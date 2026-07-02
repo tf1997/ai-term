@@ -1,0 +1,23 @@
+[package]
+name = "ai-term"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ai_term_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+reqwest = { version = "0.11", features = ["stream"] }
+tauri = { version = "1", features = ["shell-open", "http-api"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[build-dependencies]
+tauri-build = { version = "1", features = [] }

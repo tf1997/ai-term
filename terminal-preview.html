@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Term Preview</title>
+  <style>
+    :root {
+      --bg: #111315;
+      --panel: #191c20;
+      --panel-2: #20242a;
+      --line: #303640;
+      --line-soft: #262b32;
+      --text: #edf1f5;
+      --muted: #9aa5b1;
+      --quiet: #687482;
+      --green: #52d273;
+      --cyan: #46c7d8;
+      --blue: #6aa7ff;
+      --amber: #f4b84a;
+      --red: #ef6b6b;
+      --terminal: #0b0d0e;
+      --terminal-2: #111416;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .34);
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0e1012;
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 6px;
+      height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #46515f;
+      background: #252b33;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 272px minmax(420px, 1fr) 330px;
+      grid-template-rows: 46px 1fr;
+      height: 100vh;
+      min-width: 980px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .035), transparent 170px),
+        var(--bg);
+    }
+
+    .titlebar {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 272px 1fr 330px;
+      align-items: center;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(17, 19, 21, .92);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 100%;
+      padding: 0 16px;
+      border-right: 1px solid var(--line-soft);
+      font-weight: 700;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: #e7eef7;
+      color: #15181b;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 4px;
+      height: 100%;
+      padding: 0 10px;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      max-width: 220px;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: var(--panel-2);
+      border-color: var(--line);
+    }
+
+    .dot {
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--quiet);
+    }
+
+    .dot.live {
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(82, 210, 115, .13);
+    }
+
+    .top-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      height: 100%;
+      padding: 0 12px;
+      border-left: 1px solid var(--line-soft);
+    }
+
+    .ghost {
+      background: transparent;
+    }
+
+    .primary {
+      border-color: rgba(70, 199, 216, .55);
+      background: rgba(70, 199, 216, .13);
+      color: #dffbff;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line-soft);
+      background: var(--panel);
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 14px 10px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .search {
+      margin: 0 14px 12px;
+      height: 34px;
+      width: calc(100% - 28px);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #121519;
+      color: var(--text);
+      padding: 0 10px;
+      outline: none;
+    }
+
+    .server-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: auto;
+      padding: 0 10px 12px;
+    }
+
+    .server {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #171b20;
+      padding: 10px;
+    }
+
+    .server.active {
+      border-color: rgba(70, 199, 216, .48);
+      background: #1c2228;
+    }
+
+    .server-main {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .server-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+      font-size: 14px;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      height: 20px;
+      padding: 0 7px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .badge.ok {
+      color: #bcf7ca;
+      border-color: rgba(82, 210, 115, .3);
+      background: rgba(82, 210, 115, .08);
+    }
+
+    .badge.warn {
+      color: #ffe2a3;
+      border-color: rgba(244, 184, 74, .32);
+      background: rgba(244, 184, 74, .08);
+    }
+
+    .meta {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .sidebar-footer {
+      border-top: 1px solid var(--line-soft);
+      padding: 12px 14px;
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: #101214;
+    }
+
+    .connection-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--line-soft);
+    }
+
+    .conn-cell {
+      min-width: 0;
+      background: #15181c;
+      padding: 10px 12px;
+    }
+
+    .conn-label {
+      color: var(--quiet);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .conn-value {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .terminal-wrap {
+      min-height: 0;
+      padding: 12px;
+      display: flex;
+    }
+
+    .terminal {
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid #22282f;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .025), transparent 70px),
+        var(--terminal);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 36px 1fr;
+    }
+
+    .terminal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 0 12px;
+      border-bottom: 1px solid #20262d;
+      background: var(--terminal-2);
+    }
+
+    .terminal-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #cdd6df;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .term-tools {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tool-btn {
+      width: 28px;
+      height: 26px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .terminal-body {
+      min-height: 0;
+      overflow: hidden;
+      padding: 14px 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #d5dde5;
+    }
+
+    .terminal-body .muted {
+      color: #7e8995;
+    }
+
+    .terminal-body .ok {
+      color: #7ee094;
+    }
+
+    .terminal-body .warn {
+      color: #ffc95e;
+    }
+
+    .terminal-body .cyan {
+      color: #60d8e8;
+    }
+
+    .prompt {
+      color: #88b7ff;
+    }
+
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 15px;
+      vertical-align: -2px;
+      background: #d8f3ff;
+      animation: blink 1s steps(2, start) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .bottom-bar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      height: 44px;
+      padding: 0 12px;
+      border-top: 1px solid var(--line-soft);
+      background: #15181c;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chips {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #171b20;
+      white-space: nowrap;
+    }
+
+    .right {
+      min-height: 0;
+      border-left: 1px solid var(--line-soft);
+      background: var(--panel);
+      display: grid;
+      grid-template-rows: minmax(280px, 1fr) 260px;
+    }
+
+    .assistant,
+    .files {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .assistant {
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      height: 44px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .panel-title {
+      font-weight: 650;
+      font-size: 14px;
+    }
+
+    .panel-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ai-config {
+      border-bottom: 1px solid var(--line-soft);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      background: #15191e;
+    }
+
+    .config-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .config-title {
+      font-size: 12px;
+      color: #dce7f7;
+      font-weight: 650;
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .config-field {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .config-field.wide {
+      grid-column: 1 / -1;
+    }
+
+    .config-label {
+      color: var(--quiet);
+      font-size: 11px;
+    }
+
+    .config-value {
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #101316;
+      color: var(--text);
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .config-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .assistant-stream {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+
+    .message {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 10px;
+      background: #171b20;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .message.ai {
+      border-color: rgba(106, 167, 255, .24);
+      background: rgba(106, 167, 255, .075);
+    }
+
+    .message-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+      color: #dce7f7;
+      font-weight: 650;
+      font-size: 12px;
+    }
+
+    .message code {
+      color: #ccf0f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .assistant-compose {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .ask-input {
+      min-width: 0;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #121519;
+      color: var(--text);
+      padding: 0 10px;
+      outline: none;
+    }
+
+    .file-list {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      align-content: start;
+      gap: 1px;
+      background: var(--line-soft);
+    }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 44px;
+      padding: 8px 12px;
+      background: #171b20;
+    }
+
+    .file-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .file-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 3px;
+    }
+
+    .progress {
+      width: 72px;
+      height: 6px;
+      border-radius: 999px;
+      background: #2a3038;
+      overflow: hidden;
+    }
+
+    .progress > span {
+      display: block;
+      height: 100%;
+      width: var(--value);
+      background: var(--cyan);
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 240px minmax(380px, 1fr) 300px;
+      }
+
+      .titlebar {
+        grid-template-columns: 240px 1fr 300px;
+      }
+
+      .connection-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="brand">
+        <div class="mark">AT</div>
+        <div>AI Term</div>
+      </div>
+      <nav class="tabs" aria-label="Sessions">
+        <div class="tab active"><span class="dot live"></span><span>prod-app-01</span></div>
+        <div class="tab"><span class="dot"></span><span>staging-api</span></div>
+      </nav>
+      <div class="top-actions">
+        <button class="ghost">AI Config</button>
+        <button>新建</button>
+        <button class="primary">连接</button>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="section-head">
+        <div class="section-title">Connections</div>
+        <button class="tool-btn" title="Add">+</button>
+      </div>
+      <input class="search" value="prod" aria-label="Search">
+      <div class="server-list">
+        <article class="server active">
+          <div class="server-main">
+            <div class="server-name">prod-app-01</div>
+            <span class="badge ok">key</span>
+          </div>
+          <div class="meta">
+            <span>ssh.company.com</span>
+            <span>company.user -> app@10.12.8.21</span>
+          </div>
+        </article>
+        <article class="server">
+          <div class="server-main">
+            <div class="server-name">prod-worker-03</div>
+            <span class="badge warn">pwd</span>
+          </div>
+          <div class="meta">
+            <span>ssh.company.com</span>
+            <span>company.user -> deploy@10.12.9.43</span>
+          </div>
+        </article>
+        <article class="server">
+          <div class="server-main">
+            <div class="server-name">prod-mysql-ro</div>
+            <span class="badge ok">key</span>
+          </div>
+          <div class="meta">
+            <span>ssh.company.com</span>
+            <span>company.user -> dba@10.12.4.18</span>
+          </div>
+        </article>
+      </div>
+      <div class="sidebar-footer">
+        <div class="status-row"><span>Gateway</span><span class="badge ok">online</span></div>
+        <div class="status-row"><span>Key</span><span>ai-term-ed25519</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="connection-strip" aria-label="Connection details">
+        <div class="conn-cell">
+          <div class="conn-label">入口域名</div>
+          <div class="conn-value">ssh.company.com:22</div>
+        </div>
+        <div class="conn-cell">
+          <div class="conn-label">个人用户名</div>
+          <div class="conn-value">company.user</div>
+        </div>
+        <div class="conn-cell">
+          <div class="conn-label">服务器 IP</div>
+          <div class="conn-value">10.12.8.21</div>
+        </div>
+        <div class="conn-cell">
+          <div class="conn-label">服务器用户</div>
+          <div class="conn-value">app</div>
+        </div>
+      </section>
+
+      <section class="terminal-wrap">
+        <div class="terminal">
+          <div class="terminal-head">
+            <div class="terminal-title">app@prod-app-01:/srv/app/current</div>
+            <div class="term-tools">
+              <button class="tool-btn" title="Copy">C</button>
+              <button class="tool-btn" title="Split">S</button>
+              <button class="tool-btn" title="Disconnect">X</button>
+            </div>
+          </div>
+          <div class="terminal-body" aria-label="Terminal">
+            <div><span class="muted">[13:42:11]</span> <span class="ok">connected</span> gateway ssh.company.com</div>
+            <div><span class="muted">[13:42:12]</span> menu: personal username accepted</div>
+            <div><span class="muted">[13:42:13]</span> target: <span class="cyan">app@10.12.8.21</span></div>
+            <div><span class="muted">[13:42:14]</span> key: ai-term-ed25519 authenticated</div>
+            <br>
+            <div><span class="prompt">app@prod-app-01</span>:<span class="cyan">/srv/app/current</span>$ git status --short</div>
+            <div> M config/runtime.toml</div>
+            <div>?? logs/slow-query-2026-07-01.log</div>
+            <br>
+            <div><span class="prompt">app@prod-app-01</span>:<span class="cyan">/srv/app/current</span>$ systemctl status app.service --no-pager</div>
+            <div>● app.service - Production API</div>
+            <div>   Active: <span class="ok">active (running)</span> since Wed 2026-07-01 13:31:08 CST</div>
+            <div>   Memory: 412.7M</div>
+            <div>   CPU: 2min 18.442s</div>
+            <br>
+            <div><span class="warn">ai-term</span> detected modified runtime config</div>
+            <div><span class="prompt">app@prod-app-01</span>:<span class="cyan">/srv/app/current</span>$ tail -f logs/app.log<span class="cursor"></span></div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="bottom-bar">
+        <div class="chips">
+          <span class="chip"><span class="dot live"></span>interactive-menu</span>
+          <span class="chip">gateway:key</span>
+          <span class="chip">target:key</span>
+          <span class="chip">sftp:ready</span>
+          <span class="chip">keyboard:direct</span>
+        </div>
+        <span>12 ms</span>
+      </footer>
+    </main>
+
+    <aside class="right">
+      <section class="assistant">
+        <div class="panel-head">
+          <div class="panel-title">AI</div>
+          <div class="panel-actions">
+            <button>Config</button>
+            <button>应用命令</button>
+          </div>
+        </div>
+        <div class="ai-config" aria-label="AI configuration preview">
+          <div class="config-top">
+            <div class="config-title">Custom AI Provider</div>
+            <span class="badge ok">active</span>
+          </div>
+          <div class="config-grid">
+            <div class="config-field">
+              <div class="config-label">Provider</div>
+              <div class="config-value">OpenAI Compatible</div>
+            </div>
+            <div class="config-field">
+              <div class="config-label">Model</div>
+              <div class="config-value">gpt-4.1-mini</div>
+            </div>
+            <div class="config-field wide">
+              <div class="config-label">Base URL</div>
+              <div class="config-value">https://ai-gateway.company.com/v1</div>
+            </div>
+            <div class="config-field">
+              <div class="config-label">API Key</div>
+              <div class="config-value">Keychain: ai-term/default</div>
+            </div>
+            <div class="config-field">
+              <div class="config-label">Context</div>
+              <div class="config-value">selected output only</div>
+            </div>
+          </div>
+          <div class="config-foot">
+            <span>System prompt and risk policy are editable per workspace.</span>
+            <button class="primary">Save</button>
+          </div>
+        </div>
+        <div class="assistant-stream">
+          <div class="message ai">
+            <div class="message-title">
+              <span>风险提示</span>
+              <span class="badge warn">medium</span>
+            </div>
+            <div><code>config/runtime.toml</code> 有本地修改，重启前建议先确认 diff。</div>
+          </div>
+          <div class="message">
+            <div class="message-title">
+              <span>建议命令</span>
+              <span class="badge">ready</span>
+            </div>
+            <div><code>git diff -- config/runtime.toml</code></div>
+          </div>
+          <div class="message ai">
+            <div class="message-title">
+              <span>日志摘要</span>
+              <span class="badge ok">ok</span>
+            </div>
+            <div>过去 10 分钟没有 5xx 峰值，慢查询日志新增 2 条。</div>
+          </div>
+        </div>
+        <div class="assistant-compose">
+          <input class="ask-input" value="帮我看下服务是否安全重启" aria-label="Ask AI">
+          <button>发送</button>
+        </div>
+      </section>
+
+      <section class="files">
+        <div class="panel-head">
+          <div class="panel-title">Files</div>
+          <button>上传</button>
+        </div>
+        <div class="file-list">
+          <div class="file-row">
+            <div>
+              <div class="file-name">/srv/app/current/config/runtime.toml</div>
+              <div class="file-meta">remote · 4.8 KB</div>
+            </div>
+            <span class="badge">edit</span>
+          </div>
+          <div class="file-row">
+            <div>
+              <div class="file-name">logs/slow-query-2026-07-01.log</div>
+              <div class="file-meta">download · 62%</div>
+            </div>
+            <div class="progress" aria-label="Download progress"><span style="--value: 62%"></span></div>
+          </div>
+          <div class="file-row">
+            <div>
+              <div class="file-name">release/package.tar.gz</div>
+              <div class="file-meta">upload · queued</div>
+            </div>
+            <span class="badge">wait</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+</body>
+</html>
