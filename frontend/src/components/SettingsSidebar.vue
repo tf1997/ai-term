@@ -57,7 +57,7 @@ const emit = defineEmits<{
     </div>
 
     <teleport to="body">
-      <div v-if="editorOpen" class="modal-backdrop" role="presentation" @click.self="emit('closeAiConfig')">
+      <div v-if="editorOpen" class="modal-backdrop" role="presentation">
         <section class="modal ai-config-modal" role="dialog" aria-modal="true" aria-label="AI 配置">
           <div class="modal-head">
             <div>

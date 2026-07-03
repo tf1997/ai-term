@@ -70,6 +70,16 @@ fn interactive_menu_profile_uses_gateway_plaintext_password() {
 }
 
 #[test]
+fn interactive_menu_profile_does_not_submit_target_plaintext_password() {
+    let mut profile = profile(JumpMode::InteractiveMenu);
+    profile.gateway.password = Some("gateway-secret".into());
+    profile.target.password = Some("target-secret".into());
+
+    let plan = build_ssh_launch_plan(&profile);
+
+    assert_eq!(plan.passwords, vec!["gateway-secret"]);
+}
+#[test]
 fn key_auth_endpoints_do_not_auto_submit_plaintext_passwords() {
     let mut profile = profile(JumpMode::InteractiveMenu);
     profile.gateway.auth_mode = AuthMode::Key;

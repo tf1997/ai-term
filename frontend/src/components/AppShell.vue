@@ -607,14 +607,50 @@ function nextAiConfigId() {
   return id
 }
 
+function normalizeConnectionProfileForSave(profile: ConnectionProfile): ConnectionProfile {
+  const normalized = cloneConnectionProfile(profile)
+  normalized.id = normalized.id.trim() || normalized.name.trim() || `connection-${Date.now()}`
+  normalized.name = normalized.name.trim() || normalized.id
+  normalized.gateway.host = normalized.gateway.host.trim()
+  normalized.gateway.username = normalized.gateway.username.trim()
+  normalized.target.host = normalized.target.host.trim()
+  normalized.target.username = normalized.target.username.trim()
+  normalized.gateway.port = normalizePort(normalized.gateway.port, 'gateway port', 22)
+  normalized.target.port = normalizePort(normalized.target.port, 'server port')
+
+  if (!normalized.gateway.password?.trim()) normalized.gateway.password = undefined
+  if (!normalized.target.password?.trim()) normalized.target.password = undefined
+  if (normalized.jumpMode === 'interactive-menu' && normalized.fileTransferMode !== 'sftp-gateway') {
+    normalized.target.password = undefined
+  }
+
+  return normalized
+}
+
+function normalizePort(value: unknown, label: string, fallback?: number): number | undefined {
+  if (value === undefined || value === null || value === '') return fallback
+  const port = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${label} must be an integer between 1 and 65535`)
+  }
+  return port
+}
 async function saveSelectedProfile() {
   const profileToSave = connectionEditorOpen.value ? connectionDraft.value : selectedProfile.value
   if (!profileToSave) return
-  const savedProfileId = profileToSave.id
+  let normalizedProfile: ConnectionProfile
+  try {
+    normalizedProfile = normalizeConnectionProfileForSave(profileToSave)
+  } catch (error) {
+    connectionSaveState.value = 'error'
+    connectionSaveError.value = formatError(error)
+    return
+  }
+  const savedProfileId = normalizedProfile.id
   try {
     connectionSaveState.value = 'saving'
     connectionSaveError.value = ''
-    await saveConnectionProfile(profileToSave)
+    await saveConnectionProfile(normalizedProfile)
     profileStoreStatus.value = 'ready'
     profiles.value = await listConnectionProfiles()
     selectedProfileId.value = savedProfileId

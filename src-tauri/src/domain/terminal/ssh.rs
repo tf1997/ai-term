@@ -127,13 +127,9 @@ fn plaintext_passwords(profile: &ConnectionProfile) -> Vec<String> {
         JumpMode::Direct => endpoint_plaintext_password(&profile.target)
             .into_iter()
             .collect(),
-        JumpMode::InteractiveMenu => [
-            endpoint_plaintext_password(&profile.gateway),
-            endpoint_plaintext_password(&profile.target),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
+        JumpMode::InteractiveMenu => endpoint_plaintext_password(&profile.gateway)
+            .into_iter()
+            .collect(),
     }
 }
 

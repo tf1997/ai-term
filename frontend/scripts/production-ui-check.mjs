@@ -31,6 +31,60 @@ const tauriConfig = read('../src-tauri/tauri.conf.json')
 const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
 const schema = read('../src-tauri/src/domain/storage/schema.sql')
 const aiChat = read('../src-tauri/src/domain/ai/chat.rs')
+function cssRule(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = styles.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))
+  return match?.[1] ?? ''
+}
+
+function assertCssRuleIncludes(selector, snippets, message) {
+  const rule = cssRule(selector)
+  assert(snippets.every((snippet) => rule.includes(snippet)), message)
+}
+
+assertCssRuleIncludes(
+  '.assistant-panel',
+  ['flex: 1 1 auto;', 'min-height: 0;', 'overflow: hidden;'],
+  'AI assistant panel must constrain the message list so long chats scroll instead of stretching the workspace.'
+)
+
+assertCssRuleIncludes(
+  '.message-list',
+  ['overflow-y: auto;', 'overflow-x: hidden;', 'overscroll-behavior: contain;'],
+  'AI message list must own vertical scrolling and keep long chats readable.'
+)
+
+assertCssRuleIncludes(
+  '.message-list',
+  ['display: flex;', 'flex-direction: column;'],
+  'AI message list must stack messages by content height so extra messages overflow into scrolling instead of shrinking each card.'
+)
+
+assertCssRuleIncludes(
+  '.message',
+  ['flex: 0 0 auto;', 'height: auto;'],
+  'AI message cards must keep their natural height when the conversation grows.'
+)
+
+assert(
+  aiPanel.includes('collapsedMessages') &&
+    aiPanel.includes('function isMessageCollapsed') &&
+    aiPanel.includes('collapsed: isMessageCollapsed(message)') &&
+    !aiPanel.includes('collapsed: !isMessageExpanded(message)'),
+  'AI messages must be expanded by default; only messages collapsed by the user should be compact.'
+)
+
+assert(
+  !aiPanel.includes('title="执行命令"') &&
+    !aiPanel.includes('aria-label="执行命令"') &&
+    !aiPanel.includes('executeGeneratedCommand()') &&
+    !aiPanel.includes('executableCommands(message)') &&
+    !aiPanel.includes('执行第一条 bash 命令') &&
+    aiPanel.includes('v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"') &&
+    aiPanel.includes("['bash', 'sh', 'shell', 'zsh']") &&
+    !aiPanel.includes("['bash', 'sh', 'shell', 'zsh', '']"),
+  'AI execute buttons must only appear on explicit bash/shell code blocks, not panel or message-level controls.'
+)
 
 assert(
   appShell.includes('selectedProfile = computed(() =>') &&
@@ -182,8 +236,10 @@ assert(
 assert(
   sidebar.includes('v-model="selectedProfile.gateway.host"') &&
     sidebar.includes('v-model="selectedProfile.gateway.username"') &&
+    sidebar.includes('v-model.number="selectedProfile.gateway.port"') &&
     sidebar.includes('v-model="selectedProfile.target.host"') &&
-    sidebar.includes('v-model="selectedProfile.target.username"'),
+    sidebar.includes('v-model="selectedProfile.target.username"') &&
+    sidebar.includes('v-model.number="selectedProfile.target.port"'),
   'ConnectionSidebar must let users edit gateway and target connection fields after creating a profile.'
 )
 
@@ -289,7 +345,7 @@ assert(
     tauri.includes('saveConnectionProfile') &&
     tauri.includes('deleteConnectionProfile') &&
     appShell.includes('await listConnectionProfiles()') &&
-    appShell.includes('await saveConnectionProfile(profileToSave)') &&
+    appShell.includes('await saveConnectionProfile(normalizedProfile)') &&
     appShell.includes('await deleteConnectionProfile(profileId)') &&
     sidebar.includes("delete: [profileId: string]") &&
     sidebar.includes('保存配置') &&
@@ -687,4 +743,27 @@ function aiPanelUsesBackendModelCall() {
   )
 }
 
+assert(
+  sidebar.includes('v-model.number="selectedProfile.gateway.port"') &&
+    sidebar.includes('v-model.number="selectedProfile.target.port"') &&
+    sidebar.includes('type="number"') &&
+    appShell.includes('normalizeConnectionProfileForSave') &&
+    appShell.includes('normalizePort('),
+  'Connection editor must expose SSH port fields and normalize them before saving.'
+)
+
+assert(
+  !sidebar.includes('@click.self="emit(\'closeEditor\')"') &&
+    !settingsSidebar.includes('@click.self="emit(\'closeAiConfig\')"'),
+  'Connection and AI config modals must stay open when clicking outside the dialog.'
+)
+
+assert(
+  sidebar.includes('shouldShowTargetPassword') &&
+    sidebar.includes('targetPasswordLabel') &&
+    sidebar.includes('\\u670d\\u52a1\\u5668\\u5bc6\\u7801\\uff08\\u53ef\\u9009\\uff09') &&
+    appShell.includes('profile.jumpMode === \'interactive-menu\'') &&
+    appShell.includes('normalized.target.password = undefined'),
+  'Interactive-menu bastion profiles must treat the internal server password as optional and avoid saving or auto-submitting it when blank.'
+)
 console.log('production-ui-check passed')

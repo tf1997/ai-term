@@ -47,7 +47,7 @@ const emit = defineEmits<{
 
 const askText = ref('')
 const isAsking = ref(false)
-const expandedMessages = ref<Record<string, boolean>>({})
+const collapsedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
 const historyPopover = ref<HTMLElement | null>(null)
 const historyButton = ref<HTMLButtonElement | null>(null)
@@ -69,9 +69,6 @@ const composerPlaceholder = computed(() => {
   return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
 })
 
-const generatedCommand = computed(() => {
-  return [...props.messages].reverse().find((message) => message.role === 'assistant' && message.command)?.command ?? ''
-})
 
 const activeSession = computed(() => {
   return props.workspaceSessions.find((session) => session.id === props.workspaceSessionId)
@@ -375,18 +372,9 @@ function parseMessageParts(text: string): MessagePart[] {
   return parts.length ? parts : [{ type: 'text', content: text }]
 }
 
-function executableCommands(message: AiMessage) {
-  const commands = parseMessageParts(message.text)
-    .filter((part): part is Extract<MessagePart, { type: 'code' }> => part.type === 'code' && isShellLanguage(part.language))
-    .map((part) => normalizeShellCommand(part.content))
-    .filter(Boolean)
-
-  if (message.command) commands.unshift(normalizeShellCommand(message.command))
-  return Array.from(new Set(commands))
-}
 
 function isShellLanguage(language: string) {
-  return ['bash', 'sh', 'shell', 'zsh', ''].includes(language.trim().toLowerCase())
+  return ['bash', 'sh', 'shell', 'zsh'].includes(language.trim().toLowerCase())
 }
 
 function looksLikeShellCommand(line: string) {
@@ -435,18 +423,22 @@ function shouldCollapseMessage(message: AiMessage) {
   return message.text.length > LONG_MESSAGE_CHARS || message.text.split('\n').length > LONG_MESSAGE_LINES
 }
 
+function isMessageCollapsed(message: AiMessage) {
+  return shouldCollapseMessage(message) && Boolean(collapsedMessages.value[message.id])
+}
+
 function isMessageExpanded(message: AiMessage) {
-  return !shouldCollapseMessage(message) || Boolean(expandedMessages.value[message.id])
+  return !isMessageCollapsed(message)
 }
 
 function toggleMessage(messageId: string) {
-  expandedMessages.value = {
-    ...expandedMessages.value,
-    [messageId]: !expandedMessages.value[messageId]
+  collapsedMessages.value = {
+    ...collapsedMessages.value,
+    [messageId]: !collapsedMessages.value[messageId]
   }
 }
 
-function executeGeneratedCommand(command = generatedCommand.value) {
+function executeGeneratedCommand(command: string) {
   const value = command.trim()
   if (!value) return
   if (isDangerousCommand(value)) {
@@ -582,7 +574,6 @@ watch(
       <div class="panel-actions">
         <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory">◷</button>
         <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession">＋</button>
-        <button class="icon-button" title="执行命令" aria-label="执行命令" :disabled="!generatedCommand || isAsking" @click="executeGeneratedCommand()">▶</button>
       </div>
       <div v-if="historyOpen" ref="historyPopover" class="session-history-popover">
         <div class="session-search">
@@ -649,7 +640,7 @@ watch(
         v-for="message in messages"
         :key="message.id"
         class="message"
-        :class="{ ai: message.role === 'assistant', error: message.error, collapsed: !isMessageExpanded(message) }"
+        :class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"
       >
         <div class="message-title">
           <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
@@ -662,13 +653,6 @@ watch(
             >
               {{ isMessageExpanded(message) ? '收起' : '展开' }}
             </button>
-            <button
-              v-if="executableCommands(message).length"
-              class="icon-button"
-              title="执行第一条 bash 命令"
-              aria-label="执行第一条 bash 命令"
-              @click="executeGeneratedCommand(executableCommands(message)[0])"
-            >▶</button>
           </div>
         </div>
         <div class="message-body">
@@ -684,7 +668,7 @@ watch(
               <div class="code-head">
                 <span>{{ part.language || 'text' }}</span>
                 <button
-                  v-if="isShellLanguage(part.language)"
+                  v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
                   class="text-button"
                   type="button"
                   @click="executeGeneratedCommand(normalizeShellCommand(part.content))"

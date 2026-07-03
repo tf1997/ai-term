@@ -49,6 +49,25 @@ function needsMenuProfile(profile: ConnectionProfile) {
   return profile.jumpMode === 'interactive-menu' && !isSftpProfile(profile)
 }
 
+function shouldShowTargetPassword(profile: ConnectionProfile) {
+  return profile.target.authMode !== 'key' && profile.jumpMode !== 'interactive-menu'
+}
+
+function targetPasswordLabel(profile: ConnectionProfile) {
+  return profile.jumpMode === 'interactive-menu' ? '\u670d\u52a1\u5668\u5bc6\u7801\uff08\u53ef\u9009\uff09' : '\u670d\u52a1\u5668\u5bc6\u7801'
+}
+
+function gatewayPortLabel() {
+  return '\u5821\u5792\u673a\u7aef\u53e3'
+}
+
+function targetPortLabel(profile: ConnectionProfile) {
+  return isSftpProfile(profile) ? 'SFTP \u7aef\u53e3' : '\u670d\u52a1\u5668\u7aef\u53e3'
+}
+
+function targetPasswordPlaceholder() {
+  return '\u53ef\u9009\uff0c\u4fdd\u5b58\u540e\u7528\u4e8e\u76f4\u8fde\u81ea\u52a8\u767b\u5f55'
+}
 function profileReady(profile: ConnectionProfile) {
   const hasTarget = Boolean(profile.name.trim() && profile.target.host.trim() && profile.target.username.trim())
   if (!hasTarget) return false
@@ -148,7 +167,7 @@ function handleJumpModeChanged() {
       </article>
     </div>
     <teleport to="body">
-      <div v-if="selectedProfile && editorOpen" class="modal-backdrop" role="presentation" @click.self="emit('closeEditor')">
+      <div v-if="selectedProfile && editorOpen" class="modal-backdrop" role="presentation">
         <form class="modal profile-editor-modal" role="dialog" aria-modal="true" aria-label="连接配置" @submit.prevent>
           <div class="modal-head">
             <div>
@@ -197,13 +216,13 @@ function handleJumpModeChanged() {
               <span>个人用户名</span>
               <input v-model="selectedProfile.gateway.username" placeholder="company.user" />
             </label>
-            <label>
-              <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 主机' : '服务器 IP' }}</span>
-              <input v-model="selectedProfile.target.host" placeholder="10.12.8.21 or server.company.internal" />
+            <label v-if="needsGateway(selectedProfile)">
+              <span>{{ gatewayPortLabel() }}</span>
+              <input v-model.number="selectedProfile.gateway.port" type="number" min="1" max="65535" step="1" placeholder="22" />
             </label>
             <label>
-              <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 用户名' : '服务器用户名' }}</span>
-              <input v-model="selectedProfile.target.username" placeholder="app" />
+              <span>{{ targetPortLabel(selectedProfile) }}</span>
+              <input v-model.number="selectedProfile.target.port" type="number" min="1" max="65535" step="1" placeholder="22" />
             </label>
             <label v-if="needsMenuProfile(selectedProfile)">
               <span>菜单配置</span>
@@ -229,9 +248,9 @@ function handleJumpModeChanged() {
                 <option value="key">key</option>
               </select>
             </label>
-            <label v-if="selectedProfile.target.authMode !== 'key'">
-              <span>服务器密码</span>
-              <input v-model="selectedProfile.target.password" type="password" autocomplete="off" placeholder="明文保存，用于自动登录" />
+            <label v-if="shouldShowTargetPassword(selectedProfile)">
+              <span>{{ targetPasswordLabel(selectedProfile) }}</span>
+              <input v-model="selectedProfile.target.password" type="password" autocomplete="off" :placeholder="targetPasswordPlaceholder()" />
             </label>
           </div>
         </form>
