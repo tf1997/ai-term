@@ -107,9 +107,7 @@ fn sqlite_store_roundtrips_ai_messages_by_workspace_session() {
         created_at: "2026-07-02T10:00:01Z".into(),
     };
 
-    store
-        .save_ai_conversation_message(&user_message)
-        .unwrap();
+    store.save_ai_conversation_message(&user_message).unwrap();
     store
         .save_ai_conversation_message(&assistant_message)
         .unwrap();

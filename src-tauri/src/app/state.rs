@@ -1,5 +1,9 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::sync::Mutex;
 
 use crate::domain::connection::models::{AiProviderConfig, ConnectionProfile};
@@ -15,6 +19,7 @@ pub struct SessionRecord {
 #[derive(Default)]
 pub struct AppState {
     sessions: Mutex<HashMap<String, SessionRecord>>,
+    tasks: Mutex<HashMap<String, Arc<AtomicBool>>>,
     profile_store: Mutex<Option<SqliteConfigStore>>,
 }
 
@@ -22,8 +27,29 @@ impl AppState {
     pub fn with_profile_store(profile_store: SqliteConfigStore) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            tasks: Mutex::new(HashMap::new()),
             profile_store: Mutex::new(Some(profile_store)),
         }
+    }
+
+    pub async fn register_task(&self, task_id: String) -> Arc<AtomicBool> {
+        let token = Arc::new(AtomicBool::new(false));
+        self.tasks.lock().await.insert(task_id, token.clone());
+        token
+    }
+
+    pub async fn cancel_task(&self, task_id: &str) -> bool {
+        let tasks = self.tasks.lock().await;
+        if let Some(token) = tasks.get(task_id) {
+            token.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn finish_task(&self, task_id: &str) {
+        self.tasks.lock().await.remove(task_id);
     }
 
     pub async fn register_session(&self, session_id: String, profile_id: String) {
@@ -188,10 +214,7 @@ impl AppState {
         store.list_command_history(connection_id, workspace_session_id)
     }
 
-    pub async fn save_ai_conversation_message(
-        &self,
-        message: AiConversationMessage,
-    ) -> Result<()> {
+    pub async fn save_ai_conversation_message(&self, message: AiConversationMessage) -> Result<()> {
         let store = self.profile_store.lock().await;
         let Some(store) = store.as_ref() else {
             anyhow::bail!("workspace conversation store is not configured");

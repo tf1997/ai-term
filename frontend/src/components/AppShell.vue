@@ -41,6 +41,7 @@ interface TerminalTab {
 
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   executeCommand: (command: string) => boolean
+  writeTerminalInput: (data: string) => boolean
   clearTerminal: () => void
   disconnectFromButton: () => void
   restartLocalTerminal: () => void
@@ -100,6 +101,7 @@ const aiConfigDraft = ref<AiProviderConfig | undefined>()
 const leftPanelMode = ref<LeftPanelMode>('connections')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
+const workspacePanelTab = ref<'history' | 'ai' | 'sftp'>('ai')
 const terminalTabs = ref<TerminalTab[]>([
   {
     id: 'local-1',
@@ -157,6 +159,8 @@ const activeAiContextStatus = computed(() => {
 const activeWorkspaceSessions = computed(() => {
   return workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
 })
+
+const sftpWorkbenchActive = computed(() => !rightCollapsed.value && workspacePanelTab.value === 'sftp')
 
 const aiConfig = computed(() => {
   return aiConfigs.value.find((config) => config.id === selectedAiConfigId.value) ?? aiConfigs.value[0] ?? { ...defaultAiConfig }
@@ -796,6 +800,10 @@ function executeCommandOnActiveTerminal(command: string) {
   terminalRefs.value[activeTerminalId.value]?.executeCommand(command)
 }
 
+function writeInputToActiveTerminal(data: string) {
+  terminalRefs.value[activeTerminalId.value]?.writeTerminalInput(data)
+}
+
 function appendAiMessageToActiveTerminal(message: AiMessage) {
   const key = workspaceKey(message.connectionId, message.workspaceSessionId)
   aiMessagesBySession.value = {
@@ -914,7 +922,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed }">
+  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive }">
     <header class="titlebar">
       <div class="brand">
         <span class="brand-mark">AT</span>
@@ -1022,6 +1030,8 @@ onBeforeUnmount(() => {
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"
       @execute-command="executeCommandOnActiveTerminal"
+      @write-terminal-input="writeInputToActiveTerminal"
+      @workspace-tab-changed="workspacePanelTab = $event"
     />
     <button
       v-if="rightCollapsed"

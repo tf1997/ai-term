@@ -51,6 +51,51 @@ export interface AiSessionTitleResponse {
   title: string
 }
 
+export interface SftpFileEntry {
+  name: string
+  path: string
+  isDir: boolean
+  size: number
+  permissions: string
+  modified: string
+}
+
+export interface SftpListResponse {
+  path: string
+  entries: SftpFileEntry[]
+}
+
+export interface SftpTransferResponse {
+  message: string
+}
+
+export interface SftpProbeResponse {
+  available: boolean
+  path?: string
+  message: string
+}
+
+export interface LocalFileEntry {
+  name: string
+  path: string
+  isDir: boolean
+  size: number
+  modified: string
+}
+
+export interface LocalDirectoryResponse {
+  path: string
+  home: string
+  entries: LocalFileEntry[]
+}
+
+export interface BastionServerCandidate {
+  host: string
+  username?: string
+  label: string
+  sourceLine: string
+}
+
 export function connectProfile(profileId: string, cols: number, rows: number) {
   return invoke<string>('connect_profile', { profileId, cols, rows })
 }
@@ -137,6 +182,63 @@ export function listAiConversationMessages(connectionId: string, workspaceSessio
 
 export function saveAiConversationMessage(message: AiMessage) {
   return invoke<void>('save_ai_conversation_message', { message })
+}
+
+export function localHomeDirectory() {
+  return invoke<string>('local_home_directory')
+}
+
+export function localListDirectory(path: string) {
+  return invoke<LocalDirectoryResponse>('local_list_directory', { path })
+}
+
+export interface SftpTargetOverride {
+  targetHost?: string
+  targetUsername?: string
+}
+
+export interface TaskOptions {
+  taskId?: string
+}
+
+export function cancelTask(taskId: string) {
+  return invoke<boolean>('cancel_task', { taskId })
+}
+
+export function sftpListDirectory(connectionId: string, path: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpListResponse>('sftp_list_directory', { connectionId, path, ...target, ...options })
+}
+
+export function sftpProbe(connectionId: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpProbeResponse>('sftp_probe', { connectionId, ...target, ...options })
+}
+
+export function sftpCreateDirectory(connectionId: string, path: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_create_directory', { connectionId, path, ...target, ...options })
+}
+
+export function sftpDeletePath(connectionId: string, path: string, isDir: boolean, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_delete_path', { connectionId, path, isDir, ...target, ...options })
+}
+
+export function sftpUploadFile(connectionId: string, localPath: string, remoteDir: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_upload_file', { connectionId, localPath, remoteDir, ...target, ...options })
+}
+
+export function sftpUploadPath(connectionId: string, localPath: string, remoteDir: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_upload_path', { connectionId, localPath, remoteDir, ...target, ...options })
+}
+
+export function sftpDownloadFile(connectionId: string, remotePath: string, localPath: string, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_download_file', { connectionId, remotePath, localPath, ...target, ...options })
+}
+
+export function sftpDownloadPath(connectionId: string, remotePath: string, localDir: string, isDir: boolean, target?: SftpTargetOverride, options?: TaskOptions) {
+  return invoke<SftpTransferResponse>('sftp_download_path', { connectionId, remotePath, localDir, isDir, ...target, ...options })
+}
+
+export function probeBastionServers(connectionId: string) {
+  return invoke<BastionServerCandidate[]>('probe_bastion_servers', { connectionId })
 }
 
 export function terminalDataEventName(sessionId: string) {

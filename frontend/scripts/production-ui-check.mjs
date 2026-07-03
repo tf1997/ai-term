@@ -65,7 +65,9 @@ assert(
 )
 
 assert(
-  !terminalPane.includes('terminal?.write(data)'),
+  terminalPane.includes('dataDisposable = terminal.onData((data) => {') &&
+    terminalPane.includes('void terminalWrite(sessionId, data)') &&
+    !terminalPane.includes('dataDisposable = terminal.onData((data) => {\n    terminal?.write(data)'),
   'TerminalPane must not echo keyboard input locally when there is no backend session.'
 )
 
@@ -119,10 +121,56 @@ assert(
 assert(
   fileTransfer.includes('type="file"') &&
     fileTransfer.includes('triggerUpload') &&
-    fileTransfer.includes('transferQueue') &&
-    fileTransfer.includes('remoteSessionActive') &&
+    fileTransfer.includes('sftpListDirectory') &&
+    fileTransfer.includes('sftpUploadFile') &&
+    fileTransfer.includes('sftpUploadPath') &&
+    fileTransfer.includes('sftpDownloadFile') &&
+    fileTransfer.includes('sftpDownloadPath') &&
+    fileTransfer.includes('sftpDeletePath') &&
+    fileTransfer.includes('localHomeDirectory') &&
+    fileTransfer.includes('localListDirectory') &&
+    fileTransfer.includes('localEntries') &&
+    fileTransfer.includes('selectedLocalEntry') &&
+    fileTransfer.includes('selectedRemoteEntry') &&
+    fileTransfer.includes('openLocalFileLocation') &&
+    fileTransfer.includes('openLocalContextMenu') &&
+    fileTransfer.includes('openRemoteContextMenu') &&
+    fileTransfer.includes('fileContextMenu') &&
+    fileTransfer.includes('file-type-icon') &&
+    fileTransfer.includes('cancelTask') &&
+    fileTransfer.includes('activeTask') &&
+    fileTransfer.includes('cancelActiveTask') &&
+    fileTransfer.includes('sftpProbe') &&
+    fileTransfer.includes('sftpProbeByHost') &&
+    fileTransfer.includes('probeSelectedTarget') &&
+    fileTransfer.includes('probeBastionServers') &&
+    fileTransfer.includes('selectedTarget') &&
+    fileTransfer.includes("transferMode = ref<'sftp' | 'terminal'>") &&
+    fileTransfer.includes('uploadFilesThroughTerminal') &&
+    fileTransfer.includes('downloadThroughTerminal') &&
+    fileTransfer.includes('identifyCurrentTerminalTarget') &&
+    fileTransfer.includes('currentTerminalTarget') &&
+    fileTransfer.includes('useTerminalTargetForSftp') &&
+    fileTransfer.includes('writeTerminalInput') &&
+    fileTransfer.includes('remoteReady') &&
+    tauri.includes("invoke<LocalDirectoryResponse>('local_list_directory'") &&
+    tauri.includes("invoke<boolean>('cancel_task'") &&
+    tauri.includes("invoke<SftpListResponse>('sftp_list_directory'") &&
+    tauri.includes("invoke<SftpTransferResponse>('sftp_upload_path'") &&
+    tauri.includes("invoke<SftpTransferResponse>('sftp_download_path'") &&
+    tauri.includes("invoke<SftpProbeResponse>('sftp_probe'") &&
+    tauri.includes("invoke<BastionServerCandidate[]>('probe_bastion_servers'") &&
+    styles.includes('.sftp-workbench-active .right-panel') &&
+    styles.includes('grid-column: 3 / 5;') &&
+    styles.includes('grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);') &&
+    styles.includes('.file-type-icon.folder') &&
+    styles.includes('.file-context-menu') &&
+    appShell.includes('sftpWorkbenchActive') &&
+    workspacePanel.includes('workspaceTabChanged') &&
+    workspacePanel.includes('@write-terminal-input=') &&
+    terminalPane.includes('writeTerminalInput') &&
     !fileTransfer.includes('profile ? `Ready'),
-  'FileTransferPanel must expose an interactive upload flow without treating a selected profile draft as an active remote transfer session.'
+  'FileTransferPanel must expose real SFTP, bastion target discovery, and terminal-channel small-file transfer flows without treating a selected profile draft as an active remote transfer session.'
 )
 
 assert(

@@ -66,7 +66,7 @@ function syncTerminalSize() {
 }
 
 function appendTerminalOutput(data: string) {
-  terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-24000)
+  terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
   emit('terminalOutput', {
     terminalId: props.terminalId,
     snapshot: terminalOutputBuffer
@@ -281,6 +281,21 @@ function executeCommand(command: string) {
   return false
 }
 
+function writeTerminalInput(data: string) {
+  if (!data) return false
+  if (sessionId) {
+    void terminalWrite(sessionId, data)
+    void nextTick(() => terminal?.focus())
+    return true
+  }
+  if (status.value === 'preview') {
+    terminal?.write(data)
+    appendTerminalOutput(data)
+    return true
+  }
+  return false
+}
+
 function disconnect(renderReady = true) {
   const previousSessionId = sessionId
   sessionId = ''
@@ -314,7 +329,8 @@ defineExpose({
   clearTerminal,
   disconnectFromButton,
   executeCommand,
-  restartLocalTerminal
+  restartLocalTerminal,
+  writeTerminalInput
 })
 </script>
 

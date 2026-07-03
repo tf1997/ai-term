@@ -15,15 +15,16 @@ pub fn run() {
     use tauri::Manager;
 
     use app::commands::{
-        chat_with_ai_provider, chat_with_ai_provider_stream, connect_local_terminal,
+        cancel_task, chat_with_ai_provider, chat_with_ai_provider_stream, connect_local_terminal,
         connect_profile, delete_ai_provider_config, delete_connection_profile,
         delete_workspace_session, disconnect_terminal, generate_ai_session_title,
-        get_ai_provider_config,
-        list_ai_conversation_messages,
-        list_ai_provider_configs, list_command_history, list_connection_profiles,
-        list_workspace_sessions, save_ai_conversation_message, save_ai_provider_config,
-        save_command_history_record, save_connection_profile, save_workspace_session,
-        terminal_resize, terminal_write,
+        get_ai_provider_config, list_ai_conversation_messages, list_ai_provider_configs,
+        list_command_history, list_connection_profiles, list_workspace_sessions,
+        local_home_directory, local_list_directory, probe_bastion_servers,
+        save_ai_conversation_message, save_ai_provider_config, save_command_history_record,
+        save_connection_profile, save_workspace_session, sftp_create_directory, sftp_delete_path,
+        sftp_download_file, sftp_download_path, sftp_list_directory, sftp_probe, sftp_upload_file,
+        sftp_upload_path, terminal_resize, terminal_write,
     };
     use app::state::AppState;
     use domain::storage::sqlite::{default_database_path, SqliteConfigStore};
@@ -40,6 +41,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            cancel_task,
             chat_with_ai_provider,
             chat_with_ai_provider_stream,
             connect_local_terminal,
@@ -55,11 +57,22 @@ pub fn run() {
             list_command_history,
             list_connection_profiles,
             list_workspace_sessions,
+            local_home_directory,
+            local_list_directory,
+            probe_bastion_servers,
             save_ai_conversation_message,
             save_ai_provider_config,
             save_command_history_record,
             save_connection_profile,
             save_workspace_session,
+            sftp_create_directory,
+            sftp_delete_path,
+            sftp_download_file,
+            sftp_download_path,
+            sftp_list_directory,
+            sftp_probe,
+            sftp_upload_file,
+            sftp_upload_path,
             terminal_write,
             terminal_resize
         ])

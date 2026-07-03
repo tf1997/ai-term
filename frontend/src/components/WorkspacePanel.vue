@@ -23,6 +23,7 @@ defineProps<{
 
 const emit = defineEmits<{
   close: []
+  workspaceTabChanged: [tab: 'history' | 'ai' | 'sftp']
   selectWorkspaceSession: [sessionId: string]
   createWorkspaceSession: []
   renameWorkspaceSession: [sessionId: string]
@@ -32,22 +33,28 @@ const emit = defineEmits<{
   updateAiMessage: [message: AiMessage]
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
   executeCommand: [command: string]
+  writeTerminalInput: [data: string]
 }>()
 
 const activeWorkspaceTab = ref<'history' | 'ai' | 'sftp'>('ai')
+
+function selectWorkspaceTab(tab: 'history' | 'ai' | 'sftp') {
+  activeWorkspaceTab.value = tab
+  emit('workspaceTabChanged', tab)
+}
 </script>
 
 <template>
   <aside v-show="!collapsed" class="right-panel workspace-panel">
     <div class="workspace-bar">
       <nav class="workspace-tabs" aria-label="Workspace">
-        <button :class="{ active: activeWorkspaceTab === 'history' }" @click="activeWorkspaceTab = 'history'">
+        <button :class="{ active: activeWorkspaceTab === 'history' }" @click="selectWorkspaceTab('history')">
           命令历史
         </button>
-        <button :class="{ active: activeWorkspaceTab === 'ai' }" @click="activeWorkspaceTab = 'ai'">
+        <button :class="{ active: activeWorkspaceTab === 'ai' }" @click="selectWorkspaceTab('ai')">
           AI 助手
         </button>
-        <button :class="{ active: activeWorkspaceTab === 'sftp' }" @click="activeWorkspaceTab = 'sftp'">
+        <button :class="{ active: activeWorkspaceTab === 'sftp' }" @click="selectWorkspaceTab('sftp')">
           SFTP
         </button>
       </nav>
@@ -84,6 +91,11 @@ const activeWorkspaceTab = ref<'history' | 'ai' | 'sftp'>('ai')
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"
       @execute-command="emit('executeCommand', $event)"
     />
-    <FileTransferPanel v-else />
+    <FileTransferPanel
+      v-else
+      :connection-id="connectionId"
+      :terminal-snapshot="terminalSnapshot"
+      @write-terminal-input="emit('writeTerminalInput', $event)"
+    />
   </aside>
 </template>

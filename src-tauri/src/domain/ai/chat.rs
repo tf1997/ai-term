@@ -327,7 +327,14 @@ fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<Strin
         push_unique_limited(&mut points, format!("recent-output: {line}"));
     }
 
-    for command in history.iter().rev().take(20).collect::<Vec<_>>().into_iter().rev() {
+    for command in history
+        .iter()
+        .rev()
+        .take(20)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         push_unique_limited(&mut points, format!("history: {command}"));
     }
 

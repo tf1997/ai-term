@@ -345,7 +345,10 @@ impl SqliteConfigStore {
         let connection = self.connection()?;
         let transaction = connection.unchecked_transaction()?;
         let deleted = transaction.execute("DELETE FROM workspace_sessions WHERE id = ?1", [id])?;
-        transaction.execute("DELETE FROM command_history WHERE workspace_session_id = ?1", [id])?;
+        transaction.execute(
+            "DELETE FROM command_history WHERE workspace_session_id = ?1",
+            [id],
+        )?;
         transaction.execute(
             "DELETE FROM ai_conversation_messages WHERE workspace_session_id = ?1",
             [id],
