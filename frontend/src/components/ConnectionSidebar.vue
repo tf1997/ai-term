@@ -37,31 +37,67 @@ const filteredProfiles = computed(() => {
   })
 })
 
+function isSftpProfile(profile: ConnectionProfile) {
+  return profile.fileTransferMode === 'sftp-direct' || profile.fileTransferMode === 'sftp-gateway'
+}
+
+function needsGateway(profile: ConnectionProfile) {
+  return profile.jumpMode === 'interactive-menu' || profile.fileTransferMode === 'sftp-gateway'
+}
+
+function needsMenuProfile(profile: ConnectionProfile) {
+  return profile.jumpMode === 'interactive-menu' && !isSftpProfile(profile)
+}
+
+function profileReady(profile: ConnectionProfile) {
+  const hasTarget = Boolean(profile.name.trim() && profile.target.host.trim() && profile.target.username.trim())
+  if (!hasTarget) return false
+  if (!needsGateway(profile)) return true
+  const hasGateway = Boolean(profile.gateway.host.trim() && profile.gateway.username.trim())
+  if (!hasGateway) return false
+  if (needsMenuProfile(profile)) return Boolean(profile.menuProfileId.trim())
+  return true
+}
+
 const selectedProfileReadyToSave = computed(() => {
   const profile = props.selectedProfile
-  if (!profile) return false
-
-  const hasTarget = Boolean(profile.name.trim() && profile.target.host.trim() && profile.target.username.trim())
-  if (profile.jumpMode === 'direct') return hasTarget
-
-  return Boolean(
-    hasTarget &&
-      profile.gateway.host.trim() &&
-      profile.gateway.username.trim() &&
-      profile.menuProfileId.trim()
-  )
+  return profile ? profileReady(profile) : false
 })
 
 function profileReadyToConnect(profile: ConnectionProfile) {
-  const hasTarget = Boolean(profile.name.trim() && profile.target.host.trim() && profile.target.username.trim())
-  if (profile.jumpMode === 'direct') return hasTarget
+  return profileReady(profile)
+}
 
-  return Boolean(
-    hasTarget &&
-      profile.gateway.host.trim() &&
-      profile.gateway.username.trim() &&
-      profile.menuProfileId.trim()
-  )
+function setConnectionEditorType(kind: 'ssh' | 'sftp') {
+  const profile = props.selectedProfile
+  if (!profile) return
+  if (kind === 'ssh') {
+    profile.fileTransferMode = 'auto'
+    return
+  }
+  profile.fileTransferMode = profile.jumpMode === 'interactive-menu' ? 'sftp-gateway' : 'sftp-direct'
+  if (profile.jumpMode === 'interactive-menu') {
+    profile.menuProfileId = ''
+  }
+}
+
+function setSftpRoute(route: 'sftp-direct' | 'sftp-gateway') {
+  const profile = props.selectedProfile
+  if (!profile) return
+  profile.fileTransferMode = route
+  profile.jumpMode = route === 'sftp-gateway' ? 'interactive-menu' : 'direct'
+  if (route === 'sftp-gateway') {
+    profile.menuProfileId = ''
+  }
+}
+
+function handleJumpModeChanged() {
+  const profile = props.selectedProfile
+  if (!profile || !isSftpProfile(profile)) return
+  profile.fileTransferMode = profile.jumpMode === 'interactive-menu' ? 'sftp-gateway' : 'sftp-direct'
+  if (profile.fileTransferMode === 'sftp-gateway') {
+    profile.menuProfileId = ''
+  }
 }
 </script>
 
@@ -92,18 +128,20 @@ function profileReadyToConnect(profile: ConnectionProfile) {
             <strong>{{ profile.name }}</strong>
             <span
               class="badge"
-              :class="{ ok: profile.jumpMode === 'direct', warn: profile.jumpMode === 'interactive-menu' || profile.id === connectingProfileId }"
+              :class="{ ok: profile.jumpMode === 'direct' && !isSftpProfile(profile), warn: profile.jumpMode === 'interactive-menu' || profile.id === connectingProfileId, sftp: isSftpProfile(profile) }"
             >
-              {{ profile.id === connectingProfileId ? '连接中' : profile.jumpMode === 'direct' ? '直连' : '堡垒机' }}
+              {{ profile.id === connectingProfileId ? '连接中' : isSftpProfile(profile) ? 'SFTP' : profile.jumpMode === 'direct' ? '直连' : '堡垒机' }}
             </span>
           </div>
           <div class="server-meta">
             <span>{{ profile.target.username || 'user' }}@{{ profile.target.host || 'server' }}</span>
-            <span>{{ profile.jumpMode === 'interactive-menu' ? `菜单 ${profile.menuProfileId || '-'}` : 'SSH / SFTP' }}</span>
+            <span>
+              {{ isSftpProfile(profile) ? (profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct') : profile.jumpMode === 'interactive-menu' ? `菜单 ${profile.menuProfileId || '-'}` : 'SSH / SFTP' }}
+            </span>
           </div>
         </div>
         <div class="card-actions">
-          <button class="icon-button" type="button" title="连接服务器" aria-label="连接服务器" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">▶</button>
+          <button class="icon-button" type="button" :title="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :aria-label="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">▶</button>
           <button class="icon-button" type="button" title="编辑连接" aria-label="编辑连接" @click.stop="emit('edit', profile.id)">✎</button>
           <button class="icon-button danger" type="button" title="删除连接" aria-label="删除连接" @click.stop="emit('delete', profile.id)">⌫</button>
         </div>
@@ -127,8 +165,8 @@ function profileReadyToConnect(profile: ConnectionProfile) {
           </div>
           <div class="profile-editor" @submit.prevent>
             <div class="editor-mode-tabs" aria-label="Connection type tabs">
-              <button type="button" class="active">SSH 连接</button>
-              <button type="button">SFTP 连接</button>
+              <button type="button" :class="{ active: !isSftpProfile(selectedProfile) }" @click="setConnectionEditorType('ssh')">SSH 连接</button>
+              <button type="button" :class="{ active: isSftpProfile(selectedProfile) }" @click="setConnectionEditorType('sftp')">SFTP 连接</button>
             </div>
             <p v-if="saveState === 'saved'" class="save-feedback ok">配置已保存</p>
             <p v-else-if="saveState === 'error'" class="save-feedback error">{{ saveError }}</p>
@@ -139,32 +177,39 @@ function profileReadyToConnect(profile: ConnectionProfile) {
             </label>
             <label class="wide">
               <span>连接方式</span>
-              <select v-model="selectedProfile.jumpMode">
-                <option value="direct">普通直连</option>
-                <option value="interactive-menu">堡垒机菜单</option>
+              <select v-model="selectedProfile.jumpMode" @change="handleJumpModeChanged">
+                <option value="direct">{{ isSftpProfile(selectedProfile) ? 'SFTP 直连' : '普通直连' }}</option>
+                <option value="interactive-menu">{{ isSftpProfile(selectedProfile) ? 'SFTP 网关' : '堡垒机菜单' }}</option>
               </select>
             </label>
-            <label v-if="selectedProfile.jumpMode === 'interactive-menu'">
+            <label v-if="isSftpProfile(selectedProfile)" class="wide">
+              <span>SFTP 路由</span>
+              <select :value="selectedProfile.fileTransferMode" @change="setSftpRoute(($event.target as HTMLSelectElement).value as 'sftp-direct' | 'sftp-gateway')">
+                <option value="sftp-direct">直连目标服务器</option>
+                <option value="sftp-gateway">通过网关 ProxyJump</option>
+              </select>
+            </label>
+            <label v-if="needsGateway(selectedProfile)">
               <span>入口域名</span>
               <input v-model="selectedProfile.gateway.host" placeholder="ssh.company.com" />
             </label>
-            <label v-if="selectedProfile.jumpMode === 'interactive-menu'">
+            <label v-if="needsGateway(selectedProfile)">
               <span>个人用户名</span>
               <input v-model="selectedProfile.gateway.username" placeholder="company.user" />
             </label>
             <label>
-              <span>服务器 IP</span>
+              <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 主机' : '服务器 IP' }}</span>
               <input v-model="selectedProfile.target.host" placeholder="10.12.8.21 or server.company.internal" />
             </label>
             <label>
-              <span>服务器用户名</span>
+              <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 用户名' : '服务器用户名' }}</span>
               <input v-model="selectedProfile.target.username" placeholder="app" />
             </label>
-            <label v-if="selectedProfile.jumpMode === 'interactive-menu'">
+            <label v-if="needsMenuProfile(selectedProfile)">
               <span>菜单配置</span>
               <input v-model="selectedProfile.menuProfileId" placeholder="company-default" />
             </label>
-            <label v-if="selectedProfile.jumpMode === 'interactive-menu'">
+            <label v-if="needsGateway(selectedProfile)">
               <span>堡垒机认证</span>
               <select v-model="selectedProfile.gateway.authMode">
                 <option value="auto">auto</option>
@@ -172,12 +217,12 @@ function profileReadyToConnect(profile: ConnectionProfile) {
                 <option value="key">key</option>
               </select>
             </label>
-            <label v-if="selectedProfile.jumpMode === 'interactive-menu' && selectedProfile.gateway.authMode !== 'key'">
+            <label v-if="needsGateway(selectedProfile) && selectedProfile.gateway.authMode !== 'key'">
               <span>堡垒机密码</span>
               <input v-model="selectedProfile.gateway.password" type="password" autocomplete="off" placeholder="明文保存，用于自动登录" />
             </label>
             <label>
-              <span>目标认证</span>
+              <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 认证' : '目标认证' }}</span>
               <select v-model="selectedProfile.target.authMode">
                 <option value="auto">auto</option>
                 <option value="password">password</option>

@@ -26,6 +26,7 @@ const workspacePanel = read('src/components/WorkspacePanel.vue')
 const commandHistoryPanel = read('src/components/CommandHistoryPanel.vue')
 const contextMenu = read('src/components/ContextMenu.vue')
 const styles = read('src/styles.css')
+const indexHtml = read('index.html')
 const tauriConfig = read('../src-tauri/tauri.conf.json')
 const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
 const schema = read('../src-tauri/src/domain/storage/schema.sql')
@@ -167,9 +168,13 @@ assert(
     styles.includes('.file-type-icon.folder') &&
     styles.includes('.file-context-menu') &&
     appShell.includes('sftpWorkbenchActive') &&
+    appShell.includes('isSftpProfile(profile)') &&
+    appShell.includes("workspacePanelTab.value = 'sftp'") &&
     workspacePanel.includes('workspaceTabChanged') &&
     workspacePanel.includes('@write-terminal-input=') &&
     terminalPane.includes('writeTerminalInput') &&
+    terminalPane.includes('enterSftpProfileMode') &&
+    terminalPane.includes('SFTP profile is ready') &&
     !fileTransfer.includes('profile ? `Ready'),
   'FileTransferPanel must expose real SFTP, bastion target discovery, and terminal-channel small-file transfer flows without treating a selected profile draft as an active remote transfer session.'
 )
@@ -195,15 +200,24 @@ assert(
   sidebar.includes("value=\"direct\"") &&
     sidebar.includes('普通直连') &&
     sidebar.includes("value=\"interactive-menu\"") &&
-    sidebar.includes('堡垒机菜单'),
+    sidebar.includes('堡垒机菜单') &&
+    sidebar.includes('SFTP 直连') &&
+    sidebar.includes('SFTP 网关'),
   'ConnectionSidebar must expose a direct SSH mode and a bastion interactive-menu mode.'
 )
 
 assert(
-  sidebar.includes("selectedProfile.jumpMode === 'interactive-menu'") &&
-    sidebar.includes('v-if="selectedProfile.jumpMode ===') &&
+  sidebar.includes('function isSftpProfile') &&
+    sidebar.includes('function needsGateway') &&
+    sidebar.includes('function needsMenuProfile') &&
+    sidebar.includes('setConnectionEditorType') &&
+    sidebar.includes('setSftpRoute') &&
+    sidebar.includes("profile.fileTransferMode = 'auto'") &&
+    sidebar.includes("profile.fileTransferMode = profile.jumpMode === 'interactive-menu' ? 'sftp-gateway' : 'sftp-direct'") &&
+    sidebar.includes('v-if="needsGateway(selectedProfile)"') &&
+    sidebar.includes('v-if="needsMenuProfile(selectedProfile)"') &&
     sidebar.includes('v-model="selectedProfile.menuProfileId"'),
-  'ConnectionSidebar must only show gateway/menu fields for bastion interactive-menu profiles.'
+  'ConnectionSidebar must support real SSH/SFTP editor modes and only require menu fields for interactive SSH profiles.'
 )
 
 assert(
@@ -396,6 +410,8 @@ assert(
     aiPanel.includes('buildQuestionWithSelectedTerminalText') &&
     aiPanel.includes('用户选中的终端内容') &&
     aiPanel.includes('selected-terminal-note') &&
+    !aiPanel.includes('selected-context-chip') &&
+    !styles.includes('.selected-context-chip') &&
     aiPanel.includes('const commandHistory = props.commandHistory.map') &&
     aiPanel.includes('context compressed') &&
     aiPanel.includes('messages: AiMessage[]') &&
@@ -521,7 +537,8 @@ assert(
 
 assert(
     styles.includes('.context-strip') &&
-    styles.includes('overflow-x: auto') &&
+    styles.includes('flex-wrap: wrap') &&
+    styles.includes('overflow: hidden auto') &&
     styles.includes('.message-body p') &&
     styles.includes('.session-history-popover') &&
     styles.includes('.session-history-row:hover .session-history-actions') &&
@@ -532,6 +549,7 @@ assert(
     styles.includes('grid-template-rows: 58px auto minmax(0, 1fr) auto;') &&
     styles.includes('grid-template-columns: minmax(0, 1fr) var(--icon-size);') &&
     styles.includes('.assistant-compose textarea') &&
+    styles.includes('.workspace-tabs button') &&
     styles.includes('.selected-terminal-note') &&
     styles.includes('.thinking-row'),
   'Right AI workspace must constrain chips, inputs, and long model text so it does not overflow horizontally.'
@@ -559,11 +577,30 @@ assert(
 )
 
 assert(
+  indexHtml.includes('href="/icon.svg"') &&
+    indexHtml.includes('href="/icon.png"') &&
+    appShell.includes('class="brand-mark"') &&
+    appShell.includes('src="/icon.svg"') &&
+    styles.includes('.brand-mark') &&
+    styles.includes('object-fit: contain') &&
+    tauriConfig.includes('"icons/32x32.png"') &&
+    tauriConfig.includes('"icons/128x128.png"') &&
+    tauriConfig.includes('"icons/128x128@2x.png"') &&
+    tauriConfig.includes('"icons/icon-512.png"') &&
+    tauriConfig.includes('"icons/icon.png"'),
+  'Project icon must be wired into the browser favicon, app chrome, and Tauri icon config.'
+)
+
+assert(
   sidebar.includes('连接管理') &&
     sidebar.includes('新建连接') &&
     sidebar.includes('SSH 连接') &&
-    sidebar.includes('SFTP 连接'),
-  'ConnectionSidebar must use the prototype labels and SSH/SFTP editor tabs.'
+    sidebar.includes('SFTP 连接') &&
+    sidebar.includes('SFTP 路由') &&
+    sidebar.includes('sftp-direct') &&
+    sidebar.includes('sftp-gateway') &&
+    sidebar.includes('打开 SFTP'),
+  'ConnectionSidebar must use the prototype labels and provide real SSH/SFTP editor tabs.'
 )
 
 assert(
@@ -618,8 +655,15 @@ assert(
     appShell.includes('aiConfigEditorOpen') &&
     settingsSidebar.includes('modal-backdrop') &&
     settingsSidebar.includes('删除 AI 配置') &&
+    settingsSidebar.includes('settings-card-head') &&
+    settingsSidebar.includes('settings-card-main') &&
+    settingsSidebar.includes('当前使用') &&
     settingsSidebar.includes('@save="(config, apiKey) => emit(\'saveAiConfig\', config, apiKey)"') &&
     settingsSidebar.includes('已保存到 SQLite') &&
+    styles.includes('.settings-card-head') &&
+    styles.includes('.settings-card-main') &&
+    styles.includes('.settings-card .card-actions') &&
+    styles.includes('grid-template-columns: repeat(2, 26px);') &&
     schema.includes('api_key TEXT') &&
     sqlite.includes('api_key = excluded.api_key') &&
     workspacePanel.includes(':api-key="apiKey"') &&

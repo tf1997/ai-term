@@ -420,6 +420,12 @@ button:disabled {
   color: #ffe2a3;
 }
 
+.badge.sftp {
+  border-color: rgba(96, 216, 232, .34);
+  background: rgba(96, 216, 232, .1);
+  color: #b9f7ff;
+}
+
 .settings-editor {
   min-height: 0;
   overflow: auto;
@@ -441,8 +447,7 @@ button:disabled {
   height: auto;
   min-height: 54px;
   display: grid;
-  justify-items: start;
-  gap: 4px;
+  gap: 6px;
   border: 1px solid #1c2534;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(22, 29, 42, .94), rgba(16, 22, 32, .94));
@@ -456,6 +461,30 @@ button:disabled {
   background: rgba(24, 35, 52, .96);
 }
 
+.settings-card-head {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-card-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-card-main strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #eef2f8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-card span {
   max-width: 100%;
   overflow: hidden;
@@ -466,7 +495,7 @@ button:disabled {
 }
 
 .settings-card .card-actions {
-  margin-top: 4px;
+  grid-template-columns: repeat(2, 26px);
 }
 
 .modal-backdrop {
@@ -941,7 +970,9 @@ button:disabled {
 }
 
 .chip {
-  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -952,6 +983,8 @@ button:disabled {
   color: #9aa5b1;
   padding: 0 8px;
   font-size: var(--font-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -991,7 +1024,7 @@ button:disabled {
 
 .workspace-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(54px, 1fr));
   gap: 6px;
   padding: 0;
   border: 1px solid #1c2534;
@@ -1001,8 +1034,11 @@ button:disabled {
 }
 
 .workspace-tabs button {
+  height: 40px;
   min-width: 0;
   overflow: hidden;
+  padding-inline: 7px;
+  font-size: var(--font-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1114,19 +1150,16 @@ button:disabled {
 .context-strip {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   min-height: 42px;
   flex: 0 0 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
+  max-height: 78px;
+  overflow: hidden auto;
   border-bottom: 1px solid #1b2130;
   padding: 8px 12px;
   scrollbar-width: thin;
-}
-
-.selected-context-chip {
-  color: #c5f1ff;
 }
 
 .message-list {
@@ -1143,6 +1176,7 @@ button:disabled {
 .message {
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
   border: 1px solid #1c2534;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(17, 24, 38, .96), rgba(12, 18, 30, .96));
@@ -1223,6 +1257,7 @@ button:disabled {
 }
 
 .message-actions {
+  min-width: 0;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -1281,6 +1316,7 @@ button:disabled {
 
 .code-block {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid #263246;
   border-radius: 8px;
@@ -1519,7 +1555,9 @@ code {
   grid-template-columns: minmax(0, 1fr) var(--icon-size);
   align-items: end;
   gap: 8px;
+  min-width: 0;
   flex: 0 0 auto;
+  overflow: hidden;
   border-top: 1px solid #1b2130;
   padding: 10px 16px 14px;
 }
@@ -1552,6 +1590,7 @@ code {
 }
 
 .assistant-compose textarea {
+  min-width: 0;
   width: 100%;
   min-height: 88px;
   max-height: 170px;
@@ -2072,14 +2111,10 @@ code {
 
 .brand-mark {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #6a62ff, #36d28b);
-  color: white;
-  font-size: var(--font-md);
+  object-fit: contain;
 }
 
 .session-tabs {
@@ -2154,6 +2189,44 @@ code {
     z-index: 8;
     width: min(380px, calc(100vw - 56px));
     box-shadow: -24px 0 60px rgba(0, 0, 0, .38);
+  }
+
+  .workspace-bar {
+    gap: 6px;
+    padding: 8px 8px 6px;
+  }
+
+  .workspace-tabs {
+    grid-template-columns: repeat(4, minmax(48px, 1fr));
+    gap: 4px;
+  }
+
+  .workspace-tabs button {
+    height: 36px;
+    padding-inline: 5px;
+    font-size: var(--font-sm);
+  }
+
+  .panel-head {
+    min-height: 52px;
+    padding-inline: 12px;
+  }
+
+  .panel-actions {
+    gap: 5px;
+  }
+
+  .context-strip {
+    max-height: 88px;
+    padding: 7px 10px;
+  }
+
+  .message-list {
+    padding: 10px 12px;
+  }
+
+  .assistant-compose {
+    padding: 9px 12px 12px;
   }
 
   .app-shell.sftp-workbench-active:not(.right-collapsed) .right-panel {

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">AI Term icon</title>
+  <desc id="desc">A minimal terminal prompt with an AI node mark.</desc>
+  <defs>
+    <linearGradient id="bg" x1="160" y1="96" x2="864" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#06131d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="264" y1="306" x2="740" y2="726" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#70f2a4"/>
+      <stop offset="1" stop-color="#54d6ff"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <rect x="170" y="210" width="684" height="604" rx="92" fill="#0b1220" stroke="#24344f" stroke-width="28"/>
+
+  <path d="M319 403 462 512 319 621" fill="none" stroke="url(#accent)" stroke-width="76" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M524 636h194" fill="none" stroke="#d9f6ff" stroke-width="76" stroke-linecap="round"/>
+
+  <circle cx="708" cy="358" r="54" fill="#0b1220" stroke="#8d7cff" stroke-width="28"/>
+  <circle cx="708" cy="358" r="15" fill="#8d7cff"/>
+  <path d="M708 412v76" fill="none" stroke="#8d7cff" stroke-width="24" stroke-linecap="round"/>
+  <path d="M648 448h120" fill="none" stroke="#8d7cff" stroke-width="24" stroke-linecap="round"/>
+</svg>

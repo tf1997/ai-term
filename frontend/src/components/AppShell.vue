@@ -184,6 +184,21 @@ const settingsAiConfig = computed(() => {
 
 const activeAiRuntimeApiKey = computed(() => aiRuntimeApiKeys.value[aiConfig.value.id] ?? '')
 
+function isAiConfigUsable(config: AiProviderConfig) {
+  return Boolean(config.baseUrl.trim() && config.model.trim() && config.apiKey?.trim())
+}
+
+function selectPreferredAiConfig(configs: AiProviderConfig[], preferredId = selectedAiConfigId.value) {
+  return (
+    configs.find((config) => config.id === preferredId && isAiConfigUsable(config)) ??
+    configs.find(isAiConfigUsable) ??
+    configs.find((config) => config.id === preferredId) ??
+    configs.find((config) => config.id === defaultAiConfig.id) ??
+    configs[0] ??
+    { ...defaultAiConfig }
+  )
+}
+
 function selectProfile(profileId: string) {
   selectedProfileId.value = profileId
   connectionError.value = ''
@@ -237,6 +252,10 @@ async function connectProfileFromSidebar(profileId: string) {
     profileStoreStatus.value = 'ready'
     const session = await createWorkspaceSession(profile.id)
     createTerminalTab(profile, session)
+    if (isSftpProfile(profile)) {
+      workspacePanelTab.value = 'sftp'
+      rightCollapsed.value = false
+    }
     profiles.value = await listConnectionProfiles()
     selectedProfileId.value = profile.id
   } catch (error) {
@@ -245,6 +264,10 @@ async function connectProfileFromSidebar(profileId: string) {
   } finally {
     connectingProfileId.value = ''
   }
+}
+
+function isSftpProfile(profile: ConnectionProfile) {
+  return profile.fileTransferMode === 'sftp-direct' || profile.fileTransferMode === 'sftp-gateway'
 }
 
 async function createLocalTerminalTab() {
@@ -525,9 +548,7 @@ async function deleteSelectedAiConfig(configId: string) {
     await deleteAiProviderConfig(configId)
     const configs = await listAiProviderConfigs()
     aiConfigs.value = configs.length ? configs : [{ ...defaultAiConfig }]
-    selectedAiConfigId.value = aiConfigs.value.some((config) => config.id === selectedAiConfigId.value)
-      ? selectedAiConfigId.value
-      : aiConfigs.value[0].id
+    selectedAiConfigId.value = selectPreferredAiConfig(aiConfigs.value).id
     const nextRuntimeKeys = { ...aiRuntimeApiKeys.value }
     delete nextRuntimeKeys[configId]
     aiRuntimeApiKeys.value = nextRuntimeKeys
@@ -569,8 +590,7 @@ async function loadAiConfig() {
   try {
     const configs = await listAiProviderConfigs()
     aiConfigs.value = configs.length ? configs : [{ ...defaultAiConfig }]
-    selectedAiConfigId.value =
-      aiConfigs.value.find((config) => config.id === defaultAiConfig.id)?.id ?? aiConfigs.value[0].id
+    selectedAiConfigId.value = selectPreferredAiConfig(aiConfigs.value).id
   } catch (error) {
     aiConfigs.value = [{ ...defaultAiConfig }]
     selectedAiConfigId.value = defaultAiConfig.id
@@ -1053,7 +1073,7 @@ onBeforeUnmount(() => {
   <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive }">
     <header class="titlebar">
       <div class="brand">
-        <span class="brand-mark">AT</span>
+        <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
         <span>AI Term</span>
       </div>
       <nav class="session-tabs" aria-label="Sessions">

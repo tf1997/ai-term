@@ -77,3 +77,36 @@ fn interactive_profile_without_menu_id_fails() {
         "menu profile id is required"
     );
 }
+
+#[test]
+fn sftp_gateway_profile_without_menu_id_passes() {
+    let profile = ConnectionProfile {
+        id: "sftp-prod-app-01".into(),
+        name: "sftp-prod-app-01".into(),
+        gateway: endpoint("ssh.company.com", "company.user"),
+        target: endpoint("10.12.8.21", "app"),
+        jump_mode: JumpMode::InteractiveMenu,
+        menu_profile_id: "".into(),
+        file_transfer_mode: FileTransferMode::SftpGateway,
+    };
+
+    assert!(validate_profile(&profile).is_ok());
+}
+
+#[test]
+fn sftp_gateway_profile_without_gateway_fails() {
+    let profile = ConnectionProfile {
+        id: "sftp-prod-app-01".into(),
+        name: "sftp-prod-app-01".into(),
+        gateway: endpoint("", "company.user"),
+        target: endpoint("10.12.8.21", "app"),
+        jump_mode: JumpMode::InteractiveMenu,
+        menu_profile_id: "".into(),
+        file_transfer_mode: FileTransferMode::SftpGateway,
+    };
+
+    assert_eq!(
+        validate_profile(&profile).unwrap_err().to_string(),
+        "gateway host is required"
+    );
+}

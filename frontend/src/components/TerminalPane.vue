@@ -39,9 +39,9 @@ let selectionDisposable: IDisposable | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
 let lastRightClickPasteAt = 0
-const status = ref<'idle' | 'local' | 'remote' | 'preview' | 'error'>('idle')
+const status = ref<'idle' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
-const activeSession = ref<'local' | 'remote' | 'preview'>('local')
+const activeSession = ref<'local' | 'remote' | 'sftp' | 'preview'>('local')
 const activeSessionProfile = ref<ConnectionProfile | undefined>(undefined)
 const quickCommands = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
 
@@ -50,6 +50,10 @@ function renderIdlePrompt(term: Terminal) {
   term.writeln('No active shell.')
   term.writeln('Use New Local Shell to start a local terminal.')
   term.writeln('')
+}
+
+function isSftpProfile(profile?: ConnectionProfile) {
+  return profile?.fileTransferMode === 'sftp-direct' || profile?.fileTransferMode === 'sftp-gateway'
 }
 
 function estimateTerminalSize(element: HTMLElement) {
@@ -207,7 +211,9 @@ onMounted(async () => {
   })
   resizeObserver.observe(terminalHost.value)
 
-  if (props.profile) {
+  if (isSftpProfile(props.profile)) {
+    enterSftpProfileMode()
+  } else if (props.profile) {
     await connectRemote()
   } else {
     await connectLocal()
@@ -219,7 +225,11 @@ watch(
   async () => {
     if (!terminal || props.connectRequest === 0) return
     if (props.profile) {
-      await connectRemote()
+      if (isSftpProfile(props.profile)) {
+        enterSftpProfileMode()
+      } else {
+        await connectRemote()
+      }
     } else {
       await connectLocal()
     }
@@ -320,6 +330,34 @@ function enterPreviewMode() {
   terminal?.writeln('')
   terminal?.write('\x1b[94mpreview\x1b[0m$ ')
   appendTerminalOutput('Tauri backend is not available in browser preview.\nRun `cargo run` inside src-tauri to attach a local shell.\npreview$ ')
+}
+
+function enterSftpProfileMode() {
+  if (!terminal || !props.profile) return
+  disconnect(false)
+  status.value = 'sftp'
+  activeSession.value = 'sftp'
+  activeSessionProfile.value = props.profile
+  sessionId = ''
+  terminal.clear()
+  terminal.writeln('\x1b[36mSFTP profile is ready.\x1b[0m')
+  terminal.writeln(`Profile: ${props.profile.name}`)
+  terminal.writeln(`Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`)
+  terminal.writeln(`Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct'}`)
+  terminal.writeln('')
+  terminal.writeln('Use the SFTP workspace on the right to browse, upload, and download files.')
+  terminalOutputBuffer = [
+    'SFTP profile is ready.',
+    `Profile: ${props.profile.name}`,
+    `Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`,
+    `Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct'}`,
+    'Use the SFTP workspace on the right to browse, upload, and download files.'
+  ].join('\n')
+  emit('terminalOutput', {
+    terminalId: props.terminalId,
+    snapshot: terminalOutputBuffer
+  })
+  void nextTick(() => terminal?.focus())
 }
 
 function clearTerminal() {
@@ -476,7 +514,7 @@ defineExpose({
     </section>
 
     <footer class="status-bar">
-      <span class="chip"><span class="status-dot" :class="{ live: status === 'local' || status === 'remote' }" />{{ status }}</span>
+      <span class="chip"><span class="status-dot" :class="{ live: status === 'local' || status === 'remote' || status === 'sftp' }" />{{ status }}</span>
       <span class="chip">{{ activeSessionProfile?.jumpMode ?? 'local-shell' }}</span>
       <span class="chip">{{ terminalSize.cols }}x{{ terminalSize.rows }}</span>
       <span class="chip">gateway:{{ activeSessionProfile?.gateway.authMode ?? '-' }}</span>

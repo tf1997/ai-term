@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use super::models::{ConnectionProfile, JumpMode};
+use super::models::{ConnectionProfile, FileTransferMode, JumpMode};
 
 pub fn validate_profile(profile: &ConnectionProfile) -> Result<()> {
     if profile.id.trim().is_empty() {
@@ -16,7 +16,18 @@ pub fn validate_profile(profile: &ConnectionProfile) -> Result<()> {
         bail!("target username is required");
     }
 
-    if profile.jump_mode == JumpMode::InteractiveMenu {
+    if profile.file_transfer_mode == FileTransferMode::SftpGateway {
+        if profile.gateway.host.trim().is_empty() {
+            bail!("gateway host is required");
+        }
+        if profile.gateway.username.trim().is_empty() {
+            bail!("gateway username is required");
+        }
+    }
+
+    if profile.jump_mode == JumpMode::InteractiveMenu
+        && profile.file_transfer_mode != FileTransferMode::SftpGateway
+    {
         if profile.gateway.host.trim().is_empty() {
             bail!("gateway host is required");
         }

@@ -42,12 +42,17 @@ const emit = defineEmits<{
         @contextmenu.prevent="emit('openMenu', $event, config.id)"
         @keydown.enter="emit('selectAiConfig', config.id)"
       >
-        <strong>{{ config.id }}</strong>
-        <span>{{ config.model || '未配置模型' }}</span>
-        <div class="card-actions">
-          <button class="icon-button" type="button" title="编辑 AI 配置" aria-label="编辑 AI 配置" @click.stop="emit('editAiConfig', config.id)">✎</button>
-          <button class="icon-button danger" type="button" title="删除 AI 配置" aria-label="删除 AI 配置" @click.stop="emit('deleteAiConfig', config.id)">⌫</button>
+        <div class="settings-card-head">
+          <div class="settings-card-main">
+            <strong>{{ config.id }}</strong>
+            <span v-if="config.id === selectedAiConfigId" class="badge ok">当前使用</span>
+          </div>
+          <div class="card-actions">
+            <button class="icon-button" type="button" title="编辑 AI 配置" aria-label="编辑 AI 配置" @click.stop="emit('editAiConfig', config.id)">✎</button>
+            <button class="icon-button danger" type="button" title="删除 AI 配置" aria-label="删除 AI 配置" @click.stop="emit('deleteAiConfig', config.id)">⌫</button>
+          </div>
         </div>
+        <span>{{ config.model || '未配置模型' }}</span>
       </article>
     </div>
 

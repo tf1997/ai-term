@@ -51,6 +51,7 @@ const expandedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
 const historyPopover = ref<HTMLElement | null>(null)
 const historyButton = ref<HTMLButtonElement | null>(null)
+const composerInput = ref<HTMLTextAreaElement | null>(null)
 const historyOpen = ref(false)
 const sessionSearch = ref('')
 const currentRequestId = ref('')
@@ -61,6 +62,11 @@ const sessionNameDraft = ref('')
 
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
+})
+
+const composerPlaceholder = computed(() => {
+  if (hasUsableConfig.value) return '输入问题，Ctrl+Enter / ⌘+Enter 发送'
+  return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
 })
 
 const generatedCommand = computed(() => {
@@ -208,12 +214,7 @@ async function sendMessage() {
 function formatSelectedLineRange(selection: TerminalSelectionEvent) {
   if (!selection.startLine || !selection.endLine) return 'line ?'
   if (selection.startLine === selection.endLine) return `line ${selection.startLine}`
-  return `line ${selection.startLine} 到 line ${selection.endLine}`
-}
-
-function selectedTerminalLineCount(selection: TerminalSelectionEvent) {
-  if (selection.startLine && selection.endLine) return Math.max(1, selection.endLine - selection.startLine + 1)
-  return Math.max(1, selection.text.split(/\r?\n/).length)
+  return `line ${selection.startLine} - line ${selection.endLine}`
 }
 
 function truncateSelectedTerminalText(text: string) {
@@ -265,6 +266,14 @@ function handleComposerKeydown(event: KeyboardEvent) {
     event.preventDefault()
     void sendMessage()
   }
+}
+
+function focusComposer() {
+  historyOpen.value = false
+  if (!hasUsableConfig.value) return
+  void nextTick(() => {
+    composerInput.value?.focus()
+  })
 }
 
 function scrollMessagesToLatest() {
@@ -553,6 +562,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
 })
+
+watch(
+  () => hasUsableConfig.value,
+  (usable, wasUsable) => {
+    if (usable && !wasUsable) focusComposer()
+  },
+  { flush: 'post' }
+)
 </script>
 
 <template>
@@ -623,9 +640,6 @@ onBeforeUnmount(() => {
       <span v-if="contextStatus" class="chip">
         {{ contextStatus.compressed ? 'context compressed' : 'context full' }} {{ contextStatus.chars }} chars
       </span>
-      <span v-if="selectedTerminalContext" class="chip selected-context-chip">
-        已选中 {{ formatSelectedLineRange(selectedTerminalContext) }} · {{ selectedTerminalLineCount(selectedTerminalContext) }} 行
-      </span>
       <span v-if="isAsking" class="chip">模型调用中</span>
     </div>
     <div ref="messageList" class="message-list">
@@ -684,17 +698,20 @@ onBeforeUnmount(() => {
         </div>
       </article>
     </div>
-    <div class="assistant-compose">
+    <div class="assistant-compose" @pointerdown="focusComposer">
       <div v-if="selectedTerminalContext" class="selected-terminal-note">
         <strong>选中终端内容</strong>
         <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ selectedTerminalContext.text.length }} chars</span>
       </div>
       <textarea
+        ref="composerInput"
         v-model="askText"
         :disabled="!hasUsableConfig"
         rows="4"
-        placeholder="输入问题，Ctrl+Enter / ⌘+Enter 发送"
+        :placeholder="composerPlaceholder"
+        :title="composerPlaceholder"
         aria-label="Ask AI"
+        @focus="historyOpen = false"
         @keydown="handleComposerKeydown"
       />
       <button
