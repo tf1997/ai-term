@@ -11,6 +11,7 @@ use crate::domain::workspace::{
 };
 
 pub const SCHEMA: &str = include_str!("schema.sql");
+const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SqliteConfigStore {
@@ -387,6 +388,35 @@ impl SqliteConfigStore {
                 record.command,
                 record.created_at,
             ],
+        )?;
+        Self::prune_command_history(
+            &connection,
+            &record.connection_id,
+            &record.workspace_session_id,
+        )?;
+        Ok(())
+    }
+
+    fn prune_command_history(
+        connection: &Connection,
+        connection_id: &str,
+        workspace_session_id: &str,
+    ) -> Result<()> {
+        connection.execute(
+            r#"
+            DELETE FROM command_history
+            WHERE connection_id = ?1
+              AND workspace_session_id = ?2
+              AND id NOT IN (
+                SELECT id
+                FROM command_history
+                WHERE connection_id = ?1
+                  AND workspace_session_id = ?2
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?3
+              )
+            "#,
+            params![connection_id, workspace_session_id, COMMAND_HISTORY_RETENTION_LIMIT],
         )?;
         Ok(())
     }

@@ -41,6 +41,8 @@ interface TerminalTab {
   connectRequest: number
 }
 
+const COMMAND_HISTORY_CACHE_LIMIT = 300
+
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   executeCommand: (command: string) => boolean
   writeTerminalInput: (data: string) => boolean
@@ -939,7 +941,7 @@ function recordCommand(event: CommandRecordedEvent) {
   }
   commandHistoryBySession.value = {
     ...commandHistoryBySession.value,
-    [key]: [...(commandHistoryBySession.value[key] ?? []), entry].slice(-300)
+    [key]: [...(commandHistoryBySession.value[key] ?? []), entry].slice(-COMMAND_HISTORY_CACHE_LIMIT)
   }
   appendRecordingCommand(event.terminalId, event.command)
   void saveCommandHistoryForTerminal(entry).catch((error) => {

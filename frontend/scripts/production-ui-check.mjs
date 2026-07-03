@@ -706,8 +706,29 @@ assert(
 assert(
   commandHistoryPanel.includes('defineProps') &&
     commandHistoryPanel.includes('commands') &&
-    commandHistoryPanel.includes("emit('rerun'"),
-  'CommandHistoryPanel must show command history and allow rerunning a command.'
+    commandHistoryPanel.includes('MAX_VISIBLE_COMMANDS = 100') &&
+    commandHistoryPanel.includes('visibleCommands') &&
+    commandHistoryPanel.includes('historySearch') &&
+    commandHistoryPanel.includes('copyCommand') &&
+    commandHistoryPanel.includes('expandedCommandIds') &&
+    commandHistoryPanel.includes('isLongCommand') &&
+    commandHistoryPanel.includes("emit('rerun'") &&
+    styles.includes('.history-toolbar') &&
+    styles.includes('.history-meta') &&
+    styles.includes('.history-row.expanded') &&
+    styles.includes('.history-actions'),
+  'CommandHistoryPanel must cap visible command history, support search, copy, long-command expansion, and allow rerunning a command.'
+)
+
+assert(
+  appShell.includes('const COMMAND_HISTORY_CACHE_LIMIT = 300') &&
+    appShell.includes('.slice(-COMMAND_HISTORY_CACHE_LIMIT)') &&
+    sqlite.includes('const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;') &&
+    sqlite.includes('prune_command_history') &&
+    sqlite.includes('DELETE FROM command_history') &&
+    aiPanel.includes('const MAX_AI_COMMAND_HISTORY = 80') &&
+    aiPanel.includes('.slice(-MAX_AI_COMMAND_HISTORY)'),
+  'Command history must be bounded: database keeps a finite recent window, frontend cache stays capped, and AI only receives recent useful commands.'
 )
 
 assert(

@@ -17,6 +17,7 @@ type MessagePart =
 const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
+const MAX_AI_COMMAND_HISTORY = 80
 
 const props = defineProps<{
   terminalId: string
@@ -126,7 +127,7 @@ async function sendMessage() {
   const requestConnectionId = props.connectionId
   const requestWorkspaceSessionId = props.workspaceSessionId
   const terminalSnapshot = props.terminalSnapshot
-  const commandHistory = props.commandHistory.map((entry) => entry.command)
+  const commandHistory = props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
   const selectedContext = selectedTerminalContext.value
   const userMessageText = selectedContext
     ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
@@ -627,7 +628,7 @@ watch(
     <div class="context-strip">
       <span class="chip">AI {{ selectedConfigId }}</span>
       <span class="chip">terminal {{ terminalSnapshot.length }} chars</span>
-      <span class="chip">history {{ commandHistory.length }}</span>
+      <span class="chip">history {{ Math.min(commandHistory.length, MAX_AI_COMMAND_HISTORY) }}/{{ commandHistory.length }}</span>
       <span v-if="contextStatus" class="chip">
         {{ contextStatus.compressed ? 'context compressed' : 'context full' }} {{ contextStatus.chars }} chars
       </span>
