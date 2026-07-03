@@ -18,8 +18,9 @@ fn local_terminal_executes_shell_commands_and_streams_output() {
     )
     .expect("local terminal should spawn");
 
+    answer_terminal_position_query(&mut terminal);
     terminal
-        .write(b"printf __AI_TERM_LOCAL_OK__\\n\n")
+        .write(local_echo_command())
         .expect("write should reach local shell");
 
     let started = Instant::now();
@@ -53,11 +54,47 @@ fn local_terminal_notifies_when_shell_exits() {
     )
     .expect("local terminal should spawn");
 
+    answer_terminal_position_query(&mut terminal);
     terminal
-        .write(b"exit\n")
+        .write(local_exit_command())
         .expect("exit should reach local shell");
 
     exit_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("local terminal should notify when the shell exits");
+}
+
+#[cfg(windows)]
+fn local_echo_command() -> &'static [u8] {
+    b"echo __AI_TERM_LOCAL_OK__\r\n"
+}
+
+#[cfg(not(windows))]
+fn local_echo_command() -> &'static [u8] {
+    b"printf __AI_TERM_LOCAL_OK__\\n\n"
+}
+
+#[cfg(windows)]
+fn local_exit_command() -> &'static [u8] {
+    b"exit\r\n"
+}
+
+#[cfg(not(windows))]
+fn local_exit_command() -> &'static [u8] {
+    b"exit\n"
+}
+
+#[cfg(windows)]
+fn answer_terminal_position_query(
+    terminal: &mut ai_term_lib::domain::terminal::local::LocalTerminalSession,
+) {
+    terminal
+        .write(b"\x1b[1;1R")
+        .expect("cursor position response should reach local shell");
+}
+
+#[cfg(not(windows))]
+fn answer_terminal_position_query(
+    _terminal: &mut ai_term_lib::domain::terminal::local::LocalTerminalSession,
+) {
 }

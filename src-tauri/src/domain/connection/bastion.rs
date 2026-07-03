@@ -1,11 +1,12 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::ffi::CString;
-use std::os::fd::RawFd;
-use std::ptr;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use super::models::{AuthEndpoint, AuthMode, ConnectionProfile};
+use crate::domain::pty::{
+    append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
+};
 use crate::domain::terminal::ssh::output_contains_password_prompt;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
@@ -26,7 +27,6 @@ pub fn probe_servers(profile: &ConnectionProfile) -> Result<Vec<BastionServerCan
 
 fn run_gateway_probe(profile: &ConnectionProfile, timeout: Duration) -> Result<String> {
     let endpoint = &profile.gateway;
-    let program = CString::new("ssh").context("ssh program contains an interior null byte")?;
     let args = vec![
         "-tt".to_string(),
         "-o".to_string(),
@@ -40,38 +40,9 @@ fn run_gateway_probe(profile: &ConnectionProfile, timeout: Duration) -> Result<S
         endpoint_destination(endpoint),
     ];
 
-    let mut argv_strings = Vec::with_capacity(args.len() + 1);
-    argv_strings.push(program.clone());
-    for arg in &args {
-        argv_strings.push(
-            CString::new(arg.as_bytes()).context("ssh argument contains an interior null byte")?,
-        );
-    }
-    let mut argv: Vec<*const libc::c_char> = argv_strings.iter().map(|arg| arg.as_ptr()).collect();
-    argv.push(ptr::null());
-
-    let mut master_fd = 0;
-    let pid = unsafe {
-        libc::forkpty(
-            &mut master_fd,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    };
-
-    if pid < 0 {
-        bail!("failed to fork gateway probe");
-    }
-
-    if pid == 0 {
-        unsafe {
-            libc::execvp(program.as_ptr(), argv.as_ptr());
-            libc::_exit(127);
-        }
-    }
-
-    set_nonblocking(master_fd)?;
+    let mut process = spawn_pty_process(PtyCommand::new("ssh", args), 80, 24)?;
+    let writer = process.writer.clone();
+    let output_rx = spawn_reader_channel(process.reader);
     let password = endpoint_plaintext_password(endpoint);
     let started = Instant::now();
     let mut output = Vec::new();
@@ -81,73 +52,54 @@ fn run_gateway_probe(profile: &ConnectionProfile, timeout: Duration) -> Result<S
     let mut newline_sent = false;
 
     loop {
-        let mut buffer = [0_u8; 8192];
-        loop {
-            let count = unsafe {
-                libc::read(
-                    master_fd,
-                    buffer.as_mut_ptr() as *mut libc::c_void,
-                    buffer.len(),
-                )
-            };
-            if count > 0 {
-                let chunk = &buffer[..count as usize];
-                output.extend_from_slice(chunk);
-                prompt_window.push_str(&String::from_utf8_lossy(chunk));
-                if prompt_window.len() > 4096 {
-                    prompt_window = prompt_window
-                        .chars()
-                        .rev()
-                        .take(4096)
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect();
-                }
-            } else {
-                break;
+        match output_rx.recv_timeout(Duration::from_millis(30)) {
+            Ok(chunk) => {
+                output.extend_from_slice(&chunk);
+                append_limited_lossy(&mut prompt_window, &chunk, 4096);
             }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        while let Ok(chunk) = output_rx.try_recv() {
+            output.extend_from_slice(&chunk);
+            append_limited_lossy(&mut prompt_window, &chunk, 4096);
         }
 
         let normalized = prompt_window.to_lowercase();
         if !host_key_confirmed
             && normalized.contains("are you sure you want to continue connecting")
         {
-            write_all(master_fd, b"yes\n")?;
+            write_to_pty(&writer, b"yes\n")?;
             host_key_confirmed = true;
             prompt_window.clear();
         }
 
         if !password_sent && output_contains_password_prompt(&prompt_window) {
             let Some(secret) = password.as_ref() else {
-                terminate_child(pid, master_fd);
+                process.session.kill();
+                let _ = process.child.wait();
                 bail!("gateway probe requires a saved gateway password");
             };
-            write_all(master_fd, format!("{secret}\n").as_bytes())?;
+            write_to_pty(&writer, format!("{secret}\n").as_bytes())?;
             password_sent = true;
             prompt_window.clear();
         }
 
         if !newline_sent && should_nudge_menu(&prompt_window) {
-            write_all(master_fd, b"\n")?;
+            write_to_pty(&writer, b"\n")?;
             newline_sent = true;
         }
 
         if started.elapsed() >= timeout {
-            terminate_child(pid, master_fd);
+            process.session.kill();
+            let _ = process.child.wait();
             return Ok(String::from_utf8_lossy(&output).into_owned());
         }
 
-        let mut status = 0;
-        let wait_result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if wait_result == pid {
-            unsafe {
-                libc::close(master_fd);
-            }
+        if process.child.try_wait()?.is_some() {
             return Ok(String::from_utf8_lossy(&output).into_owned());
         }
-
-        std::thread::sleep(Duration::from_millis(30));
     }
 }
 
@@ -274,45 +226,6 @@ fn non_empty(value: String) -> Option<String> {
         None
     } else {
         Some(value)
-    }
-}
-
-fn set_nonblocking(fd: RawFd) -> Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        bail!("failed to read gateway probe pty flags");
-    }
-    let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if result < 0 {
-        bail!("failed to set gateway probe pty nonblocking");
-    }
-    Ok(())
-}
-
-fn write_all(fd: RawFd, bytes: &[u8]) -> Result<()> {
-    let mut written = 0;
-    while written < bytes.len() {
-        let count = unsafe {
-            libc::write(
-                fd,
-                bytes[written..].as_ptr() as *const libc::c_void,
-                bytes.len() - written,
-            )
-        };
-        if count < 0 {
-            bail!("failed to write to gateway probe");
-        }
-        written += count as usize;
-    }
-    Ok(())
-}
-
-fn terminate_child(pid: libc::pid_t, fd: RawFd) {
-    unsafe {
-        libc::kill(pid, libc::SIGTERM);
-        let mut status = 0;
-        libc::waitpid(pid, &mut status, 0);
-        libc::close(fd);
     }
 }
 

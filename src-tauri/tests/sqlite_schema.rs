@@ -22,5 +22,9 @@ fn schema_stores_plaintext_ssh_and_ai_passwords() {
 #[test]
 fn default_database_path_uses_app_config_directory() {
     let path = default_database_path(Path::new("/tmp/ai-term-test"));
-    assert_eq!(path, "/tmp/ai-term-test/ai-term.sqlite3");
+    let expected = Path::new("/tmp/ai-term-test")
+        .join("ai-term.sqlite3")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(path, expected);
 }

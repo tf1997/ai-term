@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -86,22 +87,136 @@ pub fn list_directory(path: &str) -> Result<LocalDirectoryResponse> {
     })
 }
 
-fn home_path() -> Option<PathBuf> {
-    std::env::var_os("HOME")
+pub(crate) fn home_path() -> Option<PathBuf> {
+    home_path_from_env(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn home_path_from_env(
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+    homedrive: Option<OsString>,
+    homepath: Option<OsString>,
+) -> Option<PathBuf> {
+    existing_home_path(home)
+        .or_else(|| existing_home_path(userprofile))
+        .or_else(|| home_from_drive_path(homedrive, homepath))
+}
+
+fn home_from_drive_path(
+    homedrive: Option<OsString>,
+    homepath: Option<OsString>,
+) -> Option<PathBuf> {
+    let mut drive = homedrive?;
+    let path = homepath?;
+    if drive.is_empty() || path.is_empty() {
+        return None;
+    }
+    drive.push(path);
+    existing_home_path(Some(drive))
+}
+
+fn existing_home_path(value: Option<OsString>) -> Option<PathBuf> {
+    value
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .filter(|path| path.is_dir())
 }
 
 fn expand_tilde(path: &str, home: &Path) -> PathBuf {
     if path == "~" {
         home.to_path_buf()
-    } else if let Some(rest) = path.strip_prefix("~/") {
+    } else if let Some(rest) = tilde_path_rest(path) {
         home.join(rest)
     } else {
         PathBuf::from(path)
     }
 }
 
+fn tilde_path_rest(path: &str) -> Option<&str> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        return Some(rest);
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.strip_prefix("~\\") {
+            return Some(rest);
+        }
+    }
+
+    None
+}
+
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn temp_home() -> OsString {
+        std::env::temp_dir().into_os_string()
+    }
+
+    #[test]
+    fn home_path_from_env_uses_home_first() {
+        let home = temp_home();
+
+        assert_eq!(
+            home_path_from_env(
+                Some(home.clone()),
+                Some(OsString::from("missing")),
+                None,
+                None
+            ),
+            Some(PathBuf::from(home))
+        );
+    }
+
+    #[test]
+    fn home_path_from_env_falls_back_to_userprofile() {
+        let home = temp_home();
+
+        assert_eq!(
+            home_path_from_env(None, Some(home.clone()), None, None),
+            Some(PathBuf::from(home))
+        );
+    }
+
+    #[test]
+    fn home_path_from_env_ignores_missing_home_before_userprofile() {
+        let userprofile = temp_home();
+        let missing_home = PathBuf::from(userprofile.clone()).join("ai-term-missing-home");
+
+        assert_eq!(
+            home_path_from_env(
+                Some(missing_home.into_os_string()),
+                Some(userprofile.clone()),
+                None,
+                None
+            ),
+            Some(PathBuf::from(userprofile))
+        );
+    }
+
+    #[test]
+    fn home_path_from_env_ignores_empty_values() {
+        assert_eq!(
+            home_path_from_env(Some(OsString::new()), Some(OsString::new()), None, None),
+            None
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn expand_tilde_accepts_windows_separator() {
+        let home = PathBuf::from(r"C:\Users\ai-term");
+
+        assert_eq!(expand_tilde(r"~\Desktop", &home), home.join("Desktop"));
+    }
 }

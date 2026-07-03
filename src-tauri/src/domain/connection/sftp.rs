@@ -1,9 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::ffi::CString;
-use std::os::fd::RawFd;
 use std::path::Path;
-use std::ptr;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -11,6 +9,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use super::models::{AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode};
+use crate::domain::filesystem::local::home_path;
+use crate::domain::pty::{
+    append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
+};
 use crate::domain::terminal::ssh::output_contains_password_prompt;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
@@ -421,185 +423,86 @@ fn run_sftp_launch_plan(
         bail!("SFTP task cancelled");
     }
 
-    let program = CString::new(plan.program.as_bytes())
-        .context("sftp program contains an interior null byte")?;
-    let mut argv_strings = Vec::with_capacity(plan.args.len() + 1);
-    argv_strings.push(program.clone());
-    for arg in &plan.args {
-        argv_strings.push(
-            CString::new(arg.as_bytes()).context("sftp argument contains an interior null byte")?,
-        );
-    }
-    let mut argv: Vec<*const libc::c_char> = argv_strings.iter().map(|arg| arg.as_ptr()).collect();
-    argv.push(ptr::null());
-
-    let mut master_fd = 0;
-    let pid = unsafe {
-        libc::forkpty(
-            &mut master_fd,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    };
-
-    if pid < 0 {
-        bail!("failed to fork sftp process");
-    }
-
-    if pid == 0 {
-        unsafe {
-            libc::execvp(program.as_ptr(), argv.as_ptr());
-            libc::_exit(127);
-        }
-    }
-
-    set_nonblocking(master_fd)?;
-
+    let mut process = spawn_pty_process(PtyCommand::new(plan.program, plan.args), 80, 24)?;
+    let writer = process.writer.clone();
+    let output_rx = spawn_reader_channel(process.reader);
     let commands_payload = format!("{}\n", commands.join("\n"));
     let mut output = Vec::new();
     let mut prompt_window = String::new();
     let mut password_index = 0;
     let mut commands_sent = false;
     let mut host_key_confirmed = false;
-    let mut terminal_error: Option<String> = None;
     let started = Instant::now();
 
     loop {
         if is_cancelled(cancel_token) {
-            let mut status = 0;
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-                libc::waitpid(pid, &mut status, 0);
-                libc::close(master_fd);
-            }
+            process.session.kill();
+            let _ = process.child.wait();
             bail!("SFTP task cancelled");
         }
 
-        let mut buffer = [0_u8; 8192];
-        loop {
-            let count = unsafe {
-                libc::read(
-                    master_fd,
-                    buffer.as_mut_ptr() as *mut libc::c_void,
-                    buffer.len(),
-                )
-            };
-            if count > 0 {
-                let chunk = &buffer[..count as usize];
-                output.extend_from_slice(chunk);
-                prompt_window.push_str(&String::from_utf8_lossy(chunk));
-                if prompt_window.len() > 2048 {
-                    prompt_window = prompt_window
-                        .chars()
-                        .rev()
-                        .take(2048)
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect();
-                }
-            } else {
-                break;
+        match output_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(chunk) => {
+                output.extend_from_slice(&chunk);
+                append_limited_lossy(&mut prompt_window, &chunk, 2048);
             }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        while let Ok(chunk) = output_rx.try_recv() {
+            output.extend_from_slice(&chunk);
+            append_limited_lossy(&mut prompt_window, &chunk, 2048);
         }
 
         let normalized_prompt = prompt_window.to_lowercase();
         if !host_key_confirmed
             && normalized_prompt.contains("are you sure you want to continue connecting")
         {
-            write_all(master_fd, b"yes\n")?;
+            write_to_pty(&writer, b"yes\n")?;
             host_key_confirmed = true;
             prompt_window.clear();
         }
 
         if output_contains_password_prompt(&prompt_window) {
             if password_index >= plan.passwords.len() {
-                terminal_error = Some(
-                    "SFTP requires a password/passphrase, but no plaintext password is saved for this profile"
-                        .into(),
+                process.session.kill();
+                let _ = process.child.wait();
+                let text = String::from_utf8_lossy(&output).into_owned();
+                bail!(
+                    "SFTP requires a password/passphrase, but no plaintext password is saved for this profile\n{}",
+                    clean_sftp_output(&text)
                 );
-                unsafe {
-                    libc::kill(pid, libc::SIGTERM);
-                }
-            } else {
-                let secret = format!("{}\n", plan.passwords[password_index]);
-                write_all(master_fd, secret.as_bytes())?;
-                password_index += 1;
-                prompt_window.clear();
             }
+
+            let secret = format!("{}\n", plan.passwords[password_index]);
+            write_to_pty(&writer, secret.as_bytes())?;
+            password_index += 1;
+            prompt_window.clear();
         }
 
         if !commands_sent && normalized_prompt.contains("sftp>") {
-            write_all(master_fd, commands_payload.as_bytes())?;
+            write_to_pty(&writer, commands_payload.as_bytes())?;
             commands_sent = true;
             prompt_window.clear();
         }
 
-        let mut status = 0;
-        let wait_result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if wait_result == pid {
-            unsafe {
-                libc::close(master_fd);
-            }
+        if let Some(status) = process.child.try_wait()? {
             let text = String::from_utf8_lossy(&output).into_owned();
-            if let Some(error) = terminal_error {
-                bail!("{error}\n{}", clean_sftp_output(&text));
-            }
-            if !process_status_success(status) {
+            if !status.success() {
                 bail!("SFTP command failed\n{}", clean_sftp_output(&text));
             }
             return Ok(text);
         }
 
         if started.elapsed() > timeout {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-                libc::waitpid(pid, &mut status, 0);
-                libc::close(master_fd);
-            }
+            process.session.kill();
+            let _ = process.child.wait();
             let text = String::from_utf8_lossy(&output).into_owned();
             bail!("SFTP command timed out\n{}", clean_sftp_output(&text));
         }
-
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
-
-fn set_nonblocking(fd: RawFd) -> Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        bail!("failed to read sftp pty flags");
-    }
-    let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if result < 0 {
-        bail!("failed to set sftp pty nonblocking");
-    }
-    Ok(())
-}
-
-fn write_all(fd: RawFd, bytes: &[u8]) -> Result<()> {
-    let mut written = 0;
-    while written < bytes.len() {
-        let count = unsafe {
-            libc::write(
-                fd,
-                bytes[written..].as_ptr() as *const libc::c_void,
-                bytes.len() - written,
-            )
-        };
-        if count < 0 {
-            bail!("failed to write to sftp process");
-        }
-        written += count as usize;
-    }
-    Ok(())
-}
-
-fn process_status_success(status: libc::c_int) -> bool {
-    libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
-}
-
 fn is_cancelled(cancel_token: Option<&SftpCancelToken>) -> bool {
     cancel_token
         .map(|token| token.load(Ordering::SeqCst))
@@ -696,15 +599,19 @@ fn normalize_remote_path(path: &str) -> String {
 }
 
 fn expand_tilde(path: &str) -> String {
-    if path == "~" {
-        std::env::var("HOME").unwrap_or_else(|_| path.into())
+    let Some(home) = home_path() else {
+        return path.into();
+    };
+
+    let expanded = if path == "~" {
+        home
     } else if let Some(rest) = path.strip_prefix("~/") {
-        std::env::var("HOME")
-            .map(|home| format!("{home}/{rest}"))
-            .unwrap_or_else(|_| path.into())
+        home.join(rest)
     } else {
-        path.into()
-    }
+        return path.into();
+    };
+
+    expanded.to_string_lossy().into_owned()
 }
 
 fn parse_list_output(output: &str, fallback_path: &str) -> Result<SftpListResponse> {
