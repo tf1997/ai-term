@@ -6,7 +6,9 @@ import type {
   AiMessage,
   CommandHistoryEntry,
   CommandRecordedEvent,
+  ScriptRecording,
   TerminalOutputEvent,
+  TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
 import {
@@ -101,7 +103,7 @@ const aiConfigDraft = ref<AiProviderConfig | undefined>()
 const leftPanelMode = ref<LeftPanelMode>('connections')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
-const workspacePanelTab = ref<'history' | 'ai' | 'sftp'>('ai')
+const workspacePanelTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
 const terminalTabs = ref<TerminalTab[]>([
   {
     id: 'local-1',
@@ -115,10 +117,12 @@ const terminalTabs = ref<TerminalTab[]>([
 const activeTerminalId = ref('local-1')
 const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
+const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
 const workspaceSessionsByConnection = ref<Record<string, WorkspaceSession[]>>({})
 const commandHistoryBySession = ref<Record<string, CommandHistoryEntry[]>>({})
 const aiMessagesBySession = ref<Record<string, AiMessage[]>>({})
 const aiContextBySession = ref<Record<string, AiContextStatus>>({})
+const scriptRecordingsByTerminal = ref<Record<string, ScriptRecording>>({})
 const loadedWorkspaceSessions = ref<Record<string, boolean>>({})
 const loadedSessionLists = ref<Record<string, boolean>>({})
 const contextMenu = ref<ContextMenuState | null>(null)
@@ -140,6 +144,10 @@ const activeTerminalSnapshot = computed(() => {
   return terminalSnapshots.value[activeTerminalId.value] ?? ''
 })
 
+const activeTerminalSelection = computed(() => {
+  return terminalSelections.value[activeTerminalId.value]
+})
+
 const activeConnectionId = computed(() => activeTerminal.value?.connectionId ?? LOCAL_CONNECTION_ID)
 const activeWorkspaceSessionId = computed(() => activeTerminal.value?.workspaceSessionId ?? LOCAL_DEFAULT_SESSION_ID)
 const activeWorkspaceKey = computed(() => workspaceKey(activeConnectionId.value, activeWorkspaceSessionId.value))
@@ -154,6 +162,10 @@ const activeAiMessages = computed(() => {
 
 const activeAiContextStatus = computed(() => {
   return aiContextBySession.value[activeWorkspaceKey.value]
+})
+
+const activeScriptRecording = computed(() => {
+  return scriptRecordingsByTerminal.value[activeTerminalId.value] ?? createIdleScriptRecording(activeTerminalId.value)
 })
 
 const activeWorkspaceSessions = computed(() => {
@@ -253,6 +265,31 @@ function openConnectionsPanel() {
 function openSettingsPanel() {
   leftPanelMode.value = 'settings'
   leftCollapsed.value = false
+}
+
+function toggleConnectionsPanel() {
+  if (leftPanelMode.value === 'connections') {
+    leftCollapsed.value = !leftCollapsed.value
+    return
+  }
+  openConnectionsPanel()
+}
+
+function toggleSettingsPanel() {
+  if (leftPanelMode.value === 'settings') {
+    leftCollapsed.value = !leftCollapsed.value
+    return
+  }
+  openSettingsPanel()
+}
+
+function isLeftPanelActive(mode: LeftPanelMode) {
+  return leftPanelMode.value === mode && !leftCollapsed.value
+}
+
+function leftPanelButtonTitle(mode: LeftPanelMode) {
+  if (isLeftPanelActive(mode)) return mode === 'connections' ? '收起连接管理' : '收起配置菜单'
+  return mode === 'connections' ? '打开连接管理' : '打开配置菜单'
 }
 
 function openContextMenu(event: MouseEvent, title: string, items: ContextMenuItem[]) {
@@ -655,11 +692,11 @@ async function createWorkspaceSessionForActiveConnection() {
   }
 }
 
-async function renameWorkspaceSession(sessionId: string) {
+async function renameWorkspaceSession(sessionId: string, name: string) {
   const sessions = workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
   const session = sessions.find((item) => item.id === sessionId)
   if (!session) return
-  const nextName = window.prompt('会话名称', session.name)?.trim()
+  const nextName = name.trim()
   if (!nextName) return
   const updated = { ...session, name: nextName, updatedAt: nowText() }
   try {
@@ -758,6 +795,7 @@ function closeTerminalTab(tabId: string) {
   const index = terminalTabs.value.findIndex((tab) => tab.id === tabId)
   terminalTabs.value = terminalTabs.value.filter((tab) => tab.id !== tabId)
   delete terminalSnapshots.value[tabId]
+  delete terminalSelections.value[tabId]
   delete terminalRefs.value[tabId]
   if (activeTerminalId.value === tabId) {
     const nextTab = terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]
@@ -770,7 +808,17 @@ function setTerminalRef(tabId: string, instance: TerminalPaneInstance | null) {
 }
 
 function updateTerminalOutput(event: TerminalOutputEvent) {
+  const previousSnapshot = terminalSnapshots.value[event.terminalId] ?? ''
+  const delta = terminalOutputDelta(previousSnapshot, event.snapshot)
   terminalSnapshots.value[event.terminalId] = event.snapshot
+  appendRecordingOutput(event.terminalId, delta)
+}
+
+function updateTerminalSelection(event: TerminalSelectionEvent) {
+  terminalSelections.value = {
+    ...terminalSelections.value,
+    [event.terminalId]: event
+  }
 }
 
 function recordCommand(event: CommandRecordedEvent) {
@@ -791,9 +839,89 @@ function recordCommand(event: CommandRecordedEvent) {
     ...commandHistoryBySession.value,
     [key]: [...(commandHistoryBySession.value[key] ?? []), entry].slice(-300)
   }
+  appendRecordingCommand(event.terminalId, event.command)
   void saveCommandHistoryRecord(entry).catch((error) => {
     console.error('failed to save command history', error)
   })
+}
+
+function createIdleScriptRecording(terminalId: string): ScriptRecording {
+  return {
+    terminalId,
+    connectionId: activeConnectionId.value,
+    workspaceSessionId: activeWorkspaceSessionId.value,
+    isRecording: false,
+    startedAt: '',
+    commands: [],
+    terminalOutput: ''
+  }
+}
+
+function startScriptRecording() {
+  const terminalId = activeTerminalId.value
+  scriptRecordingsByTerminal.value = {
+    ...scriptRecordingsByTerminal.value,
+    [terminalId]: {
+      terminalId,
+      connectionId: activeConnectionId.value,
+      workspaceSessionId: activeWorkspaceSessionId.value,
+      isRecording: true,
+      startedAt: nowText(),
+      commands: [],
+      terminalOutput: ''
+    }
+  }
+}
+
+function stopScriptRecording() {
+  const recording = scriptRecordingsByTerminal.value[activeTerminalId.value]
+  if (!recording) return
+  scriptRecordingsByTerminal.value = {
+    ...scriptRecordingsByTerminal.value,
+    [activeTerminalId.value]: {
+      ...recording,
+      isRecording: false,
+      stoppedAt: nowText()
+    }
+  }
+}
+
+function clearScriptRecording() {
+  const nextRecordings = { ...scriptRecordingsByTerminal.value }
+  delete nextRecordings[activeTerminalId.value]
+  scriptRecordingsByTerminal.value = nextRecordings
+}
+
+function appendRecordingOutput(terminalId: string, delta: string) {
+  if (!delta) return
+  const recording = scriptRecordingsByTerminal.value[terminalId]
+  if (!recording?.isRecording) return
+  scriptRecordingsByTerminal.value = {
+    ...scriptRecordingsByTerminal.value,
+    [terminalId]: {
+      ...recording,
+      terminalOutput: `${recording.terminalOutput}${delta}`.slice(-120_000)
+    }
+  }
+}
+
+function appendRecordingCommand(terminalId: string, command: string) {
+  const recording = scriptRecordingsByTerminal.value[terminalId]
+  if (!recording?.isRecording) return
+  scriptRecordingsByTerminal.value = {
+    ...scriptRecordingsByTerminal.value,
+    [terminalId]: {
+      ...recording,
+      commands: [...recording.commands, command].slice(-200)
+    }
+  }
+}
+
+function terminalOutputDelta(previousSnapshot: string, nextSnapshot: string) {
+  if (!previousSnapshot) return nextSnapshot
+  if (nextSnapshot.startsWith(previousSnapshot)) return nextSnapshot.slice(previousSnapshot.length)
+  if (nextSnapshot.length > previousSnapshot.length) return nextSnapshot.slice(previousSnapshot.length)
+  return nextSnapshot.slice(-8_000)
 }
 
 function executeCommandOnActiveTerminal(command: string) {
@@ -944,8 +1072,24 @@ onBeforeUnmount(() => {
       </nav>
     </header>
     <aside class="app-rail" aria-label="Primary navigation">
-      <button class="rail-button" :class="{ active: leftPanelMode === 'connections' }" title="连接管理" @click="openConnectionsPanel">▣</button>
-      <button class="rail-button" :class="{ active: leftPanelMode === 'settings' }" title="配置菜单" @click="openSettingsPanel">⚙</button>
+      <button
+        class="rail-button"
+        :class="{ active: isLeftPanelActive('connections') }"
+        :title="leftPanelButtonTitle('connections')"
+        :aria-label="leftPanelButtonTitle('connections')"
+        @click="toggleConnectionsPanel"
+      >
+        ▣
+      </button>
+      <button
+        class="rail-button"
+        :class="{ active: isLeftPanelActive('settings') }"
+        :title="leftPanelButtonTitle('settings')"
+        :aria-label="leftPanelButtonTitle('settings')"
+        @click="toggleSettingsPanel"
+      >
+        ⚙
+      </button>
     </aside>
     <ConnectionSidebar
       v-if="leftPanelMode === 'connections'"
@@ -984,16 +1128,6 @@ onBeforeUnmount(() => {
       @close-ai-config="closeAiConfigEditor"
       @save-ai-config="saveAiConfig"
     />
-    <button
-      v-if="!leftCollapsed"
-      class="sidebar-collapse-button"
-      type="button"
-      title="关闭左侧栏"
-      aria-label="关闭左侧栏"
-      @click="leftCollapsed = true"
-    >
-      ◀
-    </button>
     <section class="terminal-stack" @contextmenu.prevent="openTerminalAreaContextMenu">
       <TerminalPane
         v-for="tab in terminalTabs"
@@ -1004,6 +1138,7 @@ onBeforeUnmount(() => {
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         @terminal-output="updateTerminalOutput"
+        @terminal-selection="updateTerminalSelection"
         @command-recorded="recordCommand"
       />
     </section>
@@ -1017,9 +1152,11 @@ onBeforeUnmount(() => {
       :ai-config="aiConfig"
       :api-key="activeAiRuntimeApiKey"
       :terminal-snapshot="activeTerminalSnapshot"
+      :terminal-selection="activeTerminalSelection"
       :command-history="activeCommandHistory"
       :ai-messages="activeAiMessages"
       :ai-context-status="activeAiContextStatus"
+      :script-recording="activeScriptRecording"
       @close="rightCollapsed = true"
       @select-workspace-session="selectWorkspaceSession"
       @create-workspace-session="createWorkspaceSessionForActiveConnection"
@@ -1031,6 +1168,9 @@ onBeforeUnmount(() => {
       @set-ai-context-status="setAiContextForTerminal"
       @execute-command="executeCommandOnActiveTerminal"
       @write-terminal-input="writeInputToActiveTerminal"
+      @start-script-recording="startScriptRecording"
+      @stop-script-recording="stopScriptRecording"
+      @clear-script-recording="clearScriptRecording"
       @workspace-tab-changed="workspacePanelTab = $event"
     />
     <button

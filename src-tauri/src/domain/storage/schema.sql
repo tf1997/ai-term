@@ -88,3 +88,18 @@ CREATE TABLE IF NOT EXISTS ai_conversation_messages (
 
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_connection_created
   ON ai_conversation_messages(connection_id, workspace_session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS update_scripts (
+  id TEXT PRIMARY KEY NOT NULL,
+  connection_id TEXT NOT NULL,
+  workspace_session_id TEXT NOT NULL DEFAULT 'default',
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  source_commands_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_update_scripts_connection_updated
+  ON update_scripts(connection_id, updated_at);

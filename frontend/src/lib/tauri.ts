@@ -1,7 +1,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/tauri'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
-import type { AiMessage, CommandHistoryEntry, WorkspaceSession } from '../types/workspace'
+import type { AiMessage, CommandHistoryEntry, UpdateScript, WorkspaceSession } from '../types/workspace'
 
 export interface TerminalDataEvent {
   sessionId: string
@@ -48,6 +48,18 @@ export interface AiSessionTitleRequest {
 }
 
 export interface AiSessionTitleResponse {
+  title: string
+}
+
+export interface AiScriptTitleRequest {
+  config: AiProviderConfig
+  apiKey: string
+  userRequest: string
+  scriptContent: string
+  sourceCommands: string[]
+}
+
+export interface AiScriptTitleResponse {
   title: string
 }
 
@@ -156,6 +168,10 @@ export function generateAiSessionTitle(request: AiSessionTitleRequest) {
   return invoke<AiSessionTitleResponse>('generate_ai_session_title', { request })
 }
 
+export function generateAiScriptTitle(request: AiScriptTitleRequest) {
+  return invoke<AiScriptTitleResponse>('generate_ai_script_title', { request })
+}
+
 export function listWorkspaceSessions(connectionId: string) {
   return invoke<WorkspaceSession[]>('list_workspace_sessions', { connectionId })
 }
@@ -182,6 +198,22 @@ export function listAiConversationMessages(connectionId: string, workspaceSessio
 
 export function saveAiConversationMessage(message: AiMessage) {
   return invoke<void>('save_ai_conversation_message', { message })
+}
+
+export function listUpdateScripts(connectionId: string) {
+  return invoke<UpdateScript[]>('list_update_scripts', { connectionId })
+}
+
+export function getUpdateScript(id: string) {
+  return invoke<UpdateScript | null>('get_update_script', { id })
+}
+
+export function saveUpdateScript(script: UpdateScript) {
+  return invoke<void>('save_update_script', { script })
+}
+
+export function deleteUpdateScript(id: string) {
+  return invoke<boolean>('delete_update_script', { id })
 }
 
 export function localHomeDirectory() {

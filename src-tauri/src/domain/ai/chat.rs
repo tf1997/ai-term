@@ -1,3 +1,7 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -13,6 +17,8 @@ const TERMINAL_HEAD_CHARS: usize = 2_000;
 const TERMINAL_TAIL_CHARS: usize = 8_000;
 const MAX_HISTORY_COMMANDS: usize = 80;
 const MAX_KEY_LINES: usize = 36;
+
+pub type AiCancelToken = Arc<AtomicBool>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +56,22 @@ pub struct AiSessionTitleResponse {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiScriptTitleRequest {
+    pub config: AiProviderConfig,
+    pub api_key: String,
+    pub user_request: String,
+    pub script_content: String,
+    pub source_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiScriptTitleResponse {
+    pub title: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContextBundle {
     terminal: String,
@@ -80,6 +102,7 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
 pub async fn chat_with_provider_stream<F>(
     request: AiChatRequest,
     on_delta: F,
+    cancel_token: Option<&AiCancelToken>,
 ) -> Result<AiChatResponse>
 where
     F: FnMut(String) + Send,
@@ -89,9 +112,14 @@ where
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_chat_payload(&request, &context, true);
 
-    let answer =
-        send_openai_compatible_stream_request(&endpoint, &request.api_key, payload, on_delta)
-            .await?;
+    let answer = send_openai_compatible_stream_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        on_delta,
+        cancel_token,
+    )
+    .await?;
 
     Ok(AiChatResponse {
         answer,
@@ -131,6 +159,35 @@ pub async fn generate_session_title(
         .unwrap_or_else(|| "Untitled".to_string());
 
     Ok(AiSessionTitleResponse { title })
+}
+
+pub async fn generate_script_title(request: AiScriptTitleRequest) -> Result<AiScriptTitleResponse> {
+    validate_script_title_request(&request)?;
+    let endpoint = chat_completions_endpoint(&request.config.base_url);
+    let payload = json!({
+        "model": request.config.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 AI Term 的脚本命名助手。根据用户目标、bash 脚本和来源命令，为服务器更新脚本生成一个短名称。只输出名称本身，不要解释，不要加引号，不要 Markdown。中文不超过 14 个字；英文不超过 7 个词。名称应体现服务名、环境或更新动作。"
+            },
+            {
+                "role": "user",
+                "content": build_script_title_prompt(&request)
+            }
+        ],
+        "temperature": 0.1,
+        "stream": false
+    });
+
+    let response_text =
+        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let answer = extract_chat_answer(&response_text)?;
+    let title = sanitize_session_title(&answer)
+        .or_else(|| sanitize_session_title(&request.user_request))
+        .unwrap_or_else(|| "服务更新脚本".to_string());
+
+    Ok(AiScriptTitleResponse { title })
 }
 
 fn build_chat_payload(request: &AiChatRequest, context: &ContextBundle, stream: bool) -> Value {
@@ -179,6 +236,22 @@ fn validate_title_request(request: &AiSessionTitleRequest) -> Result<()> {
     }
     if request.user_message.trim().is_empty() {
         bail!("会话标题生成缺少用户消息");
+    }
+    Ok(())
+}
+
+fn validate_script_title_request(request: &AiScriptTitleRequest) -> Result<()> {
+    if request.config.base_url.trim().is_empty() {
+        bail!("请先配置 AI Base URL");
+    }
+    if request.config.model.trim().is_empty() {
+        bail!("请先配置 AI Model");
+    }
+    if request.api_key.trim().is_empty() {
+        bail!("请在 AI 配置中填写 API Key 并保存");
+    }
+    if request.script_content.trim().is_empty() {
+        bail!("脚本标题生成缺少脚本内容");
     }
     Ok(())
 }
@@ -415,6 +488,25 @@ fn build_title_prompt(request: &AiSessionTitleRequest, context: &ContextBundle) 
     .join("\n\n")
 }
 
+fn build_script_title_prompt(request: &AiScriptTitleRequest) -> String {
+    [
+        format!("用户目标：{}", request.user_request.trim()),
+        format!(
+            "来源命令：\n{}",
+            if request.source_commands.is_empty() {
+                "-".to_string()
+            } else {
+                request.source_commands.join("\n")
+            }
+        ),
+        format!(
+            "脚本内容：\n{}",
+            truncate_for_prompt(request.script_content.trim(), 1800)
+        ),
+    ]
+    .join("\n\n")
+}
+
 fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
     let chars = value.chars().collect::<Vec<_>>();
     if chars.len() <= max_chars {
@@ -466,6 +558,7 @@ async fn send_openai_compatible_stream_request<F>(
     api_key: &str,
     payload: Value,
     mut on_delta: F,
+    cancel_token: Option<&AiCancelToken>,
 ) -> Result<String>
 where
     F: FnMut(String) + Send,
@@ -499,6 +592,9 @@ where
     let mut saw_sse_delta = false;
 
     while let Some(chunk) = stream.next().await {
+        if is_cancelled(cancel_token) {
+            return Ok(answer);
+        }
         let chunk = chunk.context("failed to read AI stream chunk")?;
         let text = String::from_utf8_lossy(&chunk);
         raw.push_str(&text);
@@ -508,6 +604,9 @@ where
             let event = event_buffer[..index].to_string();
             event_buffer = event_buffer[index + 2..].to_string();
             for delta in parse_sse_event_deltas(&event)? {
+                if is_cancelled(cancel_token) {
+                    return Ok(answer);
+                }
                 saw_sse_delta = true;
                 answer.push_str(&delta);
                 on_delta(delta);
@@ -517,6 +616,9 @@ where
 
     if !event_buffer.trim().is_empty() {
         for delta in parse_sse_event_deltas(&event_buffer)? {
+            if is_cancelled(cancel_token) {
+                return Ok(answer);
+            }
             saw_sse_delta = true;
             answer.push_str(&delta);
             on_delta(delta);
@@ -533,6 +635,12 @@ where
         on_delta(answer.clone());
     }
     Ok(answer)
+}
+
+fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
+    cancel_token
+        .map(|token| token.load(Ordering::SeqCst))
+        .unwrap_or(false)
 }
 
 fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {

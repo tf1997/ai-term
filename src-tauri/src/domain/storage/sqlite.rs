@@ -7,7 +7,7 @@ use crate::domain::connection::models::{
     FileTransferMode, JumpMode,
 };
 use crate::domain::workspace::{
-    AiConversationMessage, AiMessageRole, CommandHistoryRecord, WorkspaceSession,
+    AiConversationMessage, AiMessageRole, CommandHistoryRecord, UpdateScript, WorkspaceSession,
 };
 
 pub const SCHEMA: &str = include_str!("schema.sql");
@@ -35,6 +35,7 @@ impl SqliteConfigStore {
         migrate_ai_provider_configs(&connection)?;
         migrate_command_history(&connection)?;
         migrate_ai_conversation_messages(&connection)?;
+        migrate_update_scripts(&connection)?;
         Ok(())
     }
 
@@ -511,6 +512,137 @@ impl SqliteConfigStore {
             .map_err(Into::into)
     }
 
+    pub fn save_update_script(&self, script: &UpdateScript) -> Result<()> {
+        self.initialize()?;
+        let connection = self.connection()?;
+        let source_commands_json = serde_json::to_string(&script.source_commands)?;
+        connection.execute(
+            r#"
+            INSERT INTO update_scripts (
+              id,
+              connection_id,
+              workspace_session_id,
+              name,
+              description,
+              content,
+              source_commands_json,
+              created_at,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+              connection_id = excluded.connection_id,
+              workspace_session_id = excluded.workspace_session_id,
+              name = excluded.name,
+              description = excluded.description,
+              content = excluded.content,
+              source_commands_json = excluded.source_commands_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                script.id,
+                script.connection_id,
+                script.workspace_session_id,
+                script.name,
+                script.description,
+                script.content,
+                source_commands_json,
+                script.created_at,
+                script.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_update_scripts(&self, connection_id: &str) -> Result<Vec<UpdateScript>> {
+        self.initialize()?;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              id,
+              connection_id,
+              workspace_session_id,
+              name,
+              description,
+              content,
+              source_commands_json,
+              created_at,
+              updated_at
+            FROM update_scripts
+            WHERE connection_id = ?1
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            "#,
+        )?;
+
+        let rows = statement.query_map([connection_id], |row| {
+            let source_commands_json: String = row.get(6)?;
+            let source_commands =
+                serde_json::from_str::<Vec<String>>(&source_commands_json).unwrap_or_default();
+            Ok(UpdateScript {
+                id: row.get(0)?,
+                connection_id: row.get(1)?,
+                workspace_session_id: row.get(2)?,
+                name: row.get(3)?,
+                description: row.get(4)?,
+                content: row.get(5)?,
+                source_commands,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_update_script(&self, id: &str) -> Result<Option<UpdateScript>> {
+        self.initialize()?;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              id,
+              connection_id,
+              workspace_session_id,
+              name,
+              description,
+              content,
+              source_commands_json,
+              created_at,
+              updated_at
+            FROM update_scripts
+            WHERE id = ?1
+            "#,
+        )?;
+
+        let mut rows = statement.query_map([id], |row| {
+            let source_commands_json: String = row.get(6)?;
+            let source_commands =
+                serde_json::from_str::<Vec<String>>(&source_commands_json).unwrap_or_default();
+            Ok(UpdateScript {
+                id: row.get(0)?,
+                connection_id: row.get(1)?,
+                workspace_session_id: row.get(2)?,
+                name: row.get(3)?,
+                description: row.get(4)?,
+                content: row.get(5)?,
+                source_commands,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+
+        rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn delete_update_script(&self, id: &str) -> Result<bool> {
+        self.initialize()?;
+        let connection = self.connection()?;
+        let deleted = connection.execute("DELETE FROM update_scripts WHERE id = ?1", [id])?;
+        Ok(deleted > 0)
+    }
+
     fn connection(&self) -> Result<Connection> {
         if let Some(parent) = Path::new(&self.database_path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -557,6 +689,28 @@ fn migrate_ai_conversation_messages(connection: &Connection) -> Result<()> {
         "ai_conversation_messages",
         "workspace_session_id",
         "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    Ok(())
+}
+
+fn migrate_update_scripts(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS update_scripts (
+          id TEXT PRIMARY KEY NOT NULL,
+          connection_id TEXT NOT NULL,
+          workspace_session_id TEXT NOT NULL DEFAULT 'default',
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          content TEXT NOT NULL,
+          source_commands_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_update_scripts_connection_updated
+          ON update_scripts(connection_id, updated_at);
+        "#,
     )?;
     Ok(())
 }
@@ -609,6 +763,7 @@ pub fn schema_contains_required_tables() -> bool {
         "workspace_sessions",
         "command_history",
         "ai_conversation_messages",
+        "update_scripts",
     ];
 
     required.iter().all(|table| SCHEMA.contains(table))

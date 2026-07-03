@@ -9,7 +9,9 @@ use tokio::sync::Mutex;
 use crate::domain::connection::models::{AiProviderConfig, ConnectionProfile};
 use crate::domain::storage::sqlite::SqliteConfigStore;
 use crate::domain::terminal::ssh::TerminalSession;
-use crate::domain::workspace::{AiConversationMessage, CommandHistoryRecord, WorkspaceSession};
+use crate::domain::workspace::{
+    AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
+};
 pub struct SessionRecord {
     pub id: String,
     pub profile_id: String,
@@ -232,6 +234,38 @@ impl AppState {
             anyhow::bail!("workspace conversation store is not configured");
         };
         store.list_ai_conversation_messages(connection_id, workspace_session_id)
+    }
+
+    pub async fn save_update_script(&self, script: UpdateScript) -> Result<()> {
+        let store = self.profile_store.lock().await;
+        let Some(store) = store.as_ref() else {
+            anyhow::bail!("workspace script store is not configured");
+        };
+        store.save_update_script(&script)
+    }
+
+    pub async fn list_update_scripts(&self, connection_id: &str) -> Result<Vec<UpdateScript>> {
+        let store = self.profile_store.lock().await;
+        let Some(store) = store.as_ref() else {
+            anyhow::bail!("workspace script store is not configured");
+        };
+        store.list_update_scripts(connection_id)
+    }
+
+    pub async fn get_update_script(&self, id: &str) -> Result<Option<UpdateScript>> {
+        let store = self.profile_store.lock().await;
+        let Some(store) = store.as_ref() else {
+            anyhow::bail!("workspace script store is not configured");
+        };
+        store.get_update_script(id)
+    }
+
+    pub async fn delete_update_script(&self, id: &str) -> Result<bool> {
+        let store = self.profile_store.lock().await;
+        let Some(store) = store.as_ref() else {
+            anyhow::bail!("workspace script store is not configured");
+        };
+        store.delete_update_script(id)
     }
 }
 

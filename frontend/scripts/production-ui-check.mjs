@@ -18,6 +18,7 @@ const terminalPane = read('src/components/TerminalPane.vue')
 const aiPanel = read('src/components/AiPanel.vue')
 const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
+const scriptPanel = read('src/components/ScriptPanel.vue')
 const sidebar = read('src/components/ConnectionSidebar.vue')
 const settingsSidebar = read('src/components/SettingsSidebar.vue')
 const tauri = read('src/lib/tauri.ts')
@@ -296,7 +297,12 @@ assert(
   appShell.includes('leftCollapsed') &&
     appShell.includes('rightCollapsed') &&
     appShell.includes('leftPanelMode') &&
-    appShell.includes('sidebar-collapse-button') &&
+    appShell.includes('toggleConnectionsPanel') &&
+    appShell.includes('toggleSettingsPanel') &&
+    appShell.includes('isLeftPanelActive') &&
+    appShell.includes('leftPanelButtonTitle') &&
+    !appShell.includes('sidebar-collapse-button') &&
+    !styles.includes('.sidebar-collapse-button') &&
     !appShell.includes('toggle-left') &&
     !appShell.includes('toggle-right') &&
     !appShell.includes('top-actions') &&
@@ -308,19 +314,29 @@ assert(
 )
 
 assert(
-    workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'sftp'>") &&
+    workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>") &&
     workspacePanel.includes('命令历史') &&
     workspacePanel.includes('AI 助手') &&
+    workspacePanel.includes('脚本') &&
     workspacePanel.includes('SFTP') &&
     workspacePanel.includes('selectWorkspaceSession') &&
     workspacePanel.includes('createWorkspaceSession') &&
     workspacePanel.includes('renameWorkspaceSession') &&
     workspacePanel.includes('deleteWorkspaceSession') &&
     aiPanel.includes('session-history-popover') &&
+    aiPanel.includes('historyPopover') &&
+    aiPanel.includes('historyButton') &&
+    aiPanel.includes('handleDocumentPointerDown') &&
+    aiPanel.includes("document.addEventListener('pointerdown'") &&
     aiPanel.includes('filteredSessions') &&
     aiPanel.includes('sessionSearch') &&
     aiPanel.includes("emit('createSession')") &&
     aiPanel.includes("emit('renameSession'") &&
+    aiPanel.includes('openRenameSessionDialog') &&
+    aiPanel.includes('submitRenameSession') &&
+    aiPanel.includes('编辑会话名称') &&
+    aiPanel.includes('rename-modal') &&
+    !aiPanel.includes('window.prompt') &&
     aiPanel.includes("emit('deleteSession'") &&
     aiPanel.includes('generateAiSessionTitle') &&
     aiPanel.includes('maybeGenerateSessionTitle') &&
@@ -334,10 +350,23 @@ assert(
 
 assert(
   terminalPane.includes('terminalOutput:') &&
+    terminalPane.includes('terminalSelection:') &&
     terminalPane.includes('commandRecorded:') &&
     terminalPane.includes('defineExpose') &&
-    terminalPane.includes('executeCommand'),
-  'TerminalPane must expose terminal output, command history events, and an executeCommand bridge.'
+    terminalPane.includes('executeCommand') &&
+    terminalPane.includes('onSelectionChange') &&
+    terminalPane.includes('getSelectionPosition') &&
+    terminalPane.includes('copySelectionToClipboard') &&
+    terminalPane.includes('pasteClipboardToTerminal') &&
+    terminalPane.includes("@tauri-apps/api/clipboard") &&
+    terminalPane.includes('readClipboardText') &&
+    terminalPane.includes('writeClipboardText') &&
+    terminalPane.includes("addEventListener('pointerdown', handleTerminalPointerDown, true)") &&
+    terminalPane.includes("addEventListener('contextmenu', handleTerminalContextMenu, true)") &&
+    terminalPane.includes('requestTerminalPaste') &&
+    appShell.includes('terminalSelections') &&
+    appShell.includes('updateTerminalSelection'),
+  'TerminalPane must expose terminal output, selection context, command history events, selection auto-copy, right-click paste, and an executeCommand bridge.'
 )
 
 assert(
@@ -350,6 +379,7 @@ assert(
 
 assert(
     workspacePanel.includes(':terminal-snapshot="terminalSnapshot"') &&
+    workspacePanel.includes(':terminal-selection="terminalSelection"') &&
     workspacePanel.includes(':command-history="commandHistory"') &&
     workspacePanel.includes(':workspace-session-id="workspaceSessionId"') &&
     workspacePanel.includes('@execute-command=') &&
@@ -360,6 +390,12 @@ assert(
 assert(
     aiPanel.includes('chatWithAiProvider') &&
     aiPanel.includes('terminalSnapshot,') &&
+    aiPanel.includes('terminalSelection?: TerminalSelectionEvent') &&
+    aiPanel.includes('selectedTerminalContext') &&
+    aiPanel.includes('formatSelectedLineRange') &&
+    aiPanel.includes('buildQuestionWithSelectedTerminalText') &&
+    aiPanel.includes('用户选中的终端内容') &&
+    aiPanel.includes('selected-terminal-note') &&
     aiPanel.includes('const commandHistory = props.commandHistory.map') &&
     aiPanel.includes('context compressed') &&
     aiPanel.includes('messages: AiMessage[]') &&
@@ -375,6 +411,9 @@ assert(
     appShell.includes('deleteWorkspaceSessionForActiveConnection') &&
     appShell.includes('saveCommandHistoryRecord') &&
     appShell.includes('saveAiConversationMessage') &&
+    tauri.includes("invoke<UpdateScript[]>('list_update_scripts'") &&
+    tauri.includes("invoke<void>('save_update_script'") &&
+    tauri.includes("invoke<boolean>('delete_update_script'") &&
     tauri.includes("invoke<WorkspaceSession[]>('list_workspace_sessions'") &&
     tauri.includes("invoke<void>('save_workspace_session'") &&
     tauri.includes("invoke<boolean>('delete_workspace_session'") &&
@@ -394,6 +433,9 @@ assert(
     !aiChat.includes('模型返回不是合法 JSON') &&
     aiPanel.includes('错误详情') &&
     aiPanel.includes('chatWithAiProviderStream') &&
+    aiPanel.includes('cancelTask') &&
+    aiPanel.includes('stopCurrentAnswer') &&
+    aiPanel.includes('停止回答') &&
     aiPanel.includes('onAiChatStream') &&
     aiPanel.includes("event.kind === 'chunk'") &&
     aiPanel.includes('streaming: true') &&
@@ -415,16 +457,82 @@ assert(
 )
 
 assert(
+  workspacePanel.includes('ScriptPanel') &&
+    workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
+    workspacePanel.includes('@write-terminal-input="emit(\'writeTerminalInput\', $event)"') &&
+    workspacePanel.includes('@start-recording="emit(\'startScriptRecording\')"') &&
+    workspacePanel.includes('@stop-recording="emit(\'stopScriptRecording\')"') &&
+    appShell.includes('scriptRecordingsByTerminal') &&
+    appShell.includes('startScriptRecording') &&
+    appShell.includes('stopScriptRecording') &&
+    appShell.includes('appendRecordingOutput') &&
+    appShell.includes('appendRecordingCommand') &&
+    scriptPanel.includes('sendScriptRequest') &&
+    scriptPanel.includes('script-history-popover') &&
+    scriptPanel.includes('historyPopover') &&
+    scriptPanel.includes('historyButton') &&
+    scriptPanel.includes('handleDocumentPointerDown') &&
+    scriptPanel.includes("document.addEventListener('pointerdown'") &&
+    scriptPanel.includes('loadSelectedScript') &&
+    scriptPanel.includes('toggleScriptEditor') &&
+    scriptPanel.includes('saveMessageScript') &&
+    scriptPanel.includes('openRenameScriptDialog') &&
+    scriptPanel.includes('renameScript') &&
+    scriptPanel.includes('编辑脚本名') &&
+    scriptPanel.includes('编辑脚本名称') &&
+    scriptPanel.includes('scriptNameDraft') &&
+    !scriptPanel.includes('window.prompt') &&
+    scriptPanel.includes('generateAiScriptTitle') &&
+    scriptPanel.includes('generateScriptTitle') &&
+    scriptPanel.includes('isAutoScriptName') &&
+    scriptPanel.includes('executeMessageScript') &&
+    scriptPanel.includes('buildScriptPrompt') &&
+    scriptPanel.includes('MAX_SCRIPT_SOURCE_COMMANDS') &&
+    scriptPanel.includes('recordedOutput') &&
+    scriptPanel.includes('录制期间命令') &&
+    scriptPanel.includes('录制期间终端输出摘要原文') &&
+    scriptPanel.includes('chatWithAiProviderStream') &&
+    scriptPanel.includes('cancelTask') &&
+    scriptPanel.includes('stopScriptGeneration') &&
+    scriptPanel.includes('停止回答') &&
+    scriptPanel.includes('onAiChatStream') &&
+    scriptPanel.includes('extractBashScript') &&
+    scriptPanel.includes('saveUpdateScript') &&
+    scriptPanel.includes('deleteUpdateScript') &&
+    scriptPanel.includes('loadPreviewScripts') &&
+    scriptPanel.includes('localStorage') &&
+    scriptPanel.includes('bash -s <<') &&
+    scriptPanel.includes('isDangerousScript') &&
+    scriptPanel.includes('window.confirm') &&
+    schema.includes('CREATE TABLE IF NOT EXISTS update_scripts') &&
+    sqlite.includes('pub fn save_update_script') &&
+    sqlite.includes('pub fn list_update_scripts') &&
+    tauri.includes("invoke<AiScriptTitleResponse>('generate_ai_script_title'") &&
+    aiChat.includes('generate_script_title') &&
+    aiChat.includes('脚本命名助手') &&
+    styles.includes('.script-panel') &&
+    styles.includes('.script-recorder') &&
+    styles.includes('.script-chat-list') &&
+    styles.includes('.script-history-popover') &&
+    styles.includes('.script-code-card textarea') &&
+    !scriptPanel.includes('script-result-editor'),
+  'Workspace must include recording-backed script generation with a chat interaction, session-style script library, in-card editing, deletion, and guarded execution.'
+)
+
+assert(
     styles.includes('.context-strip') &&
     styles.includes('overflow-x: auto') &&
     styles.includes('.message-body p') &&
     styles.includes('.session-history-popover') &&
     styles.includes('.session-history-row:hover .session-history-actions') &&
+    styles.includes('.rename-modal') &&
+    styles.includes('.rename-field') &&
     styles.includes('overflow-wrap: anywhere') &&
     styles.includes('white-space: pre-wrap') &&
     styles.includes('grid-template-rows: 58px auto minmax(0, 1fr) auto;') &&
     styles.includes('grid-template-columns: minmax(0, 1fr) var(--icon-size);') &&
     styles.includes('.assistant-compose textarea') &&
+    styles.includes('.selected-terminal-note') &&
     styles.includes('.thinking-row'),
   'Right AI workspace must constrain chips, inputs, and long model text so it does not overflow horizontally.'
 )
@@ -438,8 +546,10 @@ assert(
 
 assert(
   appShell.includes('class="app-rail"') &&
-    appShell.includes("leftPanelMode === 'connections'") &&
-    appShell.includes("leftPanelMode === 'settings'") &&
+    appShell.includes('toggleConnectionsPanel') &&
+    appShell.includes('toggleSettingsPanel') &&
+    appShell.includes(":class=\"{ active: isLeftPanelActive('connections') }\"") &&
+    appShell.includes(":class=\"{ active: isLeftPanelActive('settings') }\"") &&
     !appShell.includes('主题') &&
     !appShell.includes('Files') &&
     !appShell.includes('Vaults') &&
@@ -472,6 +582,7 @@ assert(
 assert(
   workspacePanel.includes('AI 助手') &&
     workspacePanel.includes('命令历史') &&
+    workspacePanel.includes('脚本') &&
     workspacePanel.includes('SFTP') &&
     aiConfig.includes('Custom AI Provider') &&
     settingsSidebar.includes('配置菜单') &&

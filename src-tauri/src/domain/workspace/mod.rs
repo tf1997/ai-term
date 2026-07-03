@@ -39,6 +39,20 @@ pub struct AiConversationMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateScript {
+    pub id: String,
+    pub connection_id: String,
+    pub workspace_session_id: String,
+    pub name: String,
+    pub description: String,
+    pub content: String,
+    pub source_commands: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiMessageRole {
     User,

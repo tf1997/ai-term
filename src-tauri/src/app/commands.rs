@@ -7,8 +7,9 @@ use crate::app::events::{
 };
 use crate::app::state::AppState;
 use crate::domain::ai::chat::{
-    chat_with_provider, chat_with_provider_stream, generate_session_title, AiChatRequest,
-    AiChatResponse, AiSessionTitleRequest, AiSessionTitleResponse,
+    chat_with_provider, chat_with_provider_stream, generate_script_title, generate_session_title,
+    AiChatRequest, AiChatResponse, AiScriptTitleRequest, AiScriptTitleResponse,
+    AiSessionTitleRequest, AiSessionTitleResponse,
 };
 use crate::domain::ai::config::validate_ai_config;
 use crate::domain::connection::bastion::{probe_servers, BastionServerCandidate};
@@ -26,7 +27,9 @@ use crate::domain::filesystem::local::{
 };
 use crate::domain::terminal::local::spawn_local_terminal;
 use crate::domain::terminal::ssh::spawn_ssh_terminal;
-use crate::domain::workspace::{AiConversationMessage, CommandHistoryRecord, WorkspaceSession};
+use crate::domain::workspace::{
+    AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
+};
 
 #[tauri::command]
 pub async fn connect_profile(
@@ -260,27 +263,34 @@ pub async fn chat_with_ai_provider_stream(
     request_id: String,
     request: AiChatRequest,
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<AiChatResponse, String> {
     let event_name = ai_chat_stream_event_name(&request_id);
     let chunk_request_id = request_id.clone();
     let chunk_app = app.clone();
     let chunk_event_name = event_name.clone();
+    let cancel_token = state.register_task(request_id.clone()).await;
 
-    let result = chat_with_provider_stream(request, move |delta| {
-        let _ = chunk_app.emit_all(
-            &chunk_event_name,
-            AiChatStreamEvent {
-                request_id: chunk_request_id.clone(),
-                kind: AiChatStreamEventKind::Chunk,
-                delta,
-                error: None,
-                context_compressed: None,
-                context_chars: None,
-                history_count: None,
-            },
-        );
-    })
+    let result = chat_with_provider_stream(
+        request,
+        move |delta| {
+            let _ = chunk_app.emit_all(
+                &chunk_event_name,
+                AiChatStreamEvent {
+                    request_id: chunk_request_id.clone(),
+                    kind: AiChatStreamEventKind::Chunk,
+                    delta,
+                    error: None,
+                    context_compressed: None,
+                    context_chars: None,
+                    history_count: None,
+                },
+            );
+        },
+        Some(&cancel_token),
+    )
     .await;
+    state.finish_task(&request_id).await;
 
     match result {
         Ok(response) => {
@@ -322,6 +332,15 @@ pub async fn generate_ai_session_title(
     request: AiSessionTitleRequest,
 ) -> Result<AiSessionTitleResponse, String> {
     generate_session_title(request)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn generate_ai_script_title(
+    request: AiScriptTitleRequest,
+) -> Result<AiScriptTitleResponse, String> {
+    generate_script_title(request)
         .await
         .map_err(|err| err.to_string())
 }
@@ -401,6 +420,47 @@ pub async fn list_ai_conversation_messages(
 ) -> Result<Vec<AiConversationMessage>, String> {
     state
         .list_ai_conversation_messages(&connection_id, &workspace_session_id)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn save_update_script(
+    script: UpdateScript,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .save_update_script(script)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn list_update_scripts(
+    connection_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<UpdateScript>, String> {
+    state
+        .list_update_scripts(&connection_id)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn get_update_script(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<UpdateScript>, String> {
+    state
+        .get_update_script(&id)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_update_script(id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .delete_update_script(&id)
         .await
         .map_err(|err| err.to_string())
 }

@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
-import type { AiContextStatus, AiMessage, CommandHistoryEntry, WorkspaceSession } from '../types/workspace'
+import type {
+  AiContextStatus,
+  AiMessage,
+  CommandHistoryEntry,
+  ScriptRecording,
+  TerminalSelectionEvent,
+  WorkspaceSession
+} from '../types/workspace'
 import AiPanel from './AiPanel.vue'
 import CommandHistoryPanel from './CommandHistoryPanel.vue'
 import FileTransferPanel from './FileTransferPanel.vue'
+import ScriptPanel from './ScriptPanel.vue'
 
 defineProps<{
   collapsed: boolean
@@ -16,17 +24,19 @@ defineProps<{
   aiConfig: AiProviderConfig
   apiKey: string
   terminalSnapshot: string
+  terminalSelection?: TerminalSelectionEvent
   commandHistory: CommandHistoryEntry[]
   aiMessages: AiMessage[]
   aiContextStatus?: AiContextStatus
+  scriptRecording: ScriptRecording
 }>()
 
 const emit = defineEmits<{
   close: []
-  workspaceTabChanged: [tab: 'history' | 'ai' | 'sftp']
+  workspaceTabChanged: [tab: 'history' | 'ai' | 'scripts' | 'sftp']
   selectWorkspaceSession: [sessionId: string]
   createWorkspaceSession: []
-  renameWorkspaceSession: [sessionId: string]
+  renameWorkspaceSession: [sessionId: string, name: string]
   deleteWorkspaceSession: [sessionId: string]
   updateWorkspaceSessionTitle: [connectionId: string, sessionId: string, title: string]
   appendAiMessage: [message: AiMessage]
@@ -34,11 +44,14 @@ const emit = defineEmits<{
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
   executeCommand: [command: string]
   writeTerminalInput: [data: string]
+  startScriptRecording: []
+  stopScriptRecording: []
+  clearScriptRecording: []
 }>()
 
-const activeWorkspaceTab = ref<'history' | 'ai' | 'sftp'>('ai')
+const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
 
-function selectWorkspaceTab(tab: 'history' | 'ai' | 'sftp') {
+function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
   activeWorkspaceTab.value = tab
   emit('workspaceTabChanged', tab)
 }
@@ -53,6 +66,9 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'sftp') {
         </button>
         <button :class="{ active: activeWorkspaceTab === 'ai' }" @click="selectWorkspaceTab('ai')">
           AI 助手
+        </button>
+        <button :class="{ active: activeWorkspaceTab === 'scripts' }" @click="selectWorkspaceTab('scripts')">
+          脚本
         </button>
         <button :class="{ active: activeWorkspaceTab === 'sftp' }" @click="selectWorkspaceTab('sftp')">
           SFTP
@@ -78,18 +94,35 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'sftp') {
       :config="aiConfig"
       :api-key="apiKey"
       :terminal-snapshot="terminalSnapshot"
+      :terminal-selection="terminalSelection"
       :command-history="commandHistory"
       :messages="aiMessages"
       :context-status="aiContextStatus"
       @select-session="emit('selectWorkspaceSession', $event)"
       @create-session="emit('createWorkspaceSession')"
-      @rename-session="emit('renameWorkspaceSession', $event)"
+      @rename-session="(sessionId, name) => emit('renameWorkspaceSession', sessionId, name)"
       @delete-session="emit('deleteWorkspaceSession', $event)"
       @update-session-title="(connectionId, sessionId, title) => emit('updateWorkspaceSessionTitle', connectionId, sessionId, title)"
       @append-message="emit('appendAiMessage', $event)"
       @update-message="emit('updateAiMessage', $event)"
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"
       @execute-command="emit('executeCommand', $event)"
+    />
+    <ScriptPanel
+      v-else-if="activeWorkspaceTab === 'scripts'"
+      :terminal-id="terminalId"
+      :connection-id="connectionId"
+      :workspace-session-id="workspaceSessionId"
+      :selected-config-id="selectedAiConfigId"
+      :config="aiConfig"
+      :api-key="apiKey"
+      :terminal-snapshot="terminalSnapshot"
+      :command-history="commandHistory"
+      :recording="scriptRecording"
+      @start-recording="emit('startScriptRecording')"
+      @stop-recording="emit('stopScriptRecording')"
+      @clear-recording="emit('clearScriptRecording')"
+      @write-terminal-input="emit('writeTerminalInput', $event)"
     />
     <FileTransferPanel
       v-else

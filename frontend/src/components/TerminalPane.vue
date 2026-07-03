@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import type { IDisposable } from '@xterm/xterm'
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
 import '@xterm/xterm/css/xterm.css'
 import {
   connectProfile,
@@ -13,7 +14,7 @@ import {
   terminalWrite
 } from '../lib/tauri'
 import type { ConnectionProfile } from '../types/profile'
-import type { CommandRecordedEvent, TerminalOutputEvent } from '../types/workspace'
+import type { CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
 
 const props = defineProps<{
   terminalId: string
@@ -23,6 +24,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   terminalOutput: [event: TerminalOutputEvent]
+  terminalSelection: [event: TerminalSelectionEvent]
   commandRecorded: [event: CommandRecordedEvent]
 }>()
 
@@ -33,8 +35,10 @@ let unlisten: (() => void) | undefined
 let unlistenClosed: (() => void) | undefined
 let resizeObserver: ResizeObserver | undefined
 let dataDisposable: IDisposable | undefined
+let selectionDisposable: IDisposable | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
+let lastRightClickPasteAt = 0
 const status = ref<'idle' | 'local' | 'remote' | 'preview' | 'error'>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
 const activeSession = ref<'local' | 'remote' | 'preview'>('local')
@@ -71,6 +75,74 @@ function appendTerminalOutput(data: string) {
     terminalId: props.terminalId,
     snapshot: terminalOutputBuffer
   })
+}
+
+function activeBufferLine(y: number) {
+  if (!terminal) return y
+  return terminal.buffer.active.baseY + y
+}
+
+function selectedLineRange(text: string) {
+  const selectionPosition = terminal?.getSelectionPosition()
+  if (selectionPosition) {
+    return {
+      startLine: Math.max(1, activeBufferLine(selectionPosition.start.y)),
+      endLine: Math.max(1, activeBufferLine(selectionPosition.end.y))
+    }
+  }
+  const lineCount = Math.max(1, text.split(/\r?\n/).length)
+  const endLine = Math.max(1, terminalOutputBuffer.split('\n').length)
+  return {
+    startLine: Math.max(1, endLine - lineCount + 1),
+    endLine
+  }
+}
+
+function emitTerminalSelection(text: string) {
+  const normalized = text.trimEnd()
+  if (!normalized) {
+    emit('terminalSelection', {
+      terminalId: props.terminalId,
+      text: '',
+      startLine: 0,
+      endLine: 0
+    })
+    return
+  }
+  const range = selectedLineRange(normalized)
+  emit('terminalSelection', {
+    terminalId: props.terminalId,
+    text: normalized,
+    startLine: range.startLine,
+    endLine: Math.max(range.startLine, range.endLine)
+  })
+}
+
+async function copySelectionToClipboard() {
+  const selectedText = terminal?.getSelection() ?? ''
+  emitTerminalSelection(selectedText)
+  if (!selectedText.trim()) return
+  try {
+    await writeClipboard(selectedText)
+  } catch (error) {
+    console.warn('failed to copy terminal selection', error)
+  }
+}
+
+async function readClipboard() {
+  try {
+    return (await readClipboardText()) ?? ''
+  } catch {
+    return (await navigator.clipboard?.readText()) ?? ''
+  }
+}
+
+async function writeClipboard(text: string) {
+  try {
+    await writeClipboardText(text)
+  } catch {
+    await navigator.clipboard?.writeText(text)
+  }
 }
 
 function recordCommand(command: string) {
@@ -124,6 +196,11 @@ onMounted(async () => {
       void terminalWrite(sessionId, data)
     }
   })
+  selectionDisposable = terminal.onSelectionChange(() => {
+    void copySelectionToClipboard()
+  })
+  terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
+  terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
 
   resizeObserver = new ResizeObserver(() => {
     syncTerminalSize()
@@ -251,7 +328,7 @@ function clearTerminal() {
 
 async function copyTerminalOutput() {
   if (!terminalOutputBuffer.trim()) return
-  await navigator.clipboard?.writeText(terminalOutputBuffer)
+  await writeClipboard(terminalOutputBuffer)
 }
 
 function restartLocalTerminal() {
@@ -296,6 +373,37 @@ function writeTerminalInput(data: string) {
   return false
 }
 
+async function pasteClipboardToTerminal() {
+  try {
+    const text = await readClipboard()
+    if (!text) return
+    trackUserInput(text)
+    writeTerminalInput(text)
+  } catch (error) {
+    console.warn('failed to paste terminal clipboard', error)
+  }
+}
+
+function requestTerminalPaste(event: MouseEvent | PointerEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  terminal?.focus()
+  lastRightClickPasteAt = Date.now()
+  void pasteClipboardToTerminal()
+}
+
+function handleTerminalPointerDown(event: PointerEvent) {
+  if (event.button !== 2) return
+  requestTerminalPaste(event)
+}
+
+function handleTerminalContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (Date.now() - lastRightClickPasteAt < 350) return
+  requestTerminalPaste(event)
+}
+
 function disconnect(renderReady = true) {
   const previousSessionId = sessionId
   sessionId = ''
@@ -317,11 +425,14 @@ function disconnectFromButton() {
 }
 
 onBeforeUnmount(() => {
+  terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
+  terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
   disconnect(false)
   resizeObserver?.disconnect()
   unlisten?.()
   unlistenClosed?.()
   dataDisposable?.dispose()
+  selectionDisposable?.dispose()
   terminal?.dispose()
 })
 
