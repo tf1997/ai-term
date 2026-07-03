@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
 import type { CommandHistoryEntry, ScriptRecording, UpdateScript } from '../types/workspace'
 import {
@@ -45,6 +45,8 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 type ScriptPanelMode = 'library' | 'generate'
 const MAX_SCRIPT_SOURCE_COMMANDS = 80
 const MAX_RECORDED_OUTPUT_CHARS = 80_000
+const LONG_MESSAGE_CHARS = 900
+const LONG_MESSAGE_LINES = 12
 
 const scripts = ref<UpdateScript[]>([])
 const selectedScriptId = ref('')
@@ -53,12 +55,11 @@ const panelError = ref('')
 const isGenerating = ref(false)
 const scriptStoreMode = ref<'sqlite' | 'preview'>('sqlite')
 const scriptPanelMode = ref<ScriptPanelMode>('library')
-const askText = ref('把这次录制整理成下次可复用的更新脚本，保留变量和健康检查。')
+const askText = ref('')
 const messages = ref<ScriptChatMessage[]>([])
+const collapsedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
-const historyPopover = ref<HTMLElement | null>(null)
-const historyButton = ref<HTMLButtonElement | null>(null)
-const historyOpen = ref(false)
+const librarySearchInput = ref<HTMLInputElement | null>(null)
 const scriptSearch = ref('')
 const editingMessageId = ref('')
 const scriptDrafts = ref<Record<string, string>>({})
@@ -69,6 +70,8 @@ const renamingScript = ref<UpdateScript | null>(null)
 const scriptNameDraft = ref('')
 const selectedScriptDraft = ref('')
 const selectedScriptEditing = ref(false)
+const draftScriptId = ref('')
+const draftScriptContent = ref('')
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
 const selectedScriptContent = computed(() => selectedScriptDraft.value)
@@ -80,7 +83,13 @@ const recordedOutput = computed(() => {
   return output.length > MAX_RECORDED_OUTPUT_CHARS ? output.slice(-MAX_RECORDED_OUTPUT_CHARS) : output
 })
 const recordingHasData = computed(() => recordedCommands.value.length > 0 || recordedOutput.value.trim().length > 0)
-const showScriptComposer = computed(() => scriptPanelMode.value === 'generate' && recordingHasData.value)
+const hasDraftScript = computed(() => draftScriptContent.value.trim().length > 0)
+const showScriptComposer = computed(() => scriptPanelMode.value === 'generate')
+const draftStatusText = computed(() => {
+  if (draftScriptId.value) return '已关联脚本库条目'
+  if (hasDraftScript.value) return '未保存草稿'
+  return '可直接粘贴或生成脚本'
+})
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
 })
@@ -90,6 +99,9 @@ const filteredScripts = computed(() => {
   return scripts.value.filter((script) => {
     return `${script.name} ${script.description}`.toLowerCase().includes(keyword)
   })
+})
+const scriptLibraryEmptyHint = computed(() => {
+  return scriptSearch.value.trim() ? '没有匹配的脚本，清空搜索后再试。' : '点击新增生成脚本，或直接粘贴并保存你的脚本。'
 })
 
 watch(
@@ -142,14 +154,19 @@ function loadSelectedScript(scriptId: string) {
 
 function openLibraryMode() {
   scriptPanelMode.value = 'library'
-  historyOpen.value = false
   panelError.value = ''
+  focusLibrarySearch()
 }
 
 function openGenerateMode() {
   scriptPanelMode.value = 'generate'
-  historyOpen.value = false
   panelError.value = ''
+}
+
+function focusLibrarySearch() {
+  void nextTick(() => {
+    librarySearchInput.value?.focus()
+  })
 }
 
 function startRecording() {
@@ -169,12 +186,12 @@ function clearRecording() {
   panelError.value = ''
 }
 
-async function sendScriptRequest() {
+async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = hasDraftScript.value ? 'revise' : 'generate') {
   if (scriptPanelMode.value !== 'generate') openGenerateMode()
-  const text = askText.value.trim()
-  if (!text || isGenerating.value) return
-  if (!recordingHasData.value) {
-    panelError.value = '请先开启录制并完成一次更新操作，或至少保留当前会话中的历史命令。'
+  if (isGenerating.value) return
+  const text = askText.value.trim() || defaultScriptRequest(mode)
+  if (!hasDraftScript.value && !recordingHasData.value && sourceCommands.value.length === 0 && !text) {
+    panelError.value = '请先录制操作、粘贴脚本，或描述你要生成的脚本。'
     return
   }
   if (!hasUsableConfig.value) {
@@ -189,12 +206,16 @@ async function sendScriptRequest() {
   panelError.value = ''
   isGenerating.value = true
   stopRequested.value = false
+  collapsedMessages.value = {
+    ...collapsedMessages.value,
+    [assistantMessage.id]: false
+  }
 
   const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
   const requestId = `${props.connectionId}-${props.workspaceSessionId}-script-${Date.now()}`
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
-  const prompt = buildScriptPrompt(text)
+  const prompt = buildScriptPrompt(text, mode)
   let answer = ''
   let unlisten: (() => void) | undefined
   try {
@@ -221,10 +242,7 @@ async function sendScriptRequest() {
     const script = extractBashScript(finalAnswer)
     updateAssistantMessage(assistantMessage.id, displayAnswerWithoutScript(finalAnswer), false, false, script)
     if (script) {
-      scriptDrafts.value = {
-        ...scriptDrafts.value,
-        [assistantMessage.id]: script
-      }
+      applyDraftScript(script, assistantMessage.id)
       saveState.value = 'idle'
     }
   } catch (error) {
@@ -338,7 +356,6 @@ async function saveMessageScript(message: ScriptChatMessage) {
 function openRenameScriptDialog(script: UpdateScript) {
   renamingScript.value = script
   scriptNameDraft.value = script.name
-  historyOpen.value = false
 }
 
 function closeRenameScriptDialog() {
@@ -495,17 +512,129 @@ function scriptContentForMessage(message: ScriptChatMessage) {
   return scriptDrafts.value[message.id] ?? message.scriptContent ?? ''
 }
 
-function toggleHistory() {
-  historyOpen.value = !historyOpen.value
+function messageContentForCollapse(message: ScriptChatMessage) {
+  return [message.text, scriptContentForMessage(message)].filter(Boolean).join('\n')
 }
 
-function handleDocumentPointerDown(event: PointerEvent) {
-  if (!historyOpen.value) return
-  const target = event.target
-  if (!(target instanceof Node)) return
-  if (historyPopover.value?.contains(target)) return
-  if (historyButton.value?.contains(target)) return
-  historyOpen.value = false
+function shouldCollapseMessage(message: ScriptChatMessage) {
+  const content = messageContentForCollapse(message)
+  return content.length > LONG_MESSAGE_CHARS || content.split('\n').length > LONG_MESSAGE_LINES
+}
+
+function isMessageCollapsed(message: ScriptChatMessage) {
+  return shouldCollapseMessage(message) && Boolean(collapsedMessages.value[message.id])
+}
+
+function isMessageExpanded(message: ScriptChatMessage) {
+  return !isMessageCollapsed(message)
+}
+
+function toggleMessage(messageId: string) {
+  collapsedMessages.value = {
+    ...collapsedMessages.value,
+    [messageId]: !collapsedMessages.value[messageId]
+  }
+}
+
+function applyDraftScript(content: string, messageId = '') {
+  draftScriptContent.value = content
+  if (messageId) {
+    scriptDrafts.value = {
+      ...scriptDrafts.value,
+      [messageId]: content
+    }
+  }
+}
+
+function updateDraftScriptContent(value: string) {
+  draftScriptContent.value = value
+  saveState.value = 'idle'
+}
+
+async function saveDraftScript() {
+  const content = draftScriptContent.value.trimEnd()
+  if (!content.trim()) {
+    panelError.value = '当前没有可保存的脚本内容。'
+    return
+  }
+  const now = nowText()
+  const existing = draftScriptId.value ? scripts.value.find((script) => script.id === draftScriptId.value) : undefined
+  const fallbackName = inferScriptName(content, existing?.name || '脚本')
+  const shouldGenerateName = !existing || isAutoScriptName(existing.name)
+  const name = shouldGenerateName
+    ? await generateScriptTitle(content, fallbackName, latestUserScriptRequest())
+    : existing.name
+  const script: UpdateScript = {
+    id: existing?.id || `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    connectionId: props.connectionId,
+    workspaceSessionId: props.workspaceSessionId,
+    name,
+    description: inferDescription(latestAssistantText()) || inferDescription(latestUserScriptRequest()) || '手动保存脚本',
+    content,
+    sourceCommands: sourceCommands.value,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  }
+  try {
+    saveState.value = 'saving'
+    panelError.value = ''
+    if (scriptStoreMode.value === 'sqlite') {
+      await saveUpdateScript(script)
+    } else {
+      savePreviewScript(script)
+    }
+    scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
+    draftScriptId.value = script.id
+    selectedScriptId.value = script.id
+    selectedScriptDraft.value = content
+    saveState.value = 'saved'
+  } catch (error) {
+    if (isTauriUnavailableError(error)) {
+      scriptStoreMode.value = 'preview'
+      savePreviewScript(script)
+      scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
+      draftScriptId.value = script.id
+      selectedScriptId.value = script.id
+      selectedScriptDraft.value = content
+      saveState.value = 'saved'
+      return
+    }
+    saveState.value = 'error'
+    panelError.value = formatError(error)
+  }
+}
+
+function optimizeSelectedScript() {
+  const script = selectedScript.value
+  const content = selectedScriptContent.value.trimEnd()
+  if (!script || !content.trim()) return
+  draftScriptId.value = script.id
+  draftScriptContent.value = content
+  selectedScriptEditing.value = false
+  openGenerateMode()
+  if (!askText.value.trim()) {
+    askText.value = '优化当前脚本，保留原意，并提升安全性、可读性和可复用性。'
+  }
+}
+
+function executeDraftScript() {
+  const content = draftScriptContent.value.trim()
+  if (!content) return
+  executeScriptContent(content)
+}
+
+function latestUserScriptRequest() {
+  return [...messages.value].reverse().find((message) => message.role === 'user')?.text ?? askText.value.trim()
+}
+
+function latestAssistantText() {
+  return [...messages.value].reverse().find((message) => message.role === 'assistant')?.text ?? ''
+}
+
+function defaultScriptRequest(mode: 'generate' | 'revise' | 'regenerate') {
+  if (mode === 'regenerate') return '基于当前上下文重新生成一版脚本。'
+  if (mode === 'revise') return '优化当前脚本，保留原意，并提升安全性、可读性和可复用性。'
+  return '生成一个可复用脚本，保留变量、检查和安全确认。'
 }
 
 function createScriptConversation() {
@@ -514,7 +643,9 @@ function createScriptConversation() {
   scriptDrafts.value = {}
   editingMessageId.value = ''
   selectedScriptId.value = ''
-  historyOpen.value = false
+  draftScriptId.value = ''
+  draftScriptContent.value = ''
+  collapsedMessages.value = {}
   saveState.value = 'idle'
   panelError.value = ''
 }
@@ -538,28 +669,36 @@ function scrollMessagesToLatest() {
   })
 }
 
-function buildScriptPrompt(userRequest: string) {
+function buildScriptPrompt(userRequest: string, mode: 'generate' | 'revise' | 'regenerate') {
+  const draft = draftScriptContent.value.trim()
+  const modeText = mode === 'regenerate' ? '重新生成' : mode === 'revise' ? '继续修改当前草稿' : '生成新脚本'
   return [
-    '你是 AI Term 的服务器更新脚本整理助手。',
-    '用户会先录制一次真实的服务器更新过程，你需要根据录制期间的命令和终端输出，生成下次可复用、允许用户继续编辑的 bash 脚本。',
+    '你是 AI Term 的脚本工坊助手。',
+    '你的任务是根据用户要求、当前脚本草稿、录制命令和终端输出，生成或修改一个可复用、允许用户继续编辑的脚本。',
+    '不要把任务限定为某一类场景；脚本可以用于巡检、备份、部署、排障、批处理等终端自动化场景。',
     '',
+    `模式：${modeText}`,
     `用户要求：${userRequest}`,
     `录制状态：${props.recording.isRecording ? '仍在录制' : props.recording.stoppedAt ? '已结束录制' : '未主动结束录制'}`,
     `录制命令数：${recordedCommands.value.length}；用于生成的命令数：${sourceCommands.value.length}；录制输出字符数：${recordedOutput.value.length}`,
     '',
     '生成要求：',
     '1. 优先输出一个完整 bash 代码块，代码块语言标记为 bash。',
-    '2. 脚本必须包含 set -euo pipefail、可修改变量、关键路径、构建/发布/重启/健康检查步骤。',
-    '3. 从录制内容提炼真实操作，不要编造上下文里没有出现的服务名、路径、端口或仓库地址；未知值用变量和 TODO 注释。',
-    '4. 去掉纯查看类和试错类命令，只保留更新脚本真正需要的步骤。',
-    '5. 对 rm、覆盖配置、重启、删除、数据库迁移等风险操作加注释和确认变量。',
-    '6. 代码块后用简短文字列出用户下次执行前需要确认的变量。',
+    '2. 脚本应包含 set -euo pipefail、可修改变量、必要检查、日志输出和失败处理。',
+    '3. 如果是继续修改，必须以当前脚本草稿为基础，不要无故丢失已有逻辑。',
+    '4. 从上下文提炼真实操作，不要编造没有出现的服务名、路径、端口或仓库地址；未知值用变量和 TODO 注释。',
+    '5. 去掉纯查看类和试错类命令，只保留脚本真正需要的步骤。',
+    '6. 对 rm、覆盖配置、重启、删除、数据库迁移等风险操作加注释和确认变量。',
+    '7. 代码块后用简短文字列出用户执行前需要确认的变量或风险点。',
+    '',
+    '当前脚本草稿：',
+    draft || '(无草稿)',
     '',
     '录制期间命令：',
     sourceCommands.value.length ? sourceCommands.value.map((command) => `- ${command}`).join('\n') : '- 无',
     '',
     '录制期间终端输出摘要原文：',
-    recordedOutput.value || '(无录制输出，将只能参考当前历史命令)'
+    recordedOutput.value || '(无录制输出，将只能参考当前历史命令或当前脚本草稿)'
   ].join('\n')
 }
 
@@ -596,11 +735,13 @@ function displayAnswerWithoutScript(answer: string) {
 }
 
 function inferScriptName(content: string, fallback: string) {
-  const serviceMatch = content.match(/\b(?:SERVICE_NAME|APP_NAME|SERVICE)=["']?([a-zA-Z0-9_.-]+)/)
-  if (serviceMatch?.[1]) return `${serviceMatch[1]} 更新脚本`
-  const systemctlMatch = content.match(/\bsystemctl\s+(?:restart|reload)\s+([a-zA-Z0-9_.@-]+)/)
-  if (systemctlMatch?.[1]) return `${systemctlMatch[1]} 更新脚本`
-  return fallback.trim() || '服务更新脚本'
+  const nameMatch = content.match(/\b(?:SCRIPT_NAME|TASK_NAME|JOB_NAME)=['"]?([a-zA-Z0-9_.-]+)/)
+  if (nameMatch?.[1]) return `${nameMatch[1]} 脚本`
+  const serviceMatch = content.match(/\b(?:SERVICE_NAME|APP_NAME|SERVICE)=['"]?([a-zA-Z0-9_.-]+)/)
+  if (serviceMatch?.[1]) return `${serviceMatch[1]} 脚本`
+  const systemctlMatch = content.match(/\bsystemctl\s+(?:restart|reload|status)\s+([a-zA-Z0-9_.@-]+)/)
+  if (systemctlMatch?.[1]) return `${systemctlMatch[1]} 脚本`
+  return fallback.trim() || '脚本'
 }
 
 function inferDescription(answer: string) {
@@ -613,7 +754,7 @@ function inferDescription(answer: string) {
 }
 
 function isAutoScriptName(name: string) {
-  return ['服务更新脚本', '更新脚本', 'untitled', 'untitled script'].includes(name.trim().toLowerCase())
+  return ['服务更新脚本', '更新脚本', '脚本', 'untitled', 'untitled script'].includes(name.trim().toLowerCase())
 }
 
 function userRequestForAssistantMessage(messageId: string) {
@@ -629,7 +770,7 @@ async function generateScriptTitle(content: string, fallback: string, userReques
     const response = await generateAiScriptTitle({
       config: props.config,
       apiKey,
-      userRequest: userRequest || '生成服务器更新脚本',
+      userRequest: userRequest || '生成可复用脚本',
       scriptContent: content,
       sourceCommands: sourceCommands.value
     })
@@ -699,63 +840,22 @@ function isTauriUnavailableError(error: unknown) {
 function nowText() {
   return new Date().toISOString()
 }
-
-onMounted(() => {
-  document.addEventListener('pointerdown', handleDocumentPointerDown, true)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
-})
 </script>
 
 <template>
   <section class="script-panel">
     <div class="workspace-section-head script-head">
       <div>
-        <strong>更新脚本助手</strong>
+        <strong>脚本助手</strong>
         <span>{{ props.recording.isRecording ? 'recording' : 'idle' }} &middot; {{ sourceCommands.length }} commands &middot; {{ recordedOutput.length }} chars</span>
       </div>
       <div class="panel-actions">
-        <button ref="historyButton" class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="toggleHistory">&#9719;</button>
-        <button class="icon-button" type="button" title="新建脚本会话" aria-label="新建脚本会话" @click="createScriptConversation">+</button>
+        <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode">&#9719;</button>
+        <button class="icon-button" type="button" title="新增脚本" aria-label="新增脚本" @click="createScriptConversation">+</button>
         <button v-if="!props.recording.isRecording" class="text-button" type="button" @click="startRecording">开始录制</button>
         <button v-else class="text-button danger" type="button" @click="stopRecording">结束录制</button>
         <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" @click="clearRecording">&#9003;</button>
       </div>
-      <div v-if="historyOpen" ref="historyPopover" class="session-history-popover script-history-popover">
-        <div class="session-search">
-          <span>&#8981;</span>
-          <input v-model="scriptSearch" placeholder="Search scripts..." aria-label="Search scripts" />
-        </div>
-        <div class="session-history-list">
-          <article
-            v-for="script in filteredScripts"
-            :key="script.id"
-            class="session-history-row"
-            :class="{ active: script.id === selectedScriptId }"
-            role="button"
-            tabindex="0"
-            @click="loadSelectedScript(script.id)"
-            @keydown.enter.prevent="loadSelectedScript(script.id)"
-          >
-            <span class="session-history-main">
-              <strong>{{ script.name }}</strong>
-              <small>{{ script.description || script.updatedAt }}</small>
-            </span>
-            <span class="session-history-actions">
-              <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)">&#9998;</button>
-              <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click.stop="removeScript(script)">&#9003;</button>
-            </span>
-          </article>
-          <p v-if="filteredScripts.length === 0" class="empty-state">No scripts</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="script-mode-tabs" role="tablist" aria-label="Script assistant mode">
-      <button type="button" :class="{ active: scriptPanelMode === 'library' }" @click="openLibraryMode">脚本库</button>
-      <button type="button" :class="{ active: scriptPanelMode === 'generate' }" @click="openGenerateMode">新增</button>
     </div>
 
     <div v-if="renamingScript" class="modal-backdrop" role="presentation" @click.self="closeRenameScriptDialog">
@@ -784,80 +884,120 @@ onBeforeUnmount(() => {
     <div v-if="scriptPanelMode === 'library'" class="script-library">
       <div class="session-search script-library-search">
         <span>&#8981;</span>
-        <input v-model="scriptSearch" placeholder="Search scripts..." aria-label="Search scripts" />
-      </div>
-      <div class="script-library-list">
-        <article
-          v-for="script in filteredScripts"
-          :key="script.id"
-          class="script-library-row"
-          :class="{ active: script.id === selectedScriptId }"
-          role="button"
-          tabindex="0"
-          @click="loadSelectedScript(script.id)"
-          @keydown.enter.prevent="loadSelectedScript(script.id)"
-        >
-          <span>
-            <strong>{{ script.name }}</strong>
-            <small>{{ script.description || script.updatedAt }}</small>
-          </span>
-          <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)">&#9998;</button>
-        </article>
-        <p v-if="filteredScripts.length === 0" class="empty-state">No scripts</p>
+        <input ref="librarySearchInput" v-model="scriptSearch" placeholder="搜索脚本..." aria-label="搜索脚本" />
       </div>
 
-      <section v-if="selectedScript" class="script-preview">
-        <div class="script-preview-head">
-          <div>
-            <strong>{{ selectedScript.name }}</strong>
-            <span>{{ selectedScript.description || selectedScript.updatedAt }}</span>
-          </div>
-          <div class="script-card-actions">
-            <button class="text-button" type="button" @click="toggleSelectedScriptEditor">
-              {{ selectedScriptEditing ? '完成' : '编辑' }}
-            </button>
-            <button class="text-button" type="button" @click="saveSelectedScript">保存</button>
-            <button class="text-button" type="button" @click="executeSelectedScript">执行</button>
-            <button class="text-button danger" type="button" @click="removeScript(selectedScript)">删除</button>
-          </div>
+      <div v-if="filteredScripts.length === 0" class="script-library-empty">
+        <strong>No scripts</strong>
+        <span>{{ scriptLibraryEmptyHint }}</span>
+      </div>
+
+      <div v-else class="script-library-body">
+        <div class="script-library-list">
+          <article
+            v-for="script in filteredScripts"
+            :key="script.id"
+            class="script-library-row"
+            :class="{ active: script.id === selectedScriptId }"
+            role="button"
+            tabindex="0"
+            @click="loadSelectedScript(script.id)"
+            @keydown.enter.prevent="loadSelectedScript(script.id)"
+          >
+            <span>
+              <strong>{{ script.name }}</strong>
+              <small>{{ script.description || script.updatedAt }}</small>
+            </span>
+            <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)">&#9998;</button>
+          </article>
         </div>
-        <textarea
-          v-if="selectedScriptEditing"
-          :value="selectedScriptContent"
-          spellcheck="false"
-          aria-label="编辑脚本"
-          @input="updateSelectedScriptDraft(($event.target as HTMLTextAreaElement).value)"
-        />
-        <pre v-else class="script-preview-code"><code>{{ selectedScriptContent }}</code></pre>
-      </section>
-      <p v-else class="empty-state script-preview-empty">No scripts</p>
+
+        <section v-if="selectedScript" class="script-preview">
+          <div class="script-preview-head">
+            <div>
+              <strong>{{ selectedScript.name }}</strong>
+              <span>{{ selectedScript.description || selectedScript.updatedAt }}</span>
+            </div>
+            <div class="script-card-actions">
+              <button class="text-button" type="button" @click="toggleSelectedScriptEditor">
+                {{ selectedScriptEditing ? '完成' : '编辑' }}
+              </button>
+              <button class="text-button" type="button" @click="saveSelectedScript">保存</button>
+              <button class="text-button" type="button" @click="executeSelectedScript">执行</button>
+              <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click="removeScript(selectedScript)">&#9003;</button>
+            </div>
+          </div>
+          <textarea
+            v-if="selectedScriptEditing"
+            :value="selectedScriptContent"
+            spellcheck="false"
+            aria-label="编辑脚本"
+            @input="updateSelectedScriptDraft(($event.target as HTMLTextAreaElement).value)"
+          />
+          <pre v-else class="script-preview-code"><code>{{ selectedScriptContent }}</code></pre>
+        </section>
+        <p v-else class="empty-state script-preview-empty">选择脚本查看内容</p>
+      </div>
     </div>
 
     <div v-else class="script-generate">
       <div class="script-recorder">
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
-          <strong>{{ props.recording.isRecording ? '正在录制本次操作' : recordingHasData ? '录制片段已就绪' : '先录制一次真实更新操作' }}</strong>
+          <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
           <small>{{ recordedCommands.length }} recorded commands &middot; {{ recordedOutput.length }} output chars</small>
         </div>
       </div>
 
-      <div ref="messageList" class="script-chat-list">
-        <p v-if="messages.length === 0" class="empty-state">录制完成后，再输入你希望 AI 生成的脚本目标。</p>
-        <article v-for="message in messages" :key="message.id" class="message" :class="{ ai: message.role === 'assistant', error: message.error }">
+      <section class="script-draft-card">
+        <div class="script-preview-head">
+          <div>
+            <strong>脚本草稿</strong>
+            <span>{{ draftStatusText }}</span>
+          </div>
+          <div class="script-card-actions">
+            <button class="text-button" type="button" :disabled="!hasDraftScript" @click="saveDraftScript">保存</button>
+            <button class="text-button" type="button" :disabled="!hasDraftScript || isGenerating || !hasUsableConfig" @click="sendScriptRequest('revise')">继续修改</button>
+            <button class="text-button" type="button" :disabled="isGenerating || !hasUsableConfig" @click="sendScriptRequest('regenerate')">重新生成</button>
+            <button class="text-button" type="button" :disabled="!hasDraftScript" @click="executeDraftScript">执行</button>
+          </div>
+        </div>
+        <textarea
+          :value="draftScriptContent"
+          spellcheck="false"
+          placeholder="可直接粘贴或编写脚本，保存后也可以让 AI 继续优化。"
+          aria-label="脚本草稿"
+          @input="updateDraftScriptContent(($event.target as HTMLTextAreaElement).value)"
+        />
+      </section>
+
+      <div ref="messageList" class="message-list script-chat-list">
+        <p v-if="messages.length === 0" class="empty-state">当前暂无修改记录。可先录制操作、粘贴脚本，或直接描述要生成的脚本。</p>
+        <article
+          v-for="message in messages"
+          :key="message.id"
+          class="message"
+          :class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"
+        >
           <div class="message-title">
             <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
+            <div class="message-actions">
+              <button v-if="shouldCollapseMessage(message)" class="text-button" type="button" @click="toggleMessage(message.id)">
+                {{ isMessageExpanded(message) ? '收起' : '展开' }}
+              </button>
+            </div>
           </div>
           <div class="message-body">
-            <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在生成脚本...</div>
+            <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在处理脚本...</div>
             <p v-if="message.text">{{ message.text }}</p>
             <div v-if="message.scriptContent" class="code-block script-code-card">
               <div class="code-head">
-                <span>{{ message.savedScriptId ? 'bash saved' : 'bash' }}</span>
+                <span>{{ message.savedScriptId ? 'bash saved' : 'bash draft' }}</span>
                 <div class="script-card-actions">
                   <button class="text-button" type="button" @click="toggleScriptEditor(message)">
                     {{ editingMessageId === message.id ? '完成' : '编辑' }}
                   </button>
+                  <button class="text-button" type="button" @click="applyDraftScript(scriptContentForMessage(message), message.id)">设为草稿</button>
                   <button class="text-button" type="button" @click="saveMessageScript(message)">保存</button>
                   <button class="text-button" type="button" @click="executeMessageScript(message)">执行</button>
                 </div>
@@ -879,7 +1019,7 @@ onBeforeUnmount(() => {
         <textarea
           v-model="askText"
           rows="3"
-          placeholder="例如：根据刚才录制，生成灰度发布脚本，包含备份、构建、重启和健康检查。Ctrl+Enter / ⌘+Enter 发送"
+          placeholder="例如：把当前脚本改成支持 dry-run，并在执行前确认变量。Ctrl+Enter / ⌘+Enter 发送"
           aria-label="Ask AI to generate script"
           @keydown="handleComposerKeydown"
         />

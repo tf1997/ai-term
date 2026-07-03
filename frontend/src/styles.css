@@ -1545,6 +1545,31 @@ button:disabled {
   font-size: var(--font-xs);
 }
 
+.script-draft-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(96px, 22vh);
+  overflow: hidden;
+  border-bottom: 1px solid #1b2130;
+  background: #0d1119;
+}
+
+.script-draft-card textarea {
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid #1b2130;
+  background: #070b12;
+  color: #d9e6f2;
+  resize: vertical;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .record-dot {
   width: 10px;
   height: 10px;
@@ -1560,44 +1585,14 @@ button:disabled {
 .script-chat-list {
   min-width: 0;
   min-height: 0;
-  flex: 1 1 auto;
-  overflow: auto;
-  display: grid;
-  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
-}
-
-.script-history-popover {
-  top: 52px;
-}
-
-.script-mode-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  border-bottom: 1px solid #1b2130;
-  background: rgba(12, 17, 27, .76);
-  padding: 8px 12px;
-}
-
-.script-mode-tabs button {
-  height: 30px;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid #263246;
-  border-radius: 7px;
-  background: rgba(18, 24, 36, .72);
-  color: #9aa5b1;
-  font-size: var(--font-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.script-mode-tabs button.active {
-  border-color: rgba(91, 111, 255, .52);
-  background: rgba(91, 111, 255, .14);
-  color: #d6d9ff;
 }
 
 .script-library,
@@ -1610,11 +1605,42 @@ button:disabled {
 }
 
 .script-library {
-  grid-template-rows: auto minmax(110px, .86fr) minmax(160px, 1.14fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.script-library-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(96px, .72fr) minmax(160px, 1.28fr);
+  overflow: hidden;
+}
+
+.script-library-empty {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 28px 22px;
+  color: #8c99ad;
+  text-align: center;
+}
+
+.script-library-empty strong {
+  color: #d8e2ef;
+  font-size: var(--font-sm);
+}
+
+.script-library-empty span {
+  max-width: 260px;
+  font-size: var(--font-xs);
+  line-height: 1.5;
 }
 
 .script-generate {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(150px, auto) minmax(0, 1fr) auto;
 }
 
 .script-library-search {
@@ -1745,6 +1771,8 @@ button:disabled {
 
 .script-preview-empty {
   align-self: center;
+  justify-self: center;
+  padding: 18px;
 }
 
 .script-card-actions {
@@ -1770,6 +1798,14 @@ button:disabled {
   font-size: var(--font-sm);
   line-height: 1.5;
   white-space: pre;
+}
+
+.script-code-card pre {
+  max-height: min(420px, 52vh);
+}
+
+.script-code-card code {
+  min-width: max-content;
 }
 
 .script-compose {

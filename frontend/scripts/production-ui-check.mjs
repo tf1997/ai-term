@@ -320,20 +320,49 @@ assert(
   scriptPanel.includes("type ScriptPanelMode = 'library' | 'generate'") &&
     scriptPanel.includes('scriptPanelMode') &&
     scriptPanel.includes('showScriptComposer') &&
-    scriptPanel.includes("scriptPanelMode.value === 'generate' && recordingHasData.value") &&
+    scriptPanel.includes("scriptPanelMode.value === 'generate'") &&
     scriptPanel.includes('openGenerateMode') &&
     scriptPanel.includes('openLibraryMode') &&
+    scriptPanel.includes('focusLibrarySearch') &&
+    scriptPanel.includes('librarySearchInput') &&
     scriptPanel.includes('selectedScriptContent') &&
-    scriptPanel.includes('class="script-mode-tabs"') &&
+    scriptPanel.includes('@click="openLibraryMode"') &&
+    scriptPanel.includes('@click="createScriptConversation"') &&
     scriptPanel.includes('class="script-library"') &&
+    scriptPanel.includes('class="script-library-body"') &&
+    scriptPanel.includes('class="script-library-empty"') &&
     scriptPanel.includes('class="script-preview"') &&
+    scriptPanel.includes('class="script-draft-card"') &&
+    scriptPanel.includes('draftScriptContent') &&
+    scriptPanel.includes('`\u6a21\u5f0f\uff1a${modeText}`') &&
+    scriptPanel.includes('`\u7528\u6237\u8981\u6c42\uff1a${userRequest}`') &&
+    scriptPanel.includes("['\u670d\u52a1\u66f4\u65b0\u811a\u672c', '\u66f4\u65b0\u811a\u672c', '\u811a\u672c', 'untitled', 'untitled script']") &&
+    !scriptPanel.includes('\u6a21\u5f0f?') &&
+    !scriptPanel.includes('\u6a21\u5f0f?') &&
+    scriptPanel.includes('saveDraftScript') &&
+    scriptPanel.includes('optimizeSelectedScript') &&
+    scriptPanel.includes('applyDraftScript') &&
+    scriptPanel.includes("sendScriptRequest('revise')") &&
+    scriptPanel.includes("sendScriptRequest('regenerate')") &&
+    scriptPanel.includes('collapsedMessages') &&
+    scriptPanel.includes('shouldCollapseMessage') &&
+    scriptPanel.includes('isMessageCollapsed') &&
+    scriptPanel.includes('toggleMessage') &&
+    scriptPanel.includes('class="message-list script-chat-list"') &&
+    scriptPanel.includes(`:class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"`) &&
+    scriptPanel.includes('class="message-actions"') &&
     scriptPanel.includes('v-if="showScriptComposer"') &&
     scriptPanel.includes("v-if=\"scriptPanelMode === 'library'\"") &&
-    styles.includes('.script-mode-tabs') &&
+    !scriptPanel.includes('class="script-mode-tabs"') &&
+    !styles.includes('.script-mode-tabs') &&
     styles.includes('.script-library') &&
+    styles.includes('.script-library-body') &&
+    styles.includes('.script-library-empty') &&
     styles.includes('.script-preview') &&
-    styles.includes('.script-preview-code'),
-  'Script assistant must separate library lookup from recorded script generation, hiding the user prompt while browsing saved scripts.'
+    styles.includes('.script-preview-code') &&
+    styles.includes('.script-draft-card') &&
+    styles.includes('.script-draft-card textarea'),
+  'Script assistant must use top actions for library/generate, focus library search, avoid duplicate mode tabs, support long message folding, and hide the user prompt while browsing saved scripts.'
 )
 
 assert(
@@ -624,7 +653,14 @@ assert(
 
 assert(
   workspacePanel.includes('ScriptPanel') &&
-    workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
+    workspacePanel.includes('<ScriptPanel') &&
+    workspacePanel.includes('scriptPanelVisited') &&
+    workspacePanel.includes("if (tab === 'scripts') scriptPanelVisited.value = true") &&
+    workspacePanel.includes('v-if="scriptPanelVisited"') &&
+    workspacePanel.includes(`v-if="activeWorkspaceTab === 'ai'"`) &&
+    !workspacePanel.includes('"-if=') &&
+    workspacePanel.includes(`v-show="activeWorkspaceTab === 'scripts'"`) &&
+    !workspacePanel.includes(`v-else-if="activeWorkspaceTab === 'scripts'"`) &&
     workspacePanel.includes('@write-terminal-input="emit(\'writeTerminalInput\', $event)"') &&
     workspacePanel.includes('@start-recording="emit(\'startScriptRecording\')"') &&
     workspacePanel.includes('@stop-recording="emit(\'stopScriptRecording\')"') &&
@@ -634,13 +670,18 @@ assert(
     appShell.includes('appendRecordingOutput') &&
     appShell.includes('appendRecordingCommand') &&
     scriptPanel.includes('sendScriptRequest') &&
-    scriptPanel.includes('script-history-popover') &&
-    scriptPanel.includes('historyPopover') &&
-    scriptPanel.includes('historyButton') &&
-    scriptPanel.includes('handleDocumentPointerDown') &&
-    scriptPanel.includes("document.addEventListener('pointerdown'") &&
+    scriptPanel.includes('openLibraryMode') &&
+    scriptPanel.includes('collapsedMessages') &&
+    scriptPanel.includes('shouldCollapseMessage') &&
+    scriptPanel.includes('librarySearchInput') &&
+    scriptPanel.includes('script-library-body') &&
     scriptPanel.includes('loadSelectedScript') &&
     scriptPanel.includes('toggleScriptEditor') &&
+    scriptPanel.includes('saveDraftScript') &&
+    scriptPanel.includes('optimizeSelectedScript') &&
+    scriptPanel.includes('applyDraftScript') &&
+    scriptPanel.includes('saveSelectedScript') &&
+    scriptPanel.includes('@click="saveSelectedScript"') &&
     scriptPanel.includes('saveMessageScript') &&
     scriptPanel.includes('openRenameScriptDialog') &&
     scriptPanel.includes('renameScript') &&
@@ -673,10 +714,18 @@ assert(
     styles.includes('.script-panel') &&
     styles.includes('.script-recorder') &&
     styles.includes('.script-chat-list') &&
-    styles.includes('.script-history-popover') &&
+    styles.includes('.script-draft-card') &&
+    styles.includes('.script-draft-card textarea') &&
+    styles.includes('.script-code-card pre') &&
+    styles.includes('.script-code-card code') &&
+    styles.includes('max-height: min(420px, 52vh);') &&
+    !scriptPanel.includes('script-history-popover') &&
+    !scriptPanel.includes('historyPopover') &&
+    !scriptPanel.includes('historyButton') &&
+    !styles.includes('.script-history-popover') &&
     styles.includes('.script-code-card textarea') &&
     !scriptPanel.includes('script-result-editor'),
-  'Workspace must include recording-backed script generation with a chat interaction, session-style script library, in-card editing, deletion, and guarded execution.'
+  'Workspace must include recording-backed script generation with a chat interaction, inline script library, in-card editing, deletion, and guarded execution.'
 )
 
 assert(

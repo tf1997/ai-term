@@ -50,9 +50,11 @@ const emit = defineEmits<{
 }>()
 
 const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
+const scriptPanelVisited = ref(false)
 
 function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
   activeWorkspaceTab.value = tab
+  if (tab === 'scripts') scriptPanelVisited.value = true
   emit('workspaceTabChanged', tab)
 }
 </script>
@@ -85,7 +87,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @rerun="emit('executeCommand', $event)"
     />
     <AiPanel
-      v-else-if="activeWorkspaceTab === 'ai'"
+      v-if="activeWorkspaceTab === 'ai'"
       :terminal-id="terminalId"
       :connection-id="connectionId"
       :workspace-session-id="workspaceSessionId"
@@ -109,7 +111,8 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @execute-command="emit('executeCommand', $event)"
     />
     <ScriptPanel
-      v-else-if="activeWorkspaceTab === 'scripts'"
+      v-if="scriptPanelVisited"
+      v-show="activeWorkspaceTab === 'scripts'"
       :terminal-id="terminalId"
       :connection-id="connectionId"
       :workspace-session-id="workspaceSessionId"
@@ -125,7 +128,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @write-terminal-input="emit('writeTerminalInput', $event)"
     />
     <FileTransferPanel
-      v-else
+      v-if="activeWorkspaceTab === 'sftp'"
       :connection-id="connectionId"
       :terminal-snapshot="terminalSnapshot"
       @write-terminal-input="emit('writeTerminalInput', $event)"
