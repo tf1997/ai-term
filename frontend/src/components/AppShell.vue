@@ -119,6 +119,7 @@ const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
 const workspaceSessionsByConnection = ref<Record<string, WorkspaceSession[]>>({})
+const draftWorkspaceSessionIds = ref<Record<string, boolean>>({})
 const commandHistoryBySession = ref<Record<string, CommandHistoryEntry[]>>({})
 const aiMessagesBySession = ref<Record<string, AiMessage[]>>({})
 const aiContextBySession = ref<Record<string, AiContextStatus>>({})
@@ -250,7 +251,7 @@ async function connectProfileFromSidebar(profileId: string) {
     const profile = cloneConnectionProfile(draft)
     await saveConnectionProfile(profile)
     profileStoreStatus.value = 'ready'
-    const session = await createWorkspaceSession(profile.id)
+    const session = await preferredWorkspaceSessionForConnection(profile.id)
     createTerminalTab(profile, session)
     if (isSftpProfile(profile)) {
       workspacePanelTab.value = 'sftp'
@@ -271,7 +272,7 @@ function isSftpProfile(profile: ConnectionProfile) {
 }
 
 async function createLocalTerminalTab() {
-  const session = await ensureWorkspaceSession(LOCAL_CONNECTION_ID, LOCAL_DEFAULT_SESSION_ID, 'Untitled')
+  const session = await preferredWorkspaceSessionForConnection(LOCAL_CONNECTION_ID)
   createTerminalTab(undefined, session)
 }
 
@@ -696,10 +697,10 @@ function nowText() {
   return new Date().toISOString()
 }
 
-function newWorkspaceSession(connectionId: string, name?: string): WorkspaceSession {
+function newWorkspaceSession(connectionId: string, name?: string, id?: string): WorkspaceSession {
   const createdAt = nowText()
   return {
-    id: `${connectionId}:session:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: id || `${connectionId}:session:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     connectionId,
     name: name || 'Untitled',
     summary: '',
@@ -708,34 +709,89 @@ function newWorkspaceSession(connectionId: string, name?: string): WorkspaceSess
   }
 }
 
-async function ensureWorkspaceSession(connectionId: string, sessionId = defaultWorkspaceSessionId(connectionId), name = 'Untitled') {
-  await loadWorkspaceSessionList(connectionId)
-  const existing = workspaceSessionsByConnection.value[connectionId]?.find((item) => item.id === sessionId)
-  if (existing) return existing
-  const createdAt = nowText()
-  const session: WorkspaceSession = {
-    id: sessionId,
-    connectionId,
-    name,
-    summary: '',
-    createdAt,
-    updatedAt: createdAt
+function markDraftWorkspaceSession(sessionId: string) {
+  draftWorkspaceSessionIds.value = {
+    ...draftWorkspaceSessionIds.value,
+    [sessionId]: true
   }
-  await saveWorkspaceSession(session)
+}
+
+function clearDraftWorkspaceSession(sessionId: string) {
+  const nextDrafts = { ...draftWorkspaceSessionIds.value }
+  delete nextDrafts[sessionId]
+  draftWorkspaceSessionIds.value = nextDrafts
+}
+
+function isDraftWorkspaceSession(sessionId: string) {
+  return Boolean(draftWorkspaceSessionIds.value[sessionId])
+}
+
+function workspaceSessionsForConnection(connectionId: string) {
+  return workspaceSessionsByConnection.value[connectionId] ?? []
+}
+
+function upsertWorkspaceSession(session: WorkspaceSession) {
+  const sessions = workspaceSessionsForConnection(session.connectionId)
   workspaceSessionsByConnection.value = {
     ...workspaceSessionsByConnection.value,
-    [connectionId]: [session, ...(workspaceSessionsByConnection.value[connectionId] ?? [])]
+    [session.connectionId]: [session, ...sessions.filter((item) => item.id !== session.id)]
   }
+}
+
+function replaceWorkspaceSession(session: WorkspaceSession) {
+  const sessions = workspaceSessionsForConnection(session.connectionId)
+  workspaceSessionsByConnection.value = {
+    ...workspaceSessionsByConnection.value,
+    [session.connectionId]: sessions.map((item) => (item.id === session.id ? session : item))
+  }
+}
+
+function createDraftWorkspaceSession(connectionId: string, sessionId?: string, name = 'Untitled') {
+  const existing = sessionId ? workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId) : undefined
+  if (existing) {
+    markDraftWorkspaceSession(existing.id)
+    return existing
+  }
+  const session = newWorkspaceSession(connectionId, name, sessionId)
+  markDraftWorkspaceSession(session.id)
+  upsertWorkspaceSession(session)
   return session
 }
 
+async function ensureWorkspaceSession(connectionId: string, sessionId = defaultWorkspaceSessionId(connectionId), name = 'Untitled') {
+  await loadWorkspaceSessionList(connectionId)
+  return workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId) ?? createDraftWorkspaceSession(connectionId, sessionId, name)
+}
+
+async function preferredWorkspaceSessionForConnection(connectionId: string, name = 'Untitled') {
+  await loadWorkspaceSessionList(connectionId)
+  return workspaceSessionsForConnection(connectionId).find((session) => !isDraftWorkspaceSession(session.id)) ?? createDraftWorkspaceSession(connectionId, defaultWorkspaceSessionId(connectionId), name)
+}
+
 async function createWorkspaceSession(connectionId = activeConnectionId.value, name?: string) {
-  const session = newWorkspaceSession(connectionId, name)
-  await saveWorkspaceSession(session)
-  workspaceSessionsByConnection.value = {
-    ...workspaceSessionsByConnection.value,
-    [connectionId]: [session, ...(workspaceSessionsByConnection.value[connectionId] ?? [])]
+  await loadWorkspaceSessionList(connectionId)
+  return createDraftWorkspaceSession(connectionId, undefined, name)
+}
+
+async function ensurePersistedWorkspaceSession(connectionId: string, sessionId = defaultWorkspaceSessionId(connectionId), title?: string) {
+  await loadWorkspaceSessionList(connectionId)
+  let session = workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId)
+  if (!session) {
+    session = createDraftWorkspaceSession(connectionId, sessionId, title || 'Untitled')
   }
+  const nextTitle = title?.trim()
+  let changed = false
+  if (nextTitle && isAutoWorkspaceSessionName(session.name)) {
+    session = { ...session, name: nextTitle, updatedAt: nowText() }
+    replaceWorkspaceSession(session)
+    changed = true
+  }
+  if (!isDraftWorkspaceSession(session.id)) {
+    if (changed) await saveWorkspaceSession(session)
+    return session
+  }
+  await saveWorkspaceSession(session)
+  clearDraftWorkspaceSession(session.id)
   return session
 }
 
@@ -749,47 +805,41 @@ async function createWorkspaceSessionForActiveConnection() {
 }
 
 async function renameWorkspaceSession(sessionId: string, name: string) {
-  const sessions = workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
+  const sessions = workspaceSessionsForConnection(activeConnectionId.value)
   const session = sessions.find((item) => item.id === sessionId)
   if (!session) return
   const nextName = name.trim()
   if (!nextName) return
   const updated = { ...session, name: nextName, updatedAt: nowText() }
+  replaceWorkspaceSession(updated)
+  if (isDraftWorkspaceSession(sessionId)) return
   try {
     await saveWorkspaceSession(updated)
-    workspaceSessionsByConnection.value = {
-      ...workspaceSessionsByConnection.value,
-      [activeConnectionId.value]: sessions.map((item) => (item.id === sessionId ? updated : item))
-    }
   } catch (error) {
     connectionError.value = formatError(error)
   }
 }
 
 async function updateWorkspaceSessionTitle(connectionId: string, sessionId: string, title: string) {
-  const sessions = workspaceSessionsByConnection.value[connectionId] ?? []
-  const session = sessions.find((item) => item.id === sessionId)
+  const session = workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId)
   if (!session || !isAutoWorkspaceSessionName(session.name)) return
   const nextTitle = title.trim()
   if (!nextTitle) return
   const updated = { ...session, name: nextTitle, updatedAt: nowText() }
+  replaceWorkspaceSession(updated)
   try {
-    await saveWorkspaceSession(updated)
-    workspaceSessionsByConnection.value = {
-      ...workspaceSessionsByConnection.value,
-      [connectionId]: sessions.map((item) => (item.id === sessionId ? updated : item))
-    }
+    await ensurePersistedWorkspaceSession(connectionId, sessionId, nextTitle)
   } catch (error) {
     console.error('failed to update AI generated session title', error)
   }
 }
 
 function isAutoWorkspaceSessionName(name: string) {
-  return ['untitled', '默认会话', '本地默认会话', '当前会话'].includes(name.trim().toLowerCase())
+  return ['untitled', '无标题', '默认会话', '本地默认会话', '当前会话'].includes(name.trim().toLowerCase())
 }
 
 async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
-  const sessions = workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
+  const sessions = workspaceSessionsForConnection(activeConnectionId.value)
   if (sessions.length <= 1) {
     window.alert('至少保留一个会话')
     return
@@ -798,7 +848,10 @@ async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
   if (!session) return
   if (!window.confirm(`删除会话 ${session.name}？对应命令历史和 AI 对话也会删除。`)) return
   try {
-    await deleteWorkspaceSession(sessionId)
+    if (!isDraftWorkspaceSession(sessionId)) {
+      await deleteWorkspaceSession(sessionId)
+    }
+    clearDraftWorkspaceSession(sessionId)
     const remaining = sessions.filter((item) => item.id !== sessionId)
     workspaceSessionsByConnection.value = {
       ...workspaceSessionsByConnection.value,
@@ -825,14 +878,7 @@ function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: Works
   const id = `terminal-${Date.now()}-${terminalTabs.value.length + 1}`
   const title = profile ? `${profile.target.username || 'user'}@${profile.target.host || profile.name}` : 'Local Terminal'
   const connectionId = profile?.id ?? LOCAL_CONNECTION_ID
-  const session = workspaceSession ?? {
-    id: defaultWorkspaceSessionId(connectionId),
-    connectionId,
-    name: '默认会话',
-    summary: '',
-    createdAt: nowText(),
-    updatedAt: nowText()
-  }
+  const session = workspaceSession ?? createDraftWorkspaceSession(connectionId, defaultWorkspaceSessionId(connectionId), 'Untitled')
   terminalTabs.value.push({
     id,
     title,
@@ -896,9 +942,14 @@ function recordCommand(event: CommandRecordedEvent) {
     [key]: [...(commandHistoryBySession.value[key] ?? []), entry].slice(-300)
   }
   appendRecordingCommand(event.terminalId, event.command)
-  void saveCommandHistoryRecord(entry).catch((error) => {
+  void saveCommandHistoryForTerminal(entry).catch((error) => {
     console.error('failed to save command history', error)
   })
+}
+
+async function saveCommandHistoryForTerminal(entry: CommandHistoryEntry) {
+  await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId, workspaceSessionTitleFromCommand(entry.command))
+  await saveCommandHistoryRecord(entry)
 }
 
 function createIdleScriptRecording(terminalId: string): ScriptRecording {
@@ -995,9 +1046,11 @@ function appendAiMessageToActiveTerminal(message: AiMessage) {
     [key]: [...(aiMessagesBySession.value[key] ?? []), message].slice(-300)
   }
   if (message.streaming) return
-  void saveAiConversationMessage(message).catch((error) => {
-    console.error('failed to save AI conversation message', error)
-  })
+  void persistWorkspaceSessionForMessage(message)
+    .then(() => saveAiConversationMessage(message))
+    .catch((error) => {
+      console.error('failed to save AI conversation message', error)
+    })
 }
 
 function updateAiMessage(message: AiMessage) {
@@ -1008,9 +1061,11 @@ function updateAiMessage(message: AiMessage) {
     [key]: messages.map((item) => (item.id === message.id ? message : item))
   }
   if (message.streaming) return
-  void saveAiConversationMessage(message).catch((error) => {
-    console.error('failed to save AI conversation message', error)
-  })
+  void persistWorkspaceSessionForMessage(message)
+    .then(() => saveAiConversationMessage(message))
+    .catch((error) => {
+      console.error('failed to save AI conversation message', error)
+    })
 }
 
 function setAiContextForTerminal(connectionId: string, workspaceSessionId: string, status: AiContextStatus) {
@@ -1021,6 +1076,29 @@ function setAiContextForTerminal(connectionId: string, workspaceSessionId: strin
   }
 }
 
+async function persistWorkspaceSessionForMessage(message: AiMessage) {
+  const title = message.role === 'user' ? workspaceSessionTitleFromText(message.text) : undefined
+  await ensurePersistedWorkspaceSession(message.connectionId, message.workspaceSessionId, title)
+}
+
+function workspaceSessionTitleFromCommand(command: string) {
+  return shortenWorkspaceSessionTitle(command, '命令历史')
+}
+
+function workspaceSessionTitleFromText(text: string) {
+  const titleLine = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith('选中终端内容'))
+  return shortenWorkspaceSessionTitle(titleLine || text, '当前会话')
+}
+
+function shortenWorkspaceSessionTitle(value: string, fallback: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) return fallback
+  return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized
+}
+
 async function loadWorkspaceSessionList(connectionId: string) {
   if (loadedSessionLists.value[connectionId]) return
   loadedSessionLists.value = {
@@ -1029,9 +1107,10 @@ async function loadWorkspaceSessionList(connectionId: string) {
   }
   try {
     const sessions = await listWorkspaceSessions(connectionId)
+    const drafts = workspaceSessionsForConnection(connectionId).filter((session) => isDraftWorkspaceSession(session.id))
     workspaceSessionsByConnection.value = {
       ...workspaceSessionsByConnection.value,
-      [connectionId]: sessions
+      [connectionId]: [...drafts.filter((draft) => !sessions.some((session) => session.id === draft.id)), ...sessions]
     }
   } catch (error) {
     const nextLoaded = { ...loadedSessionLists.value }
@@ -1047,6 +1126,17 @@ async function loadWorkspaceState(connectionId: string, workspaceSessionId: stri
   loadedWorkspaceSessions.value = {
     ...loadedWorkspaceSessions.value,
     [key]: true
+  }
+  if (isDraftWorkspaceSession(workspaceSessionId)) {
+    commandHistoryBySession.value = {
+      ...commandHistoryBySession.value,
+      [key]: commandHistoryBySession.value[key] ?? []
+    }
+    aiMessagesBySession.value = {
+      ...aiMessagesBySession.value,
+      [key]: aiMessagesBySession.value[key] ?? []
+    }
+    return
   }
   try {
     const [commands, messages] = await Promise.all([
@@ -1080,8 +1170,9 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 onMounted(() => {
   void loadProfiles()
   void loadAiConfig()
-  void ensureWorkspaceSession(LOCAL_CONNECTION_ID, LOCAL_DEFAULT_SESSION_ID, 'Untitled').then(() => {
-    void loadWorkspaceState(LOCAL_CONNECTION_ID, LOCAL_DEFAULT_SESSION_ID)
+  void preferredWorkspaceSessionForConnection(LOCAL_CONNECTION_ID).then((session) => {
+    terminalTabs.value = terminalTabs.value.map((tab) => (tab.id === 'local-1' ? { ...tab, workspaceSessionId: session.id } : tab))
+    void loadWorkspaceState(LOCAL_CONNECTION_ID, session.id)
   })
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
@@ -1089,10 +1180,6 @@ onMounted(() => {
 
 watch(activeConnectionId, (connectionId) => {
   void loadWorkspaceSessionList(connectionId)
-  void ensureWorkspaceSession(connectionId).then((session) => {
-    const tab = activeTerminal.value
-    if (tab && !tab.workspaceSessionId) selectWorkspaceSession(session.id)
-  })
 })
 
 watch(activeWorkspaceKey, () => {

@@ -3,6 +3,7 @@ use serde::Serialize;
 pub const TERMINAL_DATA: &str = "terminal:data";
 pub const TERMINAL_CLOSED: &str = "terminal:closed";
 pub const AI_CHAT_STREAM: &str = "ai-chat:stream";
+pub const SFTP_TRANSFER: &str = "sftp:transfer";
 
 pub fn terminal_data_event_name(session_id: &str) -> String {
     format!("{TERMINAL_DATA}:{session_id}")
@@ -14,6 +15,10 @@ pub fn terminal_closed_event_name(session_id: &str) -> String {
 
 pub fn ai_chat_stream_event_name(request_id: &str) -> String {
     format!("{AI_CHAT_STREAM}:{request_id}")
+}
+
+pub fn sftp_transfer_event_name(task_id: &str) -> String {
+    format!("{SFTP_TRANSFER}:{task_id}")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,4 +53,11 @@ pub enum AiChatStreamEventKind {
     Chunk,
     Done,
     Error,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpTransferEvent {
+    pub task_id: String,
+    pub percent: Option<u8>,
+    pub text: String,
 }

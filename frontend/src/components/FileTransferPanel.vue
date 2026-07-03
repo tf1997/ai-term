@@ -5,6 +5,7 @@ import {
   cancelTask,
   localHomeDirectory,
   localListDirectory,
+  onSftpTransferProgress,
   probeBastionServers,
   sftpCreateDirectory,
   sftpDeletePath,
@@ -17,7 +18,8 @@ import {
   type BastionServerCandidate,
   type LocalFileEntry,
   type SftpFileEntry,
-  type SftpProbeResponse
+  type SftpProbeResponse,
+  type SftpTransferResponse
 } from '../lib/tauri'
 
 const props = defineProps<{
@@ -44,10 +46,24 @@ interface SftpProbeState extends SftpProbeResponse {
   probing?: boolean
 }
 
+type TransferDirection = 'download' | 'upload'
+type TransferItemKind = 'file' | 'folder'
+type TransferTaskState = 'running' | 'done' | 'error' | 'cancelled'
+
 interface ActiveTask {
   id: string
   label: string
   cancelling: boolean
+  direction?: TransferDirection
+  itemKind?: TransferItemKind
+  itemName?: string
+  sourcePath?: string
+  targetPath?: string
+  progressPercent?: number | null
+  progressText?: string
+  startedAt?: number
+  completedAt?: number
+  status?: TransferTaskState
 }
 
 interface FileContextMenuItem {
@@ -82,6 +98,7 @@ const localLoading = ref(false)
 const probing = ref(false)
 const identifying = ref(false)
 const activeTask = ref<ActiveTask | null>(null)
+const lastTransfer = ref<ActiveTask | null>(null)
 const fileContextMenu = ref<FileContextMenuState | null>(null)
 const status = ref('')
 const error = ref('')
@@ -101,6 +118,7 @@ const pendingIdentify = ref<{
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
 const taskInProgress = computed(() => Boolean(activeTask.value))
+const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
 const targetOverride = computed(() => {
   if (!selectedTarget.value) return undefined
   return {
@@ -470,10 +488,14 @@ function goLocalParent() {
 }
 
 function localParentPath(path: string) {
-  const normalized = path.replace(/\/+$/, '')
+  const normalized = path.replace(/[\\/]+$/, '')
   if (!normalized || normalized === '/') return '/'
-  const index = normalized.lastIndexOf('/')
-  return index <= 0 ? '/' : normalized.slice(0, index)
+  if (/^[A-Za-z]:$/.test(normalized)) return `${normalized}\\`
+  if (/^[A-Za-z]:\\?$/.test(normalized)) return normalized.endsWith('\\') ? normalized : `${normalized}\\`
+  const slash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+  if (slash <= 0) return '/'
+  if (slash === 2 && /^[A-Za-z]:/.test(normalized)) return `${normalized.slice(0, 2)}\\`
+  return normalized.slice(0, slash)
 }
 
 function triggerUpload() {
@@ -496,6 +518,7 @@ async function uploadSelectedFiles(event: Event) {
     return
   }
 
+  let lastUploadedPath = ''
   for (const file of files) {
     const localPath =
       (file as File & { path?: string }).path ?? window.prompt('输入本地文件完整路径', file.name) ?? ''
@@ -503,11 +526,23 @@ async function uploadSelectedFiles(event: Event) {
       error.value = '当前环境没有提供本地文件路径，请在 Tauri 客户端中上传文件。'
       return
     }
-    await runTransfer(`正在上传 ${file.name}...`, (taskId) =>
-      sftpUploadFile(props.connectionId, localPath, currentPath.value, targetOverride.value, { taskId })
+    const targetPath = joinRemotePath(currentPath.value, localFileName(localPath) || file.name)
+    const response = await runTransfer(
+      `正在上传 ${file.name}...`,
+      (taskId) => sftpUploadFile(props.connectionId, localPath, currentPath.value, targetOverride.value, { taskId }),
+      {
+        direction: 'upload',
+        itemKind: 'file',
+        itemName: file.name,
+        sourcePath: localPath,
+        targetPath
+      }
     )
+    if (!response) return
+    lastUploadedPath = response.targetPath || response.remotePath || targetPath
   }
   await loadDirectory(currentPath.value)
+  if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
 }
 
 async function uploadFilesThroughTerminal(files: File[]) {
@@ -545,10 +580,21 @@ async function uploadSelectedLocalEntry() {
     return
   }
   const item = selectedLocalEntry.value
-  await runTransfer(`正在上传 ${item.name}...`, (taskId) =>
-    sftpUploadPath(props.connectionId, item.path, currentPath.value, targetOverride.value, { taskId })
+  const targetPath = joinRemotePath(currentPath.value, item.name)
+  const response = await runTransfer(
+    `正在上传 ${item.name}...`,
+    (taskId) => sftpUploadPath(props.connectionId, item.path, currentPath.value, targetOverride.value, { taskId }),
+    {
+      direction: 'upload',
+      itemKind: item.isDir ? 'folder' : 'file',
+      itemName: item.name,
+      sourcePath: item.path,
+      targetPath
+    }
   )
+  if (!response) return
   await loadDirectory(currentPath.value)
+  selectRemoteEntryByPath(response.targetPath || response.remotePath || targetPath)
 }
 
 async function downloadSelectedRemoteEntry() {
@@ -562,10 +608,21 @@ async function downloadSelectedRemoteEntry() {
 async function downloadRemoteEntry(entry: SftpFileEntry) {
   if (!localPath.value) await loadLocalHome()
   if (!localPath.value) return
-  await runTransfer(`正在下载 ${entry.name}...`, (taskId) =>
-    sftpDownloadPath(props.connectionId, entry.path, localPath.value, entry.isDir, targetOverride.value, { taskId })
+  const targetPath = joinLocalPath(localPath.value, entry.name)
+  const response = await runTransfer(
+    `正在下载 ${entry.name}...`,
+    (taskId) => sftpDownloadPath(props.connectionId, entry.path, localPath.value, entry.isDir, targetOverride.value, { taskId }),
+    {
+      direction: 'download',
+      itemKind: entry.isDir ? 'folder' : 'file',
+      itemName: entry.name,
+      sourcePath: entry.path,
+      targetPath
+    }
   )
+  if (!response) return
   await loadLocalDirectory(localPath.value)
+  selectLocalEntryByPath(response.localPath || response.targetPath || targetPath)
 }
 
 function downloadThroughTerminal(path = terminalRemotePath.value) {
@@ -605,38 +662,94 @@ async function deleteEntry(entry: SftpFileEntry) {
   await loadDirectory(currentPath.value)
 }
 
-async function runTransfer(label: string, action: (taskId: string) => Promise<{ message: string }>) {
-  const taskId = startRemoteTask(label)
-  if (!taskId) return
+async function runTransfer(
+  label: string,
+  action: (taskId: string) => Promise<SftpTransferResponse>,
+  details: Partial<ActiveTask> = {}
+) {
+  const taskId = startRemoteTask(label, details)
+  if (!taskId) return null
+  let unlisten: (() => void) | null = null
   loading.value = true
   error.value = ''
   status.value = label
   try {
+    if (details.direction) {
+      unlisten = await onSftpTransferProgress(taskId, (event) => updateTransferProgress(taskId, event))
+    }
     const response = await action(taskId)
-    status.value = response.message
+    completeTransferTask(taskId, response)
+    if (!details.direction) status.value = response.message
+    return response
   } catch (err) {
+    recordTransferFailure(taskId, err)
     handleTaskError(err)
+    return null
   } finally {
+    unlisten?.()
     loading.value = false
     finishRemoteTask(taskId)
   }
 }
 
-function startRemoteTask(label: string) {
+function startRemoteTask(label: string, details: Partial<ActiveTask> = {}) {
   if (activeTask.value) {
     status.value = `已有任务进行中：${activeTask.value.label}`
     return ''
   }
   const id = `sftp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  if (details.direction) lastTransfer.value = null
   activeTask.value = {
+    ...details,
     id,
     label,
-    cancelling: false
+    cancelling: false,
+    progressPercent: details.direction ? 0 : details.progressPercent,
+    startedAt: Date.now(),
+    status: details.direction ? 'running' : details.status
   }
   loading.value = true
   return id
 }
 
+function updateTransferProgress(taskId: string, event: { percent?: number; text?: string }) {
+  const task = activeTask.value
+  if (!task || task.id !== taskId) return
+  const percent = typeof event.percent === 'number' ? Math.max(0, Math.min(100, Math.round(event.percent))) : task.progressPercent
+  activeTask.value = {
+    ...task,
+    progressPercent: percent,
+    progressText: event.text || task.progressText
+  }
+}
+
+function completeTransferTask(taskId: string, response: SftpTransferResponse) {
+  const task = activeTask.value
+  if (!task || task.id !== taskId || !task.direction) return
+  const targetPath = response.targetPath || response.localPath || response.remotePath || task.targetPath || ''
+  const completedTask: ActiveTask = {
+    ...task,
+    targetPath,
+    progressPercent: 100,
+    progressText: '',
+    completedAt: Date.now(),
+    status: 'done'
+  }
+  lastTransfer.value = completedTask
+  status.value = targetPath ? `${transferActionLabel(task)}完成：${targetPath}` : response.message
+}
+
+function recordTransferFailure(taskId: string, err: unknown) {
+  const task = activeTask.value
+  if (!task || task.id !== taskId || !task.direction) return
+  const message = formatTaskError(err)
+  lastTransfer.value = {
+    ...task,
+    progressText: message,
+    completedAt: Date.now(),
+    status: isTaskCancelledMessage(message) ? 'cancelled' : 'error'
+  }
+}
 function finishRemoteTask(taskId: string) {
   if (activeTask.value?.id === taskId) {
     activeTask.value = null
@@ -682,6 +795,94 @@ function joinRemotePath(base: string, name: string) {
   return `${base}/${name}`
 }
 
+function joinLocalPath(base: string, name: string) {
+  const trimmed = base.replace(/[\\/]+$/, '')
+  if (!trimmed) return name
+  if (/^[A-Za-z]:$/.test(trimmed)) return `${trimmed}\\${name}`
+  if (trimmed === '/') return `/${name}`
+  const separator = base.includes('\\') ? '\\' : '/'
+  return `${trimmed}${separator}${name}`
+}
+
+function localFileName(path: string) {
+  const trimmed = path.replace(/[\\/]+$/, '')
+  return trimmed.split(/[\\/]/).filter(Boolean).pop() || ''
+}
+
+function remoteParentPath(path: string) {
+  const normalized = path.replace(/\/+$/, '')
+  if (!normalized || normalized === '/') return '/'
+  const index = normalized.lastIndexOf('/')
+  return index <= 0 ? '/' : normalized.slice(0, index)
+}
+
+function selectRemoteEntryByPath(path: string) {
+  const normalized = normalizeRemoteComparePath(path)
+  selectedRemoteEntry.value = entries.value.find((entry) => normalizeRemoteComparePath(entry.path) === normalized) ?? null
+}
+
+function selectLocalEntryByPath(path: string) {
+  const normalized = normalizeLocalComparePath(path)
+  selectedLocalEntry.value = localEntries.value.find((entry) => normalizeLocalComparePath(entry.path) === normalized) ?? null
+}
+
+function normalizeRemoteComparePath(path: string) {
+  return path.replace(/\/+$/, '') || '/'
+}
+
+function normalizeLocalComparePath(path: string) {
+  const normalized = path.replace(/[\\/]+$/, '').replace(/\\/g, '/')
+  return /^[A-Za-z]:/.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+function transferActionLabel(task: Pick<ActiveTask, 'direction'>) {
+  return task.direction === 'download' ? '下载' : '上传'
+}
+
+function transferKindLabel(task: Pick<ActiveTask, 'itemKind'>) {
+  return task.itemKind === 'folder' ? '文件夹' : '文件'
+}
+
+function hasDeterminateProgress(task: ActiveTask) {
+  return typeof task.progressPercent === 'number' && task.progressPercent > 0
+}
+
+function transferProgressWidth(task: ActiveTask) {
+  const percent = typeof task.progressPercent === 'number' ? Math.max(0, Math.min(100, task.progressPercent)) : 0
+  return `${percent}%`
+}
+
+function transferStatusLabel(task: ActiveTask) {
+  if (task.status === 'done') return '完成'
+  if (task.status === 'error') return '失败'
+  if (task.status === 'cancelled') return '已取消'
+  if (task.cancelling) return '取消中'
+  return hasDeterminateProgress(task) ? `${Math.round(task.progressPercent ?? 0)}%` : '传输中'
+}
+
+async function openLastTransferLocation() {
+  const task = lastTransfer.value
+  if (!task?.targetPath) return
+  try {
+    if (task.direction === 'download') {
+      const path = task.itemKind === 'folder' ? task.targetPath : localParentPath(task.targetPath)
+      if (path) await openShellPath(path)
+      return
+    }
+    const remotePath = task.itemKind === 'folder' ? task.targetPath : remoteParentPath(task.targetPath)
+    await loadDirectory(remotePath)
+    selectRemoteEntryByPath(task.targetPath)
+  } catch (err) {
+    error.value = formatError(err)
+  }
+}
+
+async function copyLastTransferPath() {
+  const path = lastTransfer.value?.targetPath
+  if (!path) return
+  await copyText(path)
+}
+
 function formatSize(size: number) {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
@@ -700,7 +901,17 @@ function formatError(err: unknown) {
 }
 
 async function copyText(value: string) {
-  await navigator.clipboard?.writeText(value)
+  if (!value) return
+  if (!navigator.clipboard?.writeText) {
+    error.value = '当前环境不支持剪贴板写入。'
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(value)
+    status.value = '已复制路径'
+  } catch (err) {
+    error.value = formatError(err)
+  }
 }
 
 function finishTerminalDownloadIfReady(snapshot: string) {
@@ -847,9 +1058,40 @@ function shellQuote(value: string) {
       <button type="button" :class="{ active: transferMode === 'terminal' }" @click="transferMode = 'terminal'">终端通道</button>
     </div>
 
-    <p v-if="status || error || activeTask" class="sftp-feedback" :class="{ error: Boolean(error) }">
-      {{ error || status || activeTask?.label }}
-    </p>
+    <div v-if="status || error || activeTask || lastTransfer" class="sftp-feedback" :class="{ error: Boolean(error) }">
+      <p v-if="error">{{ error }}</p>
+      <template v-else-if="activeTransferTask">
+        <div class="transfer-task-head">
+          <strong>{{ transferActionLabel(activeTransferTask) }}{{ transferKindLabel(activeTransferTask) }} · {{ activeTransferTask.itemName }}</strong>
+          <span>{{ transferStatusLabel(activeTransferTask) }}</span>
+        </div>
+        <div class="transfer-progress" :class="{ indeterminate: !hasDeterminateProgress(activeTransferTask) }">
+          <span :style="hasDeterminateProgress(activeTransferTask) ? { width: transferProgressWidth(activeTransferTask) } : undefined" />
+        </div>
+        <div class="transfer-task-paths">
+          <span>{{ activeTransferTask.sourcePath }}</span>
+          <span>{{ activeTransferTask.targetPath }}</span>
+        </div>
+      </template>
+      <template v-else-if="lastTransfer">
+        <div class="transfer-task-head">
+          <strong>{{ transferActionLabel(lastTransfer) }}{{ transferKindLabel(lastTransfer) }} · {{ lastTransfer.itemName }}</strong>
+          <span>{{ transferStatusLabel(lastTransfer) }}</span>
+        </div>
+        <div class="transfer-progress complete">
+          <span />
+        </div>
+        <div class="transfer-task-paths">
+          <span>{{ lastTransfer.sourcePath }}</span>
+          <span>{{ lastTransfer.targetPath || lastTransfer.progressText }}</span>
+        </div>
+        <div v-if="lastTransfer.status === 'done'" class="transfer-task-actions">
+          <button type="button" @click="openLastTransferLocation">{{ lastTransfer.direction === 'download' ? '打开位置' : '打开远端目录' }}</button>
+          <button type="button" @click="copyLastTransferPath">复制路径</button>
+        </div>
+      </template>
+      <p v-else>{{ status || activeTask?.label }}</p>
+    </div>
 
     <div v-if="currentTerminalTarget" class="terminal-target-card">
       <div>
@@ -913,7 +1155,12 @@ function shellQuote(value: string) {
       </div>
     </div>
 
-    <div v-else class="transfer-browser">
+    <div v-else class="sftp-transfer-workbench">
+      <div class="transfer-target-strip">
+        <span><strong>下载到</strong>{{ localPath || localHome || '本地目录未加载' }}</span>
+        <span><strong>上传到</strong>{{ currentPath }}</span>
+      </div>
+      <div class="transfer-browser">
       <section class="transfer-pane local-pane">
         <div class="transfer-pane-head">
           <strong>本地</strong>
@@ -991,6 +1238,8 @@ function shellQuote(value: string) {
         </div>
       </section>
     </div>
+
+        </div>
 
     <teleport to="body">
       <div v-if="fileContextMenu" class="context-menu-scrim" role="presentation" @click="closeFileContextMenu" @contextmenu.prevent="closeFileContextMenu" />

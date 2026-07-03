@@ -79,6 +79,16 @@ export interface SftpListResponse {
 
 export interface SftpTransferResponse {
   message: string
+  localPath?: string
+  remotePath?: string
+  targetPath?: string
+  isDir?: boolean
+}
+
+export interface SftpTransferEvent {
+  taskId: string
+  percent?: number
+  text?: string
 }
 
 export interface SftpProbeResponse {
@@ -285,6 +295,10 @@ export function aiChatStreamEventName(requestId: string) {
   return `ai-chat:stream:${requestId}`
 }
 
+export function sftpTransferEventName(taskId: string) {
+  return `sftp:transfer:${taskId}`
+}
+
 export function onTerminalData(sessionId: string, handler: (event: TerminalDataEvent) => void) {
   return listen<TerminalDataEvent>(terminalDataEventName(sessionId), (event) => handler(event.payload))
 }
@@ -295,4 +309,7 @@ export function onTerminalClosed(sessionId: string, handler: (event: TerminalClo
 
 export function onAiChatStream(requestId: string, handler: (event: AiChatStreamEvent) => void) {
   return listen<AiChatStreamEvent>(aiChatStreamEventName(requestId), (event) => handler(event.payload))
+}
+export function onSftpTransferProgress(taskId: string, handler: (event: SftpTransferEvent) => void) {
+  return listen<SftpTransferEvent>(sftpTransferEventName(taskId), (event) => handler(event.payload))
 }

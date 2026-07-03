@@ -38,6 +38,7 @@ let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
+let pendingInputControlSequence = ''
 let lastRightClickPasteAt = 0
 const status = ref<'idle' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
@@ -159,17 +160,54 @@ function recordCommand(command: string) {
 }
 
 function trackUserInput(data: string) {
-  for (const character of data) {
-    if (character === '\r' || character === '\n') {
+  const commandInput = stripCommandInputControlSequences(data)
+  for (const character of commandInput) {
+    const code = character.charCodeAt(0)
+    if (code === 13 || code === 10) {
       recordCommand(inputCommandBuffer)
       inputCommandBuffer = ''
-    } else if (character === '\u007f') {
+    } else if (code === 127) {
       inputCommandBuffer = inputCommandBuffer.slice(0, -1)
     } else if (character >= ' ') {
       inputCommandBuffer += character
     }
   }
 }
+
+function stripCommandInputControlSequences(data: string) {
+  let visible = ''
+  for (const char of data) {
+    if (pendingInputControlSequence) {
+      if (!skipInputControlSequence(char)) {
+        visible += char
+      }
+      continue
+    }
+    if (char === '\x1b') {
+      pendingInputControlSequence = char
+      continue
+    }
+    visible += char
+  }
+  return visible
+}
+
+function skipInputControlSequence(char: string) {
+  pendingInputControlSequence += char
+  if (pendingInputControlSequence.length > 32) {
+    pendingInputControlSequence = ''
+    return false
+  }
+  const code = char.charCodeAt(0)
+  const isPendingCsiInputSequence = pendingInputControlSequence.startsWith('\x1b[')
+  if (isPendingCsiInputSequence && pendingInputControlSequence.length > 2 && code >= 0x40 && code <= 0x7e) {
+    pendingInputControlSequence = ''
+  } else if (!isPendingCsiInputSequence && code >= 0x40 && code <= 0x7e) {
+    pendingInputControlSequence = ''
+  }
+  return true
+}
+
 
 onMounted(async () => {
   if (!terminalHost.value) return

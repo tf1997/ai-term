@@ -1,9 +1,12 @@
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tauri::{Manager, State};
 use uuid::Uuid;
 
 use crate::app::events::{
-    ai_chat_stream_event_name, terminal_closed_event_name, terminal_data_event_name,
-    AiChatStreamEvent, AiChatStreamEventKind, TerminalClosedEvent, TerminalDataEvent,
+    ai_chat_stream_event_name, sftp_transfer_event_name, terminal_closed_event_name,
+    terminal_data_event_name, AiChatStreamEvent, AiChatStreamEventKind, SftpTransferEvent,
+    TerminalClosedEvent, TerminalDataEvent,
 };
 use crate::app::state::AppState;
 use crate::domain::ai::chat::{
@@ -17,10 +20,10 @@ use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::connection::models::ConnectionProfile;
 use crate::domain::connection::profiles::validate_profile;
 use crate::domain::connection::sftp::{
-    create_directory_with_cancel, delete_path_with_cancel, download_file_with_cancel,
-    download_path_with_cancel, list_directory_with_cancel, probe_sftp_with_cancel,
-    upload_file_with_cancel, upload_path_with_cancel, SftpCancelToken, SftpListResponse,
-    SftpProbeResponse, SftpTargetOverride, SftpTransferResponse,
+    create_directory_with_cancel, delete_path_with_cancel, download_file_with_progress,
+    download_path_with_progress, list_directory_with_cancel, probe_sftp_with_cancel,
+    upload_file_with_progress, upload_path_with_progress, SftpCancelToken, SftpListResponse,
+    SftpProbeResponse, SftpProgressUpdate, SftpTargetOverride, SftpTransferResponse,
 };
 use crate::domain::filesystem::local::{
     home_directory, list_directory as list_local_directory_impl, LocalDirectoryResponse,
@@ -30,6 +33,8 @@ use crate::domain::terminal::ssh::spawn_ssh_terminal;
 use crate::domain::workspace::{
     AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
 };
+
+const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[tauri::command]
 pub async fn connect_profile(
@@ -493,12 +498,21 @@ pub async fn sftp_list_directory(
         username: target_username,
     };
     let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
-    let result = tokio::task::spawn_blocking(move || {
+    let timeout_token = cancel_token.clone();
+    let operation = tokio::task::spawn_blocking(move || {
         list_directory_with_cancel(&profile, &path, &target_override, cancel_token.as_ref())
-    })
-    .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
+    });
+    let result = match tokio::time::timeout(SFTP_COMMAND_TIMEOUT, operation).await {
+        Ok(joined) => joined
+            .map_err(|err| err.to_string())?
+            .map_err(|err| err.to_string()),
+        Err(_) => {
+            if let Some(token) = timeout_token {
+                token.store(true, Ordering::SeqCst);
+            }
+            Err("SFTP directory listing timed out; Windows sftp.exe or the PTY session did not return. Please check saved passwords, host-key prompts, ProxyJump access, and whether the remote server allows SFTP.".into())
+        }
+    };
     finish_optional_task(task_id, &state).await;
     result
 }
@@ -592,6 +606,7 @@ pub async fn sftp_upload_file(
     target_username: Option<String>,
     task_id: Option<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
     let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
@@ -599,14 +614,18 @@ pub async fn sftp_upload_file(
         username: target_username,
     };
     let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
+    let progress_task_id = task_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        upload_file_with_cancel(
-            &profile,
-            &local_path,
-            &remote_dir,
-            &target_override,
-            cancel_token.as_ref(),
-        )
+        with_sftp_progress(app, progress_task_id, |progress| {
+            upload_file_with_progress(
+                &profile,
+                &local_path,
+                &remote_dir,
+                &target_override,
+                cancel_token.as_ref(),
+                progress,
+            )
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -624,6 +643,7 @@ pub async fn sftp_upload_path(
     target_username: Option<String>,
     task_id: Option<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
     let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
@@ -631,14 +651,18 @@ pub async fn sftp_upload_path(
         username: target_username,
     };
     let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
+    let progress_task_id = task_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        upload_path_with_cancel(
-            &profile,
-            &local_path,
-            &remote_dir,
-            &target_override,
-            cancel_token.as_ref(),
-        )
+        with_sftp_progress(app, progress_task_id, |progress| {
+            upload_path_with_progress(
+                &profile,
+                &local_path,
+                &remote_dir,
+                &target_override,
+                cancel_token.as_ref(),
+                progress,
+            )
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -656,6 +680,7 @@ pub async fn sftp_download_file(
     target_username: Option<String>,
     task_id: Option<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
     let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
@@ -663,14 +688,18 @@ pub async fn sftp_download_file(
         username: target_username,
     };
     let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
+    let progress_task_id = task_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        download_file_with_cancel(
-            &profile,
-            &remote_path,
-            &local_path,
-            &target_override,
-            cancel_token.as_ref(),
-        )
+        with_sftp_progress(app, progress_task_id, |progress| {
+            download_file_with_progress(
+                &profile,
+                &remote_path,
+                &local_path,
+                &target_override,
+                cancel_token.as_ref(),
+                progress,
+            )
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -689,6 +718,7 @@ pub async fn sftp_download_path(
     target_username: Option<String>,
     task_id: Option<String>,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
     let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
@@ -696,15 +726,19 @@ pub async fn sftp_download_path(
         username: target_username,
     };
     let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
+    let progress_task_id = task_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        download_path_with_cancel(
-            &profile,
-            &remote_path,
-            &local_dir,
-            is_dir,
-            &target_override,
-            cancel_token.as_ref(),
-        )
+        with_sftp_progress(app, progress_task_id, |progress| {
+            download_path_with_progress(
+                &profile,
+                &remote_path,
+                &local_dir,
+                is_dir,
+                &target_override,
+                cancel_token.as_ref(),
+                progress,
+            )
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -725,6 +759,31 @@ pub async fn probe_bastion_servers(
         .map_err(|err| err.to_string())
 }
 
+fn with_sftp_progress<T, F>(
+    app: tauri::AppHandle,
+    task_id: Option<String>,
+    action: F,
+) -> anyhow::Result<T>
+where
+    F: FnOnce(Option<&mut dyn FnMut(SftpProgressUpdate)>) -> anyhow::Result<T>,
+{
+    if let Some(task_id) = task_id {
+        let event_name = sftp_transfer_event_name(&task_id);
+        let mut callback = move |update: SftpProgressUpdate| {
+            let _ = app.emit_all(
+                &event_name,
+                SftpTransferEvent {
+                    task_id: task_id.clone(),
+                    percent: update.percent,
+                    text: update.text,
+                },
+            );
+        };
+        action(Some(&mut callback))
+    } else {
+        action(None)
+    }
+}
 async fn register_optional_task(
     task_id: Option<String>,
     state: &State<'_, AppState>,

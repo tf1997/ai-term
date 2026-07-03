@@ -221,6 +221,14 @@ function handleJumpModeChanged() {
               <input v-model.number="selectedProfile.gateway.port" type="number" min="1" max="65535" step="1" placeholder="22" />
             </label>
             <label>
+              <span>?????</span>
+              <input v-model="selectedProfile.target.host" placeholder="10.0.0.12" />
+            </label>
+            <label>
+              <span>??????</span>
+              <input v-model="selectedProfile.target.username" placeholder="deploy" />
+            </label>
+            <label>
               <span>{{ targetPortLabel(selectedProfile) }}</span>
               <input v-model.number="selectedProfile.target.port" type="number" min="1" max="65535" step="1" placeholder="22" />
             </label>

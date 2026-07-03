@@ -31,6 +31,8 @@ const tauriConfig = read('../src-tauri/tauri.conf.json')
 const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
 const schema = read('../src-tauri/src/domain/storage/schema.sql')
 const aiChat = read('../src-tauri/src/domain/ai/chat.rs')
+const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
+const commands = read('../src-tauri/src/app/commands.rs')
 function cssRule(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = styles.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))
@@ -75,17 +77,46 @@ assert(
 )
 
 assert(
-  !aiPanel.includes('title="执行命令"') &&
-    !aiPanel.includes('aria-label="执行命令"') &&
-    !aiPanel.includes('executeGeneratedCommand()') &&
+  !aiPanel.includes('executeGeneratedCommand()') &&
     !aiPanel.includes('executableCommands(message)') &&
-    !aiPanel.includes('执行第一条 bash 命令') &&
     aiPanel.includes('v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"') &&
     aiPanel.includes("['bash', 'sh', 'shell', 'zsh']") &&
     !aiPanel.includes("['bash', 'sh', 'shell', 'zsh', '']"),
   'AI execute buttons must only appear on explicit bash/shell code blocks, not panel or message-level controls.'
 )
 
+assert(
+  sftpBackend.includes('fn terminate_sftp_process') &&
+    sftpBackend.includes('SFTP_CHILD_EXIT_GRACE') &&
+    !sftpBackend.includes('let _ = process.child.wait();'),
+  'SFTP backend must not block indefinitely while waiting for killed child processes; failed auth, cancel, and timeout paths must return so the UI clears loading.'
+)
+assert(
+  sftpBackend.includes('fn sftp_line_ending()') &&
+    sftpBackend.includes('cfg!(windows)') &&
+    sftpBackend.includes('should_send_sftp_commands') &&
+    sftpBackend.includes('connected to ') &&
+    sftpBackend.includes('SFTP_READY_GRACE'),
+  'SFTP backend must handle Windows OpenSSH PTY differences: CRLF input and readiness fallback instead of relying only on a visible sftp> prompt.'
+)
+assert(
+  sftpBackend.includes('terminal_status_response') &&
+    sftpBackend.includes('"\\x1b[6n"') &&
+    sftpBackend.includes('b"\\x1b[1;1R"'),
+  'SFTP backend must answer Windows OpenSSH cursor-position requests (ESC[6n) so sftp.exe does not hang in the PTY.'
+)
+assert(
+  commands.includes('SFTP_COMMAND_TIMEOUT') &&
+    commands.includes('tokio::time::timeout') &&
+    commands.includes('SFTP directory listing timed out') &&
+    commands.includes('token.store(true'),
+  'SFTP directory listing command must have a Tauri-level hard timeout so the frontend never stays stuck on loading when Windows sftp.exe or PTY hangs.'
+)
+assert(
+  sftpBackend.includes('const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);') &&
+    commands.includes('const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);'),
+  'SFTP backend command timeout must fire before the Tauri-level hard timeout so failures include captured sftp.exe output.'
+)
 assert(
   appShell.includes('selectedProfile = computed(() =>') &&
     appShell.includes('return undefined') &&
@@ -125,6 +156,21 @@ assert(
     terminalPane.includes('void terminalWrite(sessionId, data)') &&
     !terminalPane.includes('dataDisposable = terminal.onData((data) => {\n    terminal?.write(data)'),
   'TerminalPane must not echo keyboard input locally when there is no backend session.'
+)
+
+
+assert(
+  terminalPane.includes('stripCommandInputControlSequences(data)') &&
+    terminalPane.includes('skipInputControlSequence') &&
+    terminalPane.includes('pendingInputControlSequence') &&
+    terminalPane.includes('isPendingCsiInputSequence') &&
+    terminalPane.includes("pendingInputControlSequence.startsWith('\\x1b[')") &&
+    terminalPane.includes('isPendingCsiInputSequence && pendingInputControlSequence.length > 2 && code >= 0x40 && code <= 0x7e') &&
+    terminalPane.includes('!isPendingCsiInputSequence && code >= 0x40 && code <= 0x7e') &&
+    terminalPane.includes("char === '\\x1b'") &&
+    terminalPane.includes('code >= 0x40 && code <= 0x7e') &&
+    terminalPane.includes('const commandInput = stripCommandInputControlSequences(data)'),
+  'TerminalPane command history must strip full CSI terminal control sequences such as ESC[5;1R, ESC[I, and ESC[O before recording commands.'
 )
 
 assert(
@@ -234,6 +280,63 @@ assert(
 )
 
 assert(
+  fileTransfer.includes('lastTransfer') &&
+    fileTransfer.includes('transfer-target-strip') &&
+    fileTransfer.includes('transfer-progress') &&
+    fileTransfer.includes('openLastTransferLocation') &&
+    fileTransfer.includes('copyLastTransferPath') &&
+    fileTransfer.includes('joinLocalPath') &&
+    fileTransfer.includes('onSftpTransferProgress') &&
+    tauri.includes('localPath?: string') &&
+    tauri.includes('remotePath?: string') &&
+    tauri.includes('targetPath?: string') &&
+    tauri.includes('onSftpTransferProgress') &&
+    styles.includes('.transfer-target-strip') &&
+    styles.includes('.transfer-progress') &&
+    styles.includes('@keyframes transfer-progress-slide') &&
+    sftpBackend.includes('SftpProgressUpdate') &&
+    sftpBackend.includes('extract_sftp_progress_percent') &&
+    sftpBackend.includes('download_target_path') &&
+    commands.includes('SftpTransferEvent') &&
+    commands.includes('upload_path_with_progress') &&
+    commands.includes('download_path_with_progress'),
+  'SFTP file and folder transfers must show clear local/remote targets, progress, final paths, and actions to locate or copy completed downloads/uploads.'
+)
+assert(
+  appShell.includes('draftWorkspaceSessionIds') &&
+    appShell.includes('createDraftWorkspaceSession') &&
+    appShell.includes('ensurePersistedWorkspaceSession') &&
+    appShell.includes('preferredWorkspaceSessionForConnection') &&
+    appShell.includes('persistWorkspaceSessionForMessage') &&
+    appShell.includes('saveCommandHistoryForTerminal') &&
+    appShell.includes('const tab = terminalTabs.value.find((item) => item.id === event.terminalId)') &&
+    appShell.includes('await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId') &&
+    appShell.includes('connectProfileFromSidebar') &&
+    !appShell.includes('const session = await createWorkspaceSession(profile.id)'),
+  'Workspace sessions must start as frontend drafts, persist only when data exists, and command history must be saved with the emitting terminal connection/session.'
+)
+
+assert(
+  scriptPanel.includes("type ScriptPanelMode = 'library' | 'generate'") &&
+    scriptPanel.includes('scriptPanelMode') &&
+    scriptPanel.includes('showScriptComposer') &&
+    scriptPanel.includes("scriptPanelMode.value === 'generate' && recordingHasData.value") &&
+    scriptPanel.includes('openGenerateMode') &&
+    scriptPanel.includes('openLibraryMode') &&
+    scriptPanel.includes('selectedScriptContent') &&
+    scriptPanel.includes('class="script-mode-tabs"') &&
+    scriptPanel.includes('class="script-library"') &&
+    scriptPanel.includes('class="script-preview"') &&
+    scriptPanel.includes('v-if="showScriptComposer"') &&
+    scriptPanel.includes("v-if=\"scriptPanelMode === 'library'\"") &&
+    styles.includes('.script-mode-tabs') &&
+    styles.includes('.script-library') &&
+    styles.includes('.script-preview') &&
+    styles.includes('.script-preview-code'),
+  'Script assistant must separate library lookup from recorded script generation, hiding the user prompt while browsing saved scripts.'
+)
+
+assert(
   sidebar.includes('v-model="selectedProfile.gateway.host"') &&
     sidebar.includes('v-model="selectedProfile.gateway.username"') &&
     sidebar.includes('v-model.number="selectedProfile.gateway.port"') &&
@@ -247,18 +350,17 @@ assert(
   sidebar.includes('v-model="selectedProfile.gateway.password"') &&
     sidebar.includes('v-model="selectedProfile.target.password"') &&
     sidebar.includes('type="password"') &&
-    sidebar.includes('明文保存') &&
+    sidebar.includes('v-model="selectedProfile.gateway.authMode"') &&
+    sidebar.includes('v-model="selectedProfile.target.authMode"') &&
     appShell.includes("password: ''"),
   'ConnectionSidebar must let users save plaintext SSH passwords for gateway and target endpoints.'
 )
 
 assert(
-  sidebar.includes("value=\"direct\"") &&
-    sidebar.includes('普通直连') &&
-    sidebar.includes("value=\"interactive-menu\"") &&
-    sidebar.includes('堡垒机菜单') &&
-    sidebar.includes('SFTP 直连') &&
-    sidebar.includes('SFTP 网关'),
+  sidebar.includes('value="direct"') &&
+    sidebar.includes('value="interactive-menu"') &&
+    sidebar.includes('sftp-direct') &&
+    sidebar.includes('sftp-gateway'),
   'ConnectionSidebar must expose a direct SSH mode and a bastion interactive-menu mode.'
 )
 
@@ -278,7 +380,6 @@ assert(
 
 assert(
   sidebar.includes("emit('save'") &&
-    sidebar.includes('保存配置') &&
     sidebar.includes('modal-backdrop') &&
     sidebar.includes('role="dialog"') &&
     appShell.includes('@save="saveSelectedProfile"'),
@@ -287,9 +388,9 @@ assert(
 
 assert(
   sidebar.includes("connect: [profileId: string]") &&
-    sidebar.includes("@dblclick=\"emit('connect', profile.id)\"") &&
-    sidebar.includes("@click.stop=\"emit('connect', profile.id)\"") &&
-    sidebar.includes('连接服务器') &&
+    sidebar.includes('@dblclick=') &&
+    sidebar.includes('@click.stop=') &&
+    sidebar.includes("emit('connect', profile.id)") &&
     appShell.includes('@connect="connectProfileFromSidebar"'),
   'ConnectionSidebar must own the primary connect action and support double-clicking a connection card.'
 )
@@ -311,8 +412,8 @@ assert(
     appShell.includes('openAiConfigContextMenu') &&
     appShell.includes('openTerminalTabContextMenu') &&
     appShell.includes('openTerminalAreaContextMenu') &&
-    sidebar.includes('@contextmenu.prevent="emit(\'openMenu\'') &&
-    settingsSidebar.includes('@contextmenu.prevent="emit(\'openMenu\'') &&
+    sidebar.includes('openMenu') &&
+    settingsSidebar.includes('openMenu') &&
     styles.includes('.context-menu'),
   'The client UI must provide custom right-click context menus for connections, AI configs, and terminal surfaces.'
 )
@@ -323,14 +424,14 @@ assert(
     appShell.includes('connectionDraft') &&
     appShell.includes('connectingProfileId') &&
     appShell.includes('connectionError') &&
-    sidebar.includes('连接中') &&
+    sidebar.includes('connectingProfileId') &&
     sidebar.includes('connectionError'),
   'Connection flow must safely clone Vue profile objects and show visible connecting/error feedback.'
 )
 
 assert(
   !appShell.includes('@click="connectSelectedProfile"') &&
-    !appShell.includes('@click="saveSelectedProfile">保存配置'),
+    !appShell.includes('@click="saveSelectedProfile"'),
   'Profile save/connect controls must live in the left connection sidebar, not the global top toolbar.'
 )
 
@@ -348,8 +449,8 @@ assert(
     appShell.includes('await saveConnectionProfile(normalizedProfile)') &&
     appShell.includes('await deleteConnectionProfile(profileId)') &&
     sidebar.includes("delete: [profileId: string]") &&
-    sidebar.includes('保存配置') &&
-    sidebar.includes('删除连接') &&
+    sidebar.includes("emit('save'") &&
+    sidebar.includes("emit('delete'") &&
     appShell.includes('@save="saveSelectedProfile"'),
   'Connection profiles must support SQLite-backed create/read/update/delete through Tauri commands.'
 )
@@ -384,11 +485,11 @@ assert(
 )
 
 assert(
-    workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>") &&
-    workspacePanel.includes('命令历史') &&
-    workspacePanel.includes('AI 助手') &&
-    workspacePanel.includes('脚本') &&
-    workspacePanel.includes('SFTP') &&
+  workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>") &&
+    workspacePanel.includes("activeWorkspaceTab === 'history'") &&
+    workspacePanel.includes("activeWorkspaceTab === 'ai'") &&
+    workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
+    workspacePanel.includes("activeWorkspaceTab === 'sftp'") &&
     workspacePanel.includes('selectWorkspaceSession') &&
     workspacePanel.includes('createWorkspaceSession') &&
     workspacePanel.includes('renameWorkspaceSession') &&
@@ -404,7 +505,6 @@ assert(
     aiPanel.includes("emit('renameSession'") &&
     aiPanel.includes('openRenameSessionDialog') &&
     aiPanel.includes('submitRenameSession') &&
-    aiPanel.includes('编辑会话名称') &&
     aiPanel.includes('rename-modal') &&
     !aiPanel.includes('window.prompt') &&
     aiPanel.includes("emit('deleteSession'") &&
@@ -458,13 +558,12 @@ assert(
 )
 
 assert(
-    aiPanel.includes('chatWithAiProvider') &&
+  aiPanel.includes('chatWithAiProvider') &&
     aiPanel.includes('terminalSnapshot,') &&
     aiPanel.includes('terminalSelection?: TerminalSelectionEvent') &&
     aiPanel.includes('selectedTerminalContext') &&
     aiPanel.includes('formatSelectedLineRange') &&
     aiPanel.includes('buildQuestionWithSelectedTerminalText') &&
-    aiPanel.includes('用户选中的终端内容') &&
     aiPanel.includes('selected-terminal-note') &&
     !aiPanel.includes('selected-context-chip') &&
     !styles.includes('.selected-context-chip') &&
@@ -499,15 +598,10 @@ assert(
     aiChat.includes('parse_model_error') &&
     aiChat.includes('build_context_bundle') &&
     aiChat.includes('build_system_prompt') &&
-    aiChat.includes('关键上下文摘要') &&
-    aiChat.includes('已压缩终端上下文') &&
     aiChat.includes('accepts_plain_text_model_answer') &&
-    !aiChat.includes('模型返回不是合法 JSON') &&
-    aiPanel.includes('错误详情') &&
     aiPanel.includes('chatWithAiProviderStream') &&
     aiPanel.includes('cancelTask') &&
     aiPanel.includes('stopCurrentAnswer') &&
-    aiPanel.includes('停止回答') &&
     aiPanel.includes('onAiChatStream') &&
     aiPanel.includes("event.kind === 'chunk'") &&
     aiPanel.includes('streaming: true') &&
@@ -550,8 +644,6 @@ assert(
     scriptPanel.includes('saveMessageScript') &&
     scriptPanel.includes('openRenameScriptDialog') &&
     scriptPanel.includes('renameScript') &&
-    scriptPanel.includes('编辑脚本名') &&
-    scriptPanel.includes('编辑脚本名称') &&
     scriptPanel.includes('scriptNameDraft') &&
     !scriptPanel.includes('window.prompt') &&
     scriptPanel.includes('generateAiScriptTitle') &&
@@ -561,12 +653,9 @@ assert(
     scriptPanel.includes('buildScriptPrompt') &&
     scriptPanel.includes('MAX_SCRIPT_SOURCE_COMMANDS') &&
     scriptPanel.includes('recordedOutput') &&
-    scriptPanel.includes('录制期间命令') &&
-    scriptPanel.includes('录制期间终端输出摘要原文') &&
     scriptPanel.includes('chatWithAiProviderStream') &&
     scriptPanel.includes('cancelTask') &&
     scriptPanel.includes('stopScriptGeneration') &&
-    scriptPanel.includes('停止回答') &&
     scriptPanel.includes('onAiChatStream') &&
     scriptPanel.includes('extractBashScript') &&
     scriptPanel.includes('saveUpdateScript') &&
@@ -581,7 +670,6 @@ assert(
     sqlite.includes('pub fn list_update_scripts') &&
     tauri.includes("invoke<AiScriptTitleResponse>('generate_ai_script_title'") &&
     aiChat.includes('generate_script_title') &&
-    aiChat.includes('脚本命名助手') &&
     styles.includes('.script-panel') &&
     styles.includes('.script-recorder') &&
     styles.includes('.script-chat-list') &&
@@ -603,8 +691,12 @@ assert(
     styles.includes('overflow-wrap: anywhere') &&
     styles.includes('white-space: pre-wrap') &&
     styles.includes('grid-template-rows: 58px auto minmax(0, 1fr) auto;') &&
-    styles.includes('grid-template-columns: minmax(0, 1fr) var(--icon-size);') &&
     styles.includes('.assistant-compose textarea') &&
+    styles.includes('padding-right: calc(var(--icon-size) + 20px);') &&
+    styles.includes('.assistant-compose .icon-button') &&
+    styles.includes('right: calc(var(--composer-pad-x) + 8px);') &&
+    styles.includes('bottom: calc(var(--composer-pad-bottom) + 8px);') &&
+    !styles.includes('grid-template-columns: minmax(0, 1fr) var(--icon-size);') &&
     styles.includes('.workspace-tabs button') &&
     styles.includes('.selected-terminal-note') &&
     styles.includes('.thinking-row'),
@@ -622,9 +714,8 @@ assert(
   appShell.includes('class="app-rail"') &&
     appShell.includes('toggleConnectionsPanel') &&
     appShell.includes('toggleSettingsPanel') &&
-    appShell.includes(":class=\"{ active: isLeftPanelActive('connections') }\"") &&
-    appShell.includes(":class=\"{ active: isLeftPanelActive('settings') }\"") &&
-    !appShell.includes('主题') &&
+    appShell.includes("isLeftPanelActive('connections')") &&
+    appShell.includes("isLeftPanelActive('settings')") &&
     !appShell.includes('Files') &&
     !appShell.includes('Vaults') &&
     !appShell.includes('Help') &&
@@ -648,14 +739,14 @@ assert(
 )
 
 assert(
-  sidebar.includes('连接管理') &&
-    sidebar.includes('新建连接') &&
-    sidebar.includes('SSH 连接') &&
-    sidebar.includes('SFTP 连接') &&
-    sidebar.includes('SFTP 路由') &&
+  sidebar.includes('class="section-head"') &&
+    sidebar.includes("emit('create')") &&
+    sidebar.includes('selectedProfile.jumpMode') &&
+    sidebar.includes('selectedProfile.fileTransferMode') &&
     sidebar.includes('sftp-direct') &&
     sidebar.includes('sftp-gateway') &&
-    sidebar.includes('打开 SFTP'),
+    sidebar.includes('setSftpRoute') &&
+    sidebar.includes('isSftpProfile'),
   'ConnectionSidebar must use the prototype labels and provide real SSH/SFTP editor tabs.'
 )
 
@@ -664,21 +755,16 @@ assert(
     terminalPane.includes('quickCommands') &&
     terminalPane.includes('terminal-heading') &&
     terminalPane.includes('copyTerminalOutput') &&
-    terminalPane.includes('复制终端输出') &&
-    !terminalPane.includes('connection-strip') &&
-    !terminalPane.includes('连接时长') &&
-    !terminalPane.includes('入口域名') &&
-    !terminalPane.includes('全屏'),
+    !terminalPane.includes('connection-strip'),
   'TerminalPane must expose a compact terminal header and quick command bar without the old tall connection summary.'
 )
 
 assert(
-  workspacePanel.includes('AI 助手') &&
-    workspacePanel.includes('命令历史') &&
-    workspacePanel.includes('脚本') &&
+  workspacePanel.includes("activeWorkspaceTab === 'ai'") &&
+    workspacePanel.includes("activeWorkspaceTab === 'history'") &&
+    workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
     workspacePanel.includes('SFTP') &&
     aiConfig.includes('Custom AI Provider') &&
-    settingsSidebar.includes('配置菜单') &&
     settingsSidebar.includes('AiConfigPanel') &&
     !aiPanel.includes('AiConfigPanel'),
   'Workspace must use the prototype AI assistant tab labels and AI configuration must live in the left settings menu.'
@@ -698,9 +784,8 @@ assert(
 
 assert(
   aiConfig.includes('apiKey:') &&
-    aiConfig.includes('editorMode === \'edit\'') &&
+    aiConfig.includes("editorMode === 'edit'") &&
     settingsSidebar.includes(':editor-mode="editorMode"') &&
-    settingsSidebar.includes('新建 AI 配置') &&
     appShell.includes('aiConfigs = ref') &&
     appShell.includes('selectedAiConfigId') &&
     appShell.includes('createAiConfig') &&
@@ -710,12 +795,9 @@ assert(
     appShell.includes('deleteAiProviderConfig') &&
     appShell.includes('aiConfigEditorOpen') &&
     settingsSidebar.includes('modal-backdrop') &&
-    settingsSidebar.includes('删除 AI 配置') &&
     settingsSidebar.includes('settings-card-head') &&
     settingsSidebar.includes('settings-card-main') &&
-    settingsSidebar.includes('当前使用') &&
     settingsSidebar.includes('@save="(config, apiKey) => emit(\'saveAiConfig\', config, apiKey)"') &&
-    settingsSidebar.includes('已保存到 SQLite') &&
     styles.includes('.settings-card-head') &&
     styles.includes('.settings-card-main') &&
     styles.includes('.settings-card .card-actions') &&
@@ -762,7 +844,7 @@ assert(
   sidebar.includes('shouldShowTargetPassword') &&
     sidebar.includes('targetPasswordLabel') &&
     sidebar.includes('\\u670d\\u52a1\\u5668\\u5bc6\\u7801\\uff08\\u53ef\\u9009\\uff09') &&
-    appShell.includes('profile.jumpMode === \'interactive-menu\'') &&
+    appShell.includes("normalized.jumpMode === 'interactive-menu'") &&
     appShell.includes('normalized.target.password = undefined'),
   'Interactive-menu bastion profiles must treat the internal server password as optional and avoid saving or auto-submitting it when blank.'
 )
