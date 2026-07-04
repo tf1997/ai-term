@@ -19,9 +19,25 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body: |
+            Automated build for ${{ env.RELEASE_TAG }}.
+
+            Assets are uploaded by the Windows portable and Linux musl jobs.
+
   windows-portable:
     name: Windows portable
     runs-on: windows-latest
+    needs: create-release
 
     steps:
       - name: Checkout
@@ -64,15 +80,17 @@ jobs:
           $zip = Join-Path $releaseDir "ai-term-$tag-windows-x64-portable.zip"
           Compress-Archive -LiteralPath $exe -DestinationPath $zip -Force
 
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Windows portable asset
+        uses: softprops/action-gh-release@v2
         with:
-          name: ai-term-windows-portable
-          path: dist-release/*.zip
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist-release/*.zip
+          fail_on_unmatched_files: true
 
   linux-musl:
     name: Linux musl
     runs-on: ubuntu-latest
+    needs: create-release
 
     steps:
       - name: Checkout
@@ -116,28 +134,9 @@ jobs:
             -C "src-tauri/target/x86_64-unknown-linux-musl/release" \
             ai-term
 
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-term-linux-musl
-          path: dist-release/*.tar.gz
-
-  publish-release:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    needs:
-      - windows-portable
-      - linux-musl
-
-    steps:
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist-release
-          merge-multiple: true
-
-      - name: Publish release
+      - name: Upload Linux musl asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: dist-release/*
+          files: dist-release/*.tar.gz
+          fail_on_unmatched_files: true
