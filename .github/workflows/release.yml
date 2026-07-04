@@ -66,9 +66,20 @@ jobs:
         working-directory: frontend
         run: npm run test:ui
 
-      - name: Build portable exe
+      - name: Build frontend
         working-directory: frontend
-        run: npm run tauri -- build --ci --bundles none
+        run: npm run build
+
+      - name: Build portable exe
+        working-directory: src-tauri
+        run: cargo build --release
+
+      - name: Show Windows build outputs
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "*.exe" |
+            Where-Object { $_.FullName -match "\\release\\" } |
+            Select-Object -ExpandProperty FullName
 
       - name: Package portable exe
         shell: pwsh
@@ -76,9 +87,18 @@ jobs:
           $tag = $env:RELEASE_TAG
           $releaseDir = Join-Path $PWD "dist-release"
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-          $exe = Resolve-Path "src-tauri\target\release\ai-term.exe"
+          $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "ai-term.exe" |
+            Where-Object { $_.FullName -match "\\release\\ai-term\.exe$" } |
+            Sort-Object FullName |
+            Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "Executable files under src-tauri\target:"
+            Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "*.exe" |
+              Select-Object -ExpandProperty FullName
+            throw "Cannot find ai-term.exe release artifact."
+          }
           $zip = Join-Path $releaseDir "ai-term-$tag-windows-x64-portable.zip"
-          Compress-Archive -LiteralPath $exe -DestinationPath $zip -Force
+          Compress-Archive -LiteralPath $exe.FullName -DestinationPath $zip -Force
 
       - name: Upload Windows portable asset
         uses: softprops/action-gh-release@v2
@@ -123,16 +143,29 @@ jobs:
               cd frontend
               npm install
               npm run test:ui
-              npm run tauri -- build --ci --target x86_64-unknown-linux-musl --bundles none
+              npm run build
+              cd ../src-tauri
+              cargo build --release --target x86_64-unknown-linux-musl
             '
+
+      - name: Show Linux build outputs
+        run: |
+          find src-tauri/target -type f -perm -111 -path '*/release/*' -print
 
       - name: Package musl binary
         run: |
           tag="${RELEASE_TAG}"
           mkdir -p dist-release
+          binary="$(find src-tauri/target -type f -perm -111 -path '*/release/ai-term' | sort | head -n 1)"
+          if [ -z "$binary" ]; then
+            echo "Executable files under src-tauri/target:"
+            find src-tauri/target -type f -perm -111 -print || true
+            echo "Cannot find ai-term linux release artifact."
+            exit 1
+          fi
           tar -czf "dist-release/ai-term-${tag}-linux-x64-musl.tar.gz" \
-            -C "src-tauri/target/x86_64-unknown-linux-musl/release" \
-            ai-term
+            -C "$(dirname "$binary")" \
+            "$(basename "$binary")"
 
       - name: Upload Linux musl asset
         uses: softprops/action-gh-release@v2
