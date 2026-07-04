@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish, for example v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  windows-portable:
+    name: Windows portable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Run frontend UI checks
+        working-directory: frontend
+        run: npm run test:ui
+
+      - name: Build portable exe
+        working-directory: frontend
+        run: npm run tauri -- build --ci --bundles none
+
+      - name: Package portable exe
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $releaseDir = Join-Path $PWD "dist-release"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $exe = Resolve-Path "src-tauri\target\release\ai-term.exe"
+          $zip = Join-Path $releaseDir "ai-term-$tag-windows-x64-portable.zip"
+          Compress-Archive -LiteralPath $exe -DestinationPath $zip -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-term-windows-portable
+          path: dist-release/*.zip
+
+  linux-musl:
+    name: Linux musl
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Build in Alpine musl container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            rust:1-alpine3.20 \
+            sh -lc '
+              apk add --no-cache \
+                bash \
+                build-base \
+                curl \
+                file \
+                gtk+3.0-dev \
+                libayatana-appindicator-dev \
+                librsvg-dev \
+                nodejs \
+                npm \
+                openssl-dev \
+                pkgconf \
+                webkit2gtk-dev \
+                wget
+              rustup target add x86_64-unknown-linux-musl
+              cd frontend
+              npm install
+              npm run test:ui
+              npm run tauri -- build --ci --target x86_64-unknown-linux-musl --bundles none
+            '
+
+      - name: Package musl binary
+        run: |
+          tag="${RELEASE_TAG}"
+          mkdir -p dist-release
+          tar -czf "dist-release/ai-term-${tag}-linux-x64-musl.tar.gz" \
+            -C "src-tauri/target/x86_64-unknown-linux-musl/release" \
+            ai-term
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-term-linux-musl
+          path: dist-release/*.tar.gz
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - windows-portable
+      - linux-musl
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist-release/*
