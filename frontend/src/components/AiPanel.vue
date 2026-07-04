@@ -775,7 +775,7 @@ watch(
         ref="composerInput"
         v-model="askText"
         :disabled="!hasUsableConfig"
-        rows="4"
+        rows="3"
         :placeholder="composerPlaceholder"
         :title="composerPlaceholder"
         aria-label="Ask AI"

@@ -3184,6 +3184,22 @@ code {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
 }
 
+.assistant-panel > .assistant-compose {
+  --composer-pad-bottom: 10px;
+  padding-top: 8px;
+}
+
+.assistant-panel > .assistant-compose textarea {
+  min-height: 64px;
+  max-height: 128px;
+  padding: 8px calc(var(--icon-size) + 16px) calc(var(--icon-size) + 6px) 10px;
+}
+
+.assistant-panel > .assistant-compose .icon-button {
+  right: calc(var(--composer-pad-x) + 6px);
+  bottom: calc(var(--composer-pad-bottom) + 6px);
+}
+
 @media (max-width: 1280px) {
   .script-workbench {
     grid-template-rows: minmax(172px, .45fr) minmax(0, .55fr);

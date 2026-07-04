@@ -43,6 +43,7 @@ const emit = defineEmits<{
 const terminalHost = ref<HTMLDivElement | null>(null)
 let terminal: Terminal | undefined
 let sessionId = ''
+let connectionAttempt = 0
 let unlisten: (() => void) | undefined
 let unlistenClosed: (() => void) | undefined
 let resizeObserver: ResizeObserver | undefined
@@ -61,6 +62,20 @@ const completionSuggestions = ref<CompletionSuggestion[]>([])
 const completionActiveIndex = ref(0)
 const localCommandHistory = ref<string[]>([])
 const quickCommands = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
+
+function startConnectionAttempt() {
+  connectionAttempt += 1
+  return connectionAttempt
+}
+
+function isCurrentConnectionAttempt(attempt: number) {
+  return attempt === connectionAttempt
+}
+
+function createTerminalSessionId(kind: TerminalSessionKind) {
+  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `${kind}-${props.terminalId}-${suffix}`
+}
 
 function emitTerminalStatus(value = status.value) {
   emit('statusChanged', props.terminalId, value)
@@ -472,8 +487,10 @@ async function connectRemote() {
 
 async function connectLocal() {
   if (!terminal || !terminalHost.value) return
+  const attempt = startConnectionAttempt()
+  const requestedSessionId = createTerminalSessionId('local')
   try {
-    disconnect(false)
+    disconnect(false, false)
     status.value = 'connecting'
     activeSession.value = 'local'
     activeSessionProfile.value = undefined
@@ -485,8 +502,17 @@ async function connectLocal() {
       snapshot: terminalOutputBuffer
     })
     const size = estimateTerminalSize(terminalHost.value)
-    sessionId = await connectLocalTerminal(size.cols, size.rows)
+    sessionId = requestedSessionId
     await attachTerminalEvents()
+    const connectedSessionId = await connectLocalTerminal(size.cols, size.rows, requestedSessionId)
+    if (!isCurrentConnectionAttempt(attempt)) {
+      void disconnectTerminal(connectedSessionId)
+      return
+    }
+    if (connectedSessionId !== sessionId) {
+      sessionId = connectedSessionId
+      await attachTerminalEvents()
+    }
     if (await verifyTerminalSessionStillActive(sessionId)) {
       status.value = 'local'
     }
@@ -494,6 +520,12 @@ async function connectLocal() {
     await nextTick()
     terminal.focus()
   } catch (error) {
+    if (!isCurrentConnectionAttempt(attempt)) return
+    unlisten?.()
+    unlistenClosed?.()
+    unlisten = undefined
+    unlistenClosed = undefined
+    if (sessionId === requestedSessionId) sessionId = ''
     if (isTauriUnavailableError(error)) {
       enterPreviewMode()
     } else {
@@ -649,7 +681,8 @@ function isTauriUnavailableError(error: unknown) {
   return message.includes('__TAURI_IPC__') || message.includes('window.__TAURI_IPC__') || message.includes('invoke')
 }
 
-function disconnect(renderReady = true) {
+function disconnect(renderReady = true, cancelPending = true) {
+  if (cancelPending) connectionAttempt += 1
   const previousSessionId = sessionId
   sessionId = ''
   activeSession.value = 'local'

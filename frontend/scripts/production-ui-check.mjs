@@ -137,6 +137,14 @@ assert(
     terminalPane.includes("status.value = 'local'"),
   'TerminalPane must automatically attach a local terminal when no connection profile is configured.'
 )
+assert(
+  terminalPane.indexOf('sessionId = requestedSessionId') > -1 &&
+    terminalPane.indexOf('await attachTerminalEvents()', terminalPane.indexOf('sessionId = requestedSessionId')) > -1 &&
+    terminalPane.indexOf('await attachTerminalEvents()', terminalPane.indexOf('sessionId = requestedSessionId')) < terminalPane.indexOf('connectLocalTerminal(size.cols, size.rows, requestedSessionId)') &&
+    tauri.includes('connectLocalTerminal(cols: number, rows: number, sessionId?: string)') &&
+    commands.includes('session_id: Option<String>'),
+  'Local terminal startup must pre-bind a session-scoped listener before spawning the shell so first-launch prompt output is not lost.'
+)
 
 assert(
   terminalPane.includes('connectProfile') &&

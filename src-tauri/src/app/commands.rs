@@ -96,10 +96,13 @@ pub async fn connect_profile(
 pub async fn connect_local_terminal(
     cols: u16,
     rows: u16,
+    session_id: Option<String>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let session_id = Uuid::new_v4().to_string();
+    let session_id = session_id
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let output_session_id = session_id.clone();
     let closed_session_id = session_id.clone();
     let app_for_output = app.clone();

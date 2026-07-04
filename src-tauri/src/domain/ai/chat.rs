@@ -17,6 +17,9 @@ const TERMINAL_HEAD_CHARS: usize = 2_000;
 const TERMINAL_TAIL_CHARS: usize = 8_000;
 const MAX_HISTORY_COMMANDS: usize = 80;
 const MAX_KEY_LINES: usize = 36;
+const AI_TERM_CLIENT_NAME: &str = "ai-term";
+const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const AI_TERM_USER_AGENT: &str = concat!("ai-term/", env!("CARGO_PKG_VERSION"));
 
 pub type AiCancelToken = Arc<AtomicBool>;
 
@@ -529,6 +532,9 @@ async fn send_openai_compatible_request(
     let request = HttpRequestBuilder::new("POST", endpoint)
         .with_context(|| format!("invalid AI Base URL: {endpoint}"))?
         .header("Content-Type", "application/json")?
+        .header("User-Agent", AI_TERM_USER_AGENT)?
+        .header("X-Client-Name", AI_TERM_CLIENT_NAME)?
+        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)?
         .header("Authorization", format!("Bearer {}", api_key.trim()))?
         .body(Body::Json(payload))
         .timeout(Duration::from_secs(90))
@@ -573,6 +579,9 @@ where
         .post(endpoint)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream")
+        .header(reqwest::header::USER_AGENT, AI_TERM_USER_AGENT)
+        .header("X-Client-Name", AI_TERM_CLIENT_NAME)
+        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
         .bearer_auth(api_key.trim())
         .body(payload.to_string())
         .send()
@@ -725,11 +734,11 @@ fn extract_chat_answer(raw: &str) -> Result<String> {
 
 fn parse_model_error(raw: &str) -> String {
     if raw.trim().is_empty() {
-        return "模型未返回错误正文".into();
+        return "\u{6a21}\u{578b}\u{672a}\u{8fd4}\u{56de}\u{9519}\u{8bef}\u{6b63}\u{6587}".into();
     }
 
     let Ok(payload) = serde_json::from_str::<Value>(raw) else {
-        return raw.trim().to_string();
+        return append_client_restricted_hint(raw.trim().to_string());
     };
 
     if let Some(message) = payload.pointer("/error/message").and_then(Value::as_str) {
@@ -740,16 +749,35 @@ fn parse_model_error(raw: &str) -> String {
         if let Some(code) = payload.pointer("/error/code").and_then(Value::as_str) {
             parts.push(format!("code: {code}"));
         }
-        return parts.join("\n");
+        return append_client_restricted_hint(parts.join("\n"));
     }
 
     for key in ["message", "detail", "error_description"] {
         if let Some(value) = payload.get(key).and_then(Value::as_str) {
-            return value.to_string();
+            return append_client_restricted_hint(value.to_string());
         }
     }
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| raw.trim().to_string())
+    append_client_restricted_hint(
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| raw.trim().to_string()),
+    )
+}
+
+fn append_client_restricted_hint(message: String) -> String {
+    if !is_client_restricted_error(&message) {
+        return message;
+    }
+
+    format!(
+        "{message}\n{} User-Agent: {AI_TERM_USER_AGENT}; X-Client-Name: {AI_TERM_CLIENT_NAME}. {}",
+        "\u{7f51}\u{5173}\u{62d2}\u{7edd}\u{4e86}\u{5f53}\u{524d}\u{5ba2}\u{6237}\u{7aef}\u{6807}\u{8bc6}\u{3002}ai-term \u{5df2}\u{643a}\u{5e26}",
+        "\u{5982}\u{679c}\u{4ecd}\u{5931}\u{8d25}\u{ff0c}\u{8bf7}\u{5728} New API \u{6e20}\u{9053}\u{914d}\u{7f6e}\u{4e2d}\u{5141}\u{8bb8} ai-term\u{ff0c}\u{6216}\u{5173}\u{95ed}\u{8be5}\u{6e20}\u{9053}\u{7684}\u{5ba2}\u{6237}\u{7aef}\u{9650}\u{5236}\u{3002}"
+    )
+}
+
+fn is_client_restricted_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("channel:client_restricted") || lower.contains("client_restricted")
 }
 
 fn reject_html_response(raw: &str, endpoint: &str) -> Result<()> {
@@ -886,6 +914,16 @@ mod tests {
             parse_model_error(raw),
             "bad key\ntype: auth\ncode: invalid_api_key"
         );
+    }
+
+    #[test]
+    fn explains_client_restricted_gateway_error() {
+        let raw = r#"{"error":{"message":"blocked client","type":"new_api_error","code":"channel:client_restricted"}}"#;
+        let parsed = parse_model_error(raw);
+
+        assert!(parsed.contains("code: channel:client_restricted"));
+        assert!(parsed.contains("User-Agent: ai-term/"));
+        assert!(parsed.contains("X-Client-Name: ai-term"));
     }
 
     #[test]

@@ -122,8 +122,10 @@ export function connectProfile(profileId: string, cols: number, rows: number) {
   return invoke<string>('connect_profile', { profileId, cols, rows })
 }
 
-export function connectLocalTerminal(cols: number, rows: number) {
-  return invoke<string>('connect_local_terminal', { cols, rows })
+export function connectLocalTerminal(cols: number, rows: number, sessionId?: string) {
+  const payload: { cols: number; rows: number; sessionId?: string } = { cols, rows }
+  if (sessionId) payload.sessionId = sessionId
+  return invoke<string>('connect_local_terminal', payload)
 }
 
 export function terminalWrite(sessionId: string, data: string) {
