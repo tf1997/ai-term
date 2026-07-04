@@ -32,7 +32,7 @@ jobs:
           body: |
             Automated build for ${{ env.RELEASE_TAG }}.
 
-            Assets are uploaded by the Windows portable and Linux musl jobs.
+            Assets are uploaded by the Windows portable, Windows installer, Ubuntu installer, Linux musl, and macOS installer jobs.
 
   windows-portable:
     name: Windows portable
@@ -77,8 +77,8 @@ jobs:
       - name: Show Windows build outputs
         shell: pwsh
         run: |
-          Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "*.exe" |
-            Where-Object { $_.FullName -match "\\release\\" } |
+          Get-ChildItem -Path "src-tauri\target" -Recurse -File |
+            Where-Object { $_.FullName -match "\\release\\" -and ($_.Extension -eq ".exe" -or $_.Name -eq "WebView2Loader.dll") } |
             Select-Object -ExpandProperty FullName
 
       - name: Package portable exe
@@ -86,25 +86,201 @@ jobs:
         run: |
           $tag = $env:RELEASE_TAG
           $releaseDir = Join-Path $PWD "dist-release"
-          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $portableDir = Join-Path $releaseDir "ai-term-$tag-windows-x64-portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
           $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "ai-term.exe" |
             Where-Object { $_.FullName -match "\\release\\ai-term\.exe$" } |
             Sort-Object FullName |
             Select-Object -First 1
           if (-not $exe) {
+            $exe = Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "AI Term.exe" |
+              Where-Object { $_.FullName -match "\\release\\AI Term\.exe$" } |
+              Sort-Object FullName |
+              Select-Object -First 1
+          }
+          if (-not $exe) {
             Write-Host "Executable files under src-tauri\target:"
             Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "*.exe" |
               Select-Object -ExpandProperty FullName
-            throw "Cannot find ai-term.exe release artifact."
+            throw "Cannot find Windows release executable artifact."
+          }
+          Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $portableDir "AI Term.exe") -Force
+          $webviewLoader = Get-ChildItem -Path "src-tauri\target" -Recurse -File -Filter "WebView2Loader.dll" |
+            Where-Object { $_.FullName -match "\\release\\WebView2Loader\.dll$" } |
+            Sort-Object FullName |
+            Select-Object -First 1
+          if ($webviewLoader) {
+            Copy-Item -LiteralPath $webviewLoader.FullName -Destination $portableDir -Force
+          } else {
+            Write-Warning "WebView2Loader.dll was not found. The portable zip will include only ai-term.exe."
           }
           $zip = Join-Path $releaseDir "ai-term-$tag-windows-x64-portable.zip"
-          Compress-Archive -LiteralPath $exe.FullName -DestinationPath $zip -Force
+          Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zip -Force
 
       - name: Upload Windows portable asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist-release/*.zip
+          fail_on_unmatched_files: true
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    needs: create-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Run frontend UI checks
+        working-directory: frontend
+        run: npm run test:ui
+
+      - name: Build Windows installer
+        working-directory: src-tauri
+        run: ..\frontend\node_modules\.bin\tauri.cmd build --ci --bundles msi
+
+      - name: Show Windows installer outputs
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File |
+            Select-Object -ExpandProperty FullName
+
+      - name: Upload Windows installer asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: src-tauri/target/release/bundle/msi/*.msi
+          fail_on_unmatched_files: true
+
+  ubuntu-installer:
+    name: Ubuntu installer
+    runs-on: ubuntu-22.04
+    needs: create-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.0-dev \
+            libgtk-3-dev \
+            wget
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Run frontend UI checks
+        working-directory: frontend
+        run: npm run test:ui
+
+      - name: Build Ubuntu deb installer
+        working-directory: src-tauri
+        run: ../frontend/node_modules/.bin/tauri build --ci --bundles deb
+
+      - name: Show Ubuntu installer outputs
+        run: |
+          find src-tauri/target/release/bundle -type f -print
+
+      - name: Upload Ubuntu installer asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: src-tauri/target/release/bundle/deb/*.deb
+          fail_on_unmatched_files: true
+
+  macos-installer:
+    name: macOS installer
+    runs-on: macos-13
+    needs: create-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Run frontend UI checks
+        working-directory: frontend
+        run: npm run test:ui
+
+      - name: Build macOS dmg installer
+        working-directory: src-tauri
+        run: ../frontend/node_modules/.bin/tauri build --ci --target universal-apple-darwin --bundles dmg
+
+      - name: Show macOS installer outputs
+        run: |
+          find src-tauri/target/universal-apple-darwin/release/bundle -type f -print
+
+      - name: Upload macOS installer asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           fail_on_unmatched_files: true
 
   linux-musl:
@@ -124,7 +300,12 @@ jobs:
             -v "${{ github.workspace }}:/work" \
             -w /work \
             rust:1-alpine3.20 \
-            sh -lc '
+            sh -c '
+              set -eu
+              export PATH="/usr/local/cargo/bin:${PATH}"
+              rustc --version
+              cargo --version
+              rustup --version
               apk add --no-cache \
                 bash \
                 build-base \
