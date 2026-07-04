@@ -236,7 +236,7 @@ jobs:
 
   macos-installer:
     name: macOS installer
-    runs-on: macos-13
+    runs-on: macos-latest
     needs: create-release
 
     steps:
@@ -303,6 +303,8 @@ jobs:
             sh -c '
               set -eu
               export PATH="/usr/local/cargo/bin:${PATH}"
+              export RUSTFLAGS="-C target-feature=-crt-static"
+              export PKG_CONFIG_ALLOW_CROSS=1
               rustc --version
               cargo --version
               rustup --version
@@ -317,6 +319,7 @@ jobs:
                 nodejs \
                 npm \
                 openssl-dev \
+                pax-utils \
                 pkgconf \
                 webkit2gtk-dev \
                 wget
@@ -327,6 +330,9 @@ jobs:
               npm run build
               cd ../src-tauri
               cargo build --release --target x86_64-unknown-linux-musl
+              file target/x86_64-unknown-linux-musl/release/ai-term
+              ldd target/x86_64-unknown-linux-musl/release/ai-term || true
+              scanelf -n target/x86_64-unknown-linux-musl/release/ai-term || true
             '
 
       - name: Show Linux build outputs
@@ -344,9 +350,16 @@ jobs:
             echo "Cannot find ai-term linux release artifact."
             exit 1
           fi
+          cat > dist-release/README-linux-musl.txt <<'EOF'
+          This is a musl build intended for Alpine Linux or other musl-based systems.
+          It is dynamically linked against GTK/WebKitGTK runtime libraries; fully static Tauri/WebKitGTK builds are not practical.
+          On Alpine, install the matching runtime packages such as gtk+3.0, webkit2gtk, librsvg, and libayatana-appindicator.
+          EOF
           tar -czf "dist-release/ai-term-${tag}-linux-x64-musl.tar.gz" \
             -C "$(dirname "$binary")" \
-            "$(basename "$binary")"
+            "$(basename "$binary")" \
+            -C "dist-release" \
+            README-linux-musl.txt
 
       - name: Upload Linux musl asset
         uses: softprops/action-gh-release@v2
