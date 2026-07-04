@@ -34,6 +34,27 @@ jobs:
 
             Assets are uploaded by the Windows portable, Windows installer, Ubuntu installer, Linux musl, and macOS installer jobs.
 
+  cleanup-release-assets:
+    name: Cleanup old installer asset names
+    runs-on: ubuntu-latest
+    needs: create-release
+
+    steps:
+      - name: Delete old default installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name' | grep -E '^(AI Term_|ai-term_).*\.(dmg|msi|deb)$' || true)"
+          if [ -z "$assets" ]; then
+            echo "No old default installer assets found."
+            exit 0
+          fi
+          printf '%s\n' "$assets" | while IFS= read -r asset; do
+            echo "Deleting old asset: $asset"
+            gh release delete-asset "$TAG" "$asset" -y
+          done
+
   windows-portable:
     name: Windows portable
     runs-on: windows-latest
@@ -166,11 +187,24 @@ jobs:
           Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File |
             Select-Object -ExpandProperty FullName
 
+      - name: Rename Windows installer asset
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          New-Item -ItemType Directory -Force -Path "dist-release" | Out-Null
+          $msi = Get-ChildItem -Path "src-tauri\target\release\bundle\msi" -Recurse -File -Filter "*.msi" |
+            Sort-Object FullName |
+            Select-Object -First 1
+          if (-not $msi) {
+            throw "Cannot find Windows MSI installer."
+          }
+          Copy-Item -LiteralPath $msi.FullName -Destination "dist-release\ai-term-$tag-windows-x64-installer.msi" -Force
+
       - name: Upload Windows installer asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: src-tauri/target/release/bundle/msi/*.msi
+          files: dist-release/*.msi
           fail_on_unmatched_files: true
 
   ubuntu-installer:
@@ -227,11 +261,22 @@ jobs:
         run: |
           find src-tauri/target/release/bundle -type f -print
 
+      - name: Rename Ubuntu installer asset
+        run: |
+          tag="${RELEASE_TAG}"
+          mkdir -p dist-release
+          deb="$(find src-tauri/target/release/bundle/deb -type f -name '*.deb' | sort | head -n 1)"
+          if [ -z "$deb" ]; then
+            echo "Cannot find Ubuntu deb installer."
+            exit 1
+          fi
+          cp "$deb" "dist-release/ai-term-${tag}-ubuntu-amd64.deb"
+
       - name: Upload Ubuntu installer asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: src-tauri/target/release/bundle/deb/*.deb
+          files: dist-release/*.deb
           fail_on_unmatched_files: true
 
   macos-installer:
@@ -276,11 +321,22 @@ jobs:
         run: |
           find src-tauri/target/universal-apple-darwin/release/bundle -type f -print
 
+      - name: Rename macOS installer asset
+        run: |
+          tag="${RELEASE_TAG}"
+          mkdir -p dist-release
+          dmg="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -type f -name '*.dmg' | sort | head -n 1)"
+          if [ -z "$dmg" ]; then
+            echo "Cannot find macOS dmg installer."
+            exit 1
+          fi
+          cp "$dmg" "dist-release/ai-term-${tag}-macos-universal.dmg"
+
       - name: Upload macOS installer asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          files: dist-release/*.dmg
           fail_on_unmatched_files: true
 
   linux-musl:
