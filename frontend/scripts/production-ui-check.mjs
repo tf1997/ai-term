@@ -187,6 +187,30 @@ assert(
 )
 
 assert(
+  terminalPane.includes('statusChanged: [terminalId: string, status: TerminalRuntimeStatus]') &&
+    terminalPane.includes('type TerminalRuntimeStatus') &&
+    terminalPane.includes('watch(status, (value) => emitTerminalStatus(value), { immediate: true })') &&
+    terminalPane.includes('function enterLocalShellErrorMode(error: unknown)') &&
+    terminalPane.includes('isTauriUnavailableError(error)') &&
+    terminalPane.includes('enterPreviewMode()') &&
+    terminalPane.includes('enterLocalShellErrorMode(error)') &&
+    terminalPane.includes('Local shell failed to start:') &&
+    appShell.includes('status: TerminalRuntimeStatus') &&
+    appShell.includes('updateTerminalStatus') &&
+    appShell.includes('@status-changed="updateTerminalStatus"') &&
+    appShell.includes('terminalStatusClass(tab.status)') &&
+    appShell.includes(':class="terminalStatusClass(tab.status)"') &&
+    !appShell.includes('class="status-dot live"') &&
+    tauri.includes('terminalSessionActive') &&
+    commands.includes('terminal_session_active') &&
+    commands.includes('remove_terminal_session_after_exit') &&
+    terminalPane.includes('verifyTerminalSessionStillActive') &&
+    terminalPane.includes('await verifyTerminalSessionStillActive(sessionId)') &&
+    terminalPane.includes('window.setTimeout(resolve, 150)'),
+  'Terminal tabs must reflect real terminal runtime status, local shell spawn failures must enter error, and quick shell exits must be detected even if the close event is missed.'
+)
+
+assert(
   terminalPane.includes('function restartLocalTerminal()') &&
     terminalPane.includes('connectLocal()') &&
     terminalPane.includes('New Local Shell'),
@@ -319,6 +343,9 @@ assert(
 assert(
   scriptPanel.includes("type ScriptPanelMode = 'library' | 'generate'") &&
     scriptPanel.includes('scriptPanelMode') &&
+    scriptPanel.includes("scriptPanelMode = ref<ScriptPanelMode>('generate')") &&
+    scriptPanel.includes("type ScriptLibraryView = 'list' | 'detail'") &&
+    scriptPanel.includes("scriptLibraryView = ref<ScriptLibraryView>('list')") &&
     scriptPanel.includes('showScriptComposer') &&
     scriptPanel.includes("scriptPanelMode.value === 'generate'") &&
     scriptPanel.includes('openGenerateMode') &&
@@ -331,7 +358,75 @@ assert(
     scriptPanel.includes('class="script-library"') &&
     scriptPanel.includes('class="script-library-body"') &&
     scriptPanel.includes('class="script-library-empty"') &&
+    scriptPanel.includes('scriptLibraryView === \'list\'') &&
+    scriptPanel.includes('scriptLibraryView === \'detail\'') &&
+    scriptPanel.includes('scriptLibraryView.value = \'list\'') &&
+    scriptPanel.includes('scriptLibraryView.value = \'detail\'') &&
     scriptPanel.includes('class="script-preview"') &&
+    scriptPanel.includes('返回列表') &&
+    scriptPanel.includes('selectedScriptLineNumbers') &&
+    scriptPanel.includes('selectedScriptLineRail') &&
+    scriptPanel.includes('syncSelectedScriptLineRail') &&
+    scriptPanel.includes('copySelectedScript') &&
+    scriptPanel.includes('openScriptPreview') &&
+    scriptPanel.includes('closeScriptPreview') &&
+    scriptPanel.includes('copyExpandedScript') &&
+    scriptPanel.includes('executeExpandedScript') &&
+    scriptPanel.includes('scriptPreviewOpen') &&
+    scriptPanel.includes('expandedScriptContent') &&
+    scriptPanel.includes('expandedScriptLineNumbers') &&
+    scriptPanel.includes('regenerateSelectedScript') &&
+    scriptPanel.includes('@click="regenerateSelectedScript"') &&
+    scriptPanel.includes('当前脚本为空，无法重新生成。') &&
+    scriptPanel.includes('class="script-library-editor"') &&
+    scriptPanel.includes('title="返回列表"') &&
+    scriptPanel.includes('title="保存脚本"') &&
+    scriptPanel.includes('title="执行脚本"') &&
+    scriptPanel.includes('title="复制脚本"') &&
+    scriptPanel.includes('@click.stop="removeScript(script)"') &&
+    !scriptPanel.includes('@click="removeScript(selectedScript)"') &&
+    !scriptPanel.includes('<select aria-label="脚本语言" disabled>') &&
+    !scriptPanel.includes('<option>Bash</option>') &&
+    !scriptPanel.includes('<span>Bash</span>') &&
+    !scriptPanel.includes("message.savedScriptId ? 'bash saved' : 'bash draft'") &&
+    !scriptPanel.includes('@click="toggleSelectedScriptEditor"') &&
+    !scriptPanel.includes('v-if="selectedScriptEditing"') &&
+    !scriptPanel.includes('class="script-preview-code"><code>{{ selectedScriptContent }}</code></pre>') &&
+    !scriptPanel.includes('class="script-title-head"') &&
+    !scriptPanel.includes('<strong>脚本助手</strong>') &&
+    !scriptPanel.includes('编写、优化和执行脚本') &&
+    scriptPanel.includes('class="script-editor-toolbar"') &&
+    scriptPanel.includes('class="script-file-tab"') &&
+    scriptPanel.includes('class="script-editor-tools"') &&
+    scriptPanel.includes('title="保存脚本草稿"') &&
+    scriptPanel.includes('title="重新生成脚本"') &&
+    scriptPanel.includes('title="执行脚本"') &&
+    scriptPanel.includes('title="复制脚本"') &&
+    scriptPanel.includes('title="放大预览"') &&
+    scriptPanel.includes('script-preview-modal') &&
+    scriptPanel.includes('class="script-expanded-editor"') &&
+    !scriptPanel.includes('class="icon-button primary-action"') &&
+    !scriptPanel.includes('&#128190;') &&
+    !scriptPanel.includes('<strong>脚本草稿</strong>') &&
+    !scriptPanel.includes('{{ draftStatusText }}') &&
+    !scriptPanel.includes('可直接粘贴或生成脚本') &&
+    !scriptPanel.includes('可直接粘贴或编写脚本') &&
+    !scriptPanel.includes('>继续修改</button>') &&
+    !scriptPanel.includes('class="script-draft-actions"') &&
+    !scriptPanel.includes('class="script-assistant-section"') &&
+    !scriptPanel.includes('class="script-assistant-title"') &&
+    scriptPanel.includes('scriptRepliesExpanded') &&
+    scriptPanel.includes('hasScriptReplies') &&
+    scriptPanel.includes('class="script-replies-panel"') &&
+    scriptPanel.includes('class="script-replies-list"') &&
+    scriptPanel.includes("当前脚本草稿为空，无法复制。") &&
+    scriptPanel.includes("当前脚本草稿为空，无法执行。") &&
+    !scriptPanel.includes(':disabled="!hasDraftScript" @click="saveDraftScript"') &&
+    !scriptPanel.includes(':disabled="!hasDraftScript" @click="executeDraftScript"') &&
+    !scriptPanel.includes(':disabled="!hasDraftScript" @click="copyDraftScript"') &&
+    !scriptPanel.includes(':disabled="!hasDraftScript || isGenerating || !hasUsableConfig"') &&
+    !scriptPanel.includes(':disabled="isGenerating || !hasUsableConfig"') &&
+    !scriptPanel.includes(':disabled="!isGenerating && !hasUsableConfig"') &&
     scriptPanel.includes('class="script-draft-card"') &&
     scriptPanel.includes('draftScriptContent') &&
     scriptPanel.includes('`\u6a21\u5f0f\uff1a${modeText}`') &&
@@ -342,27 +437,49 @@ assert(
     scriptPanel.includes('saveDraftScript') &&
     scriptPanel.includes('optimizeSelectedScript') &&
     scriptPanel.includes('applyDraftScript') &&
-    scriptPanel.includes("sendScriptRequest('revise')") &&
+    !scriptPanel.includes("sendScriptRequest('revise')") &&
     scriptPanel.includes("sendScriptRequest('regenerate')") &&
     scriptPanel.includes('collapsedMessages') &&
     scriptPanel.includes('shouldCollapseMessage') &&
     scriptPanel.includes('isMessageCollapsed') &&
     scriptPanel.includes('toggleMessage') &&
-    scriptPanel.includes('class="message-list script-chat-list"') &&
-    scriptPanel.includes(`:class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"`) &&
-    scriptPanel.includes('class="message-actions"') &&
+    !scriptPanel.includes('class="message-list script-chat-list"') &&
+    !scriptPanel.includes(`:class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"`) &&
+    !scriptPanel.includes('class="message-actions"') &&
     scriptPanel.includes('v-if="showScriptComposer"') &&
     scriptPanel.includes("v-if=\"scriptPanelMode === 'library'\"") &&
     !scriptPanel.includes('class="script-mode-tabs"') &&
     !styles.includes('.script-mode-tabs') &&
     styles.includes('.script-library') &&
     styles.includes('.script-library-body') &&
+    styles.includes('grid-template-rows: minmax(0, 1fr)') &&
+    styles.includes('max-height: none') &&
     styles.includes('.script-library-empty') &&
     styles.includes('.script-preview') &&
     styles.includes('.script-preview-code') &&
+    styles.includes('.script-library-editor') &&
+    styles.includes('.script-library-editor .script-editor-toolbar') &&
+    styles.includes('/* Expanded script preview modal. */') &&
+    styles.includes('.script-preview-modal') &&
+    styles.includes('.script-expanded-editor') &&
+    styles.includes('.script-editor-toolbar') &&
+    styles.includes('.script-file-tab') &&
+    styles.includes('/* Draft editor inline action rail. */') &&
+    styles.includes('/* Uniform draft editor icon buttons. */') &&
+    styles.includes('.script-editor-tools .icon-button:hover:not(:disabled)') &&
+    !styles.includes('.script-editor-tools .primary-action') &&
+    styles.includes('.script-generate .script-workbench') &&
+    styles.includes('grid-template-rows: minmax(420px, 1fr)') &&
+    styles.includes('min-height: 420px') &&
+    styles.includes('.script-replies-panel') &&
+    styles.includes('.script-replies-panel.expanded') &&
+    styles.includes('.script-panel button:disabled') &&
+    styles.includes('grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) 32px') &&
+    styles.includes('/* Action-only script toolbar. */') &&
+    styles.includes('min-height: 40px') &&
     styles.includes('.script-draft-card') &&
     styles.includes('.script-draft-card textarea'),
-  'Script assistant must use top actions for library/generate, focus library search, avoid duplicate mode tabs, support long message folding, and hide the user prompt while browsing saved scripts.'
+  'Script assistant must keep the script editor as the primary workspace, remove the redundant title block, expose AI replies through a compact collapsible panel instead of an always-visible assistant block, keep top script actions, and hide the user prompt while browsing saved scripts.'
 )
 
 assert(

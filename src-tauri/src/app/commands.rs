@@ -74,10 +74,14 @@ pub async fn connect_profile(
             let _ = app_for_close.emit_all(
                 &terminal_closed_event_name(&closed_session_id),
                 TerminalClosedEvent {
-                    session_id: closed_session_id,
+                    session_id: closed_session_id.clone(),
                     reason: "eof".into(),
                 },
             );
+            let close_app = app_for_close.clone();
+            tauri::async_runtime::spawn(async move {
+                remove_terminal_session_after_exit(close_app, closed_session_id).await;
+            });
         },
     )
     .map_err(|err| err.to_string())?;
@@ -117,10 +121,14 @@ pub async fn connect_local_terminal(
             let _ = app_for_close.emit_all(
                 &terminal_closed_event_name(&closed_session_id),
                 TerminalClosedEvent {
-                    session_id: closed_session_id,
+                    session_id: closed_session_id.clone(),
                     reason: "eof".into(),
                 },
             );
+            let close_app = app_for_close.clone();
+            tauri::async_runtime::spawn(async move {
+                remove_terminal_session_after_exit(close_app, closed_session_id).await;
+            });
         },
     )
     .map_err(|err| err.to_string())?;
@@ -169,6 +177,19 @@ pub async fn terminal_resize(
 #[tauri::command]
 pub async fn cancel_task(task_id: String, state: State<'_, AppState>) -> Result<bool, String> {
     Ok(state.cancel_task(&task_id).await)
+}
+
+async fn remove_terminal_session_after_exit(app: tauri::AppHandle, session_id: String) {
+    let state = app.state::<AppState>();
+    state.remove_session(&session_id).await;
+}
+
+#[tauri::command]
+pub async fn terminal_session_active(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    Ok(state.has_session(&session_id).await)
 }
 
 #[tauri::command]

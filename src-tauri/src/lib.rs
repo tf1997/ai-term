@@ -25,7 +25,7 @@ pub fn run() {
         save_ai_conversation_message, save_ai_provider_config, save_command_history_record,
         save_connection_profile, save_update_script, save_workspace_session, sftp_create_directory,
         sftp_delete_path, sftp_download_file, sftp_download_path, sftp_list_directory, sftp_probe,
-        sftp_upload_file, sftp_upload_path, terminal_resize, terminal_write,
+        sftp_upload_file, sftp_upload_path, terminal_resize, terminal_session_active, terminal_write,
     };
     use app::state::AppState;
     use domain::storage::sqlite::{default_database_path, SqliteConfigStore};
@@ -80,7 +80,8 @@ pub fn run() {
             sftp_upload_file,
             sftp_upload_path,
             terminal_write,
-            terminal_resize
+            terminal_resize,
+            terminal_session_active
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ai-term");

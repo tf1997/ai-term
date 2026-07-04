@@ -76,6 +76,10 @@ const activeSession = computed(() => {
 })
 
 const activeSessionTitle = computed(() => activeSession.value?.name?.trim() || 'Untitled')
+const assistantContextSummary = computed(() => {
+  const historyCount = Math.min(props.commandHistory.length, MAX_AI_COMMAND_HISTORY)
+  return `terminal ${props.terminalSnapshot.length} chars - history ${historyCount}/${props.commandHistory.length}`
+})
 
 const selectedTerminalContext = computed(() => {
   const selection = props.terminalSelection
@@ -569,8 +573,11 @@ watch(
   <section class="assistant-panel">
     <div class="panel-head">
       <div class="ai-session-head">
-        <strong>{{ activeSessionTitle }}</strong>
-        <span>AI 助手</span>
+        <span class="panel-glyph ai-glyph" aria-hidden="true">AI</span>
+        <div>
+          <strong>{{ activeSessionTitle }}</strong>
+          <span>{{ assistantContextSummary }}</span>
+        </div>
       </div>
       <div class="panel-actions">
         <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory">◷</button>
@@ -644,7 +651,10 @@ watch(
         :class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"
       >
         <div class="message-title">
-          <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
+          <span class="message-identity">
+            <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : 'U' }}</span>
+            <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
+          </span>
           <div class="message-actions">
             <button
               v-if="shouldCollapseMessage(message)"
@@ -670,7 +680,7 @@ watch(
                 <span>{{ part.language || 'text' }}</span>
                 <button
                   v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
-                  class="text-button"
+                  class="text-button primary-action"
                   type="button"
                   @click="executeGeneratedCommand(normalizeShellCommand(part.content))"
                 >

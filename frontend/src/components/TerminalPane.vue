@@ -11,10 +11,14 @@ import {
   onTerminalClosed,
   onTerminalData,
   terminalResize,
+  terminalSessionActive,
   terminalWrite
 } from '../lib/tauri'
 import type { ConnectionProfile } from '../types/profile'
 import type { CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+
+type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
+type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
 
 const props = defineProps<{
   terminalId: string
@@ -26,6 +30,7 @@ const emit = defineEmits<{
   terminalOutput: [event: TerminalOutputEvent]
   terminalSelection: [event: TerminalSelectionEvent]
   commandRecorded: [event: CommandRecordedEvent]
+  statusChanged: [terminalId: string, status: TerminalRuntimeStatus]
 }>()
 
 const terminalHost = ref<HTMLDivElement | null>(null)
@@ -40,11 +45,15 @@ let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
 let pendingInputControlSequence = ''
 let lastRightClickPasteAt = 0
-const status = ref<'idle' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'>('idle')
+const status = ref<TerminalRuntimeStatus>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
-const activeSession = ref<'local' | 'remote' | 'sftp' | 'preview'>('local')
+const activeSession = ref<TerminalSessionKind>('local')
 const activeSessionProfile = ref<ConnectionProfile | undefined>(undefined)
 const quickCommands = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
+
+function emitTerminalStatus(value = status.value) {
+  emit('statusChanged', props.terminalId, value)
+}
 
 function renderIdlePrompt(term: Terminal) {
   term.clear()
@@ -258,6 +267,8 @@ onMounted(async () => {
   }
 })
 
+watch(status, (value) => emitTerminalStatus(value), { immediate: true })
+
 watch(
   () => props.connectRequest,
   async () => {
@@ -282,6 +293,32 @@ watch(
   }
 )
 
+function handleTerminalSessionClosed(reason: string) {
+  if (!sessionId) return
+  const closedSessionId = sessionId
+  sessionId = ''
+  status.value = 'idle'
+  const message = `\r\nShell exited: ${reason}\r\n`
+  terminal?.write(message)
+  appendTerminalOutput(message)
+  void disconnectTerminal(closedSessionId)
+}
+
+async function verifyTerminalSessionStillActive(activeSessionId: string) {
+  await new Promise((resolve) => window.setTimeout(resolve, 150))
+  try {
+    const active = await terminalSessionActive(activeSessionId)
+    if (!active && sessionId === activeSessionId) {
+      handleTerminalSessionClosed('eof')
+      return false
+    }
+    return active
+  } catch (error) {
+    console.warn('failed to verify terminal session state', error)
+    return sessionId === activeSessionId
+  }
+}
+
 async function attachTerminalEvents() {
   unlisten?.()
   unlistenClosed?.()
@@ -294,13 +331,7 @@ async function attachTerminalEvents() {
   })
   unlistenClosed = await onTerminalClosed(sessionId, (event) => {
     if (event.sessionId !== sessionId) return
-    const closedSessionId = sessionId
-    sessionId = ''
-    status.value = 'idle'
-    const message = `\r\nShell exited: ${event.reason}\r\n`
-    terminal?.write(message)
-    appendTerminalOutput(message)
-    void disconnectTerminal(closedSessionId)
+    handleTerminalSessionClosed(event.reason)
   })
 }
 
@@ -310,7 +341,7 @@ async function connectRemote() {
     disconnect(false)
     activeSession.value = 'remote'
     activeSessionProfile.value = props.profile
-    status.value = 'remote'
+    status.value = 'connecting'
     terminal.clear()
     const size = estimateTerminalSize(terminalHost.value)
     terminal.writeln(`Connecting SSH profile: ${activeSessionProfile.value.name}`)
@@ -321,6 +352,9 @@ async function connectRemote() {
     })
     sessionId = await connectProfile(props.profile.id, size.cols, size.rows)
     await attachTerminalEvents()
+    if (await verifyTerminalSessionStillActive(sessionId)) {
+      status.value = 'remote'
+    }
     syncTerminalSize()
     await nextTick()
     terminal.focus()
@@ -336,6 +370,9 @@ async function connectLocal() {
   if (!terminal || !terminalHost.value) return
   try {
     disconnect(false)
+    status.value = 'connecting'
+    activeSession.value = 'local'
+    activeSessionProfile.value = undefined
     terminal.clear()
     terminal.writeln('Opening local shell...')
     terminalOutputBuffer = 'Opening local shell...\n'
@@ -345,16 +382,35 @@ async function connectLocal() {
     })
     const size = estimateTerminalSize(terminalHost.value)
     sessionId = await connectLocalTerminal(size.cols, size.rows)
-    activeSession.value = 'local'
-    activeSessionProfile.value = undefined
-    status.value = 'local'
     await attachTerminalEvents()
+    if (await verifyTerminalSessionStillActive(sessionId)) {
+      status.value = 'local'
+    }
     syncTerminalSize()
     await nextTick()
     terminal.focus()
   } catch (error) {
-    enterPreviewMode()
+    if (isTauriUnavailableError(error)) {
+      enterPreviewMode()
+    } else {
+      enterLocalShellErrorMode(error)
+    }
   }
+}
+
+function enterLocalShellErrorMode(error: unknown) {
+  status.value = 'error'
+  activeSession.value = 'local'
+  activeSessionProfile.value = undefined
+  sessionId = ''
+  const detail = formatError(error)
+  const message = `Local shell failed to start: ${detail}`
+  terminal?.clear()
+  terminal?.writeln('\x1b[31mLocal shell failed to start.\x1b[0m')
+  terminal?.writeln(detail)
+  terminal?.writeln('')
+  terminal?.writeln('Use New Local Shell to retry.')
+  appendTerminalOutput(`${message}\nUse New Local Shell to retry.\n`)
 }
 
 function enterPreviewMode() {
@@ -480,6 +536,15 @@ function handleTerminalContextMenu(event: MouseEvent) {
   requestTerminalPaste(event)
 }
 
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isTauriUnavailableError(error: unknown) {
+  const message = formatError(error)
+  return message.includes('__TAURI_IPC__') || message.includes('window.__TAURI_IPC__') || message.includes('invoke')
+}
+
 function disconnect(renderReady = true) {
   const previousSessionId = sessionId
   sessionId = ''
@@ -552,7 +617,7 @@ defineExpose({
     </section>
 
     <footer class="status-bar">
-      <span class="chip"><span class="status-dot" :class="{ live: status === 'local' || status === 'remote' || status === 'sftp' }" />{{ status }}</span>
+      <span class="chip"><span class="status-dot" :class="{ live: status === 'local' || status === 'remote' || status === 'sftp', connecting: status === 'connecting', error: status === 'error', preview: status === 'preview' }" />{{ status }}</span>
       <span class="chip">{{ activeSessionProfile?.jumpMode ?? 'local-shell' }}</span>
       <span class="chip">{{ terminalSize.cols }}x{{ terminalSize.rows }}</span>
       <span class="chip">gateway:{{ activeSessionProfile?.gateway.authMode ?? '-' }}</span>

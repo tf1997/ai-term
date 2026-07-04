@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
+
+type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 import type {
   AiContextStatus,
   AiMessage,
@@ -39,6 +41,7 @@ interface TerminalTab {
   workspaceSessionId: string
   profile?: ConnectionProfile
   connectRequest: number
+  status: TerminalRuntimeStatus
 }
 
 const COMMAND_HISTORY_CACHE_LIMIT = 300
@@ -113,7 +116,8 @@ const terminalTabs = ref<TerminalTab[]>([
     connectionId: LOCAL_CONNECTION_ID,
     workspaceSessionId: LOCAL_DEFAULT_SESSION_ID,
     profile: undefined,
-    connectRequest: 0
+    connectRequest: 0,
+    status: 'idle'
   }
 ])
 const activeTerminalId = ref('local-1')
@@ -887,7 +891,8 @@ function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: Works
     connectionId,
     workspaceSessionId: session.id,
     profile: profile ? cloneConnectionProfile(profile) : undefined,
-    connectRequest: 1
+    connectRequest: 1,
+    status: 'idle'
   })
   activeTerminalId.value = id
   void loadWorkspaceSessionList(connectionId)
@@ -909,6 +914,19 @@ function closeTerminalTab(tabId: string) {
 
 function setTerminalRef(tabId: string, instance: TerminalPaneInstance | null) {
   terminalRefs.value[tabId] = instance
+}
+
+function terminalStatusClass(status: TerminalRuntimeStatus) {
+  return {
+    live: status === 'local' || status === 'remote' || status === 'sftp',
+    connecting: status === 'connecting',
+    error: status === 'error',
+    preview: status === 'preview'
+  }
+}
+
+function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
+  terminalTabs.value = terminalTabs.value.map((tab) => (tab.id === terminalId ? { ...tab, status } : tab))
 }
 
 function updateTerminalOutput(event: TerminalOutputEvent) {
@@ -1210,7 +1228,7 @@ onBeforeUnmount(() => {
           @click="activeTerminalId = tab.id"
           @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
         >
-          <span class="status-dot live" />{{ tab.title }}
+          <span class="status-dot" :class="terminalStatusClass(tab.status)" />{{ tab.title }}
           <span v-if="terminalTabs.length > 1" class="tab-close" @click.stop="closeTerminalTab(tab.id)">×</span>
         </button>
         <button class="icon-button" title="New local terminal" @click="openLocalTerminal">+</button>
@@ -1285,6 +1303,7 @@ onBeforeUnmount(() => {
         @terminal-output="updateTerminalOutput"
         @terminal-selection="updateTerminalSelection"
         @command-recorded="recordCommand"
+        @status-changed="updateTerminalStatus"
       />
     </section>
     <WorkspacePanel

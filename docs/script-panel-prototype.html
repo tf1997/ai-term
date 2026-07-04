@@ -1,0 +1,782 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Term Script Panel Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050914;
+      --panel: #0a101b;
+      --panel-2: #0e1624;
+      --panel-3: #111b2b;
+      --line: #202b3e;
+      --line-strong: #344260;
+      --ink: #f1f6ff;
+      --text: #c8d3e5;
+      --muted: #8c9ab0;
+      --soft: #66748a;
+      --violet: #5a4dff;
+      --green: #58d68d;
+      --amber: #eeba6b;
+      --code: #060b14;
+      --mono: "Cascadia Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+      --sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --shadow: 0 28px 70px rgba(0, 0, 0, .44);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: linear-gradient(180deg, #070c16 0, #050914 48%, #040711 100%);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    textarea,
+    select { font: inherit; }
+    button,
+    select { color: inherit; }
+    button { cursor: pointer; }
+
+    .app {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background:
+        linear-gradient(90deg, rgba(90, 77, 255, .09), transparent 30%),
+        linear-gradient(180deg, rgba(133, 174, 255, .06), transparent 38%),
+        var(--bg);
+    }
+
+    .terminal-preview { display: none; }
+
+    .right-panel {
+      width: min(100%, 960px);
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .tab-bar {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr)) minmax(0, 1fr) 42px;
+      gap: 10px;
+      align-items: center;
+      padding: 0 2px 12px;
+    }
+
+    .tab,
+    .icon-button,
+    .text-button,
+    .select-button {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(11, 17, 29, .88);
+      transition: border-color 170ms ease, background 170ms ease, box-shadow 170ms ease;
+    }
+
+    .tab {
+      min-width: 0;
+      padding: 0 14px;
+      color: #e4ebf7;
+      font-weight: 700;
+      white-space: nowrap;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+    }
+
+    .tab:hover,
+    .icon-button:hover,
+    .text-button:hover,
+    .select-button:hover {
+      border-color: #485674;
+      background: #121c2c;
+    }
+
+    .tab.active,
+    .text-button.primary,
+    .icon-button.primary {
+      border-color: rgba(116, 105, 255, .92);
+      background: var(--violet);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(90, 77, 255, .28);
+    }
+
+    .tab-spacer { min-width: 0; }
+
+    .icon-button {
+      width: 40px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      color: #d9e6fa;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .close-button {
+      border-color: transparent;
+      background: transparent;
+      color: #a6b3c7;
+      font-size: 30px;
+      font-weight: 300;
+    }
+
+    .screen {
+      min-width: 0;
+      min-height: 0;
+      display: none;
+    }
+
+    .screen.active {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      overflow: hidden;
+      border: 1px solid #182236;
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .025), transparent 120px), var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 22px 24px 14px;
+    }
+
+    .panel-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .panel-icon {
+      width: 58px;
+      height: 58px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(116, 105, 255, .68);
+      border-radius: 8px;
+      background: rgba(90, 77, 255, .16);
+      color: #aaa2ff;
+      font-family: var(--mono);
+      font-size: 26px;
+      font-weight: 800;
+    }
+
+    .panel-copy,
+    .record-copy,
+    .assistant-copy,
+    .message-content { min-width: 0; display: grid; }
+    .panel-copy { gap: 4px; }
+    .record-copy { gap: 4px; }
+    .assistant-copy { gap: 5px; }
+    .message-content { gap: 10px; }
+
+    .panel-copy strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink);
+      font-size: 24px;
+      line-height: 1.15;
+      font-weight: 800;
+    }
+
+    .panel-copy span,
+    .assistant-copy span,
+    .section-title span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+
+    .panel-actions,
+    .button-row,
+    .editor-tools,
+    .code-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .text-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-width: 0;
+      padding: 0 14px;
+      color: #d9e7f8;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .text-button.small { height: 34px; padding: 0 12px; font-size: 13px; }
+    .text-button.quiet,
+    .icon-button.quiet { color: #aebbd0; background: rgba(12, 18, 31, .72); }
+
+    .pill {
+      min-height: 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #25324a;
+      border-radius: 6px;
+      background: #111a28;
+      color: #aebdd1;
+      padding: 0 9px;
+      font-size: 13px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .pill.good { border-color: rgba(88, 214, 141, .22); color: #95f0b7; background: rgba(88, 214, 141, .08); }
+    .pill.subtle { border-color: #243149; color: #95a5bc; background: #101827; }
+
+    .script-body {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .record-strip {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      margin: 0 24px 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(12, 18, 31, .72);
+    }
+
+    .dot {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 7px rgba(88, 214, 141, .1);
+    }
+
+    .record-copy strong { color: #7defa7; font-size: 15px; line-height: 1.25; }
+    .record-copy span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #95a4b8; }
+
+    .workbench {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(410px, .48fr) minmax(420px, .52fr);
+      gap: 22px;
+      overflow: hidden auto;
+      padding: 0 24px 18px;
+      scrollbar-gutter: stable;
+    }
+
+    .draft-card,
+    .conversation-card { min-width: 0; min-height: 0; overflow: hidden; }
+    .draft-card { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .conversation-card { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+
+    .section-head,
+    .assistant-head {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .section-title,
+    .assistant-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-title strong,
+    .assistant-copy strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink);
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .editor-shell {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+    }
+
+    .editor-top {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      min-height: 48px;
+      border-bottom: 1px solid #1b2638;
+      background: #0d1522;
+    }
+
+    .file-tab {
+      min-width: 0;
+      width: max-content;
+      max-width: 260px;
+      height: 48px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      border-right: 1px solid #1b2638;
+      color: #e6efff;
+      font-weight: 760;
+    }
+
+    .file-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(88, 214, 141, .12);
+    }
+
+    .editor-tools { padding: 0 12px; gap: 10px; }
+    .select-button { min-width: 110px; height: 36px; padding: 0 12px; border-color: #293752; background: #121b2a; outline: 0; }
+    .editor-icon { width: 28px; height: 28px; border: 0; background: transparent; color: #9cabbd; font-size: 18px; }
+
+    .editor-frame,
+    .mini-code {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      overflow: hidden;
+      background: var(--code);
+    }
+
+    .editor-frame { grid-template-columns: 78px minmax(0, 1fr); }
+    .mini-code { grid-template-columns: 58px minmax(0, 1fr); max-height: 244px; overflow: hidden auto; }
+
+    .line-rail {
+      user-select: none;
+      padding: 14px 22px 14px 12px;
+      border-right: 1px solid #101a28;
+      background: #07101a;
+      color: #64758d;
+      font-family: var(--mono);
+      font-size: 16px;
+      line-height: 1.58;
+      text-align: right;
+      white-space: pre;
+    }
+
+    .script-code,
+    .mini-code pre {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden auto;
+      padding: 14px 18px;
+      color: #dff0ff;
+      font-family: var(--mono);
+      font-size: 16px;
+      line-height: 1.58;
+      white-space: pre;
+      tab-size: 2;
+    }
+
+    .mini-code .line-rail { padding: 10px 15px 10px 8px; font-size: 14px; line-height: 1.52; }
+    .mini-code pre { padding: 10px 14px; font-size: 14px; line-height: 1.52; overflow: visible; }
+    .comment { color: #69c879; }
+    .kw { color: #8fb3ff; }
+    .str { color: #f0b76b; }
+    .var { color: #c6d5ff; }
+
+    .caret {
+      display: inline-block;
+      width: 8px;
+      height: 19px;
+      margin-right: 3px;
+      vertical-align: -3px;
+      background: rgba(88, 214, 141, .78);
+      animation: blink 1s steps(2, start) infinite;
+    }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .editor-status {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      align-items: center;
+      min-height: 48px;
+      padding: 0 28px;
+      border-top: 1px solid #172235;
+      background: #0b1320;
+      color: #91a0b7;
+    }
+
+    .editor-status span:last-child { text-align: right; }
+    .spark { width: 32px; height: 32px; display: grid; place-items: center; color: #b8aeff; font-size: 28px; }
+
+    .message-list {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-gutter: stable;
+    }
+
+    .message {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(13, 20, 34, .86);
+      padding: 13px 16px;
+    }
+
+    .message.ai { background: linear-gradient(180deg, rgba(90, 77, 255, .055), transparent 90px), rgba(14, 22, 37, .9); }
+
+    .avatar {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--violet);
+      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .message.ai .avatar { background: #38328d; color: #d9d4ff; }
+
+    .message-head {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--ink);
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .message-head span { color: #8e9bb0; font-weight: 500; }
+    .message p { margin: 0; color: #dce6f6; line-height: 1.65; overflow-wrap: anywhere; }
+
+    .check-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: #dce6f6;
+      line-height: 1.5;
+    }
+
+    .check-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .check { width: 16px; height: 16px; margin-top: 2px; display: grid; place-items: center; border: 1px solid rgba(88, 214, 141, .6); border-radius: 50%; color: #7af0a6; font-size: 11px; }
+
+    .code-card { min-width: 0; overflow: hidden; border: 1px solid #22314a; border-radius: 8px; background: var(--code); }
+    .code-card-head { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 54px; padding: 0 14px 0 18px; border-bottom: 1px solid #192438; background: #0d1523; color: #dce6f6; font-weight: 700; }
+    .code-card-head .pill { height: 25px; min-height: 25px; font-family: var(--mono); }
+
+    .composer {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+      padding: 10px 24px 18px;
+      background: var(--panel);
+    }
+
+    .composer-box { position: relative; min-width: 0; }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 98px;
+      max-height: 150px;
+      resize: none;
+      border: 1px solid rgba(116, 105, 255, .46);
+      border-radius: 8px;
+      outline: 0;
+      background: #0b1220;
+      color: var(--ink);
+      padding: 17px 66px 42px 18px;
+      line-height: 1.5;
+    }
+
+    .composer textarea::placeholder { color: #8090a7; opacity: 1; }
+    .composer textarea:focus { border-color: rgba(116, 105, 255, .86); box-shadow: 0 0 0 1px rgba(116, 105, 255, .2); }
+    .send-button { position: absolute; right: 18px; bottom: 18px; width: 48px; height: 48px; }
+    .composer-help { position: absolute; left: 18px; bottom: 14px; color: #7f8ea5; pointer-events: none; }
+    .ai-note { display: flex; justify-content: center; align-items: center; gap: 8px; color: #76859b; }
+
+    .chat-body { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: #0a0e16; }
+    .pill-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid #1a2231; background: #0a0f17; }
+    .chat-body .message-list { padding: 14px; }
+    .assistant-result { display: grid; gap: 8px; }
+    .result-box { border: 1px solid #27364e; border-radius: 7px; overflow: hidden; background: #050911; }
+    .result-box b { display: block; padding: 7px 10px; border-bottom: 1px solid #1c2637; color: #9fd7ff; }
+    .result-box span { display: block; padding: 10px; color: #f1f6ff; font-family: var(--mono); }
+
+    @media (max-width: 980px) {
+      .app { padding: 10px; place-items: stretch; }
+      .right-panel { width: 100%; height: 100%; }
+      .tab-bar { grid-template-columns: repeat(4, minmax(84px, 1fr)) 36px; gap: 6px; }
+      .tab-spacer { display: none; }
+      .tab { padding: 0 8px; font-size: 13px; }
+      .panel-head,
+      .section-head,
+      .assistant-head { grid-template-columns: 1fr; }
+      .panel-head,
+      .record-strip,
+      .workbench,
+      .composer { margin-left: 0; margin-right: 0; padding-left: 14px; padding-right: 14px; }
+      .panel-actions,
+      .button-row { justify-content: flex-start; flex-wrap: wrap; }
+      .workbench { grid-template-rows: auto auto; overflow: auto; }
+      .editor-frame { grid-template-columns: 54px minmax(0, 1fr); }
+      .line-rail,
+      .script-code { font-size: 13px; }
+      .editor-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .editor-status span:last-child { text-align: left; }
+    }
+
+    @media (max-width: 640px) {
+      .screen.active { border-radius: 0; }
+      .panel-title { align-items: flex-start; }
+      .panel-icon { width: 48px; height: 48px; font-size: 22px; }
+      .panel-copy strong,
+      .section-title strong,
+      .assistant-copy strong { font-size: 18px; }
+      .message { grid-template-columns: 1fr; }
+      .avatar { width: 34px; height: 34px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="terminal-preview" aria-hidden="true">ai-term / remote</aside>
+
+    <section class="right-panel" aria-label="脚本区原型">
+      <nav class="tab-bar" aria-label="workspace tabs">
+        <button class="tab">命令历史</button>
+        <button class="tab" data-open="ai">AI 助手</button>
+        <button class="tab active" data-open="script">脚本</button>
+        <button class="tab">SFTP</button>
+        <span class="tab-spacer" aria-hidden="true"></span>
+        <button class="icon-button close-button" aria-label="close">×</button>
+      </nav>
+
+      <section id="ai-screen" class="screen">
+        <header class="panel-head">
+          <div class="panel-title">
+            <span class="panel-icon">AI</span>
+            <div class="panel-copy"><strong>AI 助手</strong><span>终端上下文和命令建议</span></div>
+          </div>
+          <div class="panel-actions"><button class="icon-button quiet" aria-label="history">↻</button><button class="icon-button quiet" aria-label="new">+</button></div>
+        </header>
+        <div class="chat-body">
+          <div class="pill-row"><span class="pill">AI default</span><span class="pill">terminal 1951 chars</span><span class="pill">history 2</span></div>
+          <div class="message-list">
+            <article class="message"><span class="avatar">Y</span><div class="message-content"><div class="message-head">You <span>刚刚</span></div><p>服务器ip</p></div></article>
+            <article class="message ai"><span class="avatar">AI</span><div class="message-content"><div class="message-head">AI <span>结果</span></div><div class="assistant-result"><p>服务器 IPv4 地址是：</p><div class="result-box"><b>text</b><span>23.238.39.4</span></div></div></div></article>
+          </div>
+        </div>
+        <form class="composer"><div class="composer-box"><textarea placeholder="输入问题"></textarea><span class="composer-help">Ctrl + Enter 发送</span><button class="icon-button send-button primary" type="button" aria-label="send">▷</button></div><div class="ai-note">AI 可能会出错，请注意核对结果 <span>ⓘ</span></div></form>
+      </section>
+
+      <section id="script-screen" class="screen active">
+        <header class="panel-head">
+          <div class="panel-title">
+            <span class="panel-icon">&lt;/&gt;</span>
+            <div class="panel-copy"><strong>脚本助手</strong><span>编写、优化和执行脚本</span></div>
+          </div>
+          <div class="panel-actions">
+            <button class="icon-button quiet" aria-label="刷新录制上下文">↻</button>
+            <button class="text-button quiet" type="button"><span>＋</span>新建脚本</button>
+            <button class="text-button primary" type="button"><span>▷</span>开始录制</button>
+            <button class="icon-button quiet" aria-label="清空录制">⌫</button>
+          </div>
+        </header>
+
+        <div class="script-body">
+          <div class="record-strip">
+            <span class="dot" aria-hidden="true"></span>
+            <div class="record-copy"><strong>录制上下文已就绪</strong><span>1 条命令记录 · 36363 output chars</span></div>
+          </div>
+
+          <div class="workbench">
+            <section class="draft-card">
+              <div class="section-head">
+                <div class="section-title"><strong>脚本草稿</strong><span class="pill good">未保存草稿</span></div>
+                <div class="button-row"><button class="text-button small quiet">▣ 保存</button><button class="text-button small quiet">◌ 继续修改</button><button class="text-button small quiet">▤ 重新生成</button><button class="text-button small primary">▷ 执行</button></div>
+              </div>
+
+              <div class="editor-shell">
+                <div class="editor-top">
+                  <div class="file-tab"><span>♟</span><span>script.sh</span><span class="file-dot" aria-hidden="true"></span></div>
+                  <div class="editor-tools"><select class="select-button" aria-label="脚本语言"><option>Bash</option></select><button class="editor-icon" aria-label="复制">▢</button><button class="editor-icon" aria-label="全屏">⌗</button><button class="editor-icon" aria-label="设置">⚙</button></div>
+                </div>
+
+                <div class="editor-frame">
+                  <div class="line-rail">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12</div>
+                  <pre class="script-code"><code><span class="comment">#!/usr/bin/env bash</span>
+<span class="kw">set</span> -euo pipefail
+
+<span class="comment"># 可修改变量</span>
+<span class="var">OUTPUT_DIR</span>=<span class="str">"${OUTPUT_DIR:-./ss_report}"</span>
+<span class="var">INCLUDE_UNIX_SOCKETS</span>=<span class="str">"${INCLUDE_UNIX_SOCKETS:-true}"</span>
+<span class="var">INCLUDE_PROCESS</span>=<span class="str">"${INCLUDE_PROCESS:-true}"</span>
+<span class="var">FILTER_STATE</span>=<span class="str">"${FILTER_STATE:-}"</span>
+<span class="var">TOP_REMOTE_LIMIT</span>=<span class="str">"${TOP_REMOTE_LIMIT:-20}"</span>
+
+<span class="comment"># 其他脚本逻辑 ...</span>
+<span class="caret" aria-hidden="true"></span></code></pre>
+                </div>
+
+                <div class="editor-status"><span>行 1, 列 1</span><span>UTF-8</span><span>LF</span><span>Bash</span><span>总字符数: 36363</span></div>
+              </div>
+            </section>
+
+            <section class="conversation-card">
+              <div class="assistant-head">
+                <div class="assistant-title"><span class="spark">✦</span><div class="assistant-copy"><strong>AI 助手</strong><span>基于当前脚本，提供优化建议和执行帮助</span></div></div>
+                <button class="text-button small quiet" type="button">⌫ 清空对话</button>
+              </div>
+
+              <div class="message-list">
+                <article class="message"><span class="avatar">♙</span><div class="message-content"><div class="message-head">You <span>10:23</span></div><p>生成一个可复用脚本，保留变量、检查和安全确认。</p></div></article>
+
+                <article class="message ai">
+                  <span class="avatar">✦</span>
+                  <div class="message-content">
+                    <div class="message-head"><strong>AI</strong><span>10:24</span></div>
+                    <p>执行前建议确认：</p>
+                    <ul class="check-list">
+                      <li><span class="check">✓</span><span>OUTPUT_DIR：报告输出目录，默认 ./ss_report</span></li>
+                      <li><span class="check">✓</span><span>INCLUDE_PROCESS=true 时，非 root 可能看不到完整进程信息</span></li>
+                      <li><span class="check">✓</span><span>FILTER_STATE 可设为 'FSTAB'、'LISTEN' 等，留空不过滤</span></li>
+                      <li><span class="check">✓</span><span>TOP_REMOTE_LIMIT：远程连接排行数量，建议根据需要调整</span></li>
+                    </ul>
+
+                    <div class="code-card">
+                      <div class="code-card-head"><div><span>优化后脚本预览</span> <span class="pill subtle">bash</span></div><div class="code-actions"><button class="text-button small quiet">▢ 复制</button><button class="text-button small quiet">⇩ 下载</button></div></div>
+                      <div class="mini-code">
+                        <div class="line-rail">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11</div>
+                        <pre><code><span class="comment">#!/usr/bin/env bash</span>
+<span class="kw">set</span> -euo pipefail
+<span class="caret" aria-hidden="true"></span>
+<span class="comment"># 可修改变量</span>
+OUTPUT_DIR=<span class="str">"${OUTPUT_DIR:-./ss_report}"</span>
+INCLUDE_UNIX_SOCKETS=<span class="str">"${INCLUDE_UNIX_SOCKETS:-true}"</span>
+INCLUDE_PROCESS=<span class="str">"${INCLUDE_PROCESS:-true}"</span>
+FILTER_STATE=<span class="str">"${FILTER_STATE:-}"</span>
+TOP_REMOTE_LIMIT=<span class="str">"${TOP_REMOTE_LIMIT:-20}"</span>
+
+<span class="comment"># ... 更多脚本内容</span></code></pre>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="message"><span class="avatar">♙</span><div class="message-content"><div class="message-head">You <span>10:28</span></div><p>把当前脚本改成支持 dry-run，并在执行前确认变量。</p></div></article>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <form class="composer">
+          <div class="composer-box"><textarea placeholder="描述你想修改或优化的脚本功能..."></textarea><span class="composer-help">Ctrl + Enter / ⌘ + Enter 发送</span><button class="icon-button send-button primary" type="button" aria-label="send">▷</button></div>
+          <div class="ai-note">AI 可能会出错，请注意核对结果 <span>ⓘ</span></div>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const tabs = Array.from(document.querySelectorAll('[data-open]'));
+    const screens = {
+      ai: document.querySelector('#ai-screen'),
+      script: document.querySelector('#script-screen')
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.open;
+        tabs.forEach((item) => item.classList.toggle('active', item === tab));
+        Object.entries(screens).forEach(([name, screen]) => {
+          screen.classList.toggle('active', name === target);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

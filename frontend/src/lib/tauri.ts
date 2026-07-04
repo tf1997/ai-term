@@ -134,6 +134,10 @@ export function terminalResize(sessionId: string, cols: number, rows: number) {
   return invoke<void>('terminal_resize', { sessionId, cols, rows })
 }
 
+export function terminalSessionActive(sessionId: string) {
+  return invoke<boolean>('terminal_session_active', { sessionId })
+}
+
 export function disconnectTerminal(sessionId: string) {
   return invoke<boolean>('disconnect_terminal', { sessionId })
 }
