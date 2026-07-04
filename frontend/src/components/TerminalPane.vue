@@ -15,15 +15,22 @@ import {
   terminalWrite
 } from '../lib/tauri'
 import type { ConnectionProfile } from '../types/profile'
-import type { CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+import type { CommandHistoryEntry, CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
+type CompletionSuggestionSource = 'system' | 'history' | 'session'
+
+interface CompletionSuggestion {
+  command: string
+  source: CompletionSuggestionSource
+}
 
 const props = defineProps<{
   terminalId: string
   profile?: ConnectionProfile
   connectRequest: number
+  commandHistory: CommandHistoryEntry[]
 }>()
 
 const emit = defineEmits<{
@@ -49,10 +56,105 @@ const status = ref<TerminalRuntimeStatus>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
 const activeSession = ref<TerminalSessionKind>('local')
 const activeSessionProfile = ref<ConnectionProfile | undefined>(undefined)
+const terminalCompletionOpen = ref(false)
+const completionSuggestions = ref<CompletionSuggestion[]>([])
+const completionActiveIndex = ref(0)
+const localCommandHistory = ref<string[]>([])
 const quickCommands = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
 
 function emitTerminalStatus(value = status.value) {
   emit('statusChanged', props.terminalId, value)
+}
+
+function systemCommandSuggestions() {
+  const common = ['cd', 'ls', 'pwd', 'cat', 'grep', 'find', 'mkdir', 'touch', 'cp', 'mv', 'rm', 'echo', 'curl', 'wget', 'ssh', 'scp', 'rsync', 'tar', 'chmod', 'chown', 'ps', 'top', 'htop', 'kill', 'df -h', 'du -sh', 'free -m', 'ping', 'git status', 'git pull', 'git checkout', 'git log --oneline', 'docker ps', 'docker logs', 'kubectl get pods']
+  const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase()
+  if (platform.includes('win')) {
+    return ['dir', 'cd', 'cls', 'type', 'copy', 'move', 'del', 'findstr', 'where', 'tasklist', 'taskkill', 'ipconfig', 'netstat -ano', 'powershell', 'wmic cpu get loadpercentage', 'Get-Process', 'Get-Service', 'Get-ChildItem', ...common]
+  }
+  if (platform.includes('mac')) {
+    return ['brew update', 'brew upgrade', 'open .', 'pbcopy', 'pbpaste', 'sw_vers', 'system_profiler', ...common]
+  }
+  return ['apt update', 'apt list --upgradable', 'systemctl status', 'journalctl -xe', 'ss -tulpn', 'ip addr', ...common]
+}
+
+function historyCommandSuggestions() {
+  return [...props.commandHistory.map((entry) => entry.command), ...localCommandHistory.value]
+}
+
+function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
+  const normalizedPrefix = prefix.toLowerCase()
+  const seen = new Set<string>()
+  const add = (command: string, source: CompletionSuggestionSource) => {
+    const value = command.trim()
+    if (!value) return
+    if (normalizedPrefix && !value.toLowerCase().startsWith(normalizedPrefix)) return
+    const key = value.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    suggestions.push({ command: value, source })
+  }
+  const suggestions: CompletionSuggestion[] = []
+  historyCommandSuggestions().slice().reverse().forEach((command) => add(command, 'history'))
+  systemCommandSuggestions().forEach((command) => add(command, 'system'))
+  return suggestions.slice(0, 9)
+}
+
+function refreshCompletionSuggestions() {
+  completionSuggestions.value = buildCompletionSuggestions()
+  completionActiveIndex.value = Math.min(completionActiveIndex.value, Math.max(0, completionSuggestions.value.length - 1))
+  terminalCompletionOpen.value = completionSuggestions.value.length > 0
+}
+
+function closeCompletion() {
+  terminalCompletionOpen.value = false
+  completionSuggestions.value = []
+  completionActiveIndex.value = 0
+}
+
+function cycleCompletion(delta: number) {
+  if (!completionSuggestions.value.length) return
+  completionActiveIndex.value = (completionActiveIndex.value + delta + completionSuggestions.value.length) % completionSuggestions.value.length
+}
+
+function acceptCompletionSuggestion(suggestion = completionSuggestions.value[completionActiveIndex.value]) {
+  if (!suggestion) return false
+  const current = inputCommandBuffer
+  if (!suggestion.command.toLowerCase().startsWith(current.toLowerCase())) return false
+  const tail = suggestion.command.slice(current.length)
+  if (tail) writeTerminalInput(tail)
+  inputCommandBuffer = suggestion.command
+  closeCompletion()
+  return true
+}
+
+function handleCompletionInput(data: string) {
+  if (data === '\t') {
+    if (terminalCompletionOpen.value) {
+      cycleCompletion(1)
+    } else {
+      refreshCompletionSuggestions()
+    }
+    return terminalCompletionOpen.value
+  }
+  if (!terminalCompletionOpen.value) return false
+  if (data === '\x1b[A') {
+    cycleCompletion(-1)
+    return true
+  }
+  if (data === '\x1b[B') {
+    cycleCompletion(1)
+    return true
+  }
+  if (data === '\r' || data === '\n' || data === '\x1b[C') {
+    return acceptCompletionSuggestion()
+  }
+  if (data === '\x1b') {
+    closeCompletion()
+    return true
+  }
+  closeCompletion()
+  return false
 }
 
 function renderIdlePrompt(term: Terminal) {
@@ -162,6 +264,7 @@ async function writeClipboard(text: string) {
 function recordCommand(command: string) {
   const value = command.trim()
   if (!value) return
+  localCommandHistory.value = [...localCommandHistory.value.filter((item) => item !== value), value].slice(-120)
   emit('commandRecorded', {
     terminalId: props.terminalId,
     command: value
@@ -242,6 +345,7 @@ onMounted(async () => {
   renderIdlePrompt(terminal)
 
   dataDisposable = terminal.onData((data) => {
+    if (handleCompletionInput(data)) return
     if (sessionId) {
       trackUserInput(data)
       void terminalWrite(sessionId, data)
@@ -589,7 +693,7 @@ defineExpose({
 <template>
   <main class="terminal-pane">
     <section class="terminal-wrap">
-      <div class="terminal-frame">
+      <div class="terminal-frame terminal-native-code">
         <div class="terminal-head">
           <div class="terminal-heading">
             <span class="terminal-title">{{ activeSessionProfile?.name ?? 'Local Terminal' }}</span>
@@ -604,7 +708,21 @@ defineExpose({
             <button class="icon-button" title="断开连接" aria-label="断开连接" @click="disconnectFromButton">×</button>
           </div>
         </div>
-        <div ref="terminalHost" class="xterm-host" aria-label="Terminal direct input" />
+        <div class="terminal-body-wrap">
+          <div ref="terminalHost" class="xterm-host" aria-label="Terminal direct input" />
+          <div v-if="terminalCompletionOpen" class="terminal-completion" role="listbox" aria-label="Command completion">
+            <button
+              v-for="(suggestion, index) in completionSuggestions"
+              :key="`${suggestion.source}-${suggestion.command}`"
+              type="button"
+              :class="{ active: index === completionActiveIndex }"
+              @pointerdown.prevent="acceptCompletionSuggestion(suggestion)"
+            >
+              <code>{{ suggestion.command }}</code>
+              <span>{{ suggestion.source === 'system' ? '系统' : suggestion.source === 'history' ? '历史' : '本次' }}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </section>
 

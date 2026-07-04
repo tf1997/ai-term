@@ -9,6 +9,13 @@ import type {
   WorkspaceSession
 } from '../types/workspace'
 import { cancelTask, chatWithAiProviderStream, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
+import {
+  analyzeScriptRisks,
+  buildScriptRiskPreviewLines,
+  riskLabelsForLine,
+  scriptRiskStatusForContent,
+  summarizeScriptRisks
+} from '../lib/scriptRisk'
 
 type MessagePart =
   | { type: 'text'; content: string }
@@ -60,6 +67,15 @@ const currentAssistantMessageId = ref('')
 const stopRequested = ref(false)
 const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
+const pendingAiCommandExecution = ref('')
+const aiCommandExecutionNotice = ref('')
+const aiCommandExecutionNoticeTitle = ref('')
+let aiCommandNoticeTimer: number | undefined
+
+const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
+const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
+const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
+const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
 
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
@@ -395,33 +411,8 @@ function normalizeShellCommand(command: string) {
     .join(' && ')
 }
 
-function isDangerousCommand(command: string) {
-  const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim()
-  const dangerousPatterns = [
-    /\brm\s+(-[a-z]*[rf][a-z]*|-r|-f)\b/,
-    /\bsudo\s+rm\b/,
-    /\bdd\s+.*\bof=\/dev\//,
-    /\bmkfs(\.| |$)/,
-    /\bformat\b/,
-    /\bshutdown\b/,
-    /\breboot\b/,
-    /\bpoweroff\b/,
-    /\bhalt\b/,
-    /\bkill\s+-9\b/,
-    /\bpkill\b/,
-    /\bkillall\b/,
-    /\bchmod\s+(-r\s+)?777\b/,
-    /\bchown\s+(-r\s+)?[^&|;]+\/\b/,
-    /\btruncate\s+.*\s+\/\b/,
-    /\bfind\b.*\s-delete\b/,
-    /\bdocker\s+system\s+prune\b.*\s-a\b/,
-    /\bkubectl\s+delete\b/,
-    /\biptables\s+-f\b/,
-    /\bnft\s+flush\b/,
-    />\s*\/dev\/sd[a-z]/,
-    /:\(\)\s*\{\s*:\|:\s*&\s*\}/
-  ]
-  return dangerousPatterns.some((pattern) => pattern.test(normalized))
+function commandRiskStatus(command: string) {
+  return scriptRiskStatusForContent(command)
 }
 
 function shouldCollapseMessage(message: AiMessage) {
@@ -446,13 +437,45 @@ function toggleMessage(messageId: string) {
 function executeGeneratedCommand(command: string) {
   const value = command.trim()
   if (!value) return
-  if (isDangerousCommand(value)) {
-    const confirmed = window.confirm(`检测到高风险命令，确认要在当前终端执行吗？\n\n${value}`)
-    if (!confirmed) return
+  const risks = analyzeScriptRisks(value)
+  if (risks.length > 0) {
+    pendingAiCommandExecution.value = value
+    clearAiCommandNotice()
+    return
   }
   emit('executeCommand', value)
+  showAiCommandNotice('已安全发送', '未检测到风险命令，已发送到当前终端。')
 }
 
+function confirmPendingAiCommandExecution() {
+  const command = pendingAiCommandExecution.value.trim()
+  if (!command) return
+  emit('executeCommand', command)
+  showAiCommandNotice('已确认发送', '已确认风险命令，命令已发送到当前终端。')
+  closeAiCommandRiskConfirm()
+}
+
+function showAiCommandNotice(label: string, title: string) {
+  aiCommandExecutionNotice.value = label
+  aiCommandExecutionNoticeTitle.value = title
+  if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
+  aiCommandNoticeTimer = window.setTimeout(() => {
+    clearAiCommandNotice()
+  }, 2600)
+}
+
+function clearAiCommandNotice() {
+  aiCommandExecutionNotice.value = ''
+  aiCommandExecutionNoticeTitle.value = ''
+  if (aiCommandNoticeTimer) {
+    window.clearTimeout(aiCommandNoticeTimer)
+    aiCommandNoticeTimer = undefined
+  }
+}
+
+function closeAiCommandRiskConfirm() {
+  pendingAiCommandExecution.value = ''
+}
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
 }
@@ -558,6 +581,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
+  if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
 })
 
 watch(
@@ -632,6 +656,46 @@ watch(
         </div>
       </form>
     </div>
+    <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation" @click.self="closeAiCommandRiskConfirm">
+      <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险命令执行确认">
+        <div class="modal-head">
+          <div>
+            <strong>检测到风险命令</strong>
+            <span>执行前请确认命中的命令行</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm">&times;</button>
+        </div>
+        <div class="script-risk-body">
+          <div class="script-risk-summary" aria-label="风险类型">
+            <span
+              v-for="risk in pendingAiCommandRiskSummary"
+              :key="risk.kind"
+              class="script-risk-chip"
+              :class="[`risk-${risk.kind}`, risk.severity]"
+            >
+              <strong>{{ risk.label }}</strong>
+              <small>{{ risk.message }}</small>
+            </span>
+          </div>
+          <div class="script-risk-preview" role="region" aria-label="命令风险预览">
+            <div
+              v-for="line in pendingAiCommandRiskLines"
+              :key="line.number"
+              class="script-risk-line"
+              :class="[line.riskClass, { flagged: line.risks.length }]"
+            >
+              <span class="script-risk-line-no">{{ line.number }}</span>
+              <code>{{ line.text || ' ' }}</code>
+              <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions script-risk-actions">
+          <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
+          <button class="text-button danger" type="button" @click="confirmPendingAiCommandExecution">确认执行</button>
+        </div>
+      </section>
+    </div>
     <div class="context-strip">
       <span class="chip">AI {{ selectedConfigId }}</span>
       <span class="chip">terminal {{ terminalSnapshot.length }} chars</span>
@@ -640,6 +704,7 @@ watch(
         {{ contextStatus.compressed ? 'context compressed' : 'context full' }} {{ contextStatus.chars }} chars
       </span>
       <span v-if="isAsking" class="chip">模型调用中</span>
+      <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
     </div>
     <div ref="messageList" class="message-list">
       <p v-if="!hasUsableConfig" class="empty-state">暂无可用 AI 配置，请在左侧配置菜单中新建或完善配置。</p>
@@ -678,6 +743,14 @@ watch(
             <div v-else-if="part.type === 'code'" class="code-block">
               <div class="code-head">
                 <span>{{ part.language || 'text' }}</span>
+                <span
+                  v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
+                  class="command-risk-status"
+                  :class="`risk-${commandRiskStatus(normalizeShellCommand(part.content)).level}`"
+                  :title="commandRiskStatus(normalizeShellCommand(part.content)).message"
+                >
+                  {{ commandRiskStatus(normalizeShellCommand(part.content)).label }}
+                </span>
                 <button
                   v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
                   class="text-button primary-action"

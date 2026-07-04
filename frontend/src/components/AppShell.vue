@@ -163,6 +163,14 @@ const activeCommandHistory = computed(() => {
   return commandHistoryBySession.value[activeWorkspaceKey.value] ?? []
 })
 
+function commandHistoryForTab(tab: TerminalTab) {
+  const currentKey = workspaceKey(tab.connectionId, tab.workspaceSessionId)
+  const current = commandHistoryBySession.value[currentKey] ?? []
+  const sameConnection = Object.entries(commandHistoryBySession.value)
+    .filter(([key]) => key !== currentKey && key.startsWith(`${tab.connectionId}:`))
+    .flatMap(([, commands]) => commands)
+  return [...current, ...sameConnection]
+}
 const activeAiMessages = computed(() => {
   return aiMessagesBySession.value[activeWorkspaceKey.value] ?? []
 })
@@ -1300,6 +1308,7 @@ onBeforeUnmount(() => {
         :terminal-id="tab.id"
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
+        :command-history="commandHistoryForTab(tab)"
         @terminal-output="updateTerminalOutput"
         @terminal-selection="updateTerminalSelection"
         @command-recorded="recordCommand"

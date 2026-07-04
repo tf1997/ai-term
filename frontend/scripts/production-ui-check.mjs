@@ -158,6 +158,23 @@ assert(
   'TerminalPane must not echo keyboard input locally when there is no backend session.'
 )
 
+assert(
+  terminalPane.includes('commandHistory: CommandHistoryEntry[]') &&
+    terminalPane.includes('handleCompletionInput(data)') &&
+    terminalPane.includes('terminalCompletionOpen') &&
+    terminalPane.includes('completionSuggestions') &&
+    terminalPane.includes('systemCommandSuggestions') &&
+    terminalPane.includes('historyCommandSuggestions') &&
+    terminalPane.includes('acceptCompletionSuggestion') &&
+    terminalPane.includes('class="terminal-completion"') &&
+    appShell.includes(':command-history="commandHistoryForTab(tab)"') &&
+    appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
+    styles.includes('.terminal-completion') &&
+    styles.includes('.terminal-native-code') &&
+    styles.includes('.xterm-host .xterm-rows'),
+  'TerminalPane must provide native-feeling terminal code styling plus command completion from system commands and same-connection user command history.'
+)
+
 
 assert(
   terminalPane.includes('stripCommandInputControlSequences(data)') &&
@@ -403,8 +420,15 @@ assert(
     scriptPanel.includes('title="执行脚本"') &&
     scriptPanel.includes('title="复制脚本"') &&
     scriptPanel.includes('title="放大预览"') &&
+    !scriptPanel.includes('<strong>script.sh</strong>') &&
     scriptPanel.includes('script-preview-modal') &&
     scriptPanel.includes('class="script-expanded-editor"') &&
+    scriptPanel.includes('script-code-overlay') &&
+    scriptPanel.includes('highlightShellScript') &&
+    scriptPanel.includes('draftScriptHighlightedHtml') &&
+    scriptPanel.includes('selectedScriptHighlightedHtml') &&
+    scriptPanel.includes('expandedScriptHighlightedHtml') &&
+    scriptPanel.includes('syncScriptEditorScroll') &&
     !scriptPanel.includes('class="icon-button primary-action"') &&
     !scriptPanel.includes('&#128190;') &&
     !scriptPanel.includes('<strong>脚本草稿</strong>') &&
@@ -462,6 +486,9 @@ assert(
     styles.includes('/* Expanded script preview modal. */') &&
     styles.includes('.script-preview-modal') &&
     styles.includes('.script-expanded-editor') &&
+    styles.includes('.script-code-overlay') &&
+    styles.includes('.shell-token.command') &&
+    styles.includes('caret-color') &&
     styles.includes('.script-editor-toolbar') &&
     styles.includes('.script-file-tab') &&
     styles.includes('/* Draft editor inline action rail. */') &&
@@ -760,8 +787,16 @@ assert(
     appShell.includes('updateAiMessage') &&
     aiPanel.includes('parseMessageParts') &&
     aiPanel.includes('extractPrimaryShellCommand') &&
-    aiPanel.includes('isDangerousCommand') &&
-    aiPanel.includes('window.confirm') &&
+    aiPanel.includes('../lib/scriptRisk') &&
+    aiPanel.includes('aiCommandRiskConfirmOpen') &&
+    aiPanel.includes('pendingAiCommandExecution') &&
+    aiPanel.includes('commandRiskStatus') &&
+    aiPanel.includes('executeGeneratedCommand') &&
+    aiPanel.includes('confirmPendingAiCommandExecution') &&
+    aiPanel.includes('class="command-risk-status"') &&
+    aiPanel.includes('script-risk-modal') &&
+    !aiPanel.includes('isDangerousCommand') &&
+    !aiPanel.includes('window.confirm') &&
     styles.includes('.message.collapsed') &&
     styles.includes('.code-block') &&
     tauri.includes('chatWithAiProvider'),
@@ -821,8 +856,31 @@ assert(
     scriptPanel.includes('loadPreviewScripts') &&
     scriptPanel.includes('localStorage') &&
     scriptPanel.includes('bash -s <<') &&
-    scriptPanel.includes('isDangerousScript') &&
-    scriptPanel.includes('window.confirm') &&
+    scriptPanel.includes('../lib/scriptRisk') &&
+    scriptPanel.includes('analyzeScriptRisks') &&
+    scriptPanel.includes('scriptRiskStatusForContent') &&
+    scriptPanel.includes('draftScriptRiskStatus') &&
+    scriptPanel.includes('selectedScriptRiskStatus') &&
+    scriptPanel.includes('pendingScriptExecution') &&
+    scriptPanel.includes('scriptRiskConfirmOpen') &&
+    scriptPanel.includes('pendingScriptRiskLines') &&
+    scriptPanel.includes('confirmPendingScriptExecution') &&
+    scriptPanel.includes('closeScriptRiskConfirm') &&
+    scriptPanel.includes('writeScriptToTerminal') &&
+    scriptPanel.includes('script-risk-modal') &&
+    scriptPanel.includes('script-risk-preview') &&
+    scriptPanel.includes(':class="[line.riskClass, { flagged: line.risks.length }]"') &&
+    !scriptPanel.includes('检测到高风险脚本，确认要在当前终端执行吗？') &&
+    !scriptPanel.includes('window.confirm(`妫€娴嬪埌楂橀闄╄剼鏈') &&
+    styles.includes('.script-risk-modal') &&
+    styles.includes('.script-risk-line') &&
+    styles.includes('.script-risk-line.flagged') &&
+    styles.includes('.risk-delete') &&
+    styles.includes('.risk-edit') &&
+    styles.includes('.risk-reboot') &&
+    styles.includes('.risk-upgrade') &&
+    styles.includes('.command-risk-status') &&
+    styles.includes('.script-editor-risk') &&
     schema.includes('CREATE TABLE IF NOT EXISTS update_scripts') &&
     sqlite.includes('pub fn save_update_script') &&
     sqlite.includes('pub fn list_update_scripts') &&

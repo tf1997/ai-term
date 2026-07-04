@@ -3,6 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
 import type { CommandHistoryEntry, ScriptRecording, UpdateScript } from '../types/workspace'
 import {
+  analyzeScriptRisks,
+  buildScriptRiskPreviewLines,
+  riskLabelsForLine,
+  scriptRiskStatusForContent,
+  summarizeScriptRisks
+} from '../lib/scriptRisk'
+import type { ScriptRiskMatch } from '../lib/scriptRisk'
+import {
   cancelTask,
   chatWithAiProviderStream,
   deleteUpdateScript,
@@ -54,6 +62,7 @@ const scripts = ref<UpdateScript[]>([])
 const selectedScriptId = ref('')
 const saveState = ref<SaveState>('idle')
 const panelError = ref('')
+const scriptExecutionNotice = ref('')
 const isGenerating = ref(false)
 const scriptStoreMode = ref<'sqlite' | 'preview'>('sqlite')
 const scriptPanelMode = ref<ScriptPanelMode>('generate')
@@ -66,6 +75,9 @@ const messageList = ref<HTMLElement | null>(null)
 const draftEditorLineRail = ref<HTMLElement | null>(null)
 const selectedScriptLineRail = ref<HTMLElement | null>(null)
 const expandedScriptLineRail = ref<HTMLElement | null>(null)
+const draftScriptHighlight = ref<HTMLElement | null>(null)
+const selectedScriptHighlight = ref<HTMLElement | null>(null)
+const expandedScriptHighlight = ref<HTMLElement | null>(null)
 const librarySearchInput = ref<HTMLInputElement | null>(null)
 const scriptSearch = ref('')
 const editingMessageId = ref('')
@@ -80,6 +92,7 @@ const selectedScriptEditing = ref(false)
 const draftScriptId = ref('')
 const draftScriptContent = ref('')
 const scriptPreviewSource = ref<ScriptPreviewSource>('')
+const pendingScriptExecution = ref('')
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
 const selectedScriptContent = computed(() => selectedScriptDraft.value)
@@ -98,10 +111,19 @@ const scriptReplyCountText = computed(() => `${messages.value.length} 条消息`
 const draftLineNumbers = computed(() => lineNumbersForScript(draftScriptContent.value))
 const selectedScriptLineNumbers = computed(() => lineNumbersForScript(selectedScriptContent.value))
 const scriptPreviewOpen = computed(() => scriptPreviewSource.value !== '')
-const expandedScriptTitle = computed(() => scriptPreviewSource.value === 'selected' ? selectedScript.value?.name || 'script.sh' : 'script.sh')
+const expandedScriptTitle = computed(() => scriptPreviewSource.value === 'selected' ? selectedScript.value?.name || '脚本预览' : '脚本预览')
 const expandedScriptContent = computed(() => scriptPreviewSource.value === 'selected' ? selectedScriptContent.value : draftScriptContent.value)
 const expandedScriptLineNumbers = computed(() => lineNumbersForScript(expandedScriptContent.value))
-
+const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value))
+const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value))
+const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value))
+const draftScriptRiskStatus = computed(() => scriptRiskStatusForContent(draftScriptContent.value))
+const selectedScriptRiskStatus = computed(() => scriptRiskStatusForContent(selectedScriptContent.value))
+const expandedScriptRiskStatus = computed(() => scriptRiskStatusForContent(expandedScriptContent.value))
+const pendingScriptRisks = computed(() => analyzeScriptRisks(pendingScriptExecution.value))
+const scriptRiskConfirmOpen = computed(() => pendingScriptExecution.value.trim().length > 0)
+const pendingScriptRiskSummary = computed(() => summarizeScriptRisks(pendingScriptRisks.value))
+const pendingScriptRiskLines = computed(() => buildScriptRiskPreviewLines(pendingScriptExecution.value, pendingScriptRisks.value))
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
 })
@@ -220,6 +242,42 @@ function clearConversation() {
 function lineNumbersForScript(content: string) {
   const lineCount = Math.max(1, content.split('\n').length)
   return Array.from({ length: lineCount }, (_, index) => String(index + 1)).join('\n')
+}
+
+function highlightShellScript(content: string) {
+  return content.split('\n').map((line) => highlightShellLine(line) || ' ').join('\n')
+}
+
+function highlightShellLine(line: string) {
+  const tokenPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\n]*|\$\{?[A-Za-z_][\w]*\}?|\b(?:sudo|apt|apt-get|yum|dnf|pacman|brew|systemctl|service|docker|kubectl|rm|cp|mv|sed|awk|grep|find|chmod|chown|curl|wget|echo|cat|mkdir|touch|tar|ssh|scp|rsync|if|then|else|fi|for|do|done|while|case|esac|function|export|exit|return)\b|&&|\|\||[|;&<>])/g
+  let cursor = 0
+  let html = ''
+  let match: RegExpExecArray | null
+  while ((match = tokenPattern.exec(line)) !== null) {
+    html += escapeHtml(line.slice(cursor, match.index))
+    html += wrapShellToken(match[0])
+    cursor = tokenPattern.lastIndex
+  }
+  html += escapeHtml(line.slice(cursor))
+  return html
+}
+
+function wrapShellToken(token: string) {
+  const escaped = escapeHtml(token)
+  if (token.startsWith('#')) return `<span class="shell-token comment">${escaped}</span>`
+  if (token.startsWith('"') || token.startsWith("'")) return `<span class="shell-token string">${escaped}</span>`
+  if (token.startsWith('$')) return `<span class="shell-token variable">${escaped}</span>`
+  if (/^(?:&&|\|\||[|;&<>])$/.test(token)) return `<span class="shell-token operator">${escaped}</span>`
+  return `<span class="shell-token command">${escaped}</span>`
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = hasDraftScript.value ? 'revise' : 'generate') {
@@ -466,13 +524,33 @@ function executeSelectedScript() {
 }
 
 function executeScriptContent(content: string) {
-  if (isDangerousScript(content)) {
-    const confirmed = window.confirm(`检测到高风险脚本，确认要在当前终端执行吗？\n\n${content.slice(0, 1200)}`)
-    if (!confirmed) return
+  const risks = analyzeScriptRisks(content)
+  if (risks.length > 0) {
+    pendingScriptExecution.value = content
+    panelError.value = ''
+    scriptExecutionNotice.value = ''
+    return
   }
+  writeScriptToTerminal(content)
+  panelError.value = ''
+  scriptExecutionNotice.value = '未检测到风险命令，已发送到当前终端。'
+}
+
+function writeScriptToTerminal(content: string) {
   emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${content}\nAI_TERM_SCRIPT\n`)
 }
 
+function confirmPendingScriptExecution() {
+  const content = pendingScriptExecution.value.trim()
+  if (!content) return
+  writeScriptToTerminal(content)
+  scriptExecutionNotice.value = '已确认风险命令，脚本已发送到当前终端。'
+  closeScriptRiskConfirm()
+}
+
+function closeScriptRiskConfirm() {
+  pendingScriptExecution.value = ''
+}
 function toggleSelectedScriptEditor() {
   if (!selectedScript.value) return
   selectedScriptEditing.value = !selectedScriptEditing.value
@@ -591,18 +669,24 @@ function updateDraftScriptContent(value: string) {
 }
 
 function syncDraftLineRail(event: Event) {
-  if (!draftEditorLineRail.value) return
-  draftEditorLineRail.value.scrollTop = (event.target as HTMLTextAreaElement).scrollTop
+  syncScriptEditorScroll(event, draftEditorLineRail.value, draftScriptHighlight.value)
 }
 
 function syncSelectedScriptLineRail(event: Event) {
-  if (!selectedScriptLineRail.value) return
-  selectedScriptLineRail.value.scrollTop = (event.target as HTMLTextAreaElement).scrollTop
+  syncScriptEditorScroll(event, selectedScriptLineRail.value, selectedScriptHighlight.value)
 }
 
 function syncExpandedScriptLineRail(event: Event) {
-  if (!expandedScriptLineRail.value) return
-  expandedScriptLineRail.value.scrollTop = (event.target as HTMLTextAreaElement).scrollTop
+  syncScriptEditorScroll(event, expandedScriptLineRail.value, expandedScriptHighlight.value)
+}
+
+function syncScriptEditorScroll(event: Event, lineRail: HTMLElement | null, highlightLayer: HTMLElement | null) {
+  const target = event.target as HTMLTextAreaElement
+  if (lineRail) lineRail.scrollTop = target.scrollTop
+  if (highlightLayer) {
+    highlightLayer.scrollTop = target.scrollTop
+    highlightLayer.scrollLeft = target.scrollLeft
+  }
 }
 
 async function saveDraftScript() {
@@ -916,27 +1000,8 @@ async function generateScriptTitle(content: string, fallback: string, userReques
 }
 
 function isDangerousScript(content: string) {
-  const normalized = content.toLowerCase().replace(/\s+/g, ' ')
-  const dangerousPatterns = [
-    /\brm\s+(-[a-z]*[rf][a-z]*|-r|-f)\b/,
-    /\bsudo\s+rm\b/,
-    /\bdd\s+.*\bof=\/dev\//,
-    /\bmkfs(\.| |$)/,
-    /\bshutdown\b/,
-    /\breboot\b/,
-    /\bpoweroff\b/,
-    /\bkillall\b/,
-    /\bpkill\b/,
-    /\bchmod\s+(-r\s+)?777\b/,
-    /\bfind\b.*\s-delete\b/,
-    /\bdocker\s+system\s+prune\b.*\s-a\b/,
-    /\bkubectl\s+delete\b/,
-    /\biptables\s+-f\b/,
-    /\bnft\s+flush\b/
-  ]
-  return dangerousPatterns.some((pattern) => pattern.test(normalized))
+  return analyzeScriptRisks(content).length > 0
 }
-
 function previewStorageKey(connectionId: string) {
   return `ai-term:update-scripts:${connectionId}`
 }
@@ -1025,6 +1090,7 @@ function nowText() {
         <div class="script-expanded-editor">
           <div class="script-editor-shell">
             <pre ref="expandedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ expandedScriptLineNumbers }}</pre>
+            <pre ref="expandedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="expandedScriptHighlightedHtml" /></pre>
             <textarea
               :value="expandedScriptContent"
               readonly
@@ -1043,7 +1109,48 @@ function nowText() {
       </section>
     </div>
 
+    <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation" @click.self="closeScriptRiskConfirm">
+      <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险脚本执行确认">
+        <div class="modal-head">
+          <div>
+            <strong>检测到风险命令</strong>
+            <span>执行前请确认命中的命令行</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeScriptRiskConfirm">&times;</button>
+        </div>
+        <div class="script-risk-body">
+          <div class="script-risk-summary" aria-label="风险类型">
+            <span
+              v-for="risk in pendingScriptRiskSummary"
+              :key="risk.kind"
+              class="script-risk-chip"
+              :class="[`risk-${risk.kind}`, risk.severity]"
+            >
+              <strong>{{ risk.label }}</strong>
+              <small>{{ risk.message }}</small>
+            </span>
+          </div>
+          <div class="script-risk-preview" role="region" aria-label="脚本风险预览">
+            <div
+              v-for="line in pendingScriptRiskLines"
+              :key="line.number"
+              class="script-risk-line"
+              :class="[line.riskClass, { flagged: line.risks.length }]"
+            >
+              <span class="script-risk-line-no">{{ line.number }}</span>
+              <code>{{ line.text || ' ' }}</code>
+              <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-actions script-risk-actions">
+          <button class="text-button" type="button" @click="closeScriptRiskConfirm">取消</button>
+          <button class="text-button danger" type="button" @click="confirmPendingScriptExecution">确认执行</button>
+        </div>
+      </section>
+    </div>
     <p v-if="panelError" class="script-feedback error">{{ panelError }}</p>
+    <p v-else-if="scriptExecutionNotice" class="script-feedback">{{ scriptExecutionNotice }}</p>
     <p v-else-if="saveState === 'saved'" class="script-feedback">脚本已保存到 {{ scriptStoreMode === 'sqlite' ? 'SQLite' : 'localStorage' }}.</p>
 
     <div v-if="scriptPanelMode === 'library'" class="script-library">
@@ -1088,6 +1195,7 @@ function nowText() {
               <span class="script-file-icon">sh</span>
               <strong>{{ selectedScript.name }}</strong>
               <span class="record-dot active" aria-hidden="true" />
+              <span class="script-editor-risk" :class="`risk-${selectedScriptRiskStatus.level}`">{{ selectedScriptRiskStatus.label }}</span>
             </div>
             <div class="script-editor-tools">
 
@@ -1101,6 +1209,7 @@ function nowText() {
           </div>
           <div class="script-editor-shell">
             <pre ref="selectedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ selectedScriptLineNumbers }}</pre>
+            <pre ref="selectedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="selectedScriptHighlightedHtml" /></pre>
             <textarea
               :value="selectedScriptContent"
               spellcheck="false"
@@ -1135,8 +1244,8 @@ function nowText() {
           <div class="script-editor-toolbar">
             <div class="script-file-tab">
               <span class="script-file-icon">sh</span>
-              <strong>script.sh</strong>
               <span class="record-dot active" aria-hidden="true" />
+              <span class="script-editor-risk" :class="`risk-${draftScriptRiskStatus.level}`">{{ draftScriptRiskStatus.label }}</span>
             </div>
             <div class="script-editor-tools">
 
@@ -1149,6 +1258,7 @@ function nowText() {
           </div>
           <div class="script-editor-shell">
             <pre ref="draftEditorLineRail" class="script-line-rail" aria-hidden="true">{{ draftLineNumbers }}</pre>
+            <pre ref="draftScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="draftScriptHighlightedHtml" /></pre>
             <textarea
               :value="draftScriptContent"
               spellcheck="false"
@@ -1196,6 +1306,7 @@ function nowText() {
               <div v-if="message.scriptContent" class="code-block script-code-card">
                 <div class="code-head">
                   <span>{{ message.savedScriptId ? '已保存' : '草稿' }}</span>
+                  <span class="command-risk-status" :class="`risk-${scriptRiskStatusForContent(scriptContentForMessage(message)).level}`">{{ scriptRiskStatusForContent(scriptContentForMessage(message)).label }}</span>
                   <div class="script-reply-code-actions">
                     <button class="text-button" type="button" @click="toggleScriptEditor(message)">
                       {{ editingMessageId === message.id ? '完成' : '编辑' }}

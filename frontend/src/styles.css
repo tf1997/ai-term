@@ -4200,3 +4200,411 @@ code {
   background: rgba(220, 90, 106, .12);
   color: #ffb1bb;
 }
+/* Script risk confirmation modal. */
+.script-risk-backdrop {
+  z-index: 96;
+}
+
+.script-risk-modal {
+  width: min(920px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 44px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding: 0;
+  border-color: rgba(239, 68, 68, .32);
+  background: #0b101a;
+}
+
+.script-risk-modal .modal-head {
+  min-height: 52px;
+  padding: 10px 12px 10px 14px;
+  border-bottom: 1px solid rgba(239, 68, 68, .24);
+  background: linear-gradient(180deg, rgba(127, 29, 29, .28), rgba(13, 21, 35, .96));
+}
+
+.script-risk-modal .modal-head strong {
+  color: #ffe4e6;
+}
+
+.script-risk-modal .modal-head span {
+  color: #ffb4be;
+}
+
+.script-risk-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.script-risk-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.script-risk-chip {
+  min-width: min(220px, 100%);
+  max-width: 100%;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, .26);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, .78);
+}
+
+.script-risk-chip strong,
+.script-risk-chip small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.script-risk-chip strong {
+  color: #f8fafc;
+  font-size: var(--font-sm);
+}
+
+.script-risk-chip small {
+  color: #b9c4d6;
+  font-size: var(--font-xs);
+  line-height: 1.35;
+}
+
+.script-risk-chip.high {
+  border-color: rgba(239, 68, 68, .52);
+  background: rgba(127, 29, 29, .32);
+}
+
+.script-risk-chip.medium {
+  border-color: rgba(245, 158, 11, .46);
+  background: rgba(120, 53, 15, .22);
+}
+
+.script-risk-preview {
+  min-width: 0;
+  min-height: 220px;
+  max-height: min(480px, 52vh);
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, .18);
+  border-radius: 8px;
+  background: #050911;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-sm);
+  line-height: 1.55;
+}
+
+.script-risk-line {
+  min-width: max-content;
+  display: grid;
+  grid-template-columns: 46px minmax(360px, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 3px 12px 3px 0;
+  border-left: 3px solid transparent;
+  color: #cbd5e1;
+}
+
+.script-risk-line code {
+  white-space: pre;
+  color: inherit;
+}
+
+.script-risk-line-no {
+  user-select: none;
+  text-align: right;
+  color: #64748b;
+}
+
+.script-risk-line-label {
+  align-self: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, .14);
+  color: #fecdd3;
+  font-family: var(--font-sans, inherit);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.script-risk-line.flagged {
+  color: #ffe4e6;
+  background: rgba(127, 29, 29, .28);
+  border-left-color: #ef4444;
+}
+
+.script-risk-line.risk-edit,
+.script-risk-line.risk-upgrade,
+.script-risk-line.risk-service,
+.script-risk-line.risk-permission {
+  color: #ffedd5;
+  background: rgba(120, 53, 15, .24);
+  border-left-color: #f59e0b;
+}
+
+.script-risk-line.risk-delete,
+.script-risk-line.risk-reboot,
+.script-risk-line.risk-network,
+.script-risk-line.risk-disk {
+  color: #ffe4e6;
+  background: rgba(127, 29, 29, .34);
+  border-left-color: #ef4444;
+}
+
+.script-risk-actions {
+  border-top: 1px solid rgba(239, 68, 68, .24);
+  background: rgba(5, 9, 17, .96);
+}
+
+.script-risk-actions .text-button.danger {
+  border-color: rgba(239, 68, 68, .58);
+  background: rgba(185, 28, 28, .24);
+  color: #fecdd3;
+}
+
+.script-risk-actions .text-button.danger:hover {
+  background: rgba(220, 38, 38, .34);
+  color: #fff1f2;
+}
+
+@media (max-width: 720px) {
+  .script-risk-modal {
+    width: calc(100vw - 18px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .script-risk-line {
+    grid-template-columns: 38px minmax(260px, 1fr) auto;
+  }
+}
+/* Inline command risk status. */
+.command-risk-status,
+.script-editor-risk {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, .72);
+  color: #cbd5e1;
+  font-size: var(--font-xs);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-head .command-risk-status {
+  margin-left: auto;
+}
+
+.code-head .command-risk-status + .text-button {
+  margin-left: 6px;
+}
+
+.script-editor-risk {
+  margin-left: 4px;
+}
+
+.command-risk-status.risk-safe,
+.script-editor-risk.risk-safe {
+  border-color: rgba(34, 197, 94, .38);
+  background: rgba(20, 83, 45, .24);
+  color: #bbf7d0;
+}
+
+.command-risk-status.risk-medium,
+.script-editor-risk.risk-medium {
+  border-color: rgba(245, 158, 11, .48);
+  background: rgba(120, 53, 15, .28);
+  color: #fed7aa;
+}
+
+.command-risk-status.risk-high,
+.script-editor-risk.risk-high {
+  border-color: rgba(239, 68, 68, .58);
+  background: rgba(127, 29, 29, .34);
+  color: #fecdd3;
+}
+
+.context-strip .command-risk-status {
+  max-width: min(360px, 100%);
+}
+.context-strip .ai-command-notice {
+  flex: 0 0 auto;
+  max-width: 96px;
+  padding-inline: 9px;
+}
+/* Native-feeling shell script editor layer. */
+.script-editor-shell {
+  position: relative;
+}
+
+.script-code-overlay {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 10px;
+  border: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: transparent;
+  color: #dff5ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-sm);
+  line-height: 1.58;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.script-code-overlay code {
+  display: block;
+  min-width: max-content;
+  font: inherit;
+  color: inherit;
+}
+
+.script-editor-shell textarea {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  z-index: 1;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: #dff5ff;
+}
+
+.script-editor-shell textarea::selection {
+  color: transparent;
+  background: rgba(91, 111, 255, .34);
+}
+
+.script-expanded-editor .script-code-overlay {
+  padding: 12px 14px;
+  font-size: var(--font-md);
+}
+
+.shell-token.comment {
+  color: #60718a;
+  font-style: italic;
+}
+
+.shell-token.string {
+  color: #9be7c7;
+}
+
+.shell-token.variable {
+  color: #8fc7ff;
+}
+
+.shell-token.operator {
+  color: #ffcf8a;
+}
+
+.shell-token.command {
+  color: #c7d2ff;
+  font-weight: 650;
+}
+/* Native terminal code surface and completion menu. */
+.terminal-native-code {
+  background:
+    linear-gradient(180deg, rgba(7, 11, 18, .96), rgba(3, 7, 12, .98)),
+    repeating-linear-gradient(0deg, rgba(96, 165, 250, .035) 0, rgba(96, 165, 250, .035) 1px, transparent 1px, transparent 28px);
+}
+
+.terminal-body-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #03070c;
+}
+
+.terminal-native-code .xterm-host {
+  height: 100%;
+  background:
+    radial-gradient(circle at 12% 0, rgba(34, 197, 94, .07), transparent 30%),
+    #03070c;
+}
+
+.xterm-host .xterm-rows {
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  text-shadow: 0 0 18px rgba(125, 211, 252, .08);
+}
+
+.xterm-host .xterm-cursor-layer .xterm-cursor {
+  box-shadow: 0 0 0 1px rgba(216, 243, 255, .28), 0 0 18px rgba(96, 216, 232, .36);
+}
+
+.xterm-host .xterm-selection div {
+  background: rgba(91, 111, 255, .34) !important;
+}
+
+.terminal-completion {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  z-index: 8;
+  display: grid;
+  gap: 4px;
+  max-height: min(260px, 42%);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid rgba(91, 111, 255, .34);
+  border-radius: 8px;
+  background: rgba(5, 10, 18, .94);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .46);
+  backdrop-filter: blur(10px);
+}
+
+.terminal-completion button {
+  min-width: 0;
+  height: 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #d5dde5;
+  padding: 0 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-completion button.active,
+.terminal-completion button:hover {
+  border-color: rgba(96, 165, 250, .42);
+  background: rgba(30, 64, 175, .28);
+}
+
+.terminal-completion code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dff5ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-sm);
+}
+
+.terminal-completion span {
+  color: #86efac;
+  font-size: var(--font-xs);
+}
