@@ -222,10 +222,10 @@ function selectProfile(profileId: string) {
 }
 
 function createProfile() {
-  const index = profiles.value.length + 1
+  const id = nextConnectionProfileId('connection')
   const profile: ConnectionProfile = {
-    id: `connection-${index}`,
-    name: `connection-${index}`,
+    id,
+    name: id,
     gateway: {
       host: '',
       port: 22,
@@ -361,6 +361,11 @@ function openConnectionContextMenu(event: MouseEvent, profileId: string) {
       action: () => editSelectedProfile(profileId)
     },
     {
+      id: 'copy',
+      label: '\u590d\u5236\u8fde\u63a5',
+      action: () => copySelectedProfile(profileId)
+    },
+    {
       id: 'new',
       label: '新建连接',
       action: createProfile
@@ -475,6 +480,20 @@ function editSelectedProfile(profileId: string) {
   openConnectionsPanel()
 }
 
+function copySelectedProfile(profileId: string) {
+  const profile = profiles.value.find((item) => item.id === profileId)
+  if (!profile) return
+  const draft = cloneConnectionProfile(profile)
+  draft.id = nextConnectionProfileId(`${profile.id}-copy`)
+  draft.name = nextConnectionProfileName(`${profile.name || profile.id} \u526f\u672c`)
+  connectionDraft.value = draft
+  selectedProfileId.value = ''
+  connectionSaveState.value = 'idle'
+  connectionSaveError.value = ''
+  connectionEditorMode.value = 'create'
+  connectionEditorOpen.value = true
+  openConnectionsPanel()
+}
 function closeConnectionEditor() {
   connectionEditorOpen.value = false
   connectionDraft.value = undefined
@@ -612,6 +631,32 @@ async function loadAiConfig() {
   }
 }
 
+function nextConnectionProfileId(base = 'connection') {
+  const baseId = base
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'connection'
+  let index = baseId === 'connection' ? profiles.value.length + 1 : 1
+  let id = baseId === 'connection' ? `${baseId}-${index}` : baseId
+  while (profiles.value.some((profile) => profile.id === id)) {
+    index += 1
+    id = `${baseId}-${index}`
+  }
+  return id
+}
+
+function nextConnectionProfileName(base: string) {
+  const baseName = base.trim() || 'connection \u526f\u672c'
+  let index = 1
+  let name = baseName
+  while (profiles.value.some((profile) => profile.name === name)) {
+    index += 1
+    name = `${baseName} ${index}`
+  }
+  return name
+}
 function nextAiConfigId() {
   let index = aiConfigs.value.filter((config) => config.id !== defaultAiConfig.id).length + 1
   let id = `ai-config-${index}`
@@ -631,7 +676,7 @@ function normalizeConnectionProfileForSave(profile: ConnectionProfile): Connecti
   normalized.target.host = normalized.target.host.trim()
   normalized.target.username = normalized.target.username.trim()
   normalized.gateway.port = normalizePort(normalized.gateway.port, 'gateway port', 22)
-  normalized.target.port = normalizePort(normalized.target.port, 'server port')
+  normalized.target.port = normalizePort(normalized.target.port, isSftpProfile(normalized) ? 'SFTP port' : 'SSH port')
 
   if (!normalized.gateway.password?.trim()) normalized.gateway.password = undefined
   if (!normalized.target.password?.trim()) normalized.target.password = undefined
@@ -1275,6 +1320,7 @@ onBeforeUnmount(() => {
       :save-error="connectionSaveError"
       @select="selectProfile"
       @edit="editSelectedProfile"
+      @copy="copySelectedProfile"
       @delete="deleteSelectedProfile"
       @open-menu="openConnectionContextMenu"
       @close-editor="closeConnectionEditor"

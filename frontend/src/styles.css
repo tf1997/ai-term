@@ -379,7 +379,7 @@ button:disabled {
 
 .card-actions {
   display: grid;
-  grid-template-columns: repeat(3, 26px);
+  grid-template-columns: repeat(4, 26px);
   align-items: center;
   gap: 4px;
 }

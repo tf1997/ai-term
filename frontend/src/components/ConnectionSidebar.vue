@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [profileId: string]
   edit: [profileId: string]
+  copy: [profileId: string]
   delete: [profileId: string]
   closeEditor: []
   connect: [profileId: string]
@@ -62,7 +63,7 @@ function gatewayPortLabel() {
 }
 
 function targetPortLabel(profile: ConnectionProfile) {
-  return isSftpProfile(profile) ? 'SFTP \u7aef\u53e3' : '\u670d\u52a1\u5668\u7aef\u53e3'
+  return isSftpProfile(profile) ? 'SFTP 端口' : 'SSH 端口'
 }
 
 function targetPasswordPlaceholder() {
@@ -162,6 +163,7 @@ function handleJumpModeChanged() {
         <div class="card-actions">
           <button class="icon-button" type="button" :title="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :aria-label="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">▶</button>
           <button class="icon-button" type="button" title="编辑连接" aria-label="编辑连接" @click.stop="emit('edit', profile.id)">✎</button>
+          <button class="icon-button" type="button" title="复制连接" aria-label="复制连接" @click.stop="emit('copy', profile.id)">⧉</button>
           <button class="icon-button danger" type="button" title="删除连接" aria-label="删除连接" @click.stop="emit('delete', profile.id)">⌫</button>
         </div>
       </article>
@@ -221,11 +223,11 @@ function handleJumpModeChanged() {
               <input v-model.number="selectedProfile.gateway.port" type="number" min="1" max="65535" step="1" placeholder="22" />
             </label>
             <label>
-              <span>?????</span>
+              <span>目标主机</span>
               <input v-model="selectedProfile.target.host" placeholder="10.0.0.12" />
             </label>
             <label>
-              <span>??????</span>
+              <span>目标用户名</span>
               <input v-model="selectedProfile.target.username" placeholder="deploy" />
             </label>
             <label>

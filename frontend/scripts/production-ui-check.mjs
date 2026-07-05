@@ -528,6 +528,13 @@ assert(
 )
 
 assert(
+  sidebar.includes("return isSftpProfile(profile) ? 'SFTP 端口' : 'SSH 端口'") &&
+    !sidebar.includes('服务器端口') &&
+    appShell.includes("isSftpProfile(normalized) ? 'SFTP port' : 'SSH port'"),
+  'Connection editor must label target SSH ports explicitly instead of calling them server ports.'
+)
+
+assert(
   sidebar.includes('v-model="selectedProfile.gateway.password"') &&
     sidebar.includes('v-model="selectedProfile.target.password"') &&
     sidebar.includes('type="password"') &&
@@ -577,6 +584,19 @@ assert(
 )
 
 assert(
+  sidebar.includes("copy: [profileId: string]") &&
+    sidebar.includes("emit('copy', profile.id)") &&
+    sidebar.includes('title="复制连接"') &&
+    appShell.includes('function copySelectedProfile') &&
+    appShell.includes('@copy="copySelectedProfile"') &&
+    appShell.includes("id: 'copy'") &&
+    appShell.includes('nextConnectionProfileId') &&
+    appShell.includes('nextConnectionProfileName') &&
+    styles.includes('grid-template-columns: repeat(4, 26px);'),
+  'ConnectionSidebar must support duplicating connection profiles into a new editable draft.'
+)
+
+assert(
   !sidebar.includes('selected-summary') &&
     !settingsSidebar.includes('settings-summary') &&
     !sidebar.includes('sidebar-footer') &&
@@ -620,6 +640,13 @@ assert(
   appShell.includes("jumpMode: 'direct'") &&
     appShell.includes("menuProfileId: ''"),
   'New connection drafts must default to ordinary direct SSH instead of requiring bastion fields.'
+)
+
+assert(
+  !sidebar.includes('????') &&
+    sidebar.includes('目标主机') &&
+    sidebar.includes('目标用户名'),
+  'Connection editor labels must not contain mojibake placeholders.'
 )
 
 assert(
