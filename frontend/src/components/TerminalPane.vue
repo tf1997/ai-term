@@ -16,6 +16,7 @@ import {
 } from '../lib/tauri'
 import type { ConnectionProfile } from '../types/profile'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+import UiIcon from './UiIcon.vue'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
@@ -729,16 +730,16 @@ defineExpose({
       <div class="terminal-frame terminal-native-code">
         <div class="terminal-head">
           <div class="terminal-heading">
-            <span class="terminal-title">{{ activeSessionProfile?.name ?? 'Local Terminal' }}</span>
+            <span class="terminal-title">{{ activeSessionProfile?.name ?? '本地终端' }}</span>
             <span class="terminal-subtitle">
               {{ activeSessionProfile ? `${activeSessionProfile.target.username || 'user'}@${activeSessionProfile.target.host || 'server'}` : 'localhost' }}
             </span>
           </div>
           <div class="terminal-tools">
-            <button class="icon-button" title="复制终端输出" aria-label="复制终端输出" @click="copyTerminalOutput">⧉</button>
-            <button class="icon-button" title="清屏" aria-label="清屏" @click="clearTerminal">⌫</button>
-            <button class="icon-button" title="新建本地终端" aria-label="新建本地终端" @click="restartLocalTerminal">+</button>
-            <button class="icon-button" title="断开连接" aria-label="断开连接" @click="disconnectFromButton">×</button>
+            <button class="icon-button" type="button" title="复制终端输出" aria-label="复制终端输出" @click="copyTerminalOutput"><UiIcon name="copy" /></button>
+            <button class="icon-button" type="button" title="清屏" aria-label="清屏" @click="clearTerminal"><UiIcon name="trash" /></button>
+            <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="restartLocalTerminal"><UiIcon name="plus" /></button>
+            <button class="icon-button" type="button" title="断开连接" aria-label="断开连接" @click="disconnectFromButton"><UiIcon name="close" /></button>
           </div>
         </div>
         <div class="terminal-body-wrap">
@@ -759,12 +760,12 @@ defineExpose({
       </div>
     </section>
 
-    <section class="quick-command-bar" aria-label="Quick commands">
+    <section class="quick-command-bar" aria-label="快速命令">
       <span>快速命令</span>
       <button v-for="command in quickCommands" :key="command" @click="runQuickCommand(command)">
         {{ command }}
       </button>
-      <button class="icon-button" title="Quick command settings">⚙</button>
+      <button class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置"><UiIcon name="settings" /></button>
     </section>
 
     <footer class="status-bar">

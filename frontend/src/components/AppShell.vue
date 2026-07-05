@@ -33,6 +33,7 @@ import ContextMenu from './ContextMenu.vue'
 import SettingsSidebar from './SettingsSidebar.vue'
 import TerminalPane from './TerminalPane.vue'
 import WorkspacePanel from './WorkspacePanel.vue'
+import UiIcon from './UiIcon.vue'
 
 interface TerminalTab {
   id: string
@@ -112,7 +113,7 @@ const workspacePanelTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
 const terminalTabs = ref<TerminalTab[]>([
   {
     id: 'local-1',
-    title: 'Local Terminal',
+    title: '本地终端',
     connectionId: LOCAL_CONNECTION_ID,
     workspaceSessionId: LOCAL_DEFAULT_SESSION_ID,
     profile: undefined,
@@ -326,8 +327,8 @@ function isLeftPanelActive(mode: LeftPanelMode) {
 }
 
 function leftPanelButtonTitle(mode: LeftPanelMode) {
-  if (isLeftPanelActive(mode)) return mode === 'connections' ? '收起连接管理' : '收起配置菜单'
-  return mode === 'connections' ? '打开连接管理' : '打开配置菜单'
+  if (isLeftPanelActive(mode)) return mode === 'connections' ? '收起连接管理' : '收起设置中心'
+  return mode === 'connections' ? '打开连接管理' : '打开设置中心'
 }
 
 function openContextMenu(event: MouseEvent, title: string, items: ContextMenuItem[]) {
@@ -935,7 +936,7 @@ function selectWorkspaceSession(sessionId: string) {
 
 function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: WorkspaceSession) {
   const id = `terminal-${Date.now()}-${terminalTabs.value.length + 1}`
-  const title = profile ? `${profile.target.username || 'user'}@${profile.target.host || profile.name}` : 'Local Terminal'
+  const title = profile ? `${profile.target.username || 'user'}@${profile.target.host || profile.name}` : '本地终端'
   const connectionId = profile?.id ?? LOCAL_CONNECTION_ID
   const session = workspaceSession ?? createDraftWorkspaceSession(connectionId, defaultWorkspaceSessionId(connectionId), 'Untitled')
   terminalTabs.value.push({
@@ -1272,7 +1273,7 @@ onBeforeUnmount(() => {
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
         <span>AI Term</span>
       </div>
-      <nav class="session-tabs" aria-label="Sessions">
+      <nav class="session-tabs" aria-label="终端会话">
         <button
           v-for="tab in terminalTabs"
           :key="tab.id"
@@ -1282,12 +1283,12 @@ onBeforeUnmount(() => {
           @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
         >
           <span class="status-dot" :class="terminalStatusClass(tab.status)" />{{ tab.title }}
-          <span v-if="terminalTabs.length > 1" class="tab-close" @click.stop="closeTerminalTab(tab.id)">×</span>
+          <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
         </button>
-        <button class="icon-button" title="New local terminal" @click="openLocalTerminal">+</button>
+        <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
       </nav>
     </header>
-    <aside class="app-rail" aria-label="Primary navigation">
+    <aside class="app-rail" aria-label="主导航">
       <button
         class="rail-button"
         :class="{ active: isLeftPanelActive('connections') }"
@@ -1295,7 +1296,7 @@ onBeforeUnmount(() => {
         :aria-label="leftPanelButtonTitle('connections')"
         @click="toggleConnectionsPanel"
       >
-        ▣
+        <UiIcon name="terminal" />
       </button>
       <button
         class="rail-button"
@@ -1304,7 +1305,7 @@ onBeforeUnmount(() => {
         :aria-label="leftPanelButtonTitle('settings')"
         @click="toggleSettingsPanel"
       >
-        ⚙
+        <UiIcon name="settings" />
       </button>
     </aside>
     <ConnectionSidebar

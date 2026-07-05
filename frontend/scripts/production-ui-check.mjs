@@ -19,6 +19,7 @@ const aiPanel = read('src/components/AiPanel.vue')
 const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
 const scriptPanel = read('src/components/ScriptPanel.vue')
+const scriptRisk = read('src/lib/scriptRisk.ts')
 const sidebar = read('src/components/ConnectionSidebar.vue')
 const settingsSidebar = read('src/components/SettingsSidebar.vue')
 const tauri = read('src/lib/tauri.ts')
@@ -80,9 +81,24 @@ assert(
   !aiPanel.includes('executeGeneratedCommand()') &&
     !aiPanel.includes('executableCommands(message)') &&
     aiPanel.includes('v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"') &&
-    aiPanel.includes("['bash', 'sh', 'shell', 'zsh']") &&
+    aiPanel.includes('SHELL_COMMAND_LANGUAGES') &&
+    aiPanel.includes("'bat'") &&
+    aiPanel.includes("'cmd'") &&
+    aiPanel.includes("'powershell'") &&
     !aiPanel.includes("['bash', 'sh', 'shell', 'zsh', '']"),
-  'AI execute buttons must only appear on explicit bash/shell code blocks, not panel or message-level controls.'
+  'AI execute buttons must only appear on explicit shell code blocks, including bash and Windows bat/cmd/powershell blocks.'
+)
+
+assert(
+  scriptRisk.includes('Windows 删除') &&
+    scriptRisk.includes('PowerShell 删除') &&
+    scriptRisk.includes('Windows 重启关机') &&
+    scriptRisk.includes('Windows 软件升级') &&
+    scriptRisk.includes('Windows 网络配置') &&
+    scriptRisk.includes('Windows 磁盘操作') &&
+    scriptRisk.includes('normalizeRiskScanLine') &&
+    scriptRisk.includes('未检测到危险命令'),
+  'Script risk scanning must include Windows bat/cmd/PowerShell dangerous commands in the same risk pipeline.'
 )
 
 assert(
@@ -585,15 +601,17 @@ assert(
 
 assert(
   sidebar.includes("copy: [profileId: string]") &&
-    sidebar.includes("emit('copy', profile.id)") &&
-    sidebar.includes('title="复制连接"') &&
+    sidebar.includes("emit('openMenu', $event, profile.id)") &&
+    sidebar.includes('title="更多操作"') &&
+    !sidebar.includes("emit('copy', profile.id)") &&
     appShell.includes('function copySelectedProfile') &&
     appShell.includes('@copy="copySelectedProfile"') &&
     appShell.includes("id: 'copy'") &&
     appShell.includes('nextConnectionProfileId') &&
     appShell.includes('nextConnectionProfileName') &&
-    styles.includes('grid-template-columns: repeat(4, 26px);'),
-  'ConnectionSidebar must support duplicating connection profiles into a new editable draft.'
+    styles.includes('.server-card .card-actions') &&
+    styles.includes('grid-template-columns: repeat(2, 26px);'),
+  'ConnectionSidebar must keep profile duplication available through the compact more menu instead of crowding every connection card.'
 )
 
 assert(
@@ -658,7 +676,7 @@ assert(
     appShell.includes('await deleteConnectionProfile(profileId)') &&
     sidebar.includes("delete: [profileId: string]") &&
     sidebar.includes("emit('save'") &&
-    sidebar.includes("emit('delete'") &&
+    appShell.includes("id: 'delete'") &&
     appShell.includes('@save="saveSelectedProfile"'),
   'Connection profiles must support SQLite-backed create/read/update/delete through Tauri commands.'
 )
@@ -1127,5 +1145,31 @@ assert(
     appShell.includes("normalized.jumpMode === 'interactive-menu'") &&
     appShell.includes('normalized.target.password = undefined'),
   'Interactive-menu bastion profiles must treat the internal server password as optional and avoid saving or auto-submitting it when blank.'
+)
+
+assert(
+  aiPanel.includes('explainPendingAiCommandRisk') &&
+    aiPanel.includes('buildAiRiskExplanationPrompt') &&
+    aiPanel.includes('aiRiskExplanationLoading') &&
+    aiPanel.includes('onAiChatStream(requestId') &&
+    aiPanel.includes('streamedAnswer += event.delta') &&
+    aiPanel.includes('借助 AI 分析风险') &&
+    aiPanel.includes('AI 正在分析风险') &&
+    aiPanel.includes('aria-live="polite"') &&
+    !aiPanel.includes('@click.self="closeAiCommandRiskConfirm"') &&
+    scriptPanel.includes('explainPendingScriptRisk') &&
+    scriptPanel.includes('buildScriptRiskExplanationPrompt') &&
+    scriptPanel.includes('scriptRiskExplanationLoading') &&
+    scriptPanel.includes('onAiChatStream(requestId') &&
+    scriptPanel.includes('streamedAnswer += event.delta') &&
+    scriptPanel.includes('借助 AI 分析风险') &&
+    scriptPanel.includes('AI 正在分析风险') &&
+    scriptPanel.includes('aria-live="polite"') &&
+    !scriptPanel.includes('@click.self="closeScriptRiskConfirm"') &&
+    styles.includes('.script-risk-ai') &&
+    styles.includes('.script-risk-ai-output') &&
+    styles.includes('.script-risk-thinking') &&
+    styles.includes('.script-risk-ai-placeholder'),
+  'Risk confirmation modals must stay open on backdrop clicks and stream AI risk explanations with an active answering state.'
 )
 console.log('production-ui-check passed')

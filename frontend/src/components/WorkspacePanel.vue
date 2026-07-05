@@ -13,6 +13,7 @@ import AiPanel from './AiPanel.vue'
 import CommandHistoryPanel from './CommandHistoryPanel.vue'
 import FileTransferPanel from './FileTransferPanel.vue'
 import ScriptPanel from './ScriptPanel.vue'
+import UiIcon from './UiIcon.vue'
 
 defineProps<{
   collapsed: boolean
@@ -62,22 +63,50 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
 <template>
   <aside v-show="!collapsed" class="right-panel workspace-panel">
     <div class="workspace-bar">
-      <nav class="workspace-tabs" aria-label="Workspace">
-        <button :class="{ active: activeWorkspaceTab === 'history' }" @click="selectWorkspaceTab('history')">
-          命令历史
+      <nav class="workspace-tabs" aria-label="右侧工作区">
+        <button
+          type="button"
+          title="命令历史"
+          aria-label="命令历史"
+          :class="{ active: activeWorkspaceTab === 'history' }"
+          @click="selectWorkspaceTab('history')"
+        >
+          <UiIcon name="history" />
+          <span>历史</span>
         </button>
-        <button :class="{ active: activeWorkspaceTab === 'ai' }" @click="selectWorkspaceTab('ai')">
-          AI 助手
+        <button
+          type="button"
+          title="AI 助手"
+          aria-label="AI 助手"
+          :class="{ active: activeWorkspaceTab === 'ai' }"
+          @click="selectWorkspaceTab('ai')"
+        >
+          <UiIcon name="ai" />
+          <span>AI</span>
         </button>
-        <button :class="{ active: activeWorkspaceTab === 'scripts' }" @click="selectWorkspaceTab('scripts')">
-          脚本
+        <button
+          type="button"
+          title="脚本"
+          aria-label="脚本"
+          :class="{ active: activeWorkspaceTab === 'scripts' }"
+          @click="selectWorkspaceTab('scripts')"
+        >
+          <UiIcon name="script" />
+          <span>脚本</span>
         </button>
-        <button :class="{ active: activeWorkspaceTab === 'sftp' }" @click="selectWorkspaceTab('sftp')">
-          SFTP
+        <button
+          type="button"
+          title="SFTP"
+          aria-label="SFTP"
+          :class="{ active: activeWorkspaceTab === 'sftp' }"
+          @click="selectWorkspaceTab('sftp')"
+        >
+          <UiIcon name="folder" />
+          <span>SFTP</span>
         </button>
       </nav>
       <button class="icon-button workspace-close" type="button" title="关闭工作区" aria-label="关闭工作区" @click="emit('close')">
-        ×
+        <UiIcon name="close" />
       </button>
     </div>
 

@@ -4624,3 +4624,244 @@ code {
   color: #86efac;
   font-size: var(--font-xs);
 }
+/* UI layout noise reduction: compact workspaces, connection actions, and settings center. */
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.ui-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+  pointer-events: none;
+}
+
+.icon-button .ui-icon,
+.rail-button .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.tab-close {
+  display: inline-grid;
+  place-items: center;
+}
+
+.server-card .card-actions {
+  grid-template-columns: repeat(2, 26px);
+}
+
+.workspace-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.workspace-tabs button .ui-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-center {
+  gap: 12px;
+  padding: 12px;
+}
+
+.settings-hub,
+.settings-section {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.settings-option {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #1c2534;
+  border-radius: 8px;
+  background: rgba(14, 20, 30, .78);
+  padding: 9px 10px;
+}
+
+.settings-option.active {
+  border-color: rgba(91, 111, 255, .48);
+  background: rgba(24, 35, 52, .86);
+}
+
+.settings-option-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #263246;
+  border-radius: 7px;
+  color: #aeb8ff;
+  background: rgba(91, 111, 255, .12);
+}
+
+.settings-option > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-option strong,
+.settings-section-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #eef2f8;
+  font-size: var(--font-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-option span:not(.settings-option-icon):not(.settings-option-status) {
+  min-width: 0;
+  overflow: hidden;
+  color: #8c99ad;
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-option-status {
+  border: 1px solid #263246;
+  border-radius: 999px;
+  color: #79869b;
+  font-size: var(--font-xs);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.settings-option-status.ready {
+  border-color: rgba(54, 200, 117, .42);
+  color: #8ce7b5;
+  background: rgba(54, 200, 117, .08);
+}
+
+.settings-section-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 0;
+}
+
+.settings-section-head span {
+  color: #78859a;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+/* AI-assisted risk explanation inside confirmation modal. */
+.script-risk-body {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.script-risk-ai {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 10px;
+  border: 1px solid rgba(91, 111, 255, .26);
+  border-radius: 8px;
+  background: rgba(18, 24, 38, .72);
+  padding: 9px 10px;
+}
+
+.script-risk-ai > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.script-risk-ai strong {
+  color: #eef2ff;
+  font-size: var(--font-sm);
+}
+
+.script-risk-ai span {
+  min-width: 0;
+  overflow: hidden;
+  color: #9aa8c2;
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-risk-ai .text-button {
+  height: 30px;
+  white-space: nowrap;
+}
+
+.script-risk-ai-output {
+  grid-column: 1 / -1;
+  max-height: 150px;
+  overflow: auto;
+  margin: 0;
+  border-top: 1px solid rgba(148, 163, 184, .16);
+  color: #dbeafe;
+  font-size: var(--font-sm);
+  line-height: 1.55;
+  padding-top: 8px;
+  white-space: pre-wrap;
+}
+
+
+.script-risk-ai-output p {
+  margin: 0;
+}
+
+.script-risk-ai-output.error {
+  color: #fecdd3;
+}
+
+
+.script-risk-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: #a7f3d0;
+  font-size: var(--font-xs);
+  font-weight: 650;
+}
+
+.script-risk-thinking span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #56e6a3;
+  animation: thinkingPulse 1.1s ease-in-out infinite;
+}
+
+.script-risk-thinking span:nth-child(2) {
+  animation-delay: .16s;
+}
+
+.script-risk-thinking span:nth-child(3) {
+  animation-delay: .32s;
+}
+
+.script-risk-ai-placeholder {
+  color: #8f9bb0;
+  font-size: var(--font-xs);
+}
+@media (max-width: 720px) {
+  .script-risk-ai {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .script-risk-ai .text-button {
+    justify-self: start;
+  }
+}

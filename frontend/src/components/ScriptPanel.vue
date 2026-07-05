@@ -93,6 +93,10 @@ const draftScriptId = ref('')
 const draftScriptContent = ref('')
 const scriptPreviewSource = ref<ScriptPreviewSource>('')
 const pendingScriptExecution = ref('')
+const scriptRiskExplanation = ref('')
+const scriptRiskExplanationError = ref('')
+const scriptRiskExplanationLoading = ref(false)
+const scriptRiskExplanationRequestId = ref('')
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
 const selectedScriptContent = computed(() => selectedScriptDraft.value)
@@ -523,10 +527,90 @@ function executeSelectedScript() {
   executeScriptContent(content)
 }
 
+function buildScriptRiskExplanationPrompt(content: string) {
+  const riskLines = pendingScriptRisks.value
+    .map((risk) => `- 第 ${risk.line} 行：${risk.label}（${risk.severity === 'high' ? '高风险' : '中风险'}）${risk.message}；命令：${risk.text.trim()}`)
+    .join('\n')
+  return [
+    '你是 AI Term 的脚本安全助手。请用中文解释下面脚本为什么存在风险。',
+    '要求：',
+    '1. 按风险类型说明可能造成的影响。',
+    '2. 标出执行前必须确认的路径、服务、主机、权限、备份或回滚方案。',
+    '3. 如可行，给出更安全的替代写法、dry-run 或只读检查命令。',
+    '4. 不要替用户确认执行，不要输出夸张恐吓文案。',
+    '',
+    '风险命中：',
+    riskLines || '- 未提供风险摘要',
+    '',
+    '待执行脚本：',
+    '```shell',
+    content,
+    '```'
+  ].join('\n')
+}
+
+async function explainPendingScriptRisk() {
+  const content = pendingScriptExecution.value.trim()
+  if (!content || scriptRiskExplanationLoading.value) return
+  if (!hasUsableConfig.value) {
+    scriptRiskExplanationError.value = '暂无可用 AI 配置，请先在左侧设置中心完善配置。'
+    return
+  }
+  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  if (!apiKey) {
+    scriptRiskExplanationError.value = '请先保存 API Key 后再使用 AI 分析。'
+    return
+  }
+  scriptRiskExplanationLoading.value = true
+  scriptRiskExplanation.value = ''
+  scriptRiskExplanationError.value = ''
+  let streamedAnswer = ''
+  let unlisten: (() => void) | undefined
+  const requestId = `${props.connectionId}-${props.workspaceSessionId}-script-risk-${Date.now()}`
+  scriptRiskExplanationRequestId.value = requestId
+  try {
+    unlisten = await onAiChatStream(requestId, (event) => {
+      if (scriptRiskExplanationRequestId.value !== requestId) return
+      if (event.kind === 'chunk') {
+        streamedAnswer += event.delta
+        scriptRiskExplanation.value = streamedAnswer
+      }
+      if (event.kind === 'error' && event.error) {
+        scriptRiskExplanationError.value = `模型流式调用失败：${event.error}`
+      }
+    })
+    const response = await chatWithAiProviderStream(requestId, {
+      config: props.config,
+      apiKey,
+      question: buildScriptRiskExplanationPrompt(content),
+      terminalSnapshot: recordedOutput.value || props.terminalSnapshot,
+      commandHistory: sourceCommands.value
+    })
+    if (scriptRiskExplanationRequestId.value !== requestId) return
+    scriptRiskExplanation.value = (streamedAnswer || response.answer).trim() || 'AI 未返回风险说明。'
+  } catch (error) {
+    if (scriptRiskExplanationRequestId.value !== requestId) return
+    scriptRiskExplanationError.value = formatError(error)
+  } finally {
+    unlisten?.()
+    if (scriptRiskExplanationRequestId.value === requestId) {
+      scriptRiskExplanationLoading.value = false
+      scriptRiskExplanationRequestId.value = ''
+    }
+  }
+}
+
+function clearScriptRiskExplanation() {
+  scriptRiskExplanation.value = ''
+  scriptRiskExplanationError.value = ''
+  scriptRiskExplanationLoading.value = false
+  scriptRiskExplanationRequestId.value = ''
+}
 function executeScriptContent(content: string) {
   const risks = analyzeScriptRisks(content)
   if (risks.length > 0) {
     pendingScriptExecution.value = content
+    clearScriptRiskExplanation()
     panelError.value = ''
     scriptExecutionNotice.value = ''
     return
@@ -535,7 +619,6 @@ function executeScriptContent(content: string) {
   panelError.value = ''
   scriptExecutionNotice.value = '未检测到风险命令，已发送到当前终端。'
 }
-
 function writeScriptToTerminal(content: string) {
   emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${content}\nAI_TERM_SCRIPT\n`)
 }
@@ -550,6 +633,7 @@ function confirmPendingScriptExecution() {
 
 function closeScriptRiskConfirm() {
   pendingScriptExecution.value = ''
+  clearScriptRiskExplanation()
 }
 function toggleSelectedScriptEditor() {
   if (!selectedScript.value) return
@@ -944,12 +1028,12 @@ function isLowSignalCommand(command: string) {
 }
 
 function extractBashScript(answer: string) {
-  const match = answer.match(/```(?:bash|sh|shell|zsh)?[ \t]*\n?([\s\S]*?)```/i)
+  const match = answer.match(/```(?:bash|sh|shell|zsh|bat|batch|cmd|powershell|pwsh|ps1)?[ \t]*\n?([\s\S]*?)```/i)
   return match?.[1]?.trim() ?? ''
 }
 
 function displayAnswerWithoutScript(answer: string) {
-  return answer.replace(/```(?:bash|sh|shell|zsh)?[ \t]*\n?[\s\S]*?```/i, '').trim() || '已生成脚本，可在卡片中编辑、保存或执行。'
+  return answer.replace(/```(?:bash|sh|shell|zsh|bat|batch|cmd|powershell|pwsh|ps1)?[ \t]*\n?[\s\S]*?```/i, '').trim() || '已生成脚本，可在卡片中编辑、保存或执行。'
 }
 
 function inferScriptName(content: string, fallback: string) {
@@ -1109,7 +1193,7 @@ function nowText() {
       </section>
     </div>
 
-    <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation" @click.self="closeScriptRiskConfirm">
+    <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
       <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险脚本执行确认">
         <div class="modal-head">
           <div>
@@ -1129,6 +1213,28 @@ function nowText() {
               <strong>{{ risk.label }}</strong>
               <small>{{ risk.message }}</small>
             </span>
+          </div>
+          <div class="script-risk-ai">
+            <div>
+              <strong>不确定原因？</strong>
+              <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
+            </div>
+            <button class="text-button" type="button" :disabled="scriptRiskExplanationLoading || !hasUsableConfig" @click="explainPendingScriptRisk">
+              {{ scriptRiskExplanationLoading ? '正在分析...' : '借助 AI 分析风险' }}
+            </button>
+            <div
+              v-if="scriptRiskExplanationLoading || scriptRiskExplanationError || scriptRiskExplanation"
+              class="script-risk-ai-output"
+              :class="{ error: scriptRiskExplanationError }"
+              aria-live="polite"
+            >
+              <div v-if="scriptRiskExplanationLoading" class="script-risk-thinking">
+                <span /><span /><span />AI 正在分析风险...
+              </div>
+              <p v-if="scriptRiskExplanationError">{{ scriptRiskExplanationError }}</p>
+              <p v-else-if="scriptRiskExplanation">{{ scriptRiskExplanation }}</p>
+              <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
+            </div>
           </div>
           <div class="script-risk-preview" role="region" aria-label="脚本风险预览">
             <div

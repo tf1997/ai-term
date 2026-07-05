@@ -25,6 +25,7 @@ const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
 const MAX_AI_COMMAND_HISTORY = 80
+const SHELL_COMMAND_LANGUAGES = ['bash', 'sh', 'shell', 'zsh', 'bat', 'batch', 'cmd', 'cmd.exe', 'powershell', 'pwsh', 'ps1']
 
 const props = defineProps<{
   terminalId: string
@@ -68,6 +69,10 @@ const stopRequested = ref(false)
 const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
+const aiRiskExplanation = ref('')
+const aiRiskExplanationError = ref('')
+const aiRiskExplanationLoading = ref(false)
+const aiRiskExplanationRequestId = ref('')
 const aiCommandExecutionNotice = ref('')
 const aiCommandExecutionNoticeTitle = ref('')
 let aiCommandNoticeTimer: number | undefined
@@ -395,7 +400,7 @@ function parseMessageParts(text: string): MessagePart[] {
 
 
 function isShellLanguage(language: string) {
-  return ['bash', 'sh', 'shell', 'zsh'].includes(language.trim().toLowerCase())
+  return SHELL_COMMAND_LANGUAGES.includes(language.trim().toLowerCase())
 }
 
 function looksLikeShellCommand(line: string) {
@@ -406,8 +411,8 @@ function normalizeShellCommand(command: string) {
   return command
     .split('\n')
     .map((line) => line.trim())
-    .map((line) => line.replace(/^\$ /, ''))
-    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.replace(/^\$ /, '').replace(/^PS\s+[A-Z]:\\[^>]*>\s*/i, '').replace(/^[A-Z]:\\[^>]*>\s*/i, ''))
+    .filter((line) => line && !line.startsWith('#') && !/^rem\b/i.test(line) && !/^::/.test(line))
     .join(' && ')
 }
 
@@ -415,6 +420,85 @@ function commandRiskStatus(command: string) {
   return scriptRiskStatusForContent(command)
 }
 
+function buildAiRiskExplanationPrompt(command: string) {
+  const riskLines = pendingAiCommandRisks.value
+    .map((risk) => `- 第 ${risk.line} 行：${risk.label}（${risk.severity === 'high' ? '高风险' : '中风险'}）${risk.message}；命令：${risk.text.trim()}`)
+    .join('\n')
+  return [
+    '你是 AI Term 的命令安全助手。请用中文解释下面命令为什么存在风险。',
+    '要求：',
+    '1. 先用 2-4 条说明风险原因。',
+    '2. 给出执行前必须确认的目标、路径、服务、权限或备份。',
+    '3. 如果可以，给出更安全的替代命令或 dry-run/只读检查方式。',
+    '4. 不要替用户确认执行，不要输出夸张恐吓文案。',
+    '',
+    '风险命中：',
+    riskLines || '- 未提供风险摘要',
+    '',
+    '待执行命令：',
+    '```shell',
+    command,
+    '```'
+  ].join('\n')
+}
+
+async function explainPendingAiCommandRisk() {
+  const command = pendingAiCommandExecution.value.trim()
+  if (!command || aiRiskExplanationLoading.value) return
+  if (!hasUsableConfig.value) {
+    aiRiskExplanationError.value = '暂无可用 AI 配置，请先在左侧设置中心完善配置。'
+    return
+  }
+  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  if (!apiKey) {
+    aiRiskExplanationError.value = '请先保存 API Key 后再使用 AI 分析。'
+    return
+  }
+  aiRiskExplanationLoading.value = true
+  aiRiskExplanation.value = ''
+  aiRiskExplanationError.value = ''
+  let streamedAnswer = ''
+  let unlisten: (() => void) | undefined
+  const requestId = `${props.connectionId}-${props.workspaceSessionId}-${props.terminalId}-risk-${Date.now()}`
+  aiRiskExplanationRequestId.value = requestId
+  try {
+    unlisten = await onAiChatStream(requestId, (event) => {
+      if (aiRiskExplanationRequestId.value !== requestId) return
+      if (event.kind === 'chunk') {
+        streamedAnswer += event.delta
+        aiRiskExplanation.value = streamedAnswer
+      }
+      if (event.kind === 'error' && event.error) {
+        aiRiskExplanationError.value = `模型流式调用失败：${event.error}`
+      }
+    })
+    const response = await chatWithAiProviderStream(requestId, {
+      config: props.config,
+      apiKey,
+      question: buildAiRiskExplanationPrompt(command),
+      terminalSnapshot: props.terminalSnapshot,
+      commandHistory: props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
+    })
+    if (aiRiskExplanationRequestId.value !== requestId) return
+    aiRiskExplanation.value = (streamedAnswer || response.answer).trim() || 'AI 未返回风险说明。'
+  } catch (error) {
+    if (aiRiskExplanationRequestId.value !== requestId) return
+    aiRiskExplanationError.value = formatAiError(error)
+  } finally {
+    unlisten?.()
+    if (aiRiskExplanationRequestId.value === requestId) {
+      aiRiskExplanationLoading.value = false
+      aiRiskExplanationRequestId.value = ''
+    }
+  }
+}
+
+function clearAiRiskExplanation() {
+  aiRiskExplanation.value = ''
+  aiRiskExplanationError.value = ''
+  aiRiskExplanationLoading.value = false
+  aiRiskExplanationRequestId.value = ''
+}
 function shouldCollapseMessage(message: AiMessage) {
   return message.text.length > LONG_MESSAGE_CHARS || message.text.split('\n').length > LONG_MESSAGE_LINES
 }
@@ -440,13 +524,13 @@ function executeGeneratedCommand(command: string) {
   const risks = analyzeScriptRisks(value)
   if (risks.length > 0) {
     pendingAiCommandExecution.value = value
+    clearAiRiskExplanation()
     clearAiCommandNotice()
     return
   }
   emit('executeCommand', value)
   showAiCommandNotice('已安全发送', '未检测到风险命令，已发送到当前终端。')
 }
-
 function confirmPendingAiCommandExecution() {
   const command = pendingAiCommandExecution.value.trim()
   if (!command) return
@@ -475,6 +559,7 @@ function clearAiCommandNotice() {
 
 function closeAiCommandRiskConfirm() {
   pendingAiCommandExecution.value = ''
+  clearAiRiskExplanation()
 }
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
@@ -610,7 +695,7 @@ watch(
       <div v-if="historyOpen" ref="historyPopover" class="session-history-popover">
         <div class="session-search">
           <span>⌕</span>
-          <input v-model="sessionSearch" placeholder="Search sessions..." aria-label="Search sessions" />
+          <input v-model="sessionSearch" placeholder="搜索会话..." aria-label="搜索会话" />
         </div>
         <div class="session-history-list">
           <article
@@ -656,7 +741,7 @@ watch(
         </div>
       </form>
     </div>
-    <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation" @click.self="closeAiCommandRiskConfirm">
+    <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
       <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险命令执行确认">
         <div class="modal-head">
           <div>
@@ -676,6 +761,28 @@ watch(
               <strong>{{ risk.label }}</strong>
               <small>{{ risk.message }}</small>
             </span>
+          </div>
+          <div class="script-risk-ai">
+            <div>
+              <strong>不确定原因？</strong>
+              <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
+            </div>
+            <button class="text-button" type="button" :disabled="aiRiskExplanationLoading || !hasUsableConfig" @click="explainPendingAiCommandRisk">
+              {{ aiRiskExplanationLoading ? '正在分析...' : '借助 AI 分析风险' }}
+            </button>
+            <div
+              v-if="aiRiskExplanationLoading || aiRiskExplanationError || aiRiskExplanation"
+              class="script-risk-ai-output"
+              :class="{ error: aiRiskExplanationError }"
+              aria-live="polite"
+            >
+              <div v-if="aiRiskExplanationLoading" class="script-risk-thinking">
+                <span /><span /><span />AI 正在分析风险...
+              </div>
+              <p v-if="aiRiskExplanationError">{{ aiRiskExplanationError }}</p>
+              <p v-else-if="aiRiskExplanation">{{ aiRiskExplanation }}</p>
+              <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
+            </div>
           </div>
           <div class="script-risk-preview" role="region" aria-label="命令风险预览">
             <div

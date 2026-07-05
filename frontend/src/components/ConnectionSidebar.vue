@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ConnectionProfile } from '../types/profile'
+import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{
   profiles: ConnectionProfile[]
@@ -125,11 +126,14 @@ function handleJumpModeChanged() {
   <aside class="sidebar">
     <div class="section-head">
       <span class="section-title">连接管理</span>
-      <button class="primary" title="Add connection" @click="emit('create')">+ 新建连接</button>
+      <button class="primary" type="button" title="新建连接" aria-label="新建连接" @click="emit('create')">
+        <UiIcon name="plus" />
+        <span>新建连接</span>
+      </button>
     </div>
-    <input v-model="query" class="search-input" placeholder="搜索连接..." aria-label="Search connections" />
+    <input v-model="query" class="search-input" placeholder="搜索连接..." aria-label="搜索连接" />
     <div class="server-list">
-      <p v-if="filteredProfiles.length === 0" class="empty-state">No connections</p>
+      <p v-if="filteredProfiles.length === 0" class="empty-state">暂无连接</p>
       <article
         v-for="profile in filteredProfiles"
         :key="profile.id"
@@ -154,17 +158,19 @@ function handleJumpModeChanged() {
             </span>
           </div>
           <div class="server-meta">
-            <span>{{ profile.target.username || 'user' }}@{{ profile.target.host || 'server' }}</span>
+            <span>{{ profile.target.username || '用户' }}@{{ profile.target.host || '服务器' }}</span>
             <span>
-              {{ isSftpProfile(profile) ? (profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct') : profile.jumpMode === 'interactive-menu' ? `菜单 ${profile.menuProfileId || '-'}` : 'SSH / SFTP' }}
+              {{ isSftpProfile(profile) ? (profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连') : profile.jumpMode === 'interactive-menu' ? `菜单 ${profile.menuProfileId || '-'}` : 'SSH / SFTP' }}
             </span>
           </div>
         </div>
         <div class="card-actions">
-          <button class="icon-button" type="button" :title="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :aria-label="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">▶</button>
-          <button class="icon-button" type="button" title="编辑连接" aria-label="编辑连接" @click.stop="emit('edit', profile.id)">✎</button>
-          <button class="icon-button" type="button" title="复制连接" aria-label="复制连接" @click.stop="emit('copy', profile.id)">⧉</button>
-          <button class="icon-button danger" type="button" title="删除连接" aria-label="删除连接" @click.stop="emit('delete', profile.id)">⌫</button>
+          <button class="icon-button" type="button" :title="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :aria-label="isSftpProfile(profile) ? '打开 SFTP' : '连接服务器'" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">
+            <UiIcon name="play" />
+          </button>
+          <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click.stop="emit('openMenu', $event, profile.id)">
+            <UiIcon name="more" />
+          </button>
         </div>
       </article>
     </div>
@@ -176,7 +182,7 @@ function handleJumpModeChanged() {
               <strong>{{ editorMode === 'create' ? '新建连接' : '编辑连接' }}</strong>
               <span>保存后写入 SQLite，连接列表会自动刷新。</span>
             </div>
-            <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="emit('closeEditor')">×</button>
+            <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="emit('closeEditor')"><UiIcon name="close" /></button>
           </div>
           <div class="modal-actions">
             <button type="button" @click="emit('closeEditor')">取消</button>
