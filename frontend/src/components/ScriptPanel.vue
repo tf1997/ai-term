@@ -19,6 +19,7 @@ import {
   onAiChatStream,
   saveUpdateScript
 } from '../lib/tauri'
+import UiIcon from './UiIcon.vue'
 
 interface ScriptChatMessage {
   id: string
@@ -617,7 +618,7 @@ function executeScriptContent(content: string) {
   }
   writeScriptToTerminal(content)
   panelError.value = ''
-  scriptExecutionNotice.value = '未检测到风险命令，已发送到当前终端。'
+  scriptExecutionNotice.value = '未检测到风险命令，已发送到目标终端。'
 }
 function writeScriptToTerminal(content: string) {
   emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${content}\nAI_TERM_SCRIPT\n`)
@@ -627,7 +628,7 @@ function confirmPendingScriptExecution() {
   const content = pendingScriptExecution.value.trim()
   if (!content) return
   writeScriptToTerminal(content)
-  scriptExecutionNotice.value = '已确认风险命令，脚本已发送到当前终端。'
+  scriptExecutionNotice.value = '已确认风险命令，脚本已发送到目标终端。'
   closeScriptRiskConfirm()
 }
 
@@ -1130,11 +1131,11 @@ function nowText() {
     <div class="workspace-section-head script-head">
 
       <div class="panel-actions">
-        <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode">&#9719;</button>
+        <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
         <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation">+ 新建脚本</button>
-        <button v-if="!props.recording.isRecording" class="text-button primary-action" type="button" @click="startRecording">&#9655; 开始录制</button>
+        <button v-if="!props.recording.isRecording" class="text-button primary-action" type="button" @click="startRecording"><UiIcon name="play" />开始录制</button>
         <button v-else class="text-button danger" type="button" @click="stopRecording">结束录制</button>
-        <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" @click="clearRecording">&#9003;</button>
+        <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" @click="clearRecording"><UiIcon name="trash" /></button>
       </div>
     </div>
 
@@ -1145,7 +1146,7 @@ function nowText() {
             <strong>编辑脚本名称</strong>
             <span>{{ renamingScript.name }}</span>
           </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeRenameScriptDialog">&times;</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeRenameScriptDialog"><UiIcon name="close" /></button>
         </div>
         <label class="rename-field">
           <span>脚本名称</span>
@@ -1166,9 +1167,9 @@ function nowText() {
             <span>脚本预览</span>
           </div>
           <div class="script-editor-tools">
-            <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyExpandedScript">&#9634;</button>
-            <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeExpandedScript">&#9655;</button>
-            <button class="icon-button" type="button" title="关闭预览" aria-label="关闭预览" @click="closeScriptPreview">&times;</button>
+            <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyExpandedScript"><UiIcon name="copy" /></button>
+            <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeExpandedScript"><UiIcon name="play" /></button>
+            <button class="icon-button" type="button" title="关闭预览" aria-label="关闭预览" @click="closeScriptPreview"><UiIcon name="close" /></button>
           </div>
         </div>
         <div class="script-expanded-editor">
@@ -1200,7 +1201,7 @@ function nowText() {
             <strong>检测到风险命令</strong>
             <span>执行前请确认命中的命令行</span>
           </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeScriptRiskConfirm">&times;</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeScriptRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
           <div class="script-risk-summary" aria-label="风险类型">
@@ -1262,12 +1263,12 @@ function nowText() {
     <div v-if="scriptPanelMode === 'library'" class="script-library">
       <template v-if="scriptLibraryView === 'list'">
         <div class="session-search script-library-search">
-          <span>&#8981;</span>
+          <span><UiIcon name="search" size="14" /></span>
           <input ref="librarySearchInput" v-model="scriptSearch" placeholder="搜索脚本..." aria-label="搜索脚本" />
         </div>
 
         <div v-if="filteredScripts.length === 0" class="script-library-empty">
-          <strong>No scripts</strong>
+          <strong>暂无脚本</strong>
           <span>{{ scriptLibraryEmptyHint }}</span>
         </div>
 
@@ -1287,8 +1288,8 @@ function nowText() {
                 <strong>{{ script.name }}</strong>
                 <small>{{ script.description || script.updatedAt }}</small>
               </span>
-              <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)">&#9998;</button>
-              <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click.stop="removeScript(script)">&#9003;</button>
+              <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)"><UiIcon name="edit" /></button>
+              <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click.stop="removeScript(script)"><UiIcon name="trash" /></button>
             </article>
           </div>
         </div>
@@ -1305,12 +1306,12 @@ function nowText() {
             </div>
             <div class="script-editor-tools">
 
-              <button class="icon-button" type="button" title="返回列表" aria-label="返回列表" @click="returnToScriptList">&#8592;</button>
-              <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" @click="saveSelectedScript">&#10515;</button>
-              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="regenerateSelectedScript">&#8635;</button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeSelectedScript">&#9655;</button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copySelectedScript">&#9634;</button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('selected')">&#9974;</button>
+              <button class="icon-button" type="button" title="返回列表" aria-label="返回列表" @click="returnToScriptList"><UiIcon name="arrow-left" /></button>
+              <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" @click="saveSelectedScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="regenerateSelectedScript"><UiIcon name="refresh" /></button>
+              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeSelectedScript"><UiIcon name="play" /></button>
+              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copySelectedScript"><UiIcon name="copy" /></button>
+              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('selected')"><UiIcon name="maximize" /></button>
             </div>
           </div>
           <div class="script-editor-shell">
@@ -1340,7 +1341,7 @@ function nowText() {
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
           <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
-          <small>{{ recordedCommands.length }} recorded commands &middot; {{ recordedOutput.length }} output chars</small>
+          <small>{{ recordedCommands.length }} 条命令 &middot; {{ recordedOutput.length }} 字符输出</small>
         </div>
       </div>
 
@@ -1355,11 +1356,11 @@ function nowText() {
             </div>
             <div class="script-editor-tools">
 
-              <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" @click="saveDraftScript">&#10515;</button>
-              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="sendScriptRequest('regenerate')">&#8635;</button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeDraftScript">&#9655;</button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyDraftScript">&#9634;</button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('draft')">&#9974;</button>
+              <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" @click="saveDraftScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="sendScriptRequest('regenerate')"><UiIcon name="refresh" /></button>
+              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeDraftScript"><UiIcon name="play" /></button>
+              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyDraftScript"><UiIcon name="copy" /></button>
+              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('draft')"><UiIcon name="maximize" /></button>
             </div>
           </div>
           <div class="script-editor-shell">

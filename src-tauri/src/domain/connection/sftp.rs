@@ -14,7 +14,10 @@ use crate::domain::pty::{
     append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
     PtySession,
 };
-use crate::domain::terminal::ssh::output_contains_password_prompt;
+use crate::domain::terminal::ssh::{
+    app_known_hosts_ssh_args, host_key_warning_hint, output_contains_host_key_warning,
+    output_contains_password_prompt,
+};
 use portable_pty::Child;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -91,14 +94,9 @@ pub fn build_sftp_launch_plan_with_target(
     target_override: &SftpTargetOverride,
 ) -> SftpLaunchPlan {
     let target = apply_target_override(&profile.target, target_override);
-    let mut args = vec![
-        "-o".into(),
-        "BatchMode=no".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-        "-o".into(),
-        "NumberOfPasswordPrompts=2".into(),
-    ];
+    let mut args = vec!["-o".into(), "BatchMode=no".into()];
+    args.extend(app_known_hosts_ssh_args());
+    args.extend(["-o".into(), "NumberOfPasswordPrompts=2".into()]);
 
     if should_use_gateway(profile) {
         args.push("-o".into());
@@ -608,6 +606,11 @@ fn run_sftp_launch_plan(
         }
 
         let normalized_prompt = prompt_window.to_lowercase();
+        if output_contains_host_key_warning(&prompt_window) {
+            terminate_sftp_process(&mut process.session, process.child.as_mut());
+            bail!("{}", host_key_warning_hint(&prompt_window));
+        }
+
         if !host_key_confirmed
             && normalized_prompt.contains("are you sure you want to continue connecting")
         {

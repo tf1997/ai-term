@@ -9,6 +9,7 @@ import type {
   CommandHistoryEntry,
   CommandRecordedEvent,
   ScriptRecording,
+  TerminalInputEvent,
   TerminalOutputEvent,
   TerminalSelectionEvent,
   WorkspaceSession
@@ -46,7 +47,16 @@ interface TerminalTab {
 }
 
 const COMMAND_HISTORY_CACHE_LIMIT = 300
-
+const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
+const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
+const defaultUserSettings: AppUserSettings = {
+  terminalFontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  terminalFontSize: 13,
+  terminalTheme: 'midnight',
+  defaultShell: 'system',
+  proxyUrl: '',
+  updateChannel: 'stable'
+}
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   executeCommand: (command: string) => boolean
   writeTerminalInput: (data: string) => boolean
@@ -58,6 +68,26 @@ type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
 type LeftPanelMode = 'connections' | 'settings'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
+type ToastKind = 'success' | 'error' | 'warning' | 'info'
+type TerminalTheme = 'midnight' | 'matrix' | 'light'
+type AppTheme = 'dark' | 'light'
+type UpdateChannel = 'stable' | 'preview'
+
+interface AppUserSettings {
+  terminalFontFamily: string
+  terminalFontSize: number
+  terminalTheme: TerminalTheme
+  defaultShell: string
+  proxyUrl: string
+  updateChannel: UpdateChannel
+}
+
+interface AppToast {
+  id: string
+  kind: ToastKind
+  title: string
+  message?: string
+}
 interface ContextMenuItem {
   id: string
   label: string
@@ -122,6 +152,7 @@ const terminalTabs = ref<TerminalTab[]>([
   }
 ])
 const activeTerminalId = ref('local-1')
+const selectedTerminalIds = ref<string[]>(['local-1'])
 const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
@@ -134,7 +165,10 @@ const scriptRecordingsByTerminal = ref<Record<string, ScriptRecording>>({})
 const loadedWorkspaceSessions = ref<Record<string, boolean>>({})
 const loadedSessionLists = ref<Record<string, boolean>>({})
 const contextMenu = ref<ContextMenuState | null>(null)
-
+const appSettings = ref<AppUserSettings>(loadUserSettings())
+const appTheme = ref<AppTheme>(loadAppTheme())
+const toasts = ref<AppToast[]>([])
+let toastSequence = 0
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
   return profiles.value.find((profile) => profile.id === selectedProfileId.value)
@@ -146,6 +180,21 @@ const sidebarProfile = computed(() => {
 
 const activeTerminal = computed(() => {
   return terminalTabs.value.find((tab) => tab.id === activeTerminalId.value) ?? terminalTabs.value[0]
+})
+
+const selectedTerminalIdSet = computed(() => new Set(selectedTerminalIds.value))
+
+const targetTerminalTabs = computed(() => {
+  const selected = terminalTabs.value.filter((tab) => selectedTerminalIdSet.value.has(tab.id))
+  if (selected.length > 0) return selected
+  return activeTerminal.value ? [activeTerminal.value] : []
+})
+
+const targetTerminalIds = computed(() => targetTerminalTabs.value.map((tab) => tab.id))
+const multiTerminalInputEnabled = computed(() => targetTerminalIds.value.length > 1)
+const terminalTargetLabel = computed(() => {
+  const count = targetTerminalIds.value.length
+  return count > 1 ? '同步 ' + count + ' 个终端' : '当前终端'
 })
 
 const activeTerminalSnapshot = computed(() => {
@@ -296,6 +345,52 @@ function openLocalTerminal() {
   void createLocalTerminalTab()
 }
 
+function normalizeTerminalTargets(preferredId = activeTerminalId.value) {
+  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
+  const next = selectedTerminalIds.value.filter((id) => validIds.has(id))
+  if (next.length === 0 && preferredId && validIds.has(preferredId)) {
+    selectedTerminalIds.value = [preferredId]
+    return
+  }
+  selectedTerminalIds.value = next
+}
+
+function selectTerminalTab(tabId: string) {
+  activeTerminalId.value = tabId
+  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
+  const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
+  if (current.length <= 1) {
+    selectedTerminalIds.value = [tabId]
+    return
+  }
+  if (!current.includes(tabId)) {
+    selectedTerminalIds.value = [...current, tabId]
+  }
+}
+
+function isTerminalTargetSelected(tabId: string) {
+  return selectedTerminalIdSet.value.has(tabId)
+}
+
+function toggleTerminalTarget(tabId: string) {
+  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
+  const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
+  if (current.includes(tabId)) {
+    if (current.length === 1) return
+    selectedTerminalIds.value = current.filter((id) => id !== tabId)
+    return
+  }
+  selectedTerminalIds.value = [...current, tabId]
+}
+
+function selectAllTerminalTargets() {
+  selectedTerminalIds.value = terminalTabs.value.map((tab) => tab.id)
+}
+
+function resetTerminalTargetsToActive() {
+  selectedTerminalIds.value = [activeTerminalId.value]
+}
+
 function openConnectionsPanel() {
   leftPanelMode.value = 'connections'
   leftCollapsed.value = false
@@ -412,9 +507,24 @@ function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
     {
       id: 'switch',
       label: '切换到此终端',
-      action: () => {
-        activeTerminalId.value = tab.id
-      }
+      action: () => selectTerminalTab(tab.id)
+    },
+    {
+      id: 'toggle-target',
+      label: isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
+      disabled: isTerminalTargetSelected(tab.id) && targetTerminalIds.value.length === 1,
+      action: () => toggleTerminalTarget(tab.id)
+    },
+    {
+      id: 'select-all-targets',
+      label: '选择全部终端',
+      disabled: terminalTabs.value.length <= 1,
+      action: selectAllTerminalTargets
+    },
+    {
+      id: 'reset-targets',
+      label: '仅当前终端',
+      action: resetTerminalTargetsToActive
     },
     {
       id: 'new-local',
@@ -430,7 +540,6 @@ function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
     }
   ])
 }
-
 function openTerminalAreaContextMenu(event: MouseEvent) {
   openContextMenu(event, activeTerminal.value?.title ?? '终端', [
     {
@@ -450,6 +559,17 @@ function openTerminalAreaContextMenu(event: MouseEvent) {
       action: () => terminalRefs.value[activeTerminalId.value]?.disconnectFromButton()
     },
     {
+      id: 'select-all-targets',
+      label: '选择全部终端',
+      disabled: terminalTabs.value.length <= 1,
+      action: selectAllTerminalTargets
+    },
+    {
+      id: 'reset-targets',
+      label: '仅当前终端',
+      action: resetTerminalTargetsToActive
+    },
+    {
       id: 'new-local',
       label: '新建本地终端',
       action: openLocalTerminal
@@ -463,10 +583,17 @@ function openTerminalAreaContextMenu(event: MouseEvent) {
     }
   ])
 }
-
 async function copyActiveTerminalSnapshot() {
-  if (!activeTerminalSnapshot.value) return
-  await navigator.clipboard?.writeText(activeTerminalSnapshot.value)
+  if (!activeTerminalSnapshot.value) {
+    showToast('warning', '没有可复制内容', '当前终端还没有输出。')
+    return
+  }
+  try {
+    await navigator.clipboard?.writeText(activeTerminalSnapshot.value)
+    showToast('success', '已复制终端输出')
+  } catch (error) {
+    showToast('error', '复制失败', formatError(error))
+  }
 }
 
 function editSelectedProfile(profileId: string) {
@@ -568,10 +695,12 @@ async function saveAiConfig(config: AiProviderConfig, apiKey = '') {
     aiConfigSaveState.value = 'saved'
     aiConfigEditorOpen.value = false
     aiConfigDraft.value = undefined
+    showToast('success', 'AI 配置已保存', savedConfig.id)
   } catch (error) {
     profileStoreStatus.value = 'preview'
     aiConfigSaveState.value = 'error'
     aiConfigSaveError.value = formatError(error)
+    showToast('error', 'AI 配置保存失败', aiConfigSaveError.value)
   }
 }
 
@@ -591,9 +720,11 @@ async function deleteSelectedAiConfig(configId: string) {
     aiConfigEditorOpen.value = false
     aiConfigSaveState.value = 'saved'
     profileStoreStatus.value = 'ready'
+    showToast('success', 'AI 配置已删除', configId)
   } catch (error) {
     aiConfigSaveState.value = 'error'
     aiConfigSaveError.value = formatError(error)
+    showToast('error', 'AI 配置删除失败', aiConfigSaveError.value)
   }
 }
 
@@ -609,6 +740,69 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+function loadUserSettings(): AppUserSettings {
+  try {
+    const raw = localStorage.getItem(USER_SETTINGS_STORAGE_KEY)
+    if (!raw) return { ...defaultUserSettings }
+    const parsed = JSON.parse(raw) as Partial<AppUserSettings>
+    return {
+      ...defaultUserSettings,
+      ...parsed,
+      terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
+      terminalTheme: 'midnight',
+      updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable'
+    }
+  } catch {
+    return { ...defaultUserSettings }
+  }
+}
+
+function persistUserSettings(settings: AppUserSettings) {
+  localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+}
+
+function loadAppTheme(): AppTheme {
+  try {
+    return localStorage.getItem(APP_THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
+function persistAppTheme(theme: AppTheme) {
+  try {
+    localStorage.setItem(APP_THEME_STORAGE_KEY, theme)
+  } catch {
+    // Theme persistence is a convenience; the UI should still switch when storage is unavailable.
+  }
+  const root = document.documentElement
+  root.dataset.theme = theme
+  root.classList.toggle('theme-light', theme === 'light')
+  root.classList.toggle('theme-dark', theme === 'dark')
+}
+
+function toggleAppTheme() {
+  appTheme.value = appTheme.value === 'light' ? 'dark' : 'light'
+  showToast('info', '主题已切换', appTheme.value === 'light' ? '已切换为白色主题。' : '已切换为深色主题。')
+}
+function updateUserSettings(settings: AppUserSettings) {
+  appSettings.value = { ...settings }
+  showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
+}
+
+function checkForUpdates() {
+  showToast('info', '更新检查', `当前选择 ${appSettings.value.updateChannel === 'preview' ? '预览版' : '稳定版'} 通道，自动检查入口已预留。`)
+}
+
+function showToast(kind: ToastKind, title: string, message = '') {
+  const id = `toast-${Date.now()}-${toastSequence++}`
+  toasts.value = [...toasts.value, { id, kind, title, message }].slice(-4)
+  window.setTimeout(() => dismissToast(id), kind === 'error' ? 6200 : 3600)
+}
+
+function dismissToast(id: string) {
+  toasts.value = toasts.value.filter((toast) => toast.id !== id)
+}
 async function loadProfiles() {
   try {
     profiles.value = await listConnectionProfiles()
@@ -681,9 +875,6 @@ function normalizeConnectionProfileForSave(profile: ConnectionProfile): Connecti
 
   if (!normalized.gateway.password?.trim()) normalized.gateway.password = undefined
   if (!normalized.target.password?.trim()) normalized.target.password = undefined
-  if (normalized.jumpMode === 'interactive-menu' && normalized.fileTransferMode !== 'sftp-gateway') {
-    normalized.target.password = undefined
-  }
 
   return normalized
 }
@@ -705,6 +896,7 @@ async function saveSelectedProfile() {
   } catch (error) {
     connectionSaveState.value = 'error'
     connectionSaveError.value = formatError(error)
+    showToast('error', '连接参数无效', connectionSaveError.value)
     return
   }
   const savedProfileId = normalizedProfile.id
@@ -719,10 +911,12 @@ async function saveSelectedProfile() {
     connectionSaveState.value = 'saved'
     connectionEditorOpen.value = false
     connectionDraft.value = undefined
+    showToast('success', '连接已保存', normalizedProfile.name)
   } catch (error) {
     profileStoreStatus.value = 'preview'
     connectionSaveState.value = 'error'
     connectionSaveError.value = formatError(error)
+    showToast('error', '连接保存失败', connectionSaveError.value)
   }
 }
 
@@ -949,6 +1143,7 @@ function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: Works
     status: 'idle'
   })
   activeTerminalId.value = id
+  selectedTerminalIds.value = [id]
   void loadWorkspaceSessionList(connectionId)
   void loadWorkspaceState(connectionId, session.id)
 }
@@ -964,6 +1159,7 @@ function closeTerminalTab(tabId: string) {
     const nextTab = terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]
     activeTerminalId.value = nextTab.id
   }
+  normalizeTerminalTargets(activeTerminalId.value)
 }
 
 function setTerminalRef(tabId: string, instance: TerminalPaneInstance | null) {
@@ -1105,14 +1301,54 @@ function terminalOutputDelta(previousSnapshot: string, nextSnapshot: string) {
   return nextSnapshot.slice(-8_000)
 }
 
-function executeCommandOnActiveTerminal(command: string) {
-  terminalRefs.value[activeTerminalId.value]?.executeCommand(command)
+function commandPreview(command: string) {
+  return command.length > 120 ? `${command.slice(0, 120)}...` : command
 }
 
-function writeInputToActiveTerminal(data: string) {
-  terminalRefs.value[activeTerminalId.value]?.writeTerminalInput(data)
+function executeCommandOnTargetTerminals(command: string) {
+  const targets = targetTerminalIds.value
+  let sentCount = 0
+  targets.forEach((terminalId) => {
+    if (terminalRefs.value[terminalId]?.executeCommand(command)) sentCount += 1
+  })
+  if (sentCount > 0) {
+    showToast('success', sentCount > 1 ? `命令已发送到 ${sentCount} 个终端` : '命令已发送', commandPreview(command))
+  } else {
+    showToast('error', '命令未发送', '目标终端不可用或没有活动 shell。')
+  }
 }
 
+function writeInputToTargetTerminals(data: string) {
+  if (!data) return
+  let sentCount = 0
+  targetTerminalIds.value.forEach((terminalId) => {
+    if (terminalRefs.value[terminalId]?.writeTerminalInput(data)) sentCount += 1
+  })
+  if (sentCount === 0) {
+    showToast('error', '脚本未发送', '目标终端不可用或没有活动 shell。')
+  }
+}
+
+function syncTerminalInputToTargets(event: TerminalInputEvent) {
+  if (!multiTerminalInputEnabled.value) return
+  if (!targetTerminalIds.value.includes(event.terminalId)) return
+  targetTerminalIds.value.forEach((terminalId) => {
+    if (terminalId === event.terminalId) return
+    terminalRefs.value[terminalId]?.writeTerminalInput(event.data)
+  })
+}
+
+async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
+  try {
+    profiles.value = await listConnectionProfiles()
+    if (profiles.value.some((profile) => profile.id === profileId)) {
+      selectedProfileId.value = profileId
+    }
+    showToast('success', 'SSH \u8ba4\u8bc1\u5df2\u4fdd\u5b58', '\u4e0b\u6b21\u8fde\u63a5\u5c06\u81ea\u52a8\u8ba4\u8bc1')
+  } catch (error) {
+    showToast('error', '\u8fde\u63a5\u5237\u65b0\u5931\u8d25', formatError(error))
+  }
+}
 function appendAiMessageToActiveTerminal(message: AiMessage) {
   const key = workspaceKey(message.connectionId, message.workspaceSessionId)
   aiMessagesBySession.value = {
@@ -1260,6 +1496,14 @@ watch(activeWorkspaceKey, () => {
   void loadWorkspaceState(activeConnectionId.value, activeWorkspaceSessionId.value)
 })
 
+watch(
+  appSettings,
+  (settings) => {
+    persistUserSettings(settings)
+  },
+  { deep: true }
+)
+watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
@@ -1267,7 +1511,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive }">
+  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }">
     <header class="titlebar">
       <div class="brand">
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
@@ -1278,14 +1522,28 @@ onBeforeUnmount(() => {
           v-for="tab in terminalTabs"
           :key="tab.id"
           class="tab"
-          :class="{ active: tab.id === activeTerminalId }"
-          @click="activeTerminalId = tab.id"
+          :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id) }"
+          @click="selectTerminalTab(tab.id)"
           @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
         >
-          <span class="status-dot" :class="terminalStatusClass(tab.status)" />{{ tab.title }}
+                    <span
+            class="terminal-target-toggle"
+            :class="{ selected: isTerminalTargetSelected(tab.id) }"
+            :title="isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
+            aria-hidden="true"
+            @click.stop="toggleTerminalTarget(tab.id)"
+          >
+            <span />
+          </span>
+          <span class="status-dot" :class="terminalStatusClass(tab.status)" />
+          <span class="tab-title">{{ tab.title }}</span>
           <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
         </button>
-        <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
+                <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
+        <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="multiTerminalInputEnabled ? '键盘输入、脚本和命令会同步到已选终端' : '仅发送到当前终端'">
+          <UiIcon name="terminal" size="13" />
+          <span>{{ terminalTargetLabel }}</span>
+        </span>
       </nav>
     </header>
     <aside class="app-rail" aria-label="主导航">
@@ -1306,6 +1564,15 @@ onBeforeUnmount(() => {
         @click="toggleSettingsPanel"
       >
         <UiIcon name="settings" />
+      </button>
+      <button
+        class="rail-button theme-toggle-button"
+        type="button"
+        :title="appTheme === 'light' ? '切换深色主题' : '切换白色主题'"
+        :aria-label="appTheme === 'light' ? '切换深色主题' : '切换白色主题'"
+        @click="toggleAppTheme"
+      >
+        <UiIcon :name="appTheme === 'light' ? 'moon' : 'sun'" />
       </button>
     </aside>
     <ConnectionSidebar
@@ -1338,6 +1605,7 @@ onBeforeUnmount(() => {
       :editor-mode="aiConfigEditorMode"
       :save-state="aiConfigSaveState"
       :save-error="aiConfigSaveError"
+      :settings="appSettings"
       @select-ai-config="selectAiConfig"
       @create-ai-config="createAiConfig"
       @edit-ai-config="editAiConfig"
@@ -1345,6 +1613,8 @@ onBeforeUnmount(() => {
       @open-menu="openAiConfigContextMenu"
       @close-ai-config="closeAiConfigEditor"
       @save-ai-config="saveAiConfig"
+      @update-settings="updateUserSettings"
+      @check-update="checkForUpdates"
     />
     <section class="terminal-stack" @contextmenu.prevent="openTerminalAreaContextMenu">
       <TerminalPane
@@ -1356,10 +1626,16 @@ onBeforeUnmount(() => {
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         :command-history="commandHistoryForTab(tab)"
+        :terminal-settings="appSettings"
+        :app-theme="appTheme"
+        :ai-config="aiConfig"
+        :api-key="activeAiRuntimeApiKey"
         @terminal-output="updateTerminalOutput"
         @terminal-selection="updateTerminalSelection"
+        @terminal-input="syncTerminalInputToTargets"
         @command-recorded="recordCommand"
         @status-changed="updateTerminalStatus"
+        @profile-updated="refreshConnectionProfilesAfterTerminalAuth"
       />
     </section>
     <WorkspacePanel
@@ -1386,8 +1662,8 @@ onBeforeUnmount(() => {
       @append-ai-message="appendAiMessageToActiveTerminal"
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"
-      @execute-command="executeCommandOnActiveTerminal"
-      @write-terminal-input="writeInputToActiveTerminal"
+      @execute-command="executeCommandOnTargetTerminals"
+      @write-terminal-input="writeInputToTargetTerminals"
       @start-script-recording="startScriptRecording"
       @stop-script-recording="stopScriptRecording"
       @clear-script-recording="clearScriptRecording"
@@ -1403,8 +1679,16 @@ onBeforeUnmount(() => {
     >
       工作区
     </button>
-    <div class="persistence-status" :class="profileStoreStatus">
-      profiles: {{ profileStoreStatus }} · active: {{ activeTerminal?.title }}
+    <div v-if="toasts.length" class="toast-stack" aria-live="polite" aria-atomic="false">
+      <article v-for="toast in toasts" :key="toast.id" class="app-toast" :class="toast.kind">
+        <span>
+          <strong>{{ toast.title }}</strong>
+          <small v-if="toast.message">{{ toast.message }}</small>
+        </span>
+        <button class="icon-button" type="button" title="关闭通知" aria-label="关闭通知" @click="dismissToast(toast.id)">
+          <UiIcon name="close" size="12" />
+        </button>
+      </article>
     </div>
     <ContextMenu
       v-if="contextMenu"

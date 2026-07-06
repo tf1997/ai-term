@@ -51,8 +51,19 @@ function needsMenuProfile(profile: ConnectionProfile) {
   return profile.jumpMode === 'interactive-menu' && !isSftpProfile(profile)
 }
 
+function targetUsernameRequired(profile: ConnectionProfile) {
+  return !(profile.jumpMode === 'interactive-menu' && !isSftpProfile(profile))
+}
+
+function targetUsernameLabel(profile: ConnectionProfile) {
+  return targetUsernameRequired(profile) ? '目标用户名' : '目标用户名（可选）'
+}
+
+function targetUsernamePlaceholder(profile: ConnectionProfile) {
+  return targetUsernameRequired(profile) ? 'deploy' : '可选，有些堡垒机会直接进入'
+}
 function shouldShowTargetPassword(profile: ConnectionProfile) {
-  return profile.target.authMode !== 'key' && profile.jumpMode !== 'interactive-menu'
+  return profile.target.authMode !== 'key'
 }
 
 function targetPasswordLabel(profile: ConnectionProfile) {
@@ -68,10 +79,14 @@ function targetPortLabel(profile: ConnectionProfile) {
 }
 
 function targetPasswordPlaceholder() {
-  return '\u53ef\u9009\uff0c\u4fdd\u5b58\u540e\u7528\u4e8e\u76f4\u8fde\u81ea\u52a8\u767b\u5f55'
+  return '\u53ef\u9009\uff0c\u7528\u4e8e\u76ee\u6807\u670d\u52a1\u5668\u81ea\u52a8\u767b\u5f55'
 }
 function profileReady(profile: ConnectionProfile) {
-  const hasTarget = Boolean(profile.name.trim() && profile.target.host.trim() && profile.target.username.trim())
+  const hasTarget = Boolean(
+    profile.name.trim() &&
+      profile.target.host.trim() &&
+      (!targetUsernameRequired(profile) || profile.target.username.trim())
+  )
   if (!hasTarget) return false
   if (!needsGateway(profile)) return true
   const hasGateway = Boolean(profile.gateway.host.trim() && profile.gateway.username.trim())
@@ -233,8 +248,8 @@ function handleJumpModeChanged() {
               <input v-model="selectedProfile.target.host" placeholder="10.0.0.12" />
             </label>
             <label>
-              <span>目标用户名</span>
-              <input v-model="selectedProfile.target.username" placeholder="deploy" />
+              <span>{{ targetUsernameLabel(selectedProfile) }}</span>
+              <input v-model="selectedProfile.target.username" :placeholder="targetUsernamePlaceholder(selectedProfile)" />
             </label>
             <label>
               <span>{{ targetPortLabel(selectedProfile) }}</span>

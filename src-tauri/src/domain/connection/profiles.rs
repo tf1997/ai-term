@@ -12,7 +12,7 @@ pub fn validate_profile(profile: &ConnectionProfile) -> Result<()> {
     if profile.target.host.trim().is_empty() {
         bail!("target host is required");
     }
-    if profile.target.username.trim().is_empty() {
+    if target_username_required(profile) && profile.target.username.trim().is_empty() {
         bail!("target username is required");
     }
 
@@ -39,4 +39,11 @@ pub fn validate_profile(profile: &ConnectionProfile) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn target_username_required(profile: &ConnectionProfile) -> bool {
+    if profile.file_transfer_mode == FileTransferMode::SftpGateway {
+        return true;
+    }
+    profile.jump_mode != JumpMode::InteractiveMenu
 }

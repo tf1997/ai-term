@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { CommandHistoryEntry } from '../types/workspace'
+import UiIcon from './UiIcon.vue'
 
 const MAX_VISIBLE_COMMANDS = 100
 const LONG_COMMAND_CHARS = 96
@@ -64,15 +65,15 @@ async function copyCommand(command: string) {
       <input v-model="historySearch" type="search" placeholder="搜索命令或时间" aria-label="搜索历史命令" />
     </div>
     <div class="history-list">
-      <p v-if="commands.length === 0" class="empty-state">No command history</p>
-      <p v-else-if="visibleCommands.length === 0" class="empty-state">No matching commands</p>
+      <p v-if="commands.length === 0" class="empty-state">暂无命令历史</p>
+      <p v-else-if="visibleCommands.length === 0" class="empty-state">没有匹配的命令</p>
       <article
         v-for="entry in visibleCommands"
         :key="entry.id"
         class="history-row"
         :class="{ expanded: isExpanded(entry) }"
       >
-        <div>
+        <div class="history-command-cell">
           <code>{{ entry.command }}</code>
           <span>{{ entry.createdAt }}</span>
         </div>
@@ -82,12 +83,13 @@ async function copyCommand(command: string) {
             class="text-button"
             type="button"
             :title="isExpanded(entry) ? '折叠命令' : '展开命令'"
+            :aria-expanded="isExpanded(entry)"
             @click="toggleCommand(entry)"
           >
             {{ isExpanded(entry) ? '收起' : '展开' }}
           </button>
-          <button class="icon-button" type="button" title="复制命令" aria-label="复制命令" @click="copyCommand(entry.command)">C</button>
-          <button class="icon-button" type="button" title="再次执行" aria-label="再次执行" @click="emit('rerun', entry.command)">→</button>
+          <button class="icon-button" type="button" title="复制命令" aria-label="复制命令" @click="copyCommand(entry.command)"><UiIcon name="copy" /></button>
+          <button class="icon-button" type="button" title="再次执行" aria-label="再次执行" @click="emit('rerun', entry.command)"><UiIcon name="play" /></button>
         </div>
       </article>
     </div>

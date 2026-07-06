@@ -16,6 +16,7 @@ import {
   scriptRiskStatusForContent,
   summarizeScriptRisks
 } from '../lib/scriptRisk'
+import UiIcon from './UiIcon.vue'
 
 type MessagePart =
   | { type: 'text'; content: string }
@@ -529,13 +530,13 @@ function executeGeneratedCommand(command: string) {
     return
   }
   emit('executeCommand', value)
-  showAiCommandNotice('已安全发送', '未检测到风险命令，已发送到当前终端。')
+  showAiCommandNotice('已安全发送', '未检测到风险命令，已发送到目标终端。')
 }
 function confirmPendingAiCommandExecution() {
   const command = pendingAiCommandExecution.value.trim()
   if (!command) return
   emit('executeCommand', command)
-  showAiCommandNotice('已确认发送', '已确认风险命令，命令已发送到当前终端。')
+  showAiCommandNotice('已确认发送', '已确认风险命令，命令已发送到目标终端。')
   closeAiCommandRiskConfirm()
 }
 
@@ -689,12 +690,12 @@ watch(
         </div>
       </div>
       <div class="panel-actions">
-        <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory">◷</button>
-        <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession">＋</button>
+        <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory"><UiIcon name="history" /></button>
+        <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession"><UiIcon name="plus" /></button>
       </div>
       <div v-if="historyOpen" ref="historyPopover" class="session-history-popover">
         <div class="session-search">
-          <span>⌕</span>
+          <span><UiIcon name="search" size="14" /></span>
           <input v-model="sessionSearch" placeholder="搜索会话..." aria-label="搜索会话" />
         </div>
         <div class="session-history-list">
@@ -714,11 +715,11 @@ watch(
             </span>
             <span class="session-history-time">{{ sessionTimeLabel(session) }}</span>
             <span class="session-history-actions">
-              <button class="icon-button" type="button" title="编辑会话" aria-label="编辑会话" @click.stop="openRenameSessionDialog(session)">✎</button>
-              <button class="icon-button danger" type="button" title="删除会话" aria-label="删除会话" @click.stop="emit('deleteSession', session.id)">⌫</button>
+              <button class="icon-button" type="button" title="编辑会话" aria-label="编辑会话" @click.stop="openRenameSessionDialog(session)"><UiIcon name="edit" /></button>
+              <button class="icon-button danger" type="button" title="删除会话" aria-label="删除会话" @click.stop="emit('deleteSession', session.id)"><UiIcon name="trash" /></button>
             </span>
           </article>
-          <p v-if="filteredSessions.length === 0" class="empty-state">No sessions</p>
+          <p v-if="filteredSessions.length === 0" class="empty-state">暂无会话</p>
         </div>
       </div>
     </div>
@@ -729,7 +730,7 @@ watch(
             <strong>编辑会话名称</strong>
             <span>{{ renamingSession.name || 'Untitled' }}</span>
           </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeRenameSessionDialog">×</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeRenameSessionDialog"><UiIcon name="close" /></button>
         </div>
         <label class="rename-field">
           <span>会话名称</span>
@@ -748,7 +749,7 @@ watch(
             <strong>检测到风险命令</strong>
             <span>执行前请确认命中的命令行</span>
           </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm">&times;</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
           <div class="script-risk-summary" aria-label="风险类型">
@@ -885,7 +886,7 @@ watch(
         rows="3"
         :placeholder="composerPlaceholder"
         :title="composerPlaceholder"
-        aria-label="Ask AI"
+        aria-label="询问 AI"
         @focus="historyOpen = false"
         @keydown="handleComposerKeydown"
       />
@@ -896,7 +897,7 @@ watch(
         :disabled="!isAsking && !hasUsableConfig"
         @click="isAsking ? stopCurrentAnswer() : sendMessage()"
       >
-        {{ isAsking ? '■' : '→' }}
+        <UiIcon v-if="isAsking" name="stop" /><UiIcon v-else name="arrow-right" />
       </button>
     </div>
   </section>

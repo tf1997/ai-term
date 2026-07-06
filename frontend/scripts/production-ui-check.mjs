@@ -25,6 +25,7 @@ const settingsSidebar = read('src/components/SettingsSidebar.vue')
 const tauri = read('src/lib/tauri.ts')
 const workspacePanel = read('src/components/WorkspacePanel.vue')
 const commandHistoryPanel = read('src/components/CommandHistoryPanel.vue')
+const uiIcon = read('src/components/UiIcon.vue')
 const contextMenu = read('src/components/ContextMenu.vue')
 const styles = read('src/styles.css')
 const indexHtml = read('index.html')
@@ -44,6 +45,542 @@ function assertCssRuleIncludes(selector, snippets, message) {
   const rule = cssRule(selector)
   assert(snippets.every((snippet) => rule.includes(snippet)), message)
 }
+
+function cssDeclarationBlocks(selector, options = {}) {
+  const start = options.afterMarker ? styles.indexOf(options.afterMarker) : 0
+  assert(start !== -1, `Missing CSS marker: ${options.afterMarker}`)
+  const end = options.beforeMarker ? styles.indexOf(options.beforeMarker, start + 1) : styles.length
+  assert(end !== -1, `Missing CSS marker: ${options.beforeMarker}`)
+  const source = styles.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
+  const blocks = []
+  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const rawSelector = match[1].replace(/\s+/g, ' ').trim()
+    if (rawSelector.includes('@media')) continue
+    if (options.excludeThemeLight && rawSelector.includes('theme-light')) continue
+    const selectors = rawSelector.split(',').map((item) => item.trim())
+    if (!selectors.includes(selector)) continue
+    const declarations = new Map()
+    for (const declaration of match[2].split(';')) {
+      const separator = declaration.indexOf(':')
+      if (separator === -1) continue
+      declarations.set(declaration.slice(0, separator).trim(), declaration.slice(separator + 1).trim())
+    }
+    blocks.push(declarations)
+  }
+  return blocks
+}
+
+function lastCssDeclaration(selector, property, options = {}) {
+  let value = undefined
+  for (const declarations of cssDeclarationBlocks(selector, options)) {
+    if (declarations.has(property)) value = declarations.get(property)
+  }
+  return value
+}
+
+function assertLastCssDeclarations(selector, expected, message, options = {}) {
+  for (const [property, value] of Object.entries(expected)) {
+    const actual = lastCssDeclaration(selector, property, options)
+    assert(
+      actual === value,
+      `${message}: expected ${selector} ${property}: ${value}, got ${actual}`
+    )
+  }
+}
+
+
+
+const layoutParityProperties = [
+  'display', 'position', 'top', 'right', 'bottom', 'left', 'z-index', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'margin-inline', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding-inline', 'padding-block',
+  'gap', 'row-gap', 'column-gap', 'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row', 'align-items', 'align-self', 'justify-content', 'justify-items', 'place-items',
+  'flex', 'flex-direction', 'flex-wrap', 'order', 'overflow', 'overflow-x', 'overflow-y', 'transform', 'border', 'border-top', 'border-right', 'border-bottom', 'border-left', 'border-radius', 'box-shadow',
+  'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-transform',
+]
+
+function normalizeLayoutParityValue(property, value) {
+  if (!value) return value
+  if (!property.startsWith('border')) return value
+  return value
+    .replace(/#[0-9a-fA-F]{3,8}\b/g, '<color>')
+    .replace(/rgba?\([^)]*\)/g, '<color>')
+    .replace(/hsla?\([^)]*\)/g, '<color>')
+    .replace(/var\(--[\w-]+\)/g, '<color>')
+    .replace(/\b(?:transparent|currentColor|black|white|red|green|blue)\b/g, '<color>')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function assertLightThemeLayoutParity(pairs, options = {}) {
+  const allowed = new Set(options.allowedDifferences ?? [])
+  const properties = options.properties ?? layoutParityProperties
+  const mismatches = []
+
+  for (const [baseSelector, lightSelector] of pairs) {
+    for (const property of properties) {
+      const light = lastCssDeclaration(lightSelector, property)
+      if (light === undefined) continue
+
+      const base = lastCssDeclaration(baseSelector, property, { excludeThemeLight: true })
+      if (base === undefined) continue
+
+      const key = baseSelector + ' -> ' + lightSelector + ' -> ' + property
+      if (allowed.has(key)) continue
+
+      if (normalizeLayoutParityValue(property, base) !== normalizeLayoutParityValue(property, light)) {
+        mismatches.push(key + ': base=' + base + ', light=' + light)
+      }
+    }
+  }
+
+  assert(
+    mismatches.length === 0,
+    'Light theme layout must match the dark-theme structure for key shell/workspace surfaces: ' + mismatches.join('; ')
+  )
+}
+
+function lightThemeCustomProperties() {
+  const variables = new Map()
+  for (const declarations of cssDeclarationBlocks('.app-shell.theme-light')) {
+    for (const [property, value] of declarations.entries()) {
+      if (property.startsWith('--light-')) variables.set(property, value)
+    }
+  }
+  return variables
+}
+
+function resolveCssColor(value, variables, seen = new Set()) {
+  const trimmed = value.trim()
+  const variable = trimmed.match(/^var\((--[\w-]+)(?:,\s*([^)]+))?\)$/)
+  if (!variable) return trimmed
+
+  const [, name, fallback] = variable
+  assert(!seen.has(name), `CSS color variable cycle detected: ${name}`)
+  if (variables.has(name)) {
+    seen.add(name)
+    const resolved = resolveCssColor(variables.get(name), variables, seen)
+    seen.delete(name)
+    return resolved
+  }
+  assert(fallback, `Missing CSS color variable: ${name}`)
+  return resolveCssColor(fallback, variables, seen)
+}
+
+function parseCssColor(value, variables = new Map()) {
+  const color = resolveCssColor(value, variables).toLowerCase()
+  const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/)
+  if (hex) {
+    const raw = hex[1].length === 3
+      ? hex[1].split('').map((part) => part + part).join('')
+      : hex[1]
+    return {
+      r: Number.parseInt(raw.slice(0, 2), 16),
+      g: Number.parseInt(raw.slice(2, 4), 16),
+      b: Number.parseInt(raw.slice(4, 6), 16),
+    }
+  }
+
+  const rgb = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*(?:[\d.]+))?\)$/)
+  if (rgb) {
+    return {
+      r: Number(rgb[1]),
+      g: Number(rgb[2]),
+      b: Number(rgb[3]),
+    }
+  }
+
+  throw new Error(`Unsupported CSS color format in UI check: ${value}`)
+}
+
+function relativeLuminance({ r, g, b }) {
+  return [r, g, b]
+    .map((channel) => {
+      const normalized = channel / 255
+      return normalized <= 0.03928
+        ? normalized / 12.92
+        : ((normalized + 0.055) / 1.055) ** 2.4
+    })
+    .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0)
+}
+
+function contrastRatio(foreground, background, variables = new Map()) {
+  const foregroundLuminance = relativeLuminance(parseCssColor(foreground, variables))
+  const backgroundLuminance = relativeLuminance(parseCssColor(background, variables))
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance)
+  const darker = Math.min(foregroundLuminance, backgroundLuminance)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+function assertContrast(foreground, background, minimum, message, variables = new Map()) {
+  const ratio = contrastRatio(foreground, background, variables)
+  assert(
+    ratio >= minimum,
+    `${message}: expected ${minimum}:1, got ${ratio.toFixed(2)}:1 for ${foreground} on ${background}`
+  )
+}
+function earlyLightThemeStructuralDeclarations() {
+  const cutoff = styles.indexOf('/* Light theme layout parity. */')
+  assert(cutoff !== -1, 'Light theme layout parity marker must exist')
+  const structural = new Set([
+    'display', 'position', 'top', 'right', 'bottom', 'left', 'z-index', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+    'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'margin-inline', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding-inline', 'padding-block',
+    'gap', 'row-gap', 'column-gap', 'grid-template-columns', 'grid-template-rows', 'grid-column', 'grid-row', 'align-items', 'align-self', 'justify-content', 'justify-items', 'place-items',
+    'flex', 'flex-direction', 'flex-wrap', 'order', 'overflow', 'overflow-x', 'overflow-y', 'transform', 'border', 'border-top', 'border-right', 'border-bottom', 'border-left', 'border-radius', 'box-shadow', 'backdrop-filter', 'transition', 'content',
+    'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-transform',
+  ])
+  const hits = []
+  for (const match of styles.slice(0, cutoff).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim()
+    if (!selector.includes('theme-light')) continue
+    for (const declaration of match[2].split(';')) {
+      const separator = declaration.indexOf(':')
+      if (separator === -1) continue
+      const property = declaration.slice(0, separator).trim()
+      if (structural.has(property)) hits.push(selector + ' -> ' + property)
+    }
+  }
+  return hits
+}
+
+function disallowedDeclarationsInRange(afterMarker, beforeMarker, allowedProperties) {
+  const start = styles.indexOf(afterMarker)
+  assert(start !== -1, `Missing CSS marker: ${afterMarker}`)
+  const end = beforeMarker ? styles.indexOf(beforeMarker, start + 1) : styles.length
+  assert(end !== -1, `Missing CSS marker: ${beforeMarker}`)
+  const source = styles.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
+  const hits = []
+  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1].replace(/\s+/g, ' ').trim()
+    if (selector.includes('@media')) continue
+    for (const declaration of match[2].split(';')) {
+      const separator = declaration.indexOf(':')
+      if (separator === -1) continue
+      const property = declaration.slice(0, separator).trim()
+      if (!allowedProperties.has(property)) hits.push(selector + " -> " + property)
+    }
+  }
+  return hits
+}
+
+function darkLightThemeSurfaceDeclarations() {
+  const hits = []
+  const isDarkSurfaceColor = (value) => {
+    const hex = value.match(/#([0-9a-fA-F]{3,8})\b/)
+    if (hex) {
+      const raw = hex[1].length === 3
+        ? hex[1].split('').map((part) => part + part).join('')
+        : hex[1]
+      const r = Number.parseInt(raw.slice(0, 2), 16)
+      const g = Number.parseInt(raw.slice(2, 4), 16)
+      const b = Number.parseInt(raw.slice(4, 6), 16)
+      return r < 45 && g < 45 && b < 55
+    }
+
+    const rgb = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
+    if (!rgb) return false
+    const alpha = rgb[4] === undefined ? 1 : Number(rgb[4])
+    return Number(rgb[1]) < 45 && Number(rgb[2]) < 45 && Number(rgb[3]) < 55 && alpha > 0.35
+  }
+
+  for (const match of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim()
+    if (!selector.includes('theme-light')) continue
+    for (const declaration of match[2].split(';')) {
+      const separator = declaration.indexOf(':')
+      if (separator === -1) continue
+      const property = declaration.slice(0, separator).trim()
+      const value = declaration.slice(separator + 1).trim()
+      if (!/^background(?:-|$)|^border/.test(property)) continue
+      if (isDarkSurfaceColor(value)) hits.push(selector + ' -> ' + property + ': ' + value)
+    }
+  }
+
+  return hits
+}
+
+function assertStylesMarkersInOrder(markers, message) {
+  let previousIndex = -1
+  for (const marker of markers) {
+    const index = styles.indexOf(marker)
+    assert(index !== -1, `${message}: missing ${marker}`)
+    assert(index > previousIndex, `${message}: ${marker} is out of order`)
+    previousIndex = index
+  }
+}
+
+function staticComponentClasses() {
+  const classes = new Set()
+  const sources = [
+    appShell,
+    terminalPane,
+    aiPanel,
+    aiConfig,
+    fileTransfer,
+    scriptPanel,
+    sidebar,
+    settingsSidebar,
+    workspacePanel,
+    commandHistoryPanel,
+    contextMenu,
+  ]
+  for (const source of sources) {
+    for (const match of source.matchAll(/class="([^"]+)"/g)) {
+      for (const token of match[1].split(/\s+/)) {
+        if (token && !/[{}()[\]:]/.test(token)) {
+          classes.add(token)
+        }
+      }
+    }
+  }
+  return classes
+}
+
+function darkSurfaceStaticClassesMissingLightCover() {
+  const usedClasses = staticComponentClasses()
+  const lightCoveredClasses = new Set()
+  for (const match of styles.matchAll(/([^{}]*theme-light[^{}]*)\{[^{}]*\}/g)) {
+    for (const classMatch of match[1].matchAll(/\.([a-zA-Z0-9_-]+)/g)) {
+      lightCoveredClasses.add(classMatch[1])
+    }
+  }
+
+  const darkSurfaceDeclaration = /(?:background|border(?:-[a-z]+)?|color)\s*:\s*[^;]*(?:#0[0-9a-fA-F]|#1[0-9a-fA-F]|#2[0-9a-fA-F]|#e[0-9a-fA-F]|#f[0-9a-fA-F]|rgba\((?:0|1\d|2\d|3\d),|rgba\((?:2[0-5]{2}|24\d|23\d),)/
+  const missing = new Set()
+  for (const match of styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1].replace(/\s+/g, ' ').trim()
+    const body = match[2]
+    if (/theme-light|@media|:root|body|button|input|textarea|select/.test(selector)) {
+      continue
+    }
+    if (!darkSurfaceDeclaration.test(body)) {
+      continue
+    }
+    for (const classMatch of selector.matchAll(/\.([a-zA-Z0-9_-]+)/g)) {
+      const className = classMatch[1]
+      if (usedClasses.has(className) && !lightCoveredClasses.has(className)) {
+        missing.add(className)
+      }
+    }
+  }
+  return [...missing].sort()
+}
+
+const missingStaticLightCovers = darkSurfaceStaticClassesMissingLightCover()
+assert(
+  missingStaticLightCovers.length === 0,
+  `Static component classes with dark surface styles must have light theme coverage: ${missingStaticLightCovers.join(', ')}`
+)
+
+assertStylesMarkersInOrder(
+  [
+    '/* Application light theme. */',
+    '/* Design-taste light theme refinement. */',
+    '/* Rail parity and SFTP directory polish. */',
+    '/* Workspace separation polish. */',
+    '/* Light theme surface hardening. */',
+    '/* Light theme layout parity. */',
+    '/* Light theme dark-surface cleanup. */',
+    '/* Light theme state surface cleanup. */',
+    '/* Light theme status indicator cleanup. */',
+    '/* Command history expanded action polish. */',
+    '/* Light theme shell structure parity contract. */',
+    '/* Light theme color-only surface contract. */',
+  ],
+  'Light theme final override layers must stay after earlier decorative theme layers'
+)
+
+const earlyLightThemeStructure = earlyLightThemeStructuralDeclarations()
+assert(
+  earlyLightThemeStructure.length === 0,
+  'Light theme rules before the layout parity layer must only recolor existing structure: ' + earlyLightThemeStructure.join(', ')
+)
+
+const surfaceContractAllowedProperties = new Set([
+  'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'background', 'background-color', 'color', 'caret-color', 'outline-color',
+])
+const surfaceContractDisallowed = disallowedDeclarationsInRange('/* Light theme color-only surface contract. */', null, surfaceContractAllowedProperties)
+assert(
+  surfaceContractDisallowed.length === 0,
+  'Light theme color-only surface contract must not change layout or geometry: ' + surfaceContractDisallowed.join(', ')
+)
+
+const darkLightSurfaces = darkLightThemeSurfaceDeclarations()
+assert(
+  darkLightSurfaces.length === 0,
+  'Light theme must not retain dark background or border surfaces: ' + darkLightSurfaces.join(', ')
+)
+
+assert(
+  appShell.includes('root.dataset.theme = theme') &&
+    appShell.includes("root.classList.toggle('theme-light', theme === 'light')") &&
+    appShell.includes("root.classList.toggle('theme-dark', theme === 'dark')") &&
+    styles.includes(':root[data-theme="light"]') &&
+    styles.includes(':root[data-theme="light"] body') &&
+    styles.includes('color-scheme: light;') &&
+    styles.includes('--light-border: #e3e9ed;') &&
+    styles.includes('--light-surface: #ffffff;') &&
+    styles.includes('--light-text: #111827;') &&
+    styles.includes('background: #f6f8fc;'),
+  'Light theme must sync document root theme state so window edges and teleported overlays follow the active theme.'
+)
+
+
+const lightThemeLayoutParityPairs = [
+  ['.app-shell', '.app-shell.theme-light'],
+  ['.app-shell.left-collapsed', '.app-shell.theme-light.left-collapsed'],
+  ['.app-shell.right-collapsed', '.app-shell.theme-light.right-collapsed'],
+  ['.app-shell.left-collapsed.right-collapsed', '.app-shell.theme-light.left-collapsed.right-collapsed'],
+  ['.titlebar', '.app-shell.theme-light .titlebar'],
+  ['.left-collapsed .titlebar', '.app-shell.theme-light.left-collapsed .titlebar'],
+  ['.sidebar', '.app-shell.theme-light .sidebar'],
+  ['.terminal-stack', '.app-shell.theme-light .terminal-stack'],
+  ['.terminal-wrap', '.app-shell.theme-light .terminal-wrap'],
+  ['.terminal-frame', '.app-shell.theme-light .terminal-frame'],
+  ['.quick-command-bar', '.app-shell.theme-light .quick-command-bar'],
+  ['.workspace-panel', '.app-shell.theme-light .workspace-panel'],
+  ['.right-panel', '.app-shell.theme-light .right-panel'],
+  ['.workspace-bar', '.app-shell.theme-light .workspace-bar'],
+  ['.workspace-tabs', '.app-shell.theme-light .workspace-tabs'],
+  ['.workspace-tabs button', '.app-shell.theme-light .workspace-tabs button'],
+  ['.app-rail', '.app-shell.theme-light .app-rail'],
+  ['.rail-button', '.app-shell.theme-light .rail-button'],
+  ['.rail-button.active', '.app-shell.theme-light .rail-button.active'],
+  ['.rail-button.active::before', '.app-shell.theme-light .rail-button.active::before'],
+  ['.rail-button .ui-icon', '.app-shell.theme-light .rail-button .ui-icon'],
+  ['.server-list', '.app-shell.theme-light .server-list'],
+  ['.search-input', '.app-shell.theme-light .search-input'],
+  ['.server-card', '.app-shell.theme-light .server-card'],
+  ['.file-row', '.app-shell.theme-light .file-row'],
+]
+
+assertLightThemeLayoutParity(lightThemeLayoutParityPairs, {
+  allowedDifferences: [
+    '.terminal-frame -> .app-shell.theme-light .terminal-frame -> box-shadow',
+  ],
+})
+
+const lightThemeContentSelectors = [
+  '.settings-card',
+  '.settings-option',
+  '.settings-search',
+  '.settings-config-list',
+  '.settings-status-card',
+  '.message-list',
+  '.message',
+  '.message-title',
+  '.message-body',
+  '.history-list',
+  '.history-row',
+  '.file-list',
+  '.file-row',
+  '.script-chat-list',
+  '.script-draft-card',
+  '.script-preview',
+  '.script-library-row',
+  '.script-reply-message',
+  '.terminal-target-card',
+  '.selected-target',
+  '.assistant-compose',
+  '.panel-head',
+  '.context-strip',
+  '.workspace-section-head',
+  '.local-pathbar',
+  '.sftp-pathbar',
+]
+const lightThemeContentParityPairs = lightThemeContentSelectors.flatMap((selector) => [
+  [selector, '.theme-light ' + selector],
+  [selector, '.app-shell.theme-light ' + selector],
+])
+assertLightThemeLayoutParity(lightThemeContentParityPairs)
+
+const lightThemeVars = lightThemeCustomProperties()
+assertContrast('var(--light-text)', 'var(--light-surface)', 4.5, 'Light theme primary text must remain readable on cards', lightThemeVars)
+assertContrast('var(--light-text)', 'var(--light-bg)', 4.5, 'Light theme primary text must remain readable on the app background', lightThemeVars)
+assertContrast('var(--light-muted)', 'var(--light-surface)', 4.5, 'Light theme secondary text must remain readable on cards', lightThemeVars)
+assertContrast('var(--light-muted)', '#fbfcfd', 4.5, 'Light theme secondary text must remain readable on soft headers', lightThemeVars)
+assertContrast('var(--light-danger)', '#fff6f7', 4.5, 'Light theme danger text must remain readable on warning surfaces', lightThemeVars)
+assertContrast('#be123c', '#fff1f2', 4.5, 'Light theme destructive action text must remain readable on danger chips', lightThemeVars)
+
+
+const lightThemeShellGeometryPattern = /\.app-shell\.theme-light[^{}]*\{[^{}]*\b(?:grid-template-columns|grid-template-rows|grid-column|grid-row|position|top|right|bottom|left|z-index|width|height|min-width|min-height|max-width|max-height|margin|margin-inline|margin-top|margin-right|margin-bottom|margin-left|padding|padding-inline|padding-top|padding-right|padding-bottom|padding-left|gap|row-gap|column-gap|border-radius|font-size|font-weight|transform)\s*:/
+assert(
+  !lightThemeShellGeometryPattern.test(styles),
+  'Light theme must inherit base shell/workspace layout; remove geometry overrides from .app-shell.theme-light rules.'
+)
+
+assert(
+  !styles.includes('/* Light theme structural cleanup. */') &&
+    !styles.includes('/* Light theme responsive parity. */') &&
+    !styles.includes('/* Light theme typography and interaction parity. */') &&
+    !styles.includes('/* Light theme right workspace 1280 parity contract. */') &&
+    !styles.includes('/* Light theme right workspace 1080 parity contract. */') &&
+    !styles.includes('/* Light theme workspace structure parity contract. */') &&
+    !styles.includes('.app-shell.theme-light {\n  grid-template-columns: 56px 280px minmax(440px, 1fr) 320px;') &&
+    !styles.includes('.app-shell.theme-light:not(.right-collapsed) {\n  grid-template-columns: 56px 270px minmax(0, 1fr) 0;') &&
+    !styles.includes('.app-shell.theme-light .workspace-tabs {\n  grid-template-columns: repeat(4, minmax(54px, 1fr));') &&
+    !styles.includes('.app-shell.theme-light:not(.right-collapsed) .right-panel') &&
+    !styles.includes('.app-shell.theme-light .app-rail {\n  gap') &&
+    !styles.includes('.app-shell.theme-light .rail-button {\n  width') &&
+    !styles.includes('.app-shell.theme-light .server-card {\n  min-height') &&
+    !styles.includes('.app-shell.theme-light .quick-command-bar {\n  margin'),
+  'Light theme must not duplicate layout geometry; shared app layout should come from base rules.'
+)
+
+assertLastCssDeclarations(
+  '.history-row.expanded .history-actions',
+  {
+    order: '-1',
+    position: 'sticky',
+    top: '0',
+    'z-index': '1',
+    'padding-top': '0',
+    'padding-bottom': '6px',
+    'border-top': '0',
+    background: 'inherit',
+  },
+  'Expanded command history actions must remain visible above long command previews',
+  { afterMarker: '/* Command history expanded action polish. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
+)
+assertLastCssDeclarations(
+  '.app-shell.theme-light .assistant-panel',
+  {
+    background: '#fff',
+    color: 'var(--light-text)',
+  },
+  'Light theme AI panel must not retain dark workspace surfaces',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .files-panel',
+  {
+    background: '#fff',
+    color: 'var(--light-text)',
+  },
+  'Light theme SFTP panel must not retain dark workspace surfaces',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .terminal-completion',
+  {
+    'border-color': 'var(--light-border)',
+    background: '#fff',
+    color: 'var(--light-text)',
+  },
+  'Light theme terminal completion popover must use light surfaces',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .transfer-browser',
+  {
+    background: 'var(--light-border)',
+  },
+  'Light theme SFTP file browser divider must be light, not dark',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
 
 assertCssRuleIncludes(
   '.assistant-panel',
@@ -495,7 +1032,7 @@ assert(
     !scriptPanel.includes(`:class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"`) &&
     !scriptPanel.includes('class="message-actions"') &&
     scriptPanel.includes('v-if="showScriptComposer"') &&
-    scriptPanel.includes("v-if=\"scriptPanelMode === 'library'\"") &&
+    scriptPanel.includes('v-if="scriptPanelMode === \'library\'"') &&
     !scriptPanel.includes('class="script-mode-tabs"') &&
     !styles.includes('.script-mode-tabs') &&
     styles.includes('.script-library') &&
@@ -760,8 +1297,11 @@ assert(
     terminalPane.includes("addEventListener('pointerdown', handleTerminalPointerDown, true)") &&
     terminalPane.includes("addEventListener('contextmenu', handleTerminalContextMenu, true)") &&
     terminalPane.includes('requestTerminalPaste') &&
+    terminalPane.includes('terminalInput: [event: TerminalInputEvent]') &&
+    terminalPane.includes("emit('terminalInput'") &&
     appShell.includes('terminalSelections') &&
-    appShell.includes('updateTerminalSelection'),
+    appShell.includes('updateTerminalSelection') &&
+    appShell.includes('@terminal-input="syncTerminalInputToTargets"'),
   'TerminalPane must expose terminal output, selection context, command history events, selection auto-copy, right-click paste, and an executeCommand bridge.'
 )
 
@@ -779,8 +1319,36 @@ assert(
     workspacePanel.includes(':command-history="commandHistory"') &&
     workspacePanel.includes(':workspace-session-id="workspaceSessionId"') &&
     workspacePanel.includes('@execute-command=') &&
-    appShell.includes('executeCommandOnActiveTerminal'),
-  'AI workspace must receive current terminal content and command history and be able to execute generated commands in the active terminal.'
+    appShell.includes('executeCommandOnTargetTerminals'),
+  'AI workspace must receive current terminal content and command history and execute generated commands through the selected terminal targets.'
+)
+
+assert(
+  !terminalPane.includes('class="status-bar"') &&
+    !terminalPane.includes('local-shell') &&
+    !terminalPane.includes('gateway:{{') &&
+    styles.includes('grid-template-rows: minmax(0, 1fr) auto;'),
+  'Terminal pane must not render the old bottom local status footer.'
+)
+
+assert(
+  appShell.includes('selectedTerminalIds') &&
+    appShell.includes('targetTerminalIds') &&
+    appShell.includes('multiTerminalInputEnabled') &&
+    appShell.includes('terminalTargetLabel') &&
+    appShell.includes('toggleTerminalTarget') &&
+    appShell.includes('selectAllTerminalTargets') &&
+    appShell.includes('resetTerminalTargetsToActive') &&
+    appShell.includes('syncTerminalInputToTargets') &&
+    appShell.includes('writeInputToTargetTerminals') &&
+    appShell.includes('terminal-target-toggle') &&
+    appShell.includes('terminal-target-summary') &&
+    appShell.includes('{{ terminalTargetLabel }}') &&
+    styles.includes('.terminal-target-toggle') &&
+    styles.includes('.terminal-target-summary') &&
+    aiPanel.includes('已发送到目标终端') &&
+    scriptPanel.includes('已发送到目标终端'),
+  'Terminal tabs must support selecting multiple targets for synchronized input, AI command execution, and script execution.'
 )
 
 assert(
@@ -989,10 +1557,17 @@ assert(
     commandHistoryPanel.includes('copyCommand') &&
     commandHistoryPanel.includes('expandedCommandIds') &&
     commandHistoryPanel.includes('isLongCommand') &&
+    commandHistoryPanel.includes('history-command-cell') &&
+    commandHistoryPanel.includes(':aria-expanded="isExpanded(entry)"') &&
     commandHistoryPanel.includes("emit('rerun'") &&
     styles.includes('.history-toolbar') &&
     styles.includes('.history-meta') &&
     styles.includes('.history-row.expanded') &&
+    styles.includes('.history-row.expanded .history-actions') &&
+    styles.includes('grid-template-columns: minmax(0, 1fr);') &&
+    styles.includes('overflow-wrap: anywhere;') &&
+    styles.includes('/* Command history expanded action polish. */') &&
+    styles.includes('order: -1;') &&
     styles.includes('.history-actions'),
   'CommandHistoryPanel must cap visible command history, support search, copy, long-command expansion, and allow rerunning a command.'
 )
@@ -1051,6 +1626,20 @@ assert(
 assert(
   terminalPane.includes('quick-command-bar') &&
     terminalPane.includes('quickCommands') &&
+    terminalPane.includes('quickCommandSettingsOpen') &&
+    terminalPane.includes('quickCommandDraft') &&
+    terminalPane.includes('recommendQuickCommandsWithAi') &&
+    terminalPane.includes('chatWithAiProvider') &&
+    terminalPane.includes('class="modal quick-command-modal"') &&
+    !terminalPane.includes('@click.self="closeQuickCommandSettings"') &&
+    terminalPane.includes('v-model="quickCommandDraft"') &&
+    terminalPane.includes('AI 推荐') &&
+    terminalPane.includes('aiConfig?: AiProviderConfig') &&
+    terminalPane.includes('apiKey?: string') &&
+    (appShell.match(/:ai-config="aiConfig"/g) ?? []).length >= 2 &&
+    (appShell.match(/:api-key="activeAiRuntimeApiKey"/g) ?? []).length >= 2 &&
+    styles.includes('.quick-command-modal') &&
+    styles.includes('.quick-command-editor') &&
     terminalPane.includes('terminal-heading') &&
     terminalPane.includes('copyTerminalOutput') &&
     !terminalPane.includes('connection-strip'),
@@ -1140,11 +1729,13 @@ assert(
 
 assert(
   sidebar.includes('shouldShowTargetPassword') &&
+    sidebar.includes("return profile.target.authMode !== 'key'") &&
     sidebar.includes('targetPasswordLabel') &&
     sidebar.includes('\\u670d\\u52a1\\u5668\\u5bc6\\u7801\\uff08\\u53ef\\u9009\\uff09') &&
-    appShell.includes("normalized.jumpMode === 'interactive-menu'") &&
-    appShell.includes('normalized.target.password = undefined'),
-  'Interactive-menu bastion profiles must treat the internal server password as optional and avoid saving or auto-submitting it when blank.'
+    sidebar.includes('v-model="selectedProfile.target.password"') &&
+    appShell.includes('if (!normalized.target.password?.trim()) normalized.target.password = undefined') &&
+    !appShell.includes("normalized.jumpMode === 'interactive-menu' && normalized.fileTransferMode !== 'sftp-gateway'"),
+  'Interactive-menu bastion profiles must keep the target server password optional, visible, and saved when provided.'
 )
 
 assert(
@@ -1171,5 +1762,158 @@ assert(
     styles.includes('.script-risk-thinking') &&
     styles.includes('.script-risk-ai-placeholder'),
   'Risk confirmation modals must stay open on backdrop clicks and stream AI risk explanations with an active answering state.'
+)
+
+assert(
+  settingsSidebar.includes('terminalFontFamily') &&
+    settingsSidebar.includes('terminalFontSize') &&
+    settingsSidebar.includes('defaultShell') &&
+    settingsSidebar.includes('proxyUrl') &&
+    settingsSidebar.includes('\u7ec8\u7aef\u5916\u89c2') &&
+    settingsSidebar.includes('\u7f51\u7edc\u4e0e\u4ee3\u7406') &&
+    settingsSidebar.includes('\u9009\u62e9\u7ec8\u7aef\u5b57\u4f53') &&
+    settingsSidebar.includes('Cascadia Mono') &&
+    !settingsSidebar.includes('\u7ec8\u7aef\u4e3b\u9898') &&
+    !settingsSidebar.includes('v-model="draft.terminalTheme"') &&
+    !settingsSidebar.includes('\u5b89\u5168\u4e0e\u5bc6\u94a5') &&
+    !settingsSidebar.includes('\u66f4\u65b0\u4e0e\u6570\u636e') &&
+    !settingsSidebar.includes("activeSection === 'security'") &&
+    !settingsSidebar.includes("activeSection === 'data'") &&
+    settingsSidebar.includes('aiConfigSearch') &&
+    settingsSidebar.includes('sortedAiConfigs') &&
+    settingsSidebar.includes('filteredAiConfigs') &&
+    settingsSidebar.includes('settings-ai-list') &&
+    settingsSidebar.includes('settings-search') &&
+    settingsSidebar.includes('settings-config-list') &&
+    settingsSidebar.includes('\u6ca1\u6709\u5339\u914d\u7684 AI \u914d\u7f6e') &&
+    appShell.includes('USER_SETTINGS_STORAGE_KEY') &&
+    appShell.includes('updateUserSettings') &&
+    appShell.includes('showToast') &&
+    !appShell.includes('class="app-status-bar"') &&
+    appShell.includes('class="toast-stack"') &&
+    terminalPane.includes('terminalSettings?: TerminalVisualSettings') &&
+    terminalPane.includes('applyTerminalAppearance') &&
+    terminalPane.includes('terminalThemeOptions') &&
+    appShell.includes(':terminal-settings="appSettings"') &&
+    styles.includes('.settings-controls') &&
+    styles.includes('.settings-search') &&
+    styles.includes('.settings-config-list') &&
+    styles.includes('.settings-empty') &&
+    styles.includes('.app-toast') &&
+    styles.includes('.toast-stack'),
+  'Settings center must keep the visible settings surface focused, use selectable terminal fonts, hide terminal theme controls, and retain shared toasts.'
+)
+
+assert(
+  commandHistoryPanel.includes('\u6682\u65e0\u547d\u4ee4\u5386\u53f2') &&
+    commandHistoryPanel.includes('\u6ca1\u6709\u5339\u914d\u7684\u547d\u4ee4') &&
+    commandHistoryPanel.includes('UiIcon') &&
+    !commandHistoryPanel.includes('No command history') &&
+    !commandHistoryPanel.includes('No matching commands') &&
+    terminalPane.includes('SFTP \u76f4\u8fde') &&
+    terminalPane.includes('SFTP \u7ecf\u7f51\u5173') &&
+    !terminalPane.includes('SFTP direct') &&
+    !terminalPane.includes('SFTP via gateway'),
+  'Command history and SFTP mode labels must be localized to Chinese.'
+)
+
+assert(
+  uiIcon.includes("'arrow-left'") &&
+    uiIcon.includes("'download'") &&
+    uiIcon.includes("'upload'") &&
+    uiIcon.includes("'save'") &&
+    uiIcon.includes("'maximize'") &&
+    uiIcon.includes("'search'") &&
+    uiIcon.includes("'stop'") &&
+    aiPanel.includes('import UiIcon') &&
+    aiPanel.includes('name="history"') &&
+    aiPanel.includes('name="arrow-right"') &&
+    scriptPanel.includes('import UiIcon') &&
+    scriptPanel.includes('name="save"') &&
+    scriptPanel.includes('name="maximize"') &&
+    fileTransfer.includes('import UiIcon') &&
+    fileTransfer.includes('name="upload"') &&
+    fileTransfer.includes('name="download"') &&
+    fileTransfer.includes('name="folder-open"'),
+  'AI, script, SFTP, and history surfaces must use UiIcon for common action buttons instead of fragile character glyphs.'
+)
+assert(
+  !styles.includes('.app-shell.theme-light .local-pathbar input') &&
+    !styles.includes('.app-shell.theme-light .sftp-pathbar input') &&
+    !styles.includes('.app-shell.theme-light .file-row {\n  min-height') &&
+    !styles.includes('.app-shell.theme-light .file-copy {\n  gap') &&
+    !styles.includes('.app-shell.theme-light .file-actions {\n  gap') &&
+    !styles.includes('.app-shell.theme-light .file-type-icon, .app-shell.theme-light .file-type-icon.file'),
+  'Light theme SFTP directory must inherit the base file-browser geometry and only recolor surfaces.'
+)
+
+assert(
+  appShell.includes("const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'") &&
+    appShell.includes("type AppTheme = 'dark' | 'light'") &&
+    appShell.includes('const appTheme = ref<AppTheme>(loadAppTheme())') &&
+    appShell.includes('class="rail-button theme-toggle-button"') &&
+    appShell.includes("'theme-light': appTheme === 'light'") &&
+    appShell.includes(':app-theme="appTheme"') &&
+    terminalPane.includes("appTheme?: 'dark' | 'light'") &&
+    terminalPane.includes("props.appTheme === 'light' ? 'light'") &&
+    uiIcon.includes("| 'sun'") &&
+    uiIcon.includes("| 'moon'") &&
+    uiIcon.includes("name === 'sun'") &&
+    uiIcon.includes("name === 'moon'") &&
+    styles.includes('/* Application light theme. */') &&
+    styles.includes('/* Design-taste light theme refinement. */') &&
+    styles.includes('/* Workspace separation polish. */') &&
+    styles.includes('/* Light theme surface hardening. */') &&
+    styles.includes('/* History expansion and light divider polish. */') &&
+    styles.includes('/* Light theme layout parity. */') &&
+    styles.includes('/* Light theme dark-surface cleanup. */') &&
+    styles.includes('/* Light theme state surface cleanup. */') &&
+    styles.includes('/* Light theme status indicator cleanup. */') &&
+    styles.includes('/* Command history expanded action polish. */') &&
+    styles.includes('/* Light theme shell structure parity contract. */') &&
+    styles.includes('/* Light theme color-only surface contract. */') &&
+    styles.includes('.theme-light .brand') &&
+    styles.includes('border-right-color: var(--light-border);') &&
+    styles.includes('.theme-light .workspace-tabs') &&
+    styles.includes('.theme-light .terminal-frame') &&
+    styles.includes('.theme-light .history-list') &&
+    styles.includes('.theme-light .history-row') &&
+    styles.includes('.theme-light .quick-command-modal') &&
+    styles.includes('.theme-light .script-preview-modal') &&
+    styles.includes('.theme-light .script-risk-modal .modal-head') &&
+    styles.includes('.theme-light .file-context-menu') &&
+    styles.includes('.theme-light .terminal-completion') &&
+    styles.includes('.app-shell.theme-light .terminal-native-code .xterm-host .composition-view') &&
+    styles.includes('.app-shell.theme-light .workspace-open-handle') &&
+    styles.includes('.app-shell.theme-light .record-dot') &&
+    styles.includes('.app-shell.theme-light .status-dot.live') &&
+    styles.includes('.app-shell.theme-light .badge') &&
+    styles.includes('.rail-button.active::before') &&
+    styles.includes('.rail-button .ui-icon') &&
+    styles.includes('.theme-light .local-pathbar') &&
+    styles.includes('.theme-light .file-actions .icon-button:hover:not(:disabled)') &&
+    !appShell.includes('profileStoreStatusLabel'),
+  'AppShell must provide a persisted light theme toggle and make all major workspace surfaces follow the app theme.'
+)
+
+assert(
+  !styles.includes('/* Light theme structural cleanup. */') &&
+    !styles.includes('/* Light theme responsive parity. */') &&
+    !styles.includes('/* Light theme typography and interaction parity. */') &&
+    !styles.includes('/* Light theme right workspace 1280 parity contract. */') &&
+    !styles.includes('/* Light theme right workspace 1080 parity contract. */') &&
+    !styles.includes('/* Light theme workspace structure parity contract. */') &&
+    !styles.includes('.app-shell.theme-light {\n  grid-template-columns: 56px 280px minmax(440px, 1fr) 320px;') &&
+    !styles.includes('.app-shell.theme-light:not(.right-collapsed) {\n  grid-template-columns: 56px 270px minmax(0, 1fr) 0;') &&
+    !styles.includes('.app-shell.theme-light .workspace-tabs {\n  grid-template-columns: repeat(4, minmax(54px, 1fr));') &&
+    !styles.includes('.app-shell.theme-light:not(.right-collapsed) .right-panel') &&
+    !styles.includes('.app-shell.theme-light .workspace-tabs button {\n  height') &&
+    !styles.includes('.app-shell.theme-light .app-rail {\n  gap') &&
+    !styles.includes('.app-shell.theme-light .rail-button {\n  width') &&
+    !styles.includes('.app-shell.theme-light .server-list {\n  gap') &&
+    !styles.includes('.app-shell.theme-light .search-input {\n  width') &&
+    !styles.includes('.app-shell.theme-light .server-card {\n  min-height') &&
+    !styles.includes('.app-shell.theme-light .quick-command-bar {\n  margin'),
+  'Light theme must inherit base geometry; theme-specific rules should not duplicate shell, rail, sidebar, terminal, or workspace layout.'
 )
 console.log('production-ui-check passed')

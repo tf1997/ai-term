@@ -28,6 +28,38 @@ fn valid_profile_passes() {
 }
 
 #[test]
+fn interactive_menu_profile_without_target_username_passes() {
+    let profile = ConnectionProfile {
+        id: "prod-app-01".into(),
+        name: "prod-app-01".into(),
+        gateway: endpoint("ssh.company.com", "company.user"),
+        target: endpoint("10.12.8.21", ""),
+        jump_mode: JumpMode::InteractiveMenu,
+        menu_profile_id: "company-default".into(),
+        file_transfer_mode: FileTransferMode::Auto,
+    };
+
+    assert!(validate_profile(&profile).is_ok());
+}
+
+#[test]
+fn direct_profile_without_target_username_fails() {
+    let profile = ConnectionProfile {
+        id: "direct-prod-app-01".into(),
+        name: "direct-prod-app-01".into(),
+        gateway: endpoint("", ""),
+        target: endpoint("10.12.8.21", ""),
+        jump_mode: JumpMode::Direct,
+        menu_profile_id: "".into(),
+        file_transfer_mode: FileTransferMode::Auto,
+    };
+
+    assert_eq!(
+        validate_profile(&profile).unwrap_err().to_string(),
+        "target username is required"
+    );
+}
+#[test]
 fn empty_gateway_host_fails() {
     let profile = ConnectionProfile {
         id: "prod-app-01".into(),

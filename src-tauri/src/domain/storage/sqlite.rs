@@ -416,7 +416,11 @@ impl SqliteConfigStore {
                 LIMIT ?3
               )
             "#,
-            params![connection_id, workspace_session_id, COMMAND_HISTORY_RETENTION_LIMIT],
+            params![
+                connection_id,
+                workspace_session_id,
+                COMMAND_HISTORY_RETENTION_LIMIT
+            ],
         )?;
         Ok(())
     }

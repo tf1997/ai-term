@@ -24,6 +24,7 @@ tauri = { version = "1", features = ["shell-open", "http-api"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 portable-pty = "0.9"
+ssh2 = "0.9.6"
 
 [build-dependencies]
 tauri-build = { version = "1", features = [] }

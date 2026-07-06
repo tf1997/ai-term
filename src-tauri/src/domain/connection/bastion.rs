@@ -7,7 +7,10 @@ use super::models::{AuthEndpoint, AuthMode, ConnectionProfile};
 use crate::domain::pty::{
     append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
 };
-use crate::domain::terminal::ssh::output_contains_password_prompt;
+use crate::domain::terminal::ssh::{
+    app_known_hosts_ssh_args, host_key_warning_hint, output_contains_host_key_warning,
+    output_contains_password_prompt,
+};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -27,18 +30,19 @@ pub fn probe_servers(profile: &ConnectionProfile) -> Result<Vec<BastionServerCan
 
 fn run_gateway_probe(profile: &ConnectionProfile, timeout: Duration) -> Result<String> {
     let endpoint = &profile.gateway;
-    let args = vec![
+    let mut args = vec![
         "-tt".to_string(),
         "-o".to_string(),
         "BatchMode=no".to_string(),
-        "-o".to_string(),
-        "StrictHostKeyChecking=accept-new".to_string(),
+    ];
+    args.extend(app_known_hosts_ssh_args());
+    args.extend([
         "-o".to_string(),
         "NumberOfPasswordPrompts=1".to_string(),
         "-p".to_string(),
         endpoint.port.unwrap_or(22).to_string(),
         endpoint_destination(endpoint),
-    ];
+    ]);
 
     let mut process = spawn_pty_process(PtyCommand::new("ssh", args), 80, 24)?;
     let writer = process.writer.clone();
@@ -67,6 +71,12 @@ fn run_gateway_probe(profile: &ConnectionProfile, timeout: Duration) -> Result<S
         }
 
         let normalized = prompt_window.to_lowercase();
+        if output_contains_host_key_warning(&prompt_window) {
+            process.session.kill();
+            let _ = process.child.wait();
+            bail!("{}", host_key_warning_hint(&prompt_window));
+        }
+
         if !host_key_confirmed
             && normalized.contains("are you sure you want to continue connecting")
         {

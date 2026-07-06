@@ -21,6 +21,7 @@ import {
   type SftpProbeResponse,
   type SftpTransferResponse
 } from '../lib/tauri'
+import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{
   connectionId: string
@@ -1040,14 +1041,14 @@ function shellQuote(value: string) {
     <div class="panel-head">
       <strong>文件传输</strong>
       <div class="panel-actions">
-        <button class="icon-button" type="button" title="识别当前终端服务器" aria-label="识别当前终端服务器" :disabled="!remoteReady || identifying" @click="identifyCurrentTerminalTarget">◎</button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="探测堡垒机服务器" aria-label="探测堡垒机服务器" :disabled="!remoteReady || probing || loading" @click="probeTargets">⌕</button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory()">↻</button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory">＋</button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry">↓</button>
-        <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!remoteReady || loading || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload">↑</button>
+        <button class="icon-button" type="button" title="识别当前终端服务器" aria-label="识别当前终端服务器" :disabled="!remoteReady || identifying" @click="identifyCurrentTerminalTarget"><UiIcon name="terminal" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="探测堡垒机服务器" aria-label="探测堡垒机服务器" :disabled="!remoteReady || probing || loading" @click="probeTargets"><UiIcon name="search" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory()"><UiIcon name="refresh" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory"><UiIcon name="folder" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
+        <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!remoteReady || loading || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload"><UiIcon name="upload" /></button>
         <button v-if="activeTask" class="icon-button danger" type="button" title="取消当前任务" aria-label="取消当前任务" :disabled="activeTask.cancelling" @click="cancelActiveTask">
-          {{ activeTask.cancelling ? '…' : '×' }}
+          <span v-if="activeTask.cancelling" class="spinner-dot" aria-hidden="true" /><UiIcon v-else name="close" />
         </button>
         <input ref="fileInput" type="file" multiple class="visually-hidden" @change="uploadSelectedFiles" />
       </div>
@@ -1167,7 +1168,7 @@ function shellQuote(value: string) {
           <span>{{ localPath || localHome }}</span>
         </div>
         <div class="local-pathbar">
-          <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="localLoading" @click="goLocalParent">←</button>
+          <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="localLoading" @click="goLocalParent"><UiIcon name="arrow-left" /></button>
           <input v-model="localPathDraft" :disabled="localLoading" placeholder="用户目录" @keydown.enter="loadLocalDirectory(localPathDraft)" />
           <button type="button" :disabled="localLoading" @click="loadLocalDirectory(localPathDraft)">打开</button>
           <button type="button" :disabled="localLoading || !localHome" @click="loadLocalDirectory(localHome)">用户目录</button>
@@ -1188,12 +1189,12 @@ function shellQuote(value: string) {
               <span class="file-type-icon" :class="{ folder: entry.isDir, file: !entry.isDir }" aria-hidden="true" />
               <div class="file-copy">
                 <strong>{{ entry.name }}</strong>
-                <span>{{ entry.isDir ? 'folder' : formatSize(entry.size) }} · {{ formatLocalModified(entry.modified) }}</span>
+                <span>{{ entry.isDir ? '目录' : formatSize(entry.size) }} · {{ formatLocalModified(entry.modified) }}</span>
               </div>
             </div>
             <div class="file-actions">
-              <button class="icon-button" type="button" title="打开文件位置" aria-label="打开文件位置" @click.stop="openLocalFileLocation(entry)">↗</button>
-              <button class="icon-button" type="button" title="上传到远端目录" aria-label="上传到远端目录" :disabled="!remoteReady || loading" @click.stop="selectedLocalEntry = entry; uploadSelectedLocalEntry()">↑</button>
+              <button class="icon-button" type="button" title="打开文件位置" aria-label="打开文件位置" @click.stop="openLocalFileLocation(entry)"><UiIcon name="external-link" /></button>
+              <button class="icon-button" type="button" title="上传到远端目录" aria-label="上传到远端目录" :disabled="!remoteReady || loading" @click.stop="selectedLocalEntry = entry; uploadSelectedLocalEntry()"><UiIcon name="upload" /></button>
             </div>
           </article>
         </div>
@@ -1205,7 +1206,7 @@ function shellQuote(value: string) {
           <span>{{ currentPath }}</span>
         </div>
         <div class="sftp-pathbar">
-          <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || loading" @click="goParent">←</button>
+          <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || loading" @click="goParent"><UiIcon name="arrow-left" /></button>
           <input v-model="pathDraft" :disabled="!remoteReady || loading" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
           <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory(pathDraft)">打开</button>
         </div>
@@ -1226,13 +1227,13 @@ function shellQuote(value: string) {
               <span class="file-type-icon" :class="{ folder: entry.isDir, file: !entry.isDir }" aria-hidden="true" />
               <div class="file-copy">
                 <strong>{{ entry.name }}</strong>
-                <span>{{ entry.permissions }} · {{ entry.isDir ? 'folder' : formatSize(entry.size) }} · {{ entry.modified }}</span>
+                <span>{{ entry.permissions }} · {{ entry.isDir ? '目录' : formatSize(entry.size) }} · {{ entry.modified }}</span>
               </div>
             </div>
             <div class="file-actions">
-              <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" @click.stop="openEntry(entry)">↳</button>
-              <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" @click.stop="downloadEntry(entry)">↓</button>
-              <button class="icon-button danger" type="button" title="删除" aria-label="删除" @click.stop="deleteEntry(entry)">⌫</button>
+              <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" @click.stop="openEntry(entry)"><UiIcon name="folder-open" /></button>
+              <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" @click.stop="downloadEntry(entry)"><UiIcon name="download" /></button>
+              <button class="icon-button danger" type="button" title="删除" aria-label="删除" @click.stop="deleteEntry(entry)"><UiIcon name="trash" /></button>
             </div>
           </article>
         </div>

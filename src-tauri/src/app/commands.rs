@@ -29,7 +29,7 @@ use crate::domain::filesystem::local::{
     home_directory, list_directory as list_local_directory_impl, LocalDirectoryResponse,
 };
 use crate::domain::terminal::local::spawn_local_terminal;
-use crate::domain::terminal::ssh::spawn_ssh_terminal;
+use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
 use crate::domain::workspace::{
     AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
 };
@@ -84,12 +84,18 @@ pub async fn connect_profile(
             });
         },
     )
-    .map_err(|err| err.to_string())?;
+    .map_err(|err| format!("{err:#}"))?;
 
     state
-        .register_terminal_session(session_id.clone(), profile_id, Box::new(terminal))
+        .register_terminal_session(session_id.clone(), profile_id, terminal)
         .await;
     Ok(session_id)
+}
+
+#[tauri::command]
+pub async fn forget_ai_term_known_host(host: String, port: Option<u16>) -> Result<usize, String> {
+    remove_ai_term_known_host(&host, port.filter(|value| *value > 0).unwrap_or(22))
+        .map_err(|err| format!("{err:#}"))
 }
 
 #[tauri::command]

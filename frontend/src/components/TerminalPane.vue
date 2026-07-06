@@ -5,23 +5,38 @@ import type { IDisposable } from '@xterm/xterm'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
 import '@xterm/xterm/css/xterm.css'
 import {
+  chatWithAiProvider,
   connectProfile,
   connectLocalTerminal,
+  forgetAiTermKnownHost,
   disconnectTerminal,
   onTerminalClosed,
   onTerminalData,
+  saveConnectionProfile,
   terminalResize,
   terminalSessionActive,
   terminalWrite
 } from '../lib/tauri'
-import type { ConnectionProfile } from '../types/profile'
-import type { CommandHistoryEntry, CommandRecordedEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+import type { AiProviderConfig, AuthEndpoint, ConnectionProfile } from '../types/profile'
+import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
 import UiIcon from './UiIcon.vue'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
 type CompletionSuggestionSource = 'system' | 'history' | 'session'
+type TerminalTheme = 'midnight' | 'matrix' | 'light'
 
+interface TerminalVisualSettings {
+  terminalFontFamily: string
+  terminalFontSize: number
+  terminalTheme: TerminalTheme
+}
+
+interface SshHostKeyTarget {
+  host: string
+  port: number
+  label: string
+}
 interface CompletionSuggestion {
   command: string
   source: CompletionSuggestionSource
@@ -32,13 +47,19 @@ const props = defineProps<{
   profile?: ConnectionProfile
   connectRequest: number
   commandHistory: CommandHistoryEntry[]
+  terminalSettings?: TerminalVisualSettings
+  appTheme?: 'dark' | 'light'
+  aiConfig?: AiProviderConfig
+  apiKey?: string
 }>()
 
 const emit = defineEmits<{
   terminalOutput: [event: TerminalOutputEvent]
   terminalSelection: [event: TerminalSelectionEvent]
+  terminalInput: [event: TerminalInputEvent]
   commandRecorded: [event: CommandRecordedEvent]
   statusChanged: [terminalId: string, status: TerminalRuntimeStatus]
+  profileUpdated: [profileId: string]
 }>()
 
 const terminalHost = ref<HTMLDivElement | null>(null)
@@ -62,8 +83,26 @@ const terminalCompletionOpen = ref(false)
 const completionSuggestions = ref<CompletionSuggestion[]>([])
 const completionActiveIndex = ref(0)
 const localCommandHistory = ref<string[]>([])
-const quickCommands = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
-
+const DEFAULT_QUICK_COMMANDS = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
+const QUICK_COMMAND_STORAGE_KEY = 'ai-term:quick-commands:v1'
+const QUICK_COMMAND_LIMIT = 12
+const quickCommands = ref<string[]>(loadQuickCommands())
+const quickCommandSettingsOpen = ref(false)
+const quickCommandDraft = ref(quickCommands.value.join('\n'))
+const quickCommandNotice = ref('')
+const quickCommandError = ref('')
+const quickCommandAiLoading = ref(false)
+const sshAuthPromptOpen = ref(false)
+const sshAuthPassword = ref('')
+const sshAuthError = ref('')
+const sshAuthSaving = ref(false)
+const sshAuthFailedDetail = ref('')
+const sshHostKeyPromptOpen = ref(false)
+const sshHostKeySaving = ref(false)
+const sshHostKeyError = ref('')
+const sshHostKeyFailedDetail = ref('')
+const sshHostKeyKnownHosts = ref('')
+const sshHostKeyTarget = ref<SshHostKeyTarget | undefined>(undefined)
 function startConnectionAttempt() {
   connectionAttempt += 1
   return connectionAttempt
@@ -82,6 +121,150 @@ function emitTerminalStatus(value = status.value) {
   emit('statusChanged', props.terminalId, value)
 }
 
+function cloneConnectionProfile(profile: ConnectionProfile): ConnectionProfile {
+  return JSON.parse(JSON.stringify(profile)) as ConnectionProfile
+}
+
+function sshAuthTargetLabel(profile?: ConnectionProfile) {
+  if (!profile) return 'SSH \u670d\u52a1\u5668'
+  return profile.jumpMode === 'interactive-menu' ? '\u5821\u5792\u673a' : '\u76ee\u6807\u670d\u52a1\u5668'
+}
+
+function shouldAskForSshPassword(error: unknown) {
+  if (!props.profile || isSftpProfile(props.profile)) return false
+  const message = formatError(error)
+  return (
+    message.includes('password: no saved password') ||
+    message.includes('SSH \u8ba4\u8bc1\u5931\u8d25') ||
+    message.includes('Authentication failed') ||
+    message.includes('no saved password')
+  )
+}
+
+function openSshAuthPrompt(detail: string) {
+  sshAuthFailedDetail.value = detail
+  sshAuthPassword.value = ''
+  sshAuthError.value = ''
+  sshAuthSaving.value = false
+  sshAuthPromptOpen.value = true
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>('.ssh-auth-modal input[type="password"]')
+    input?.focus()
+  })
+}
+
+function closeSshAuthPrompt() {
+  if (sshAuthSaving.value) return
+  sshAuthPromptOpen.value = false
+  sshAuthPassword.value = ''
+  sshAuthError.value = ''
+}
+
+async function submitSshAuthPassword() {
+  if (!props.profile) return
+  const password = sshAuthPassword.value
+  if (!password) {
+    sshAuthError.value = '\u8bf7\u8f93\u5165\u5bc6\u7801'
+    return
+  }
+  sshAuthSaving.value = true
+  sshAuthError.value = ''
+  try {
+    const updated = cloneConnectionProfile(props.profile)
+    const endpoint = updated.jumpMode === 'interactive-menu' ? updated.gateway : updated.target
+    endpoint.authMode = 'password'
+    endpoint.password = password
+    await saveConnectionProfile(updated)
+    emit('profileUpdated', updated.id)
+    sshAuthPromptOpen.value = false
+    sshAuthPassword.value = ''
+    await connectRemote()
+  } catch (error) {
+    sshAuthError.value = formatError(error)
+  } finally {
+    sshAuthSaving.value = false
+  }
+}
+
+function shouldAskForSshHostKeyReset(error: unknown) {
+  const message = formatError(error)
+  return message.includes('SSH host key verification failed') && message.includes('AI Term known_hosts')
+}
+
+function endpointPort(endpoint: AuthEndpoint) {
+  return endpoint.port ?? 22
+}
+
+function endpointHostPort(endpoint: AuthEndpoint) {
+  return `${endpoint.host}:${endpointPort(endpoint)}`
+}
+
+function endpointLabelForHostKey(endpoint: AuthEndpoint) {
+  const username = endpoint.username?.trim()
+  return `${username ? `${username}@` : ''}${endpointHostPort(endpoint)}`
+}
+
+function endpointMatchesHostKeyDetail(endpoint: AuthEndpoint, detail: string) {
+  const host = endpoint.host?.trim()
+  if (!host) return false
+  return detail.includes(endpointLabelForHostKey(endpoint)) || detail.includes(endpointHostPort(endpoint))
+}
+
+function resolveSshHostKeyTarget(detail: string): SshHostKeyTarget | undefined {
+  const profile = activeSessionProfile.value ?? props.profile
+  if (!profile) return undefined
+  const candidates = [profile.target, profile.gateway].filter((endpoint) => endpoint.host?.trim())
+  const endpoint = candidates.find((candidate) => endpointMatchesHostKeyDetail(candidate, detail)) ?? candidates[0]
+  if (!endpoint) return undefined
+  return {
+    host: endpoint.host.trim(),
+    port: endpointPort(endpoint),
+    label: endpointLabelForHostKey(endpoint)
+  }
+}
+
+function extractKnownHostsPath(detail: string) {
+  return detail.match(/Known hosts:\s*([^\r\n]+)/)?.[1]?.trim() ?? ''
+}
+
+function openSshHostKeyPrompt(detail: string) {
+  const target = resolveSshHostKeyTarget(detail)
+  if (!target) return
+  sshHostKeyTarget.value = target
+  sshHostKeyFailedDetail.value = detail
+  sshHostKeyKnownHosts.value = extractKnownHostsPath(detail)
+  sshHostKeyError.value = ''
+  sshHostKeySaving.value = false
+  sshHostKeyPromptOpen.value = true
+}
+
+function closeSshHostKeyPrompt() {
+  if (sshHostKeySaving.value) return
+  sshHostKeyPromptOpen.value = false
+  sshHostKeyError.value = ''
+}
+
+async function confirmSshHostKeyReset() {
+  const target = sshHostKeyTarget.value
+  if (!target) return
+  sshHostKeySaving.value = true
+  sshHostKeyError.value = ''
+  try {
+    const removed = await forgetAiTermKnownHost(target.host, target.port)
+    sshHostKeyPromptOpen.value = false
+    const notice = removed > 0
+      ? `\r\n[AI Term] 已移除 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
+      : `\r\n[AI Term] 没有找到 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
+    terminal?.write(notice)
+    appendTerminalOutput(notice)
+    await connectRemote()
+  } catch (error) {
+    sshHostKeyError.value = formatError(error)
+  } finally {
+    sshHostKeySaving.value = false
+  }
+}
+
 function systemCommandSuggestions() {
   const common = ['cd', 'ls', 'pwd', 'cat', 'grep', 'find', 'mkdir', 'touch', 'cp', 'mv', 'rm', 'echo', 'curl', 'wget', 'ssh', 'scp', 'rsync', 'tar', 'chmod', 'chown', 'ps', 'top', 'htop', 'kill', 'df -h', 'du -sh', 'free -m', 'ping', 'git status', 'git pull', 'git checkout', 'git log --oneline', 'docker ps', 'docker logs', 'kubectl get pods']
   const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase()
@@ -96,6 +279,157 @@ function systemCommandSuggestions() {
 
 function historyCommandSuggestions() {
   return [...props.commandHistory.map((entry) => entry.command), ...localCommandHistory.value]
+}
+
+function loadQuickCommands() {
+  try {
+    const raw = window.localStorage.getItem(QUICK_COMMAND_STORAGE_KEY)
+    if (!raw) return [...DEFAULT_QUICK_COMMANDS]
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return normalizeQuickCommandList(parsed)
+  } catch (error) {
+    console.warn('failed to load quick commands', error)
+  }
+  return [...DEFAULT_QUICK_COMMANDS]
+}
+
+function persistQuickCommands(commands: string[]) {
+  window.localStorage.setItem(QUICK_COMMAND_STORAGE_KEY, JSON.stringify(commands))
+}
+
+function normalizeQuickCommandList(commands: string[]) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  commands.forEach((command) => {
+    const value = command.replace(/\s+/g, ' ').trim()
+    const key = value.toLowerCase()
+    if (!value || seen.has(key) || value.length > 140) return
+    seen.add(key)
+    result.push(value)
+  })
+  return result.slice(0, QUICK_COMMAND_LIMIT)
+}
+
+function normalizeQuickCommandText(text: string) {
+  return normalizeQuickCommandList(text.split(/\r?\n/))
+}
+
+function openQuickCommandSettings() {
+  quickCommandDraft.value = quickCommands.value.join('\n')
+  quickCommandNotice.value = ''
+  quickCommandError.value = ''
+  quickCommandSettingsOpen.value = true
+}
+
+function closeQuickCommandSettings() {
+  quickCommandSettingsOpen.value = false
+  quickCommandAiLoading.value = false
+}
+
+function saveQuickCommandSettings() {
+  const nextCommands = normalizeQuickCommandText(quickCommandDraft.value)
+  quickCommands.value = nextCommands
+  quickCommandDraft.value = nextCommands.join('\n')
+  persistQuickCommands(nextCommands)
+  quickCommandError.value = ''
+  quickCommandNotice.value = '快速命令已保存。'
+}
+
+function resetQuickCommandDraft() {
+  quickCommandDraft.value = DEFAULT_QUICK_COMMANDS.join('\n')
+  quickCommandError.value = ''
+  quickCommandNotice.value = '已恢复默认候选，保存后生效。'
+}
+
+function quickCommandHistorySeed() {
+  const seen = new Set<string>()
+  return historyCommandSuggestions()
+    .map((command) => command.trim())
+    .filter((command) => {
+      const key = command.toLowerCase()
+      if (!command || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(-80)
+}
+
+function buildQuickCommandPrompt(history: string[]) {
+  return [
+    '你是 AI Term 的终端效率助手。',
+    '请根据用户历史命令推荐 8 个适合放在快速命令栏的常用命令。',
+    '只返回命令本身，每行一个，不要编号、不要解释、不要 Markdown。',
+    '不要推荐删除、格式化、重启、关机、覆盖写入等高风险命令。',
+    '',
+    '历史命令：',
+    history.join('\n') || '暂无历史命令'
+  ].join('\n')
+}
+
+function parseQuickCommandRecommendations(answer: string) {
+  return normalizeQuickCommandList(
+    answer
+      .replace(/```[a-zA-Z0-9_-]*\n?/g, '')
+      .replace(/```/g, '')
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)、])\s*/, '').replace(/^`|`$/g, '').trim())
+      .filter((command) => command && !isHighRiskQuickCommand(command))
+  )
+}
+
+function isHighRiskQuickCommand(command: string) {
+  return /\b(rm\s+-rf|mkfs|shutdown|reboot|halt|poweroff|format\s+|del\s+\/|remove-item\b|dd\s+if=|chmod\s+-R\s+777)\b/i.test(command) || command.includes(':(){')
+}
+
+function localQuickCommandRecommendations() {
+  const counts = new Map<string, number>()
+  quickCommandHistorySeed().forEach((command) => {
+    if (isHighRiskQuickCommand(command)) return
+    counts.set(command, (counts.get(command) ?? 0) + 1)
+  })
+  return normalizeQuickCommandList(
+    [...counts.entries()]
+      .sort((first, second) => second[1] - first[1])
+      .map(([command]) => command)
+      .concat(DEFAULT_QUICK_COMMANDS)
+  )
+}
+
+async function recommendQuickCommandsWithAi() {
+  if (quickCommandAiLoading.value) return
+  quickCommandAiLoading.value = true
+  quickCommandError.value = ''
+  quickCommandNotice.value = ''
+  const history = quickCommandHistorySeed()
+  const config = props.aiConfig
+  const apiKey = config?.apiKey?.trim() || props.apiKey?.trim() || ''
+
+  try {
+    if (config?.baseUrl.trim() && config.model.trim() && apiKey) {
+      const response = await chatWithAiProvider({
+        config,
+        apiKey,
+        question: buildQuickCommandPrompt(history),
+        terminalSnapshot: terminalOutputBuffer.slice(-12_000),
+        commandHistory: history
+      })
+      const recommended = parseQuickCommandRecommendations(response.answer)
+      if (recommended.length > 0) {
+        quickCommandDraft.value = recommended.join('\n')
+        quickCommandNotice.value = 'AI 已根据历史命令生成候选。'
+        return
+      }
+    }
+    const local = localQuickCommandRecommendations()
+    quickCommandDraft.value = local.join('\n')
+    quickCommandNotice.value = config ? 'AI 未返回可用候选，已使用历史命令推荐。' : '未配置 AI，已使用历史命令推荐。'
+  } catch (error) {
+    const local = localQuickCommandRecommendations()
+    quickCommandDraft.value = local.join('\n')
+    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已使用历史命令推荐。`
+  } finally {
+    quickCommandAiLoading.value = false
+  }
 }
 
 function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
@@ -336,6 +670,58 @@ function skipInputControlSequence(char: string) {
   return true
 }
 
+function resolvedTerminalSettings() {
+  return {
+    terminalFontFamily: props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || 13)),
+    terminalTheme: props.appTheme === 'light' ? 'light' : props.terminalSettings?.terminalTheme || 'midnight'
+  }
+}
+
+function terminalThemeOptions(theme: TerminalTheme) {
+  if (theme === 'matrix') {
+    return {
+      background: '#050807',
+      foreground: '#d8ffe7',
+      cursor: '#7cffb2',
+      blue: '#8cc8ff',
+      cyan: '#5ff1d2',
+      green: '#63ff91',
+      yellow: '#f2ff86',
+      red: '#ff7d7d'
+    }
+  }
+  if (theme === 'light') {
+    return {
+      background: '#f6f8fb',
+      foreground: '#172033',
+      cursor: '#1d4ed8',
+      blue: '#2563eb',
+      cyan: '#0891b2',
+      green: '#047857',
+      yellow: '#a16207',
+      red: '#dc2626'
+    }
+  }
+  return {
+    background: '#0b0d0e',
+    foreground: '#d5dde5',
+    cursor: '#d8f3ff',
+    blue: '#88b7ff',
+    cyan: '#60d8e8',
+    green: '#7ee094',
+    yellow: '#ffc95e'
+  }
+}
+
+function applyTerminalAppearance() {
+  if (!terminal) return
+  const settings = resolvedTerminalSettings()
+  terminal.options.fontFamily = settings.terminalFontFamily
+  terminal.options.fontSize = settings.terminalFontSize
+  terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
+  terminal.refresh(0, terminal.rows - 1)
+}
 
 onMounted(async () => {
   if (!terminalHost.value) return
@@ -343,17 +729,9 @@ onMounted(async () => {
   terminal = new Terminal({
     cursorBlink: true,
     convertEol: true,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    fontSize: 13,
-    theme: {
-      background: '#0b0d0e',
-      foreground: '#d5dde5',
-      cursor: '#d8f3ff',
-      blue: '#88b7ff',
-      cyan: '#60d8e8',
-      green: '#7ee094',
-      yellow: '#ffc95e'
-    }
+    fontFamily: resolvedTerminalSettings().terminalFontFamily,
+    fontSize: resolvedTerminalSettings().terminalFontSize,
+    theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
   terminal.open(terminalHost.value)
   syncTerminalSize()
@@ -364,6 +742,7 @@ onMounted(async () => {
     if (handleCompletionInput(data)) return
     if (sessionId) {
       trackUserInput(data)
+      emit('terminalInput', { terminalId: props.terminalId, data })
       void terminalWrite(sessionId, data)
     }
   })
@@ -388,6 +767,17 @@ onMounted(async () => {
 })
 
 watch(status, (value) => emitTerminalStatus(value), { immediate: true })
+
+watch(
+  () => props.terminalSettings,
+  () => applyTerminalAppearance(),
+  { deep: true }
+)
+
+watch(
+  () => props.appTheme,
+  () => applyTerminalAppearance()
+)
 
 watch(
   () => props.connectRequest,
@@ -480,9 +870,15 @@ async function connectRemote() {
     terminal.focus()
   } catch (error) {
     status.value = 'error'
-    const message = `\r\nSSH connection failed: ${String(error)}\r\n`
+    const detail = formatError(error)
+    const message = `\r\nSSH connection failed: ${detail}\r\n`
     terminal.write(message)
     appendTerminalOutput(message)
+    if (shouldAskForSshHostKeyReset(error)) {
+      openSshHostKeyPrompt(detail)
+    } else if (shouldAskForSshPassword(error)) {
+      openSshAuthPrompt(detail)
+    }
   }
 }
 
@@ -574,14 +970,14 @@ function enterSftpProfileMode() {
   terminal.writeln('\x1b[36mSFTP profile is ready.\x1b[0m')
   terminal.writeln(`Profile: ${props.profile.name}`)
   terminal.writeln(`Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`)
-  terminal.writeln(`Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct'}`)
+  terminal.writeln(`Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连'}`)
   terminal.writeln('')
   terminal.writeln('Use the SFTP workspace on the right to browse, upload, and download files.')
   terminalOutputBuffer = [
     'SFTP profile is ready.',
     `Profile: ${props.profile.name}`,
     `Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`,
-    `Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP via gateway' : 'SFTP direct'}`,
+    `Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连'}`,
     'Use the SFTP workspace on the right to browse, upload, and download files.'
   ].join('\n')
   emit('terminalOutput', {
@@ -647,6 +1043,7 @@ async function pasteClipboardToTerminal() {
     const text = await readClipboard()
     if (!text) return
     trackUserInput(text)
+    emit('terminalInput', { terminalId: props.terminalId, data: text })
     writeTerminalInput(text)
   } catch (error) {
     console.warn('failed to paste terminal clipboard', error)
@@ -743,8 +1140,8 @@ defineExpose({
           </div>
         </div>
         <div class="terminal-body-wrap">
-          <div ref="terminalHost" class="xterm-host" aria-label="Terminal direct input" />
-          <div v-if="terminalCompletionOpen" class="terminal-completion" role="listbox" aria-label="Command completion">
+          <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
+          <div v-if="terminalCompletionOpen" class="terminal-completion" role="listbox" aria-label="命令补全">
             <button
               v-for="(suggestion, index) in completionSuggestions"
               :key="`${suggestion.source}-${suggestion.command}`"
@@ -759,22 +1156,112 @@ defineExpose({
         </div>
       </div>
     </section>
-
     <section class="quick-command-bar" aria-label="快速命令">
       <span>快速命令</span>
       <button v-for="command in quickCommands" :key="command" @click="runQuickCommand(command)">
         {{ command }}
       </button>
-      <button class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置"><UiIcon name="settings" /></button>
+      <button class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置" @click="openQuickCommandSettings"><UiIcon name="settings" /></button>
     </section>
 
-    <footer class="status-bar">
-      <span class="chip"><span class="status-dot" :class="{ live: status === 'local' || status === 'remote' || status === 'sftp', connecting: status === 'connecting', error: status === 'error', preview: status === 'preview' }" />{{ status }}</span>
-      <span class="chip">{{ activeSessionProfile?.jumpMode ?? 'local-shell' }}</span>
-      <span class="chip">{{ terminalSize.cols }}x{{ terminalSize.rows }}</span>
-      <span class="chip">gateway:{{ activeSessionProfile?.gateway.authMode ?? '-' }}</span>
-      <span class="chip">target:{{ activeSessionProfile?.target.authMode ?? '-' }}</span>
-      <span class="chip">keyboard:direct</span>
-    </footer>
+    <teleport to="body">
+      <div v-if="sshAuthPromptOpen" class="modal-backdrop" role="presentation">
+        <section class="modal ssh-auth-modal" role="dialog" aria-modal="true" aria-label="SSH &#35748;&#35777;">
+          <div class="modal-head">
+            <div>
+              <strong>SSH &#35748;&#35777;</strong>
+              <span>{{ sshAuthTargetLabel(activeSessionProfile) }}&#38656;&#35201;&#30331;&#24405;&#23494;&#30721;</span>
+            </div>
+            <button class="icon-button" type="button" title="&#20851;&#38381;" aria-label="&#20851;&#38381;" :disabled="sshAuthSaving" @click="closeSshAuthPrompt"><UiIcon name="close" /></button>
+          </div>
+          <div class="ssh-auth-body">
+            <div class="ssh-auth-target">
+              <strong>{{ activeSessionProfile?.name ?? props.profile?.name }}</strong>
+              <span>{{ activeSessionProfile ? `${activeSessionProfile.target.username || 'user'}@${activeSessionProfile.target.host || 'server'}` : '' }}</span>
+            </div>
+            <label>
+              <span>&#23494;&#30721;</span>
+              <input
+                v-model="sshAuthPassword"
+                type="password"
+                autocomplete="current-password"
+                placeholder="&#36755;&#20837;&#21518;&#20445;&#23384;&#21040;&#35813;&#36830;&#25509;"
+                @keydown.enter.prevent="submitSshAuthPassword"
+              />
+            </label>
+            <p class="ssh-auth-hint">&#23494;&#30721;&#20250;&#20445;&#23384;&#21040;&#24403;&#21069;&#36830;&#25509;&#37197;&#32622;&#12290;&#19979;&#27425;&#36830;&#25509;&#20250;&#22312; SSH &#35748;&#35777;&#38454;&#27573;&#33258;&#21160;&#20351;&#29992;&#65292;&#32456;&#31471;&#37324;&#19981;&#20877;&#37325;&#22797;&#24377;&#23494;&#30721;&#25552;&#31034;&#12290;</p>
+            <p v-if="sshAuthFailedDetail" class="ssh-auth-detail">{{ sshAuthFailedDetail }}</p>
+            <p v-if="sshAuthError" class="save-feedback error">{{ sshAuthError }}</p>
+          </div>
+          <div class="modal-actions">
+            <button class="text-button" type="button" :disabled="sshAuthSaving" @click="closeSshAuthPrompt">{{ '\u53d6\u6d88' }}</button>
+            <button class="text-button primary-action" type="button" :disabled="sshAuthSaving" @click="submitSshAuthPassword">
+              {{ sshAuthSaving ? '\u8fde\u63a5\u4e2d...' : '\u4fdd\u5b58\u5e76\u8fde\u63a5' }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </teleport>
+
+    <teleport to="body">
+      <div v-if="sshHostKeyPromptOpen" class="modal-backdrop" role="presentation">
+        <section class="modal ssh-host-key-modal" role="dialog" aria-modal="true" aria-label="SSH 主机密钥变更">
+          <div class="modal-head">
+            <div>
+              <strong>SSH 主机密钥变更</strong>
+              <span>远端主机身份与 AI Term 记录不一致</span>
+            </div>
+            <button class="icon-button" type="button" title="关闭" aria-label="关闭" :disabled="sshHostKeySaving" @click="closeSshHostKeyPrompt"><UiIcon name="close" /></button>
+          </div>
+          <div class="ssh-auth-body ssh-host-key-body">
+            <div class="ssh-auth-target ssh-host-key-target">
+              <strong>{{ sshHostKeyTarget?.label }}</strong>
+              <span v-if="sshHostKeyKnownHosts">记录文件：{{ sshHostKeyKnownHosts }}</span>
+              <span v-else>AI Term known_hosts</span>
+            </div>
+            <p class="ssh-host-key-risk">这通常发生在服务器重装、IP 复用或堡垒机目标变更后，也可能代表中间人攻击。请先确认远端新指纹可信，再更新本机记录。</p>
+            <p v-if="sshHostKeyFailedDetail" class="ssh-auth-detail ssh-host-key-detail">{{ sshHostKeyFailedDetail }}</p>
+            <p v-if="sshHostKeyError" class="save-feedback error">{{ sshHostKeyError }}</p>
+          </div>
+          <div class="modal-actions">
+            <button class="text-button" type="button" :disabled="sshHostKeySaving" @click="closeSshHostKeyPrompt">取消</button>
+            <button class="text-button primary-action" type="button" :disabled="sshHostKeySaving" @click="confirmSshHostKeyReset">
+              {{ sshHostKeySaving ? '处理中...' : '已确认，更新并重连' }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </teleport>
+
+    <teleport to="body">
+      <div v-if="quickCommandSettingsOpen" class="modal-backdrop" role="presentation">
+        <section class="modal quick-command-modal" role="dialog" aria-modal="true" aria-label="快速命令设置">
+          <div class="modal-head">
+            <div>
+              <strong>快速命令</strong>
+              <span>{{ quickCommands.length }} 个已启用</span>
+            </div>
+            <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeQuickCommandSettings"><UiIcon name="close" /></button>
+          </div>
+          <textarea
+            v-model="quickCommandDraft"
+            class="quick-command-editor"
+            spellcheck="false"
+            placeholder="ping\ndf -h\nfree -m\nsystemctl status"
+            aria-label="快速命令列表"
+          />
+          <p v-if="quickCommandError" class="save-feedback error">{{ quickCommandError }}</p>
+          <p v-else-if="quickCommandNotice" class="save-feedback ok">{{ quickCommandNotice }}</p>
+          <div class="modal-actions quick-command-actions">
+            <button class="text-button" type="button" @click="resetQuickCommandDraft">恢复默认</button>
+            <button class="text-button" type="button" :disabled="quickCommandAiLoading" @click="recommendQuickCommandsWithAi">
+              {{ quickCommandAiLoading ? '推荐中...' : 'AI 推荐' }}
+            </button>
+            <button class="text-button" type="button" @click="closeQuickCommandSettings">取消</button>
+            <button class="text-button primary-action" type="button" @click="saveQuickCommandSettings">保存</button>
+          </div>
+        </section>
+      </div>
+    </teleport>
   </main>
 </template>

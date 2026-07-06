@@ -152,6 +152,10 @@ export function saveConnectionProfile(profile: ConnectionProfile) {
   return invoke<void>('save_connection_profile', { profile })
 }
 
+export function forgetAiTermKnownHost(host: string, port?: number) {
+  return invoke<number>('forget_ai_term_known_host', { host, port })
+}
+
 export function deleteConnectionProfile(id: string) {
   return invoke<boolean>('delete_connection_profile', { id })
 }

@@ -28,6 +28,11 @@ export interface TerminalSelectionEvent {
   endLine: number
 }
 
+export interface TerminalInputEvent {
+  terminalId: string
+  data: string
+}
+
 export interface CommandRecordedEvent {
   terminalId: string
   command: string
