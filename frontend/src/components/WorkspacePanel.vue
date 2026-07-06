@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { AiProviderConfig } from '../types/profile'
+import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
 import type {
   AiContextStatus,
   AiMessage,
@@ -19,6 +19,7 @@ defineProps<{
   collapsed: boolean
   terminalId: string
   connectionId: string
+  connectionProfile?: ConnectionProfile
   workspaceSessionId: string
   workspaceSessions: WorkspaceSession[]
   selectedAiConfigId: string
@@ -159,6 +160,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
     <FileTransferPanel
       v-if="activeWorkspaceTab === 'sftp'"
       :connection-id="connectionId"
+      :profile="connectionProfile"
       :terminal-snapshot="terminalSnapshot"
       @write-terminal-input="emit('writeTerminalInput', $event)"
     />

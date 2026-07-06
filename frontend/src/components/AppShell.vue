@@ -312,7 +312,7 @@ async function connectProfileFromSidebar(profileId: string) {
   try {
     connectingProfileId.value = profileId
     connectionError.value = ''
-    const profile = cloneConnectionProfile(draft)
+    const profile = normalizeConnectionProfileForSave(draft)
     await saveConnectionProfile(profile)
     profileStoreStatus.value = 'ready'
     const session = await preferredWorkspaceSessionForConnection(profile.id)
@@ -866,14 +866,21 @@ function normalizeConnectionProfileForSave(profile: ConnectionProfile): Connecti
   const normalized = cloneConnectionProfile(profile)
   normalized.id = normalized.id.trim() || normalized.name.trim() || `connection-${Date.now()}`
   normalized.name = normalized.name.trim() || normalized.id
-  normalized.gateway.host = normalized.gateway.host.trim()
-  normalized.gateway.username = normalized.gateway.username.trim()
   normalized.target.host = normalized.target.host.trim()
   normalized.target.username = normalized.target.username.trim()
-  normalized.gateway.port = normalizePort(normalized.gateway.port, 'gateway port', 22)
-  normalized.target.port = normalizePort(normalized.target.port, isSftpProfile(normalized) ? 'SFTP port' : 'SSH port')
+  normalized.target.port = normalizePort(normalized.target.port, 'SSH port', 22)
+  normalized.jumpMode = 'direct'
+  normalized.menuProfileId = ''
+  normalized.fileTransferMode = 'auto'
+  normalized.gateway = {
+    host: '',
+    port: 22,
+    username: '',
+    authMode: 'auto',
+    password: undefined,
+    credentialRef: undefined
+  }
 
-  if (!normalized.gateway.password?.trim()) normalized.gateway.password = undefined
   if (!normalized.target.password?.trim()) normalized.target.password = undefined
 
   return normalized
@@ -1642,6 +1649,7 @@ onBeforeUnmount(() => {
       :collapsed="rightCollapsed"
       :terminal-id="activeTerminalId"
       :connection-id="activeConnectionId"
+      :connection-profile="activeTerminal?.profile"
       :workspace-session-id="activeWorkspaceSessionId"
       :workspace-sessions="activeWorkspaceSessions"
       :selected-ai-config-id="selectedAiConfigId"

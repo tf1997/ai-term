@@ -125,9 +125,8 @@ function cloneConnectionProfile(profile: ConnectionProfile): ConnectionProfile {
   return JSON.parse(JSON.stringify(profile)) as ConnectionProfile
 }
 
-function sshAuthTargetLabel(profile?: ConnectionProfile) {
-  if (!profile) return 'SSH \u670d\u52a1\u5668'
-  return profile.jumpMode === 'interactive-menu' ? '\u5821\u5792\u673a' : '\u76ee\u6807\u670d\u52a1\u5668'
+function sshAuthTargetLabel(_profile?: ConnectionProfile) {
+  return 'SSH 服务器'
 }
 
 function shouldAskForSshPassword(error: unknown) {
@@ -171,7 +170,10 @@ async function submitSshAuthPassword() {
   sshAuthError.value = ''
   try {
     const updated = cloneConnectionProfile(props.profile)
-    const endpoint = updated.jumpMode === 'interactive-menu' ? updated.gateway : updated.target
+    const endpoint = updated.target
+    updated.jumpMode = 'direct'
+    updated.menuProfileId = ''
+    updated.fileTransferMode = 'auto'
     endpoint.authMode = 'password'
     endpoint.password = password
     await saveConnectionProfile(updated)

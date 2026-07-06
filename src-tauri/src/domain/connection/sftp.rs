@@ -93,27 +93,24 @@ pub fn build_sftp_launch_plan_with_target(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
 ) -> SftpLaunchPlan {
-    let target = apply_target_override(&profile.target, target_override);
+    let route = effective_sftp_route(profile, target_override);
     let mut args = vec!["-o".into(), "BatchMode=no".into()];
     args.extend(app_known_hosts_ssh_args());
     args.extend(["-o".into(), "NumberOfPasswordPrompts=2".into()]);
 
-    if should_use_gateway(profile) {
+    if let Some(proxy) = route.proxy.as_ref() {
         args.push("-o".into());
-        args.push(format!(
-            "ProxyJump={}",
-            proxy_jump_destination(&profile.gateway)
-        ));
+        args.push(format!("ProxyJump={}", proxy_jump_destination(proxy)));
     }
 
     args.push("-P".into());
-    args.push(target.port.unwrap_or(22).to_string());
-    args.push(endpoint_destination(&target));
+    args.push(route.target.port.unwrap_or(22).to_string());
+    args.push(endpoint_destination(&route.target));
 
     SftpLaunchPlan {
         program: "sftp".into(),
         args,
-        passwords: plaintext_passwords(profile),
+        passwords: plaintext_passwords(&route),
     }
 }
 
@@ -784,19 +781,91 @@ fn is_cancelled(cancel_token: Option<&SftpCancelToken>) -> bool {
         .unwrap_or(false)
 }
 
-fn should_use_gateway(profile: &ConnectionProfile) -> bool {
-    matches!(profile.file_transfer_mode, FileTransferMode::SftpGateway)
-        || matches!(profile.jump_mode, JumpMode::InteractiveMenu)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SftpRoute {
+    target: AuthEndpoint,
+    proxy: Option<AuthEndpoint>,
+}
+
+fn effective_sftp_route(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> SftpRoute {
+    let target = apply_target_override(&profile.target, target_override);
+    let proxy = explicit_sftp_gateway(profile)
+        .or_else(|| infer_direct_login_proxy(profile, target_override, &target));
+
+    SftpRoute { target, proxy }
+}
+
+fn explicit_sftp_gateway(profile: &ConnectionProfile) -> Option<AuthEndpoint> {
+    if matches!(profile.file_transfer_mode, FileTransferMode::SftpGateway) {
+        non_empty_endpoint(&profile.gateway)
+    } else {
+        None
+    }
+}
+
+fn infer_direct_login_proxy(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    target: &AuthEndpoint,
+) -> Option<AuthEndpoint> {
+    if !matches!(
+        profile.file_transfer_mode,
+        FileTransferMode::Auto | FileTransferMode::SftpDirect
+    ) {
+        return None;
+    }
+    if !matches!(profile.jump_mode, JumpMode::Direct) {
+        return None;
+    }
+    if !target_override_has_host(target_override) {
+        return None;
+    }
+    let proxy = non_empty_endpoint(&profile.target)?;
+    if same_endpoint_host(&proxy, target) {
+        None
+    } else {
+        Some(proxy)
+    }
+}
+
+fn target_override_has_host(target_override: &SftpTargetOverride) -> bool {
+    target_override
+        .host
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn non_empty_endpoint(endpoint: &AuthEndpoint) -> Option<AuthEndpoint> {
+    if endpoint.host.trim().is_empty() {
+        None
+    } else {
+        Some(endpoint.clone())
+    }
+}
+
+fn same_endpoint_host(left: &AuthEndpoint, right: &AuthEndpoint) -> bool {
+    left.host.trim().eq_ignore_ascii_case(right.host.trim())
 }
 
 fn endpoint_destination(endpoint: &AuthEndpoint) -> String {
-    format!("{}@{}", endpoint.username, endpoint.host)
+    let host = endpoint.host.trim();
+    let username = endpoint.username.trim();
+    if username.is_empty() {
+        host.to_string()
+    } else {
+        format!("{username}@{host}")
+    }
 }
 
 fn proxy_jump_destination(endpoint: &AuthEndpoint) -> String {
+    let destination = endpoint_destination(endpoint);
     match endpoint.port {
-        Some(port) if port != 22 => format!("{}@{}:{port}", endpoint.username, endpoint.host),
-        _ => endpoint_destination(endpoint),
+        Some(port) if port != 22 => format!("{destination}:{port}"),
+        _ => destination,
     }
 }
 
@@ -805,12 +874,14 @@ fn apply_target_override(
     target_override: &SftpTargetOverride,
 ) -> AuthEndpoint {
     let mut target = target.clone();
+    let mut host_changed = false;
     if let Some(host) = target_override
         .host
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
+        host_changed = !host.eq_ignore_ascii_case(target.host.trim());
         target.host = host.into();
     }
     if let Some(username) = target_override
@@ -821,23 +892,23 @@ fn apply_target_override(
     {
         target.username = username.into();
     }
+    if host_changed {
+        target.port = Some(22);
+        target.password = None;
+        target.credential_ref = None;
+    }
     target
 }
 
-fn plaintext_passwords(profile: &ConnectionProfile) -> Vec<String> {
-    if should_use_gateway(profile) {
-        [
-            endpoint_plaintext_password(&profile.gateway),
-            endpoint_plaintext_password(&profile.target),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    } else {
-        endpoint_plaintext_password(&profile.target)
-            .into_iter()
-            .collect()
+fn plaintext_passwords(route: &SftpRoute) -> Vec<String> {
+    let mut passwords = Vec::new();
+    if let Some(proxy) = route.proxy.as_ref().and_then(endpoint_plaintext_password) {
+        passwords.push(proxy);
     }
+    if let Some(target) = endpoint_plaintext_password(&route.target) {
+        passwords.push(target);
+    }
+    passwords
 }
 
 fn endpoint_plaintext_password(endpoint: &AuthEndpoint) -> Option<String> {
@@ -1018,10 +1089,31 @@ fn join_remote_path(base: &str, name: &str) -> String {
 fn clean_sftp_output(output: &str) -> String {
     output
         .lines()
+        .map(strip_terminal_controls)
         .filter(|line| !line.trim().is_empty())
         .take(30)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn strip_terminal_controls(value: &str) -> String {
+    let mut result = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            while let Some(next) = chars.next() {
+                if next.is_ascii_alphabetic() || matches!(next, '~' | '@') {
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch.is_control() && ch != '\t' {
+            continue;
+        }
+        result.push(ch);
+    }
+    result.trim().to_string()
 }
 
 fn summarize_sftp_error(error: &str) -> String {
@@ -1038,6 +1130,104 @@ fn summarize_sftp_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_endpoint(host: &str, username: &str, port: Option<u16>) -> AuthEndpoint {
+        AuthEndpoint {
+            host: host.into(),
+            port,
+            username: username.into(),
+            auth_mode: AuthMode::Auto,
+            credential_ref: None,
+            password: None,
+        }
+    }
+
+    fn direct_profile_targeting_bastion() -> ConnectionProfile {
+        let mut target = test_endpoint("bastion.example.com", "ops", Some(2222));
+        target.password = Some("bastion-password".into());
+        ConnectionProfile {
+            id: "direct-bastion".into(),
+            name: "direct-bastion".into(),
+            gateway: test_endpoint("", "", None),
+            target,
+            jump_mode: JumpMode::Direct,
+            menu_profile_id: String::new(),
+            file_transfer_mode: FileTransferMode::Auto,
+        }
+    }
+
+    #[test]
+    fn endpoint_destination_omits_empty_username() {
+        assert_eq!(
+            endpoint_destination(&test_endpoint("10.1.2.3", "", Some(22))),
+            "10.1.2.3"
+        );
+    }
+
+    #[test]
+    fn direct_sftp_without_override_keeps_configured_target() {
+        let plan = build_sftp_launch_plan(&direct_profile_targeting_bastion());
+        assert!(!plan.args.iter().any(|arg| arg.starts_with("ProxyJump=")));
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-P" && pair[1] == "2222"));
+        assert_eq!(
+            plan.args.last().map(String::as_str),
+            Some("ops@bastion.example.com")
+        );
+        assert_eq!(plan.passwords, vec!["bastion-password"]);
+    }
+
+    #[test]
+    fn terminal_target_override_uses_direct_target_as_proxy_jump() {
+        let plan = build_sftp_launch_plan_with_target(
+            &direct_profile_targeting_bastion(),
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ProxyJump=ops@bastion.example.com:2222"));
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-P" && pair[1] == "22"));
+        assert_eq!(plan.args.last().map(String::as_str), Some("app@10.1.2.3"));
+        assert_eq!(plan.passwords, vec!["bastion-password"]);
+    }
+
+    #[test]
+    fn sftp_direct_target_override_uses_current_connection_as_proxy_jump() {
+        let mut profile = direct_profile_targeting_bastion();
+        profile.file_transfer_mode = FileTransferMode::SftpDirect;
+
+        let plan = build_sftp_launch_plan_with_target(
+            &profile,
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ProxyJump=ops@bastion.example.com:2222"));
+        assert_eq!(plan.args.last().map(String::as_str), Some("app@10.1.2.3"));
+    }
+
+    #[test]
+    fn cleans_terminal_control_sequences_from_sftp_errors() {
+        let output = clean_sftp_output(
+            "\u{1b}[?25h\u{1b}[?25lusage: ssh destination [command]\u{1b}[?25h\r\n",
+        );
+        assert_eq!(output, "usage: ssh destination [command]");
+    }
 
     #[test]
     fn parses_unix_listing() {

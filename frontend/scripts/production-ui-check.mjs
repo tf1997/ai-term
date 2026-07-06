@@ -849,7 +849,7 @@ assert(
     fileTransfer.includes('sftpProbe') &&
     fileTransfer.includes('sftpProbeByHost') &&
     fileTransfer.includes('probeSelectedTarget') &&
-    fileTransfer.includes('probeBastionServers') &&
+
     fileTransfer.includes('selectedTarget') &&
     fileTransfer.includes("transferMode = ref<'sftp' | 'terminal'>") &&
     fileTransfer.includes('uploadFilesThroughTerminal') &&
@@ -857,6 +857,9 @@ assert(
     fileTransfer.includes('identifyCurrentTerminalTarget') &&
     fileTransfer.includes('currentTerminalTarget') &&
     fileTransfer.includes('useTerminalTargetForSftp') &&
+    fileTransfer.includes('openCurrentTerminalSftp') &&
+    fileTransfer.includes('hasRemoteShellSnapshot') &&
+    fileTransfer.includes('useForSftp') &&
     fileTransfer.includes('writeTerminalInput') &&
     fileTransfer.includes('remoteReady') &&
     tauri.includes("invoke<LocalDirectoryResponse>('local_list_directory'") &&
@@ -865,7 +868,7 @@ assert(
     tauri.includes("invoke<SftpTransferResponse>('sftp_upload_path'") &&
     tauri.includes("invoke<SftpTransferResponse>('sftp_download_path'") &&
     tauri.includes("invoke<SftpProbeResponse>('sftp_probe'") &&
-    tauri.includes("invoke<BastionServerCandidate[]>('probe_bastion_servers'") &&
+
     styles.includes('.sftp-workbench-active .right-panel') &&
     styles.includes('grid-column: 3 / 5;') &&
     styles.includes('grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);') &&
@@ -880,7 +883,7 @@ assert(
     terminalPane.includes('enterSftpProfileMode') &&
     terminalPane.includes('SFTP profile is ready') &&
     !fileTransfer.includes('profile ? `Ready'),
-  'FileTransferPanel must expose real SFTP, bastion target discovery, and terminal-channel small-file transfer flows without treating a selected profile draft as an active remote transfer session.'
+  'FileTransferPanel must expose real SFTP, current-terminal target detection, and terminal-channel small-file transfer flows without treating a selected profile draft as an active remote transfer session.'
 )
 
 assert(
@@ -1073,43 +1076,42 @@ assert(
 )
 
 assert(
-  sidebar.includes('v-model="selectedProfile.gateway.host"') &&
-    sidebar.includes('v-model="selectedProfile.gateway.username"') &&
-    sidebar.includes('v-model.number="selectedProfile.gateway.port"') &&
-    sidebar.includes('v-model="selectedProfile.target.host"') &&
+  sidebar.includes('v-model="selectedProfile.target.host"') &&
     sidebar.includes('v-model="selectedProfile.target.username"') &&
-    sidebar.includes('v-model.number="selectedProfile.target.port"'),
-  'ConnectionSidebar must let users edit gateway and target connection fields after creating a profile.'
+    sidebar.includes('v-model.number="selectedProfile.target.port"') &&
+    appShell.includes("normalized.gateway = {") &&
+    appShell.includes("normalized.jumpMode = 'direct'") &&
+    appShell.includes("normalized.fileTransferMode = 'auto'") &&
+    !sidebar.includes('v-model="selectedProfile.gateway.host"'),
+  'ConnectionSidebar must keep direct target connection fields editable and AppShell must normalize away legacy gateway fields.'
 )
 
 assert(
-  sidebar.includes("return isSftpProfile(profile) ? 'SFTP 端口' : 'SSH 端口'") &&
+  sidebar.includes("return 'SSH 端口'") &&
     !sidebar.includes('服务器端口') &&
-    appShell.includes("isSftpProfile(normalized) ? 'SFTP port' : 'SSH port'"),
-  'Connection editor must label target SSH ports explicitly instead of calling them server ports.'
+    appShell.includes("normalizePort(normalized.target.port, 'SSH port', 22)"),
+  'Connection editor must label the target SSH port explicitly in the simplified direct editor.'
 )
 
 assert(
-  sidebar.includes('v-model="selectedProfile.gateway.password"') &&
-    sidebar.includes('v-model="selectedProfile.target.password"') &&
+  sidebar.includes('v-model="selectedProfile.target.password"') &&
     sidebar.includes('passwordFieldType') &&
-
-    sidebar.includes('v-model="selectedProfile.gateway.authMode"') &&
     sidebar.includes('v-model="selectedProfile.target.authMode"') &&
-    appShell.includes("password: ''"),
-  'ConnectionSidebar must let users enter SSH passwords while backend storage moves them into the system credential store.'
+    appShell.includes("password: ''") &&
+    !sidebar.includes('v-model="selectedProfile.gateway.password"'),
+  'ConnectionSidebar must let users enter direct SSH passwords while backend storage moves them into the system credential store.'
 )
 
 assert(
-  sidebar.includes('showGatewayPassword') &&
-    sidebar.includes('showTargetPassword') &&
+  sidebar.includes('showTargetPassword') &&
     sidebar.includes('passwordFieldType') &&
     sidebar.includes('password-input-wrap') &&
     sidebar.includes('password-visibility-button') &&
+    !sidebar.includes('showGatewayPassword') &&
     uiIcon.includes("'eye'") &&
     uiIcon.includes("'eye-off'") &&
     styles.includes('.password-visibility-button'),
-  'Connection editor password fields must support explicit show/hide eye buttons for saved credentials.'
+  'Connection editor target password field must support an explicit show/hide eye button for saved credentials.'
 )
 
 assert(
@@ -1135,25 +1137,26 @@ assert(
 )
 
 assert(
-  sidebar.includes('value="direct"') &&
-    sidebar.includes('value="interactive-menu"') &&
-    sidebar.includes('sftp-direct') &&
-    sidebar.includes('sftp-gateway'),
-  'ConnectionSidebar must expose a direct SSH mode and a bastion interactive-menu mode.'
+  sidebar.includes('SSH 主机') &&
+    sidebar.includes('登录用户名') &&
+    sidebar.includes('堡垒机用户名 或 堡垒机用户名/服务器IP/服务器用户名') &&
+    sidebar.includes('SSH 密码') &&
+    sidebar.includes('SSH 端口') &&
+    !sidebar.includes('value="interactive-menu"') &&
+    !sidebar.includes('sftp-gateway'),
+  'ConnectionSidebar must expose a simplified direct SSH/SFTP editor without the old bastion mode selector.'
 )
 
 assert(
-  sidebar.includes('function isSftpProfile') &&
-    sidebar.includes('function needsGateway') &&
-    sidebar.includes('function needsMenuProfile') &&
-    sidebar.includes('setConnectionEditorType') &&
-    sidebar.includes('setSftpRoute') &&
-    sidebar.includes("profile.fileTransferMode = 'auto'") &&
-    sidebar.includes("profile.fileTransferMode = profile.jumpMode === 'interactive-menu' ? 'sftp-gateway' : 'sftp-direct'") &&
-    sidebar.includes('v-if="needsGateway(selectedProfile)"') &&
-    sidebar.includes('v-if="needsMenuProfile(selectedProfile)"') &&
-    sidebar.includes('v-model="selectedProfile.menuProfileId"'),
-  'ConnectionSidebar must support real SSH/SFTP editor modes and only require menu fields for interactive SSH profiles.'
+  sidebar.includes('function profileReady') &&
+    sidebar.includes('function shouldShowTargetPassword') &&
+    sidebar.includes('targetUsernamePlaceholder') &&
+    sidebar.includes('SSH / SFTP') &&
+    sidebar.includes('连接服务器') &&
+    !sidebar.includes('function needsGateway') &&
+    !sidebar.includes('function needsMenuProfile') &&
+    !sidebar.includes('setSftpRoute'),
+  'ConnectionSidebar must keep the connection editor focused on direct SSH/SFTP fields.'
 )
 
 assert(
@@ -1236,8 +1239,10 @@ assert(
 
 assert(
   !sidebar.includes('????') &&
-    sidebar.includes('目标主机') &&
-    sidebar.includes('目标用户名'),
+    sidebar.includes('SSH 主机') &&
+    sidebar.includes('登录用户名') &&
+    sidebar.includes('SSH 密码') &&
+    sidebar.includes('SSH 端口'),
   'Connection editor labels must not contain mojibake placeholders.'
 )
 
@@ -1651,13 +1656,13 @@ assert(
 assert(
   sidebar.includes('class="section-head"') &&
     sidebar.includes("emit('create')") &&
-    sidebar.includes('selectedProfile.jumpMode') &&
-    sidebar.includes('selectedProfile.fileTransferMode') &&
-    sidebar.includes('sftp-direct') &&
-    sidebar.includes('sftp-gateway') &&
-    sidebar.includes('setSftpRoute') &&
-    sidebar.includes('isSftpProfile'),
-  'ConnectionSidebar must use the prototype labels and provide real SSH/SFTP editor tabs.'
+    sidebar.includes('SSH 主机') &&
+    sidebar.includes('登录用户名') &&
+    sidebar.includes('SSH / SFTP') &&
+    !sidebar.includes('selectedProfile.jumpMode') &&
+    !sidebar.includes('selectedProfile.fileTransferMode') &&
+    !sidebar.includes('isSftpProfile'),
+  'ConnectionSidebar must use the simplified prototype labels and avoid exposing legacy mode controls.'
 )
 
 assert(
@@ -1750,11 +1755,11 @@ function aiPanelUsesBackendModelCall() {
 }
 
 assert(
-  sidebar.includes('v-model.number="selectedProfile.gateway.port"') &&
-    sidebar.includes('v-model.number="selectedProfile.target.port"') &&
+  sidebar.includes('v-model.number="selectedProfile.target.port"') &&
     sidebar.includes('type="number"') &&
     appShell.includes('normalizeConnectionProfileForSave') &&
-    appShell.includes('normalizePort('),
+    appShell.includes("normalizePort(normalized.target.port, 'SSH port', 22)") &&
+    !sidebar.includes('v-model.number="selectedProfile.gateway.port"'),
   'Connection editor must expose SSH port fields and normalize them before saving.'
 )
 
@@ -1768,11 +1773,12 @@ assert(
   sidebar.includes('shouldShowTargetPassword') &&
     sidebar.includes("return profile.target.authMode !== 'key'") &&
     sidebar.includes('targetPasswordLabel') &&
-    sidebar.includes('\\u670d\\u52a1\\u5668\\u5bc6\\u7801\\uff08\\u53ef\\u9009\\uff09') &&
+    sidebar.includes('SSH 密码') &&
     sidebar.includes('v-model="selectedProfile.target.password"') &&
     appShell.includes('if (!normalized.target.password?.trim()) normalized.target.password = undefined') &&
-    !appShell.includes("normalized.jumpMode === 'interactive-menu' && normalized.fileTransferMode !== 'sftp-gateway'"),
-  'Interactive-menu bastion profiles must keep the target server password optional, visible, and saved when provided.'
+    appShell.includes("normalized.jumpMode = 'direct'") &&
+    appShell.includes("normalized.fileTransferMode = 'auto'"),
+  'Direct SSH profiles must keep the server password visible when needed and normalize away legacy bastion mode fields.'
 )
 
 assert(

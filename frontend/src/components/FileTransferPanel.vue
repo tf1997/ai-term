@@ -6,7 +6,6 @@ import {
   localHomeDirectory,
   localListDirectory,
   onSftpTransferProgress,
-  probeBastionServers,
   sftpCreateDirectory,
   sftpDeletePath,
   sftpDownloadFile,
@@ -15,16 +14,17 @@ import {
   sftpProbe,
   sftpUploadFile,
   sftpUploadPath,
-  type BastionServerCandidate,
   type LocalFileEntry,
   type SftpFileEntry,
   type SftpProbeResponse,
   type SftpTransferResponse
 } from '../lib/tauri'
+import type { ConnectionProfile } from '../types/profile'
 import UiIcon from './UiIcon.vue'
 
 const props = defineProps<{
   connectionId: string
+  profile?: ConnectionProfile
   terminalSnapshot: string
 }>()
 
@@ -41,6 +41,13 @@ interface TerminalTargetIdentity {
   hostname: string
   pwd: string
   label: string
+}
+
+interface SftpTarget {
+  host: string
+  username?: string
+  label: string
+  sourceLine: string
 }
 
 interface SftpProbeState extends SftpProbeResponse {
@@ -96,15 +103,13 @@ const selectedRemoteEntry = ref<SftpFileEntry | null>(null)
 const selectedLocalEntry = ref<LocalFileEntry | null>(null)
 const loading = ref(false)
 const localLoading = ref(false)
-const probing = ref(false)
 const identifying = ref(false)
 const activeTask = ref<ActiveTask | null>(null)
 const lastTransfer = ref<ActiveTask | null>(null)
 const fileContextMenu = ref<FileContextMenuState | null>(null)
 const status = ref('')
 const error = ref('')
-const candidates = ref<BastionServerCandidate[]>([])
-const selectedTarget = ref<BastionServerCandidate | null>(null)
+const selectedTarget = ref<SftpTarget | null>(null)
 const sftpProbeByHost = ref<Record<string, SftpProbeState>>({})
 const currentTerminalTarget = ref<TerminalTargetIdentity | null>(null)
 const pendingDownload = ref<{
@@ -115,9 +120,19 @@ const pendingDownload = ref<{
 const pendingIdentify = ref<{
   begin: string
   end: string
+  useForSftp: boolean
 } | null>(null)
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
+const usesCompositeDirectUsername = computed(() => {
+  const username = props.profile?.target.username.trim() ?? ''
+  return username.split('/').filter(Boolean).length >= 3
+})
+const hasRemoteShellSnapshot = computed(() => {
+  const snapshot = props.terminalSnapshot.trim()
+  if (!remoteReady.value || !snapshot) return false
+  return !/No active shell|SFTP profile is ready|Opening local shell|Local shell failed|Connecting SSH profile|SSH connection failed/i.test(snapshot)
+})
 const taskInProgress = computed(() => Boolean(activeTask.value))
 const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
 const targetOverride = computed(() => {
@@ -147,19 +162,18 @@ watch(
     pathDraft.value = '.'
     entries.value = []
     selectedRemoteEntry.value = null
-    candidates.value = []
     selectedTarget.value = null
     sftpProbeByHost.value = {}
     currentTerminalTarget.value = null
     pendingIdentify.value = null
     status.value = ''
     error.value = ''
-    if (remoteReady.value) void loadDirectory('.')
+    initializeRemoteBrowser()
   }
 )
 
 onMounted(() => {
-  if (remoteReady.value) void loadDirectory(currentPath.value)
+  initializeRemoteBrowser()
   void loadLocalHome()
 })
 
@@ -170,6 +184,12 @@ watch(
     if (pendingIdentify.value) finishTerminalIdentifyIfReady(snapshot)
   }
 )
+
+watch(transferMode, (mode) => {
+  if (mode === 'sftp' && remoteReady.value && !selectedTarget.value && entries.value.length === 0) {
+    initializeRemoteBrowser()
+  }
+})
 
 async function loadDirectory(path = currentPath.value) {
   if (!remoteReady.value) return
@@ -195,12 +215,33 @@ async function loadDirectory(path = currentPath.value) {
 
 async function loadLocalHome() {
   try {
-    const home = await localHomeDirectory()
-    localHome.value = home
-    await loadLocalDirectory(home)
+    localHome.value = await localHomeDirectory()
+    await loadLocalDirectory(localHome.value)
   } catch (err) {
     error.value = formatError(err)
   }
+}
+
+function initializeRemoteBrowser() {
+  if (!remoteReady.value) return
+  if (usesCompositeDirectUsername.value) {
+    void loadDirectory(currentPath.value)
+    return
+  }
+  if (hasRemoteShellSnapshot.value) {
+    openCurrentTerminalSftp()
+    return
+  }
+  void loadDirectory(currentPath.value)
+}
+
+function openCurrentTerminalSftp() {
+  if (!remoteReady.value) return
+  if (currentTerminalTarget.value) {
+    void useTerminalTargetForSftp()
+    return
+  }
+  identifyCurrentTerminalTarget({ useForSftp: true })
 }
 
 async function loadLocalDirectory(path = localPath.value || localHome.value) {
@@ -218,42 +259,6 @@ async function loadLocalDirectory(path = localPath.value || localHome.value) {
   } finally {
     localLoading.value = false
   }
-}
-
-async function probeTargets() {
-  if (!remoteReady.value) return
-  probing.value = true
-  error.value = ''
-  status.value = '正在探测堡垒机可访问服务器...'
-  try {
-    const response = await probeBastionServers(props.connectionId)
-    candidates.value = response
-    sftpProbeByHost.value = {}
-    status.value = response.length ? `发现 ${response.length} 台服务器` : '没有从堡垒机菜单中解析到服务器 IP'
-  } catch (err) {
-    error.value = formatError(err)
-    status.value = ''
-  } finally {
-    probing.value = false
-  }
-}
-
-async function selectTarget(candidate: BastionServerCandidate) {
-  selectedTarget.value = candidate
-  currentPath.value = '.'
-  pathDraft.value = '.'
-  entries.value = []
-  const probe = await probeSelectedTarget(candidate)
-  if (!probe) return
-  if (!probe.available) {
-    error.value = probe.message
-    status.value = ''
-    return
-  }
-  const path = probe.path || '.'
-  currentPath.value = path
-  pathDraft.value = path
-  await loadDirectory(path)
 }
 
 async function useTerminalTargetForSftp() {
@@ -279,7 +284,7 @@ async function useTerminalTargetForSftp() {
   await loadDirectory(currentPath.value)
 }
 
-async function probeSelectedTarget(candidate: BastionServerCandidate) {
+async function probeSelectedTarget(candidate: SftpTarget) {
   if (!remoteReady.value) return null
   const taskId = startRemoteTask(`探测 ${candidate.host}`)
   if (!taskId) return null
@@ -334,27 +339,20 @@ function switchToTerminalMode() {
   if (!currentTerminalTarget.value) void identifyCurrentTerminalTarget()
 }
 
-function candidateKey(candidate: Pick<BastionServerCandidate, 'host' | 'username'>) {
+function candidateKey(candidate: Pick<SftpTarget, 'host' | 'username'>) {
   return `${candidate.username || 'user'}@${candidate.host}`.toLowerCase()
 }
 
-function probeStateFor(candidate: BastionServerCandidate) {
+function probeStateFor(candidate: SftpTarget) {
   return sftpProbeByHost.value[candidateKey(candidate)]
 }
 
-function probeStateLabel(candidate: BastionServerCandidate) {
-  const state = probeStateFor(candidate)
-  if (!state) return '未探测'
-  if (state.probing) return '探测中'
-  return state.available ? 'SFTP 可用' : '不可用'
-}
-
-function identifyCurrentTerminalTarget() {
+function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
   if (!remoteReady.value || identifying.value) return
   const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const begin = `__AI_TERM_IDENT_BEGIN_${id}__`
   const end = `__AI_TERM_IDENT_END_${id}__`
-  pendingIdentify.value = { begin, end }
+  pendingIdentify.value = { begin, end, useForSftp: Boolean(options.useForSftp) }
   identifying.value = true
   error.value = ''
   status.value = '正在识别当前终端服务器...'
@@ -953,6 +951,7 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   const values = parseIdentityOutput(raw)
   const ip = firstUsableIp(values.ips)
   const host = ip || values.hostname || ''
+  const shouldUseForSftp = pending.useForSftp
   if (!host) {
     error.value = '没有识别到当前服务器 IP 或主机名。'
   } else {
@@ -969,6 +968,7 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   }
   identifying.value = false
   pendingIdentify.value = null
+  if (shouldUseForSftp && currentTerminalTarget.value) void useTerminalTargetForSftp()
 }
 
 function parseIdentityOutput(raw: string) {
@@ -1041,8 +1041,7 @@ function shellQuote(value: string) {
     <div class="panel-head">
       <strong>文件传输</strong>
       <div class="panel-actions">
-        <button class="icon-button" type="button" title="识别当前终端服务器" aria-label="识别当前终端服务器" :disabled="!remoteReady || identifying" @click="identifyCurrentTerminalTarget"><UiIcon name="terminal" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="探测堡垒机服务器" aria-label="探测堡垒机服务器" :disabled="!remoteReady || probing || loading" @click="probeTargets"><UiIcon name="search" /></button>
+        <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || identifying || loading" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory()"><UiIcon name="refresh" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory"><UiIcon name="folder" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
@@ -1100,50 +1099,25 @@ function shellQuote(value: string) {
         <strong>{{ currentTerminalTarget.username }}@{{ currentTerminalTarget.host }}</strong>
         <small>{{ currentTerminalTarget.hostname }} · {{ currentTerminalTarget.pwd }}</small>
       </div>
-      <button type="button" @click="useTerminalTargetForSftp">用作 SFTP 目标</button>
+      <button type="button" @click="useTerminalTargetForSftp">打开 SFTP</button>
     </div>
 
-    <div v-if="transferMode === 'sftp' && (selectedTarget || candidates.length)" class="bastion-targets">
-      <div v-if="selectedTarget" class="selected-target">
-        <span>当前目标</span>
+    <div v-if="transferMode === 'sftp' && selectedTarget" class="bastion-targets">
+      <div class="selected-target">
+        <span>当前 SFTP 目标</span>
         <strong>{{ selectedTarget.username || 'user' }}@{{ selectedTarget.host }}</strong>
         <button type="button" @click="clearSelectedTarget">使用配置目标</button>
       </div>
-      <div v-if="candidates.length" class="target-list">
-        <article
-          v-for="candidate in candidates"
-          :key="`${candidate.username || 'user'}@${candidate.host}`"
-          :class="{ active: selectedTarget?.host === candidate.host }"
-          tabindex="0"
-          @click="selectTarget(candidate)"
-          @keydown.enter="selectTarget(candidate)"
-        >
-          <div>
-            <strong>{{ candidate.username || 'user' }}@{{ candidate.host }}</strong>
-            <span>{{ candidate.label }}</span>
-          </div>
-          <span
-            class="target-probe-state"
-            :class="{
-              probing: probeStateFor(candidate)?.probing,
-              ok: probeStateFor(candidate)?.available,
-              failed: probeStateFor(candidate) && !probeStateFor(candidate)?.available && !probeStateFor(candidate)?.probing
-            }"
-          >
-            {{ probeStateLabel(candidate) }}
-          </span>
-        </article>
-      </div>
-      <button v-if="selectedTarget && probeStateFor(selectedTarget) && !probeStateFor(selectedTarget)?.available" class="terminal-fallback-button" type="button" @click="switchToTerminalMode">
+      <button v-if="probeStateFor(selectedTarget) && !probeStateFor(selectedTarget)?.available" class="terminal-fallback-button" type="button" @click="switchToTerminalMode">
         切到终端通道
       </button>
     </div>
 
     <div v-if="transferMode === 'terminal'" class="terminal-transfer-panel">
       <p class="terminal-transfer-note">
-        通过当前已登录终端传输小文件，适合只支持交互式菜单的堡垒机。单文件限制 {{ formatSize(INLINE_TRANSFER_LIMIT) }}。
+        通过当前已登录终端传输小文件，适合无法直接 SFTP 的环境。单文件限制 {{ formatSize(INLINE_TRANSFER_LIMIT) }}。
       </p>
-      <button type="button" :disabled="!remoteReady || identifying" @click="identifyCurrentTerminalTarget">
+      <button type="button" :disabled="!remoteReady || identifying" @click="() => identifyCurrentTerminalTarget()">
         {{ identifying ? '识别中...' : '识别当前服务器' }}
       </button>
       <label>
