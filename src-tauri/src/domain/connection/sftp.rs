@@ -129,19 +129,27 @@ pub fn list_directory_with_cancel(
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpListResponse> {
     let remote_path = normalize_remote_path(path);
-    let output = run_sftp_commands(
+    let (output, parsed_path) = match run_sftp_commands(
         profile,
         target_override,
-        vec![
-            format!("cd {}", quote_sftp_path(&remote_path)?),
-            "pwd".into(),
-            "ls -la".into(),
-            "bye".into(),
-        ],
+        list_directory_commands(&remote_path)?,
         cancel_token,
-    )?;
+    ) {
+        Ok(output) => (output, remote_path.clone()),
+        Err(error) if should_retry_sftp_root_listing(&error) => {
+            let fallback_path = "/".to_string();
+            let output = run_sftp_commands(
+                profile,
+                target_override,
+                list_directory_without_cwd_commands(&fallback_path)?,
+                cancel_token,
+            )?;
+            (output, fallback_path)
+        }
+        Err(error) => return Err(error),
+    };
 
-    parse_list_output(&output, &remote_path)
+    parse_list_output(&output, &parsed_path)
 }
 
 pub fn probe_sftp(
@@ -169,6 +177,26 @@ pub fn probe_sftp_with_cancel(
                 available: true,
                 path: Some(path.clone()),
                 message: format!("SFTP 可用，远程目录 {path}"),
+            }
+        }
+        Err(error) if should_retry_sftp_root_listing(&error) => {
+            match run_sftp_launch_plan(
+                build_sftp_launch_plan_with_target(profile, target_override),
+                list_directory_without_cwd_commands("/").unwrap_or_else(|_| vec!["bye".into()]),
+                PROBE_TIMEOUT,
+                cancel_token,
+                None,
+            ) {
+                Ok(_) => SftpProbeResponse {
+                    available: true,
+                    path: Some("/".into()),
+                    message: "SFTP 可用，远程目录 /".into(),
+                },
+                Err(error) => SftpProbeResponse {
+                    available: false,
+                    path: None,
+                    message: summarize_sftp_error(&error.to_string()),
+                },
             }
         }
         Err(error) => SftpProbeResponse {
@@ -517,6 +545,26 @@ pub fn download_path_with_progress(
     ))
 }
 
+fn list_directory_commands(remote_path: &str) -> Result<Vec<String>> {
+    Ok(vec![
+        format!("cd {}", quote_sftp_path(remote_path)?),
+        "pwd".into(),
+        "ls -la1".into(),
+        "bye".into(),
+    ])
+}
+
+fn list_directory_without_cwd_commands(remote_path: &str) -> Result<Vec<String>> {
+    Ok(vec![
+        format!("ls -la1 {}", quote_sftp_path(remote_path)?),
+        "bye".into(),
+    ])
+}
+
+fn should_retry_sftp_root_listing(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("need cwd") || message.contains("couldn't canonicalize")
+}
 fn run_sftp_commands(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
@@ -961,9 +1009,11 @@ fn expand_tilde(path: &str) -> String {
 }
 
 fn parse_list_output(output: &str, fallback_path: &str) -> Result<SftpListResponse> {
-    let path = parse_remote_working_directory(output).unwrap_or_else(|| fallback_path.to_string());
+    let cleaned = clean_sftp_listing_output(output);
+    let path =
+        parse_remote_working_directory(&cleaned).unwrap_or_else(|| fallback_path.to_string());
 
-    let entries = output
+    let entries = cleaned
         .lines()
         .filter_map(|line| parse_ls_line(line, &path))
         .filter(|entry| entry.name != "." && entry.name != "..")
@@ -972,18 +1022,30 @@ fn parse_list_output(output: &str, fallback_path: &str) -> Result<SftpListRespon
     Ok(SftpListResponse { path, entries })
 }
 
+fn clean_sftp_listing_output(output: &str) -> String {
+    output
+        .lines()
+        .map(strip_terminal_controls)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn parse_remote_working_directory(output: &str) -> Option<String> {
     output
         .lines()
-        .filter_map(|line| line.strip_prefix("Remote working directory: "))
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("Remote working directory: ")
+                .map(str::trim)
+        })
         .last()
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
 fn parse_ls_line(line: &str, current_path: &str) -> Option<SftpFileEntry> {
-    let trimmed = line.trim();
+    let cleaned = strip_terminal_controls(line);
+    let trimmed = cleaned.trim();
     let first = trimmed.chars().next()?;
     if !matches!(first, 'd' | '-' | 'l') {
         return None;
@@ -1097,14 +1159,33 @@ fn clean_sftp_output(output: &str) -> String {
 }
 
 fn strip_terminal_controls(value: &str) -> String {
+    let without_ansi = strip_ansi_controls(value);
+    strip_bare_csi_fragments(&without_ansi).trim().to_string()
+}
+
+fn strip_ansi_controls(value: &str) -> String {
     let mut result = String::new();
     let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\u{1b}' {
-            while let Some(next) = chars.next() {
-                if next.is_ascii_alphabetic() || matches!(next, '~' | '@') {
-                    break;
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    while let Some(next) = chars.next() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
                 }
+                Some(']') => {
+                    chars.next();
+                    while let Some(next) = chars.next() {
+                        if next == '\u{7}' {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
             }
             continue;
         }
@@ -1113,7 +1194,33 @@ fn strip_terminal_controls(value: &str) -> String {
         }
         result.push(ch);
     }
-    result.trim().to_string()
+    result
+}
+
+fn strip_bare_csi_fragments(value: &str) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = value.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '[' {
+            let mut cursor = index + 1;
+            while cursor < chars.len()
+                && (chars[cursor].is_ascii_digit() || matches!(chars[cursor], ';' | '?'))
+            {
+                cursor += 1;
+            }
+            if cursor > index + 1
+                && cursor < chars.len()
+                && matches!(chars[cursor], 'A'..='Z' | 'a'..='z')
+            {
+                index = cursor + 1;
+                continue;
+            }
+        }
+        result.push(chars[index]);
+        index += 1;
+    }
+    result
 }
 
 fn summarize_sftp_error(error: &str) -> String {
@@ -1222,6 +1329,17 @@ mod tests {
     }
 
     #[test]
+    fn retries_need_cwd_errors_with_absolute_root_listing() {
+        let error =
+            anyhow::anyhow!("SFTP command failed\nCouldn't canonicalize: Failure\nNeed cwd");
+        assert!(should_retry_sftp_root_listing(&error));
+
+        let commands = list_directory_without_cwd_commands("/").unwrap();
+        assert_eq!(commands, vec!["ls -la1 \"/\"", "bye"]);
+        assert!(!commands.iter().any(|command| command.starts_with("cd ")));
+    }
+
+    #[test]
     fn cleans_terminal_control_sequences_from_sftp_errors() {
         let output = clean_sftp_output(
             "\u{1b}[?25h\u{1b}[?25lusage: ssh destination [command]\u{1b}[?25h\r\n",
@@ -1242,6 +1360,18 @@ mod tests {
         assert_eq!(parsed.entries[1].path, "/var/log/syslog");
     }
 
+    #[test]
+    fn parses_listing_after_windows_cursor_controls() {
+        let output = "Remote working directory: /home/app\n\
+                      drwxr-xr-x    2 app app 4096 Jul 15 2024 .arthas\u{1b}[12X\u{1b}[12C\n\
+                      drwxr-xr-x    2 app app 4096 Jun 13 2023 .cache[13X[13C\n";
+
+        let parsed = parse_list_output(output, ".").unwrap();
+        assert_eq!(parsed.path, "/home/app");
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[0].name, ".arthas");
+        assert_eq!(parsed.entries[1].name, ".cache");
+    }
     #[test]
     fn parses_probe_working_directory() {
         let output = "Connected to 10.0.0.7.\nRemote working directory: /home/app\nsftp> bye\n";

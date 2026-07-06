@@ -131,7 +131,13 @@ const usesCompositeDirectUsername = computed(() => {
 const hasRemoteShellSnapshot = computed(() => {
   const snapshot = props.terminalSnapshot.trim()
   if (!remoteReady.value || !snapshot) return false
-  return !/No active shell|SFTP profile is ready|Opening local shell|Local shell failed|Connecting SSH profile|SSH connection failed/i.test(snapshot)
+  const tailLines = snapshot
+    .slice(-4000)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const lastLine = tailLines[tailLines.length - 1] ?? ''
+  return !/^(No active shell|Use New Local Shell|SFTP profile is ready|Opening local shell|Local shell failed|Connecting SSH profile|SSH connection failed|.*password:|.*passphrase:)/i.test(lastLine)
 })
 const taskInProgress = computed(() => Boolean(activeTask.value))
 const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
@@ -944,26 +950,21 @@ function finishTerminalDownloadIfReady(snapshot: string) {
 function finishTerminalIdentifyIfReady(snapshot: string) {
   const pending = pendingIdentify.value
   if (!pending) return
-  const beginIndex = snapshot.lastIndexOf(pending.begin)
-  const endIndex = snapshot.lastIndexOf(pending.end)
-  if (beginIndex === -1 || endIndex === -1 || endIndex <= beginIndex) return
-  const raw = cleanTerminalText(snapshot.slice(beginIndex + pending.begin.length, endIndex))
-  const values = parseIdentityOutput(raw)
-  const ip = firstUsableIp(values.ips)
-  const host = ip || values.hostname || ''
+  const parsed = parseTerminalIdentitySnapshot(snapshot, pending)
+  if (!parsed.complete) return
   const shouldUseForSftp = pending.useForSftp
-  if (!host) {
+  if (!parsed.host) {
     error.value = '没有识别到当前服务器 IP 或主机名。'
   } else {
     currentTerminalTarget.value = {
-      host,
-      ip,
-      username: values.user || 'user',
-      hostname: values.hostname || host,
-      pwd: values.pwd || '.',
-      label: `${values.user || 'user'}@${host} · ${values.hostname || host} · ${values.pwd || '.'}`
+      host: parsed.host,
+      ip: parsed.ip,
+      username: parsed.values.user || 'user',
+      hostname: parsed.values.hostname || parsed.host,
+      pwd: parsed.values.pwd || '.',
+      label: `${parsed.values.user || 'user'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
     }
-    terminalRemotePath.value = values.pwd || terminalRemotePath.value
+    terminalRemotePath.value = parsed.values.pwd || terminalRemotePath.value
     status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
   }
   identifying.value = false
@@ -971,31 +972,78 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   if (shouldUseForSftp && currentTerminalTarget.value) void useTerminalTargetForSftp()
 }
 
-function parseIdentityOutput(raw: string) {
-  const values = {
+function parseTerminalIdentitySnapshot(snapshot: string, pending: { begin: string; end: string }) {
+  const cleaned = cleanTerminalText(snapshot)
+  let searchStart = 0
+  let sawCompletePair = false
+  let fallbackValues = emptyIdentityValues()
+  let fallbackIp = ''
+  let fallbackHost = ''
+
+  while (searchStart < cleaned.length) {
+    const beginIndex = cleaned.indexOf(pending.begin, searchStart)
+    if (beginIndex === -1) break
+    const endIndex = cleaned.indexOf(pending.end, beginIndex + pending.begin.length)
+    if (endIndex === -1) return { complete: false, values: fallbackValues, ip: fallbackIp, host: fallbackHost }
+    sawCompletePair = true
+    const raw = cleaned.slice(beginIndex + pending.begin.length, endIndex)
+    const values = parseIdentityOutput(raw)
+    const ip = firstUsableIp(values.ips) || firstUsableIp(raw)
+    const hostname = sanitizeHostCandidate(values.hostname)
+    const host = ip || hostname
+    fallbackValues = values
+    fallbackIp = ip
+    fallbackHost = host
+    if (host) return { complete: true, values: { ...values, hostname }, ip, host }
+    searchStart = beginIndex + pending.begin.length
+  }
+
+  return { complete: sawCompletePair, values: fallbackValues, ip: fallbackIp, host: fallbackHost }
+}
+
+function emptyIdentityValues() {
+  return {
     user: '',
     hostname: '',
     ips: '',
     pwd: ''
   }
+}
+
+function parseIdentityOutput(raw: string) {
+  const values = emptyIdentityValues()
   for (const line of raw.split('\n')) {
-    const [key, ...rest] = line.trim().split('=')
-    const value = rest.join('=').trim()
-    if (key === 'user') values.user = value
-    if (key === 'hostname') values.hostname = value
-    if (key === 'ips') values.ips = value
-    if (key === 'pwd') values.pwd = value
+    const match = line.trim().match(/(?:^|\s)(user|hostname|ips|pwd)=([^\r\n]*)/)
+    if (!match) continue
+    const key = match[1] as keyof ReturnType<typeof emptyIdentityValues>
+    const value = sanitizeIdentityValue(match[2], key)
+    if (value) values[key] = value
   }
   return values
 }
 
+function sanitizeIdentityValue(value: string, key: keyof ReturnType<typeof emptyIdentityValues>) {
+  const trimmed = value.trim()
+  if (!trimmed || /printf\s|;|'|"/.test(trimmed)) return ''
+  if (key === 'hostname') return sanitizeHostCandidate(trimmed)
+  if (key === 'ips') return extractIpv4Candidates(trimmed).join(' ')
+  if (key === 'pwd') return trimmed.startsWith('/') || trimmed === '.' || trimmed.startsWith('~') ? trimmed : ''
+  return trimmed.split(/\s+/)[0] ?? ''
+}
+
+function sanitizeHostCandidate(value: string) {
+  const host = value.trim().split(/\s+/)[0] ?? ''
+  if (!/^[A-Za-z0-9._-]+$/.test(host) || host === 'unknown') return ''
+  return host
+}
+
 function firstUsableIp(value: string) {
-  return (
-    value
-      .split(/\s+/)
-      .map((item) => item.trim())
-      .find((item) => /^\d{1,3}(\.\d{1,3}){3}$/.test(item) && item !== '127.0.0.1') ?? ''
-  )
+  return extractIpv4Candidates(value).find((item) => item !== '127.0.0.1') ?? ''
+}
+
+function extractIpv4Candidates(value: string) {
+  const matches = value.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) ?? []
+  return matches.filter((item) => item.split('.').every((part) => Number(part) <= 255))
 }
 
 function cleanTerminalText(value: string) {
