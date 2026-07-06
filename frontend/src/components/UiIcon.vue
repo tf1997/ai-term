@@ -12,6 +12,8 @@ defineProps<{
     | 'download'
     | 'edit'
     | 'external-link'
+    | 'eye'
+    | 'eye-off'
     | 'folder'
     | 'folder-open'
     | 'history'
@@ -102,6 +104,16 @@ defineProps<{
       <path d="M15 3h6v6" />
       <path d="M10 14 21 3" />
       <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </template>
+    <template v-else-if="name === 'eye'">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </template>
+    <template v-else-if="name === 'eye-off'">
+      <path d="M3 3l18 18" />
+      <path d="M10.6 10.6a3 3 0 0 0 4.2 4.2" />
+      <path d="M9.9 4.3A10.6 10.6 0 0 1 12 4.1c6.5 0 10 7 10 7a18.5 18.5 0 0 1-3.1 4.1" />
+      <path d="M6.4 6.6A18.7 18.7 0 0 0 2 12s3.5 7 10 7a10.7 10.7 0 0 0 4-.8" />
     </template>
     <template v-else-if="name === 'folder'">
       <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />

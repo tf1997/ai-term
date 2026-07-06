@@ -10,7 +10,7 @@ fn schema_contains_required_config_tables() {
 }
 
 #[test]
-fn schema_stores_plaintext_ssh_and_ai_passwords() {
+fn schema_keeps_credential_refs_and_legacy_secret_columns_for_migration() {
     assert!(SCHEMA.contains("gateway_credential_ref"));
     assert!(SCHEMA.contains("target_credential_ref"));
     assert!(SCHEMA.contains("gateway_password"));

@@ -1,7 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::path::Path;
+use std::{fmt, path::Path, sync::Arc};
 
+use crate::domain::auth::credentials::{
+    CredentialStore, MemoryCredentialStore, SystemCredentialStore,
+};
 use crate::domain::connection::models::{
     AiProviderConfig, AiProviderType, AuthEndpoint, AuthMode, ConnectionProfile, ContextPolicy,
     FileTransferMode, JumpMode,
@@ -13,15 +16,37 @@ use crate::domain::workspace::{
 pub const SCHEMA: &str = include_str!("schema.sql");
 const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct SqliteConfigStore {
     database_path: String,
+    credential_store: Arc<dyn CredentialStore>,
+}
+
+impl fmt::Debug for SqliteConfigStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SqliteConfigStore")
+            .field("database_path", &self.database_path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SqliteConfigStore {
     pub fn new(database_path: impl Into<String>) -> Self {
+        Self::with_credential_store(database_path, Arc::new(MemoryCredentialStore::default()))
+    }
+
+    pub fn with_system_credentials(database_path: impl Into<String>) -> Self {
+        Self::with_credential_store(database_path, Arc::new(SystemCredentialStore::new()))
+    }
+
+    pub fn with_credential_store(
+        database_path: impl Into<String>,
+        credential_store: Arc<dyn CredentialStore>,
+    ) -> Self {
         Self {
             database_path: database_path.into(),
+            credential_store,
         }
     }
 
@@ -43,6 +68,7 @@ impl SqliteConfigStore {
     pub fn save_connection_profile(&self, profile: &ConnectionProfile) -> Result<()> {
         self.initialize()?;
         let connection = self.connection()?;
+        let stored = self.prepare_connection_profile_for_storage(profile)?;
         connection.execute(
             r#"
             INSERT INTO connection_profiles (
@@ -86,23 +112,23 @@ impl SqliteConfigStore {
               updated_at = CURRENT_TIMESTAMP
             "#,
             params![
-                profile.id,
-                profile.name,
-                profile.gateway.host,
-                profile.gateway.port.unwrap_or(22),
-                profile.gateway.username,
-                auth_mode_to_str(&profile.gateway.auth_mode),
-                profile.gateway.credential_ref,
-                normalize_secret(profile.gateway.password.as_deref()),
-                profile.target.host,
-                profile.target.port,
-                profile.target.username,
-                auth_mode_to_str(&profile.target.auth_mode),
-                profile.target.credential_ref,
-                normalize_secret(profile.target.password.as_deref()),
-                jump_mode_to_str(&profile.jump_mode),
-                profile.menu_profile_id,
-                file_transfer_mode_to_str(&profile.file_transfer_mode),
+                stored.id,
+                stored.name,
+                stored.gateway.host,
+                stored.gateway.port.unwrap_or(22),
+                stored.gateway.username,
+                auth_mode_to_str(&stored.gateway.auth_mode),
+                stored.gateway.credential_ref,
+                Option::<String>::None,
+                stored.target.host,
+                stored.target.port,
+                stored.target.username,
+                auth_mode_to_str(&stored.target.auth_mode),
+                stored.target.credential_ref,
+                Option::<String>::None,
+                jump_mode_to_str(&stored.jump_mode),
+                stored.menu_profile_id,
+                file_transfer_mode_to_str(&stored.file_transfer_mode),
             ],
         )?;
         Ok(())
@@ -167,8 +193,12 @@ impl SqliteConfigStore {
             })
         })?;
 
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        let mut profiles = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for profile in &mut profiles {
+            self.hydrate_connection_profile_secrets(&connection, profile)?;
+        }
+        Ok(profiles)
     }
 
     pub fn get_connection_profile(&self, id: &str) -> Result<Option<ConnectionProfile>> {
@@ -180,6 +210,9 @@ impl SqliteConfigStore {
 
     pub fn delete_connection_profile(&self, id: &str) -> Result<bool> {
         self.initialize()?;
+        if let Some(profile) = self.get_connection_profile(id)? {
+            self.delete_connection_profile_secrets(&profile)?;
+        }
         let connection = self.connection()?;
         let deleted = connection.execute("DELETE FROM connection_profiles WHERE id = ?1", [id])?;
         Ok(deleted > 0)
@@ -188,6 +221,7 @@ impl SqliteConfigStore {
     pub fn save_ai_provider_config(&self, config: &AiProviderConfig) -> Result<()> {
         self.initialize()?;
         let connection = self.connection()?;
+        let stored = self.prepare_ai_provider_config_for_storage(config)?;
         connection.execute(
             r#"
             INSERT INTO ai_provider_configs (
@@ -215,15 +249,15 @@ impl SqliteConfigStore {
               updated_at = CURRENT_TIMESTAMP
             "#,
             params![
-                config.id,
-                ai_provider_type_to_str(&config.provider),
-                config.base_url,
-                config.model,
-                config.api_key_ref,
-                normalize_secret(config.api_key.as_deref()),
-                context_policy_to_str(&config.context_policy),
-                config.system_prompt,
-                config.risk_policy,
+                stored.id,
+                ai_provider_type_to_str(&stored.provider),
+                stored.base_url,
+                stored.model,
+                stored.api_key_ref,
+                Option::<String>::None,
+                context_policy_to_str(&stored.context_policy),
+                stored.system_prompt,
+                stored.risk_policy,
             ],
         )?;
         Ok(())
@@ -265,8 +299,12 @@ impl SqliteConfigStore {
             })
         })?;
 
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        let mut configs = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for config in &mut configs {
+            self.hydrate_ai_provider_config_secret(&connection, config)?;
+        }
+        Ok(configs)
     }
 
     pub fn get_ai_provider_config(&self, id: &str) -> Result<Option<AiProviderConfig>> {
@@ -278,6 +316,9 @@ impl SqliteConfigStore {
 
     pub fn delete_ai_provider_config(&self, id: &str) -> Result<bool> {
         self.initialize()?;
+        if let Some(config) = self.get_ai_provider_config(id)? {
+            self.delete_ai_provider_config_secret(&config)?;
+        }
         let connection = self.connection()?;
         let deleted = connection.execute("DELETE FROM ai_provider_configs WHERE id = ?1", [id])?;
         Ok(deleted > 0)
@@ -677,6 +718,178 @@ impl SqliteConfigStore {
         Ok(deleted > 0)
     }
 
+    fn prepare_connection_profile_for_storage(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<ConnectionProfile> {
+        let mut stored = profile.clone();
+        self.prepare_endpoint_for_storage(&profile.id, "gateway", &mut stored.gateway)?;
+        self.prepare_endpoint_for_storage(&profile.id, "target", &mut stored.target)?;
+        Ok(stored)
+    }
+
+    fn prepare_endpoint_for_storage(
+        &self,
+        profile_id: &str,
+        role: &str,
+        endpoint: &mut AuthEndpoint,
+    ) -> Result<()> {
+        if let Some(secret) = normalize_secret(endpoint.password.as_deref()) {
+            let key = normalized_optional(endpoint.credential_ref.take())
+                .unwrap_or_else(|| connection_secret_ref(profile_id, role));
+            self.credential_store
+                .set_secret(&key, &secret)
+                .with_context(|| {
+                    format!("failed to save {role} SSH password to system credentials")
+                })?;
+            endpoint.credential_ref = Some(key);
+        } else {
+            endpoint.credential_ref = normalized_optional(endpoint.credential_ref.take());
+        }
+        endpoint.password = None;
+        Ok(())
+    }
+
+    fn hydrate_connection_profile_secrets(
+        &self,
+        connection: &Connection,
+        profile: &mut ConnectionProfile,
+    ) -> Result<()> {
+        self.hydrate_endpoint_secret(
+            connection,
+            &profile.id,
+            "gateway",
+            "gateway_credential_ref",
+            "gateway_password",
+            &mut profile.gateway,
+        )?;
+        self.hydrate_endpoint_secret(
+            connection,
+            &profile.id,
+            "target",
+            "target_credential_ref",
+            "target_password",
+            &mut profile.target,
+        )?;
+        Ok(())
+    }
+
+    fn hydrate_endpoint_secret(
+        &self,
+        connection: &Connection,
+        profile_id: &str,
+        role: &str,
+        credential_ref_column: &str,
+        password_column: &str,
+        endpoint: &mut AuthEndpoint,
+    ) -> Result<()> {
+        if let Some(secret) = normalize_secret(endpoint.password.as_deref()) {
+            let key = normalized_optional(endpoint.credential_ref.take())
+                .unwrap_or_else(|| connection_secret_ref(profile_id, role));
+            self.credential_store
+                .set_secret(&key, &secret)
+                .with_context(|| {
+                    format!("failed to migrate {role} SSH password to system credentials")
+                })?;
+            connection.execute(
+                &format!(
+                    "UPDATE connection_profiles SET {credential_ref_column} = ?1, {password_column} = NULL WHERE id = ?2"
+                ),
+                params![&key, profile_id],
+            )?;
+            endpoint.credential_ref = Some(key);
+            endpoint.password = Some(secret);
+            return Ok(());
+        }
+
+        endpoint.credential_ref = normalized_optional(endpoint.credential_ref.take());
+        if let Some(key) = endpoint.credential_ref.as_deref() {
+            endpoint.password = self.credential_store.get_secret(key).with_context(|| {
+                format!("failed to read {role} SSH password from system credentials")
+            })?;
+        } else {
+            endpoint.password = None;
+        }
+        Ok(())
+    }
+
+    fn delete_connection_profile_secrets(&self, profile: &ConnectionProfile) -> Result<()> {
+        for key in [
+            profile.gateway.credential_ref.as_deref(),
+            profile.target.credential_ref.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.credential_store
+                .delete_secret(key)
+                .with_context(|| format!("failed to delete SSH credential {key}"))?;
+        }
+        Ok(())
+    }
+
+    fn prepare_ai_provider_config_for_storage(
+        &self,
+        config: &AiProviderConfig,
+    ) -> Result<AiProviderConfig> {
+        let mut stored = config.clone();
+        if let Some(secret) = normalize_secret(stored.api_key.as_deref()) {
+            let key = normalized_string(&stored.api_key_ref)
+                .unwrap_or_else(|| ai_provider_secret_ref(&stored.id));
+            self.credential_store
+                .set_secret(&key, &secret)
+                .context("failed to save AI API key to system credentials")?;
+            stored.api_key_ref = key;
+        } else if let Some(key) = normalized_string(&stored.api_key_ref) {
+            stored.api_key_ref = key;
+        } else {
+            stored.api_key_ref.clear();
+        }
+        stored.api_key = None;
+        Ok(stored)
+    }
+
+    fn hydrate_ai_provider_config_secret(
+        &self,
+        connection: &Connection,
+        config: &mut AiProviderConfig,
+    ) -> Result<()> {
+        if let Some(secret) = normalize_secret(config.api_key.as_deref()) {
+            let key = normalized_string(&config.api_key_ref)
+                .unwrap_or_else(|| ai_provider_secret_ref(&config.id));
+            self.credential_store
+                .set_secret(&key, &secret)
+                .context("failed to migrate AI API key to system credentials")?;
+            connection.execute(
+                "UPDATE ai_provider_configs SET api_key_ref = ?1, api_key = NULL WHERE id = ?2",
+                params![&key, config.id],
+            )?;
+            config.api_key_ref = key;
+            config.api_key = Some(secret);
+            return Ok(());
+        }
+
+        if let Some(key) = normalized_string(&config.api_key_ref) {
+            config.api_key_ref = key.clone();
+            config.api_key = self
+                .credential_store
+                .get_secret(&key)
+                .context("failed to read AI API key from system credentials")?;
+        } else {
+            config.api_key_ref.clear();
+            config.api_key = None;
+        }
+        Ok(())
+    }
+
+    fn delete_ai_provider_config_secret(&self, config: &AiProviderConfig) -> Result<()> {
+        if let Some(key) = normalized_string(&config.api_key_ref) {
+            self.credential_store
+                .delete_secret(&key)
+                .with_context(|| format!("failed to delete AI API credential {key}"))?;
+        }
+        Ok(())
+    }
     fn connection(&self) -> Result<Connection> {
         if let Some(parent) = Path::new(&self.database_path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -777,6 +990,26 @@ fn table_has_column(connection: &Connection, table_name: &str, column_name: &str
     Ok(false)
 }
 
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value.and_then(|value| normalized_string(&value))
+}
+
+fn normalized_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn connection_secret_ref(profile_id: &str, role: &str) -> String {
+    format!("ssh-profile:{profile_id}:{role}:password")
+}
+
+fn ai_provider_secret_ref(config_id: &str) -> String {
+    format!("ai-provider:{config_id}")
+}
 fn normalize_secret(value: Option<&str>) -> Option<String> {
     value.and_then(|secret| {
         let trimmed = secret.trim();

@@ -775,6 +775,31 @@ button:disabled {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-sm);
 }
+.password-input-wrap {
+  min-width: 0;
+  position: relative;
+  display: block;
+}
+.password-input-wrap input {
+  padding-right: 34px;
+}
+.password-visibility-button {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  transform: translateY(-50%);
+  border-color: transparent;
+  background: transparent;
+  color: #7f8b9c;
+  box-shadow: none;
+}
+.password-visibility-button:hover:not(:disabled), .password-visibility-button:focus-visible {
+  border-color: rgba(91, 111, 255, .28);
+  background: rgba(91, 111, 255, .12);
+  color: #dce6ff;
+}
 .empty-state {
   margin: 0;
   color: #687482;
@@ -5449,6 +5474,16 @@ code {
 }
 .theme-light .profile-editor span, .theme-light .settings-editor span, .theme-light .rename-field span, .theme-light .terminal-transfer-panel label span {
   color: var(--light-muted);
+}
+.theme-light .password-visibility-button, .app-shell.theme-light .password-visibility-button {
+  border-color: transparent;
+  background: transparent;
+  color: #64748b;
+}
+.theme-light .password-visibility-button:hover:not(:disabled), .theme-light .password-visibility-button:focus-visible, .app-shell.theme-light .password-visibility-button:hover:not(:disabled), .app-shell.theme-light .password-visibility-button:focus-visible {
+  border-color: #ccebdd;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
 }
 .theme-light .save-feedback {
   border-color: var(--light-border);

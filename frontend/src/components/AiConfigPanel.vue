@@ -65,7 +65,7 @@ function save() {
       </label>
       <label>
         <span>API Key</span>
-        <input v-model="draft.apiKey" type="password" placeholder="明文保存到 SQLite" />
+        <input v-model="draft.apiKey" type="password" placeholder="保存到系统凭据管理器" />
       </label>
       <label>
         <span>Context</span>
@@ -81,7 +81,7 @@ function save() {
       </label>
     </div>
     <div class="config-footer">
-      <span>{{ saved ? 'Saved to SQLite' : 'API Key 将明文保存到 SQLite' }}</span>
+      <span>{{ saved ? '已保存到系统凭据管理器' : 'API Key 将保存到系统凭据管理器' }}</span>
       <button class="primary" @click="save">保存配置</button>
     </div>
   </section>

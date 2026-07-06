@@ -35,6 +35,8 @@ const schema = read('../src-tauri/src/domain/storage/schema.sql')
 const aiChat = read('../src-tauri/src/domain/ai/chat.rs')
 const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
+const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
+const tauriLib = read('../src-tauri/src/lib.rs')
 function cssRule(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = styles.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))
@@ -1090,11 +1092,46 @@ assert(
 assert(
   sidebar.includes('v-model="selectedProfile.gateway.password"') &&
     sidebar.includes('v-model="selectedProfile.target.password"') &&
-    sidebar.includes('type="password"') &&
+    sidebar.includes('passwordFieldType') &&
+
     sidebar.includes('v-model="selectedProfile.gateway.authMode"') &&
     sidebar.includes('v-model="selectedProfile.target.authMode"') &&
     appShell.includes("password: ''"),
-  'ConnectionSidebar must let users save plaintext SSH passwords for gateway and target endpoints.'
+  'ConnectionSidebar must let users enter SSH passwords while backend storage moves them into the system credential store.'
+)
+
+assert(
+  sidebar.includes('showGatewayPassword') &&
+    sidebar.includes('showTargetPassword') &&
+    sidebar.includes('passwordFieldType') &&
+    sidebar.includes('password-input-wrap') &&
+    sidebar.includes('password-visibility-button') &&
+    uiIcon.includes("'eye'") &&
+    uiIcon.includes("'eye-off'") &&
+    styles.includes('.password-visibility-button'),
+  'Connection editor password fields must support explicit show/hide eye buttons for saved credentials.'
+)
+
+assert(
+  sidebar.includes('系统凭据管理器') &&
+    settingsSidebar.includes('系统凭据管理器') &&
+    aiConfig.includes('系统凭据管理器') &&
+    !sidebar.includes('明文保存') &&
+    !aiConfig.includes('明文保存'),
+  'Credential UI copy must describe system credential storage instead of plaintext SQLite storage.'
+)
+
+assert(
+  credentials.includes('pub struct SystemCredentialStore') &&
+    credentials.includes('CredWriteW') &&
+    credentials.includes('secret-tool') &&
+    credentials.includes('security') &&
+    sqlite.includes('with_system_credentials') &&
+    sqlite.includes('with_credential_store') &&
+    sqlite.includes('credential_store') &&
+    sqlite.includes('Option::<String>::None') &&
+    tauriLib.includes('SqliteConfigStore::with_system_credentials'),
+  'Sensitive SSH passwords and AI API keys must be saved through the system credential store, with SQLite retaining only credential references.'
 )
 
 assert(

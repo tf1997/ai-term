@@ -340,7 +340,7 @@ async function callConfiguredModelStream(requestId: string, question: string, te
   }
   const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
   if (!apiKey) {
-    throw new Error('请在 AI Config 中填写 API Key 并保存到 SQLite')
+    throw new Error('请在 AI 配置中填写 API Key 并保存到系统凭据管理器')
   }
 
   return chatWithAiProviderStream(requestId, {

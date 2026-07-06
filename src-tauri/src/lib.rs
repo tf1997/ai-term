@@ -37,7 +37,8 @@ pub fn run() {
                 .path_resolver()
                 .app_config_dir()
                 .ok_or_else(|| "failed to resolve app config directory".to_string())?;
-            let store = SqliteConfigStore::new(default_database_path(&app_config_dir));
+            let store =
+                SqliteConfigStore::with_system_credentials(default_database_path(&app_config_dir));
             store.initialize().map_err(|err| err.to_string())?;
             app.manage(AppState::with_profile_store(store));
             Ok(())

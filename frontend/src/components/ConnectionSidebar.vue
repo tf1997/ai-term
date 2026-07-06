@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ConnectionProfile } from '../types/profile'
 import UiIcon from './UiIcon.vue'
 
@@ -28,6 +28,25 @@ const emit = defineEmits<{
 }>()
 
 const query = ref('')
+const showGatewayPassword = ref(false)
+const showTargetPassword = ref(false)
+
+watch(
+  () => [props.editorOpen, props.selectedProfile?.id] as const,
+  () => {
+    showGatewayPassword.value = false
+    showTargetPassword.value = false
+  }
+)
+
+function passwordFieldType(visible: boolean) {
+  return visible ? 'text' : 'password'
+}
+
+function passwordToggleLabel(visible: boolean) {
+  return visible ? '隐藏密码' : '显示密码'
+}
+
 const filteredProfiles = computed(() => {
   const value = query.value.trim().toLowerCase()
   if (!value) return props.profiles
@@ -79,7 +98,7 @@ function targetPortLabel(profile: ConnectionProfile) {
 }
 
 function targetPasswordPlaceholder() {
-  return '\u53ef\u9009\uff0c\u7528\u4e8e\u76ee\u6807\u670d\u52a1\u5668\u81ea\u52a8\u767b\u5f55'
+  return '可选，保存到系统凭据管理器用于自动登录'
 }
 function profileReady(profile: ConnectionProfile) {
   const hasTarget = Boolean(
@@ -195,7 +214,7 @@ function handleJumpModeChanged() {
           <div class="modal-head">
             <div>
               <strong>{{ editorMode === 'create' ? '新建连接' : '编辑连接' }}</strong>
-              <span>保存后写入 SQLite，连接列表会自动刷新。</span>
+              <span>连接信息写入 SQLite，密码保存到系统凭据管理器。</span>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="emit('closeEditor')"><UiIcon name="close" /></button>
           </div>
@@ -269,7 +288,19 @@ function handleJumpModeChanged() {
             </label>
             <label v-if="needsGateway(selectedProfile) && selectedProfile.gateway.authMode !== 'key'">
               <span>堡垒机密码</span>
-              <input v-model="selectedProfile.gateway.password" type="password" autocomplete="off" placeholder="明文保存，用于自动登录" />
+              <div class="password-input-wrap">
+                <input v-model="selectedProfile.gateway.password" :type="passwordFieldType(showGatewayPassword)" autocomplete="off" placeholder="保存到系统凭据管理器，用于自动登录" />
+                <button
+                  class="icon-button password-visibility-button"
+                  type="button"
+                  :title="passwordToggleLabel(showGatewayPassword)"
+                  :aria-label="passwordToggleLabel(showGatewayPassword)"
+                  :aria-pressed="showGatewayPassword"
+                  @click="showGatewayPassword = !showGatewayPassword"
+                >
+                  <UiIcon :name="showGatewayPassword ? 'eye-off' : 'eye'" />
+                </button>
+              </div>
             </label>
             <label>
               <span>{{ isSftpProfile(selectedProfile) ? 'SFTP 认证' : '目标认证' }}</span>
@@ -281,7 +312,19 @@ function handleJumpModeChanged() {
             </label>
             <label v-if="shouldShowTargetPassword(selectedProfile)">
               <span>{{ targetPasswordLabel(selectedProfile) }}</span>
-              <input v-model="selectedProfile.target.password" type="password" autocomplete="off" :placeholder="targetPasswordPlaceholder()" />
+              <div class="password-input-wrap">
+                <input v-model="selectedProfile.target.password" :type="passwordFieldType(showTargetPassword)" autocomplete="off" :placeholder="targetPasswordPlaceholder()" />
+                <button
+                  class="icon-button password-visibility-button"
+                  type="button"
+                  :title="passwordToggleLabel(showTargetPassword)"
+                  :aria-label="passwordToggleLabel(showTargetPassword)"
+                  :aria-pressed="showTargetPassword"
+                  @click="showTargetPassword = !showTargetPassword"
+                >
+                  <UiIcon :name="showTargetPassword ? 'eye-off' : 'eye'" />
+                </button>
+              </div>
             </label>
           </div>
         </form>

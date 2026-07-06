@@ -1,8 +1,10 @@
+use ai_term_lib::domain::auth::credentials::{CredentialStore, MemoryCredentialStore};
 use ai_term_lib::domain::connection::models::{
     AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode,
 };
 use ai_term_lib::domain::storage::sqlite::SqliteConfigStore;
 use rusqlite::Connection;
+use std::sync::Arc;
 
 fn endpoint(host: &str, username: &str) -> AuthEndpoint {
     AuthEndpoint {
@@ -99,8 +101,12 @@ fn sqlite_store_roundtrips_direct_connection_profiles() {
 }
 
 #[test]
-fn sqlite_store_roundtrips_plaintext_ssh_passwords() {
-    let store = SqliteConfigStore::new(temp_db_path("profiles-passwords"));
+fn sqlite_store_moves_ssh_passwords_to_credential_store() {
+    let credentials = Arc::new(MemoryCredentialStore::default());
+    let store = SqliteConfigStore::with_credential_store(
+        temp_db_path("profiles-passwords"),
+        credentials.clone(),
+    );
     store.initialize().unwrap();
 
     let mut password_profile = profile("prod-password", "prod-password");
@@ -111,14 +117,45 @@ fn sqlite_store_roundtrips_plaintext_ssh_passwords() {
 
     store.save_connection_profile(&password_profile).unwrap();
 
+    let mut expected = password_profile.clone();
+    expected.gateway.credential_ref = Some("ssh-profile:prod-password:gateway:password".into());
+    expected.target.credential_ref = Some("ssh-profile:prod-password:target:password".into());
+    assert_eq!(store.list_connection_profiles().unwrap(), vec![expected]);
+
+    let connection = Connection::open(store.database_path()).unwrap();
+    let raw: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT gateway_credential_ref, gateway_password, target_credential_ref, target_password
+            FROM connection_profiles
+            WHERE id = ?1
+            "#,
+            ["prod-password"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+
+    let gateway_ref = raw.0.as_deref().unwrap();
+    let target_ref = raw.2.as_deref().unwrap();
+    assert_eq!(raw.1, None);
+    assert_eq!(raw.3, None);
     assert_eq!(
-        store.list_connection_profiles().unwrap(),
-        vec![password_profile]
+        credentials.get_secret(gateway_ref).unwrap().as_deref(),
+        Some("gateway-secret")
+    );
+    assert_eq!(
+        credentials.get_secret(target_ref).unwrap().as_deref(),
+        Some("target-secret")
     );
 }
 
 #[test]
-fn sqlite_store_migrates_existing_profiles_table_for_plaintext_passwords() {
+fn sqlite_store_adds_legacy_secret_columns_to_existing_profiles_table() {
     let database_path = temp_db_path("profiles-password-migration");
     let connection = Connection::open(&database_path).unwrap();
     connection
@@ -155,8 +192,134 @@ fn sqlite_store_migrates_existing_profiles_table_for_plaintext_passwords() {
 
     store.save_connection_profile(&password_profile).unwrap();
 
+    let mut expected = password_profile.clone();
+    expected.gateway.credential_ref = Some("ssh-profile:prod-migrated:gateway:password".into());
+    expected.target.credential_ref = Some("ssh-profile:prod-migrated:target:password".into());
+    assert_eq!(store.list_connection_profiles().unwrap(), vec![expected]);
+}
+
+#[test]
+fn sqlite_store_migrates_legacy_plaintext_ssh_passwords_on_read() {
+    let database_path = temp_db_path("profiles-legacy-plaintext");
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE connection_profiles (
+              id TEXT PRIMARY KEY NOT NULL,
+              name TEXT NOT NULL,
+              gateway_host TEXT NOT NULL,
+              gateway_port INTEGER NOT NULL DEFAULT 22,
+              gateway_username TEXT NOT NULL,
+              gateway_auth_mode TEXT NOT NULL,
+              gateway_credential_ref TEXT,
+              gateway_password TEXT,
+              target_host TEXT NOT NULL,
+              target_port INTEGER,
+              target_username TEXT NOT NULL,
+              target_auth_mode TEXT NOT NULL,
+              target_credential_ref TEXT,
+              target_password TEXT,
+              jump_mode TEXT NOT NULL,
+              menu_profile_id TEXT NOT NULL,
+              file_transfer_mode TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO connection_profiles (
+              id,
+              name,
+              gateway_host,
+              gateway_port,
+              gateway_username,
+              gateway_auth_mode,
+              gateway_credential_ref,
+              gateway_password,
+              target_host,
+              target_port,
+              target_username,
+              target_auth_mode,
+              target_credential_ref,
+              target_password,
+              jump_mode,
+              menu_profile_id,
+              file_transfer_mode
+            ) VALUES (
+              'legacy-prod',
+              'legacy-prod',
+              'ssh.company.com',
+              22,
+              'company.user',
+              'password',
+              NULL,
+              'gateway-secret',
+              '10.12.8.21',
+              22,
+              'app',
+              'password',
+              NULL,
+              'target-secret',
+              'interactive-menu',
+              'company-default',
+              'auto'
+            );
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let credentials = Arc::new(MemoryCredentialStore::default());
+    let store = SqliteConfigStore::with_credential_store(database_path, credentials.clone());
+    let mut expected = profile("legacy-prod", "legacy-prod");
+    expected.gateway.auth_mode = AuthMode::Password;
+    expected.gateway.credential_ref = Some("ssh-profile:legacy-prod:gateway:password".into());
+    expected.gateway.password = Some("gateway-secret".into());
+    expected.target.auth_mode = AuthMode::Password;
+    expected.target.credential_ref = Some("ssh-profile:legacy-prod:target:password".into());
+    expected.target.password = Some("target-secret".into());
+
+    assert_eq!(store.list_connection_profiles().unwrap(), vec![expected]);
+
+    let connection = Connection::open(store.database_path()).unwrap();
+    let raw: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection
+        .query_row(
+            r#"
+            SELECT gateway_credential_ref, gateway_password, target_credential_ref, target_password
+            FROM connection_profiles
+            WHERE id = ?1
+            "#,
+            ["legacy-prod"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+
     assert_eq!(
-        store.list_connection_profiles().unwrap(),
-        vec![password_profile]
+        raw.0.as_deref(),
+        Some("ssh-profile:legacy-prod:gateway:password")
+    );
+    assert_eq!(raw.1, None);
+    assert_eq!(
+        raw.2.as_deref(),
+        Some("ssh-profile:legacy-prod:target:password")
+    );
+    assert_eq!(raw.3, None);
+    assert_eq!(
+        credentials
+            .get_secret("ssh-profile:legacy-prod:gateway:password")
+            .unwrap()
+            .as_deref(),
+        Some("gateway-secret")
+    );
+    assert_eq!(
+        credentials
+            .get_secret("ssh-profile:legacy-prod:target:password")
+            .unwrap()
+            .as_deref(),
+        Some("target-secret")
     );
 }
