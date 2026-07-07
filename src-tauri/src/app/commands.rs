@@ -26,7 +26,8 @@ use crate::domain::connection::sftp::{
     SftpProbeResponse, SftpProgressUpdate, SftpTargetOverride, SftpTransferResponse,
 };
 use crate::domain::filesystem::local::{
-    home_directory, list_directory as list_local_directory_impl, LocalDirectoryResponse,
+    home_directory, list_directory as list_local_directory_impl, open_path as open_local_path_impl,
+    LocalDirectoryResponse,
 };
 use crate::domain::terminal::local::spawn_local_terminal;
 use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
@@ -508,6 +509,14 @@ pub async fn local_home_directory() -> Result<String, String> {
 #[tauri::command]
 pub async fn local_list_directory(path: String) -> Result<LocalDirectoryResponse, String> {
     tokio::task::spawn_blocking(move || list_local_directory_impl(&path))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn local_open_path(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || open_local_path_impl(&path))
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())

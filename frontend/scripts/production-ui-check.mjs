@@ -26,6 +26,7 @@ const sidebar = read('src/components/ConnectionSidebar.vue')
 const settingsSidebar = read('src/components/SettingsSidebar.vue')
 const tauri = read('src/lib/tauri.ts')
 const workspacePanel = read('src/components/WorkspacePanel.vue')
+const workspaceTypes = read('src/types/workspace.ts')
 const commandHistoryPanel = read('src/components/CommandHistoryPanel.vue')
 const uiIcon = read('src/components/UiIcon.vue')
 const contextMenu = read('src/components/ContextMenu.vue')
@@ -36,6 +37,7 @@ const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
 const schema = read('../src-tauri/src/domain/storage/schema.sql')
 const aiChat = read('../src-tauri/src/domain/ai/chat.rs')
 const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
+const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
@@ -454,6 +456,16 @@ assert(
   'Light theme must sync document root theme state so window edges and teleported overlays follow the active theme.'
 )
 
+assert(
+  styles.includes('--shell-gap: 10px;') &&
+    styles.includes('--shell-gap-tight: 8px;') &&
+    styles.includes('padding: var(--shell-gap) var(--shell-gap) var(--shell-gap-tight) var(--shell-gap);') &&
+    styles.includes('margin: 0 var(--shell-gap) var(--shell-gap) var(--shell-gap);') &&
+    styles.includes('.workspace-bar {\n  padding: var(--shell-gap);') &&
+    styles.includes('--shell-gap: 8px;') &&
+    styles.includes('--shell-gap-tight: 6px;'),
+  'Terminal, quick-command bar, and workspace tabs must share the same shell spacing tokens across themes and responsive widths.'
+)
 
 const lightThemeLayoutParityPairs = [
   ['.app-shell', '.app-shell.theme-light'],
@@ -1035,6 +1047,11 @@ assert(
     fileTransfer.includes('sftpDeletePath') &&
     fileTransfer.includes('localHomeDirectory') &&
     fileTransfer.includes('localListDirectory') &&
+    fileTransfer.includes('localOpenPath') &&
+    !fileTransfer.includes('@tauri-apps/api/shell') &&
+    !fileTransfer.includes('openShellPath') &&
+    fileTransfer.includes('await localOpenPath(entry.path)') &&
+    fileTransfer.includes('await localOpenPath(task.targetPath)') &&
     fileTransfer.includes('localEntries') &&
     fileTransfer.includes('selectedLocalEntry') &&
     fileTransfer.includes('selectedRemoteEntry') &&
@@ -1068,6 +1085,14 @@ assert(
     fileTransfer.includes('writeTerminalInput') &&
     fileTransfer.includes('remoteReady') &&
     tauri.includes("invoke<LocalDirectoryResponse>('local_list_directory'") &&
+    tauri.includes("invoke<void>('local_open_path'") &&
+    commands.includes('pub async fn local_open_path') &&
+    commands.includes('open_path as open_local_path_impl') &&
+    localFilesystem.includes('pub fn open_path') &&
+    localFilesystem.includes('open_platform_path') &&
+    localFilesystem.includes('explorer.exe') &&
+    localFilesystem.includes('CREATE_NO_WINDOW') &&
+    localFilesystem.includes('xdg-open') &&
     tauri.includes("invoke<boolean>('cancel_task'") &&
     tauri.includes("invoke<SftpListResponse>('sftp_list_directory'") &&
     tauri.includes("invoke<SftpTransferResponse>('sftp_upload_path'") &&
@@ -1106,9 +1131,55 @@ assert(
     appShell.includes('writeInputToActiveTerminal(data)'),
   'SFTP terminal identity detection must parse robust plain markers and send terminal-channel probes only to the active terminal snapshot.'
 )
+
+assert(
+  workspaceTypes.includes('interface TerminalOutputDeltaEvent extends TerminalOutputEvent') &&
+    appShell.includes('terminalOutputEvents') &&
+    appShell.includes('terminalOutputSequence') &&
+    appShell.includes('activeTerminalOutputEvent') &&
+    appShell.includes('@focus-terminal="focusActiveTerminalFromWorkspace"') &&
+    terminalPane.includes('function focusTerminal()') &&
+    terminalPane.includes('focusTerminal,') &&
+    workspacePanel.includes('sftpPanelVisited') &&
+    workspacePanel.includes("if (tab === 'sftp') sftpPanelVisited.value = true") &&
+    workspacePanel.includes('v-if="sftpPanelVisited"') &&
+    workspacePanel.includes(`v-show="activeWorkspaceTab === 'sftp'"`) &&
+    workspacePanel.includes(':terminal-id="terminalId"') &&
+    workspacePanel.includes(':terminal-output-event="terminalOutputEvent"') &&
+    workspacePanel.includes('@focus-terminal="emit(\'focusTerminal\')"') &&
+    fileTransfer.includes('terminalId: string') &&
+    fileTransfer.includes('terminalOutputEvent?: TerminalOutputDeltaEvent') &&
+    fileTransfer.includes('transferStateByTerminal') &&
+    fileTransfer.includes('saveTransferState(previousKey)') &&
+    fileTransfer.includes('restoreTransferState(key)') &&
+    fileTransfer.includes('PendingIdentityProbe') &&
+    fileTransfer.includes('pendingIdentify.value.output') &&
+    fileTransfer.includes('identityProbeText') &&
+    fileTransfer.includes('snapshot.slice(-160_000)') &&
+    appShell.includes('nextSnapshot.slice(-80_000)') &&
+    fileTransfer.includes('sftp-terminal-switch') &&
+    fileTransfer.includes('切换到终端') &&
+    styles.includes('.sftp-terminal-switch'),
+  'SFTP workspace must stay mounted across tab switches, parse terminal identity from output deltas, and expose a clear switch-back-to-terminal action.'
+)
 assert(
   fileTransfer.includes('lastTransfer') &&
     fileTransfer.includes('transfer-target-strip') &&
+    fileTransfer.includes('sftpHeaderSummary') &&
+    fileTransfer.includes('localPaneSummary') &&
+    fileTransfer.includes('remotePaneSummary') &&
+    fileTransfer.includes('formatRemoteModified') &&
+    fileTransfer.includes('sftp-title-copy') &&
+    fileTransfer.includes('transfer-route-item') &&
+    fileTransfer.includes('transfer-pane-title') &&
+    fileTransfer.includes('transfer-pane-path') &&
+    fileTransfer.includes('file-meta') &&
+    fileTransfer.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
+    fileTransfer.includes('name="arrow-up"') &&
+    fileTransfer.includes('role="tablist"') &&
+    fileTransfer.includes(':aria-selected=') &&
+    fileTransfer.includes(':title="entry.name"') &&
+    fileTransfer.includes("entry.permissions || '权限未知'") &&
     fileTransfer.includes('transfer-progress') &&
     fileTransfer.includes('transfer-task-stats') &&
     fileTransfer.includes('transferAmountLabel') &&
@@ -1127,6 +1198,20 @@ assert(
     tauri.includes('estimatedCompletionEpochMs?: number') &&
     tauri.includes('onSftpTransferProgress') &&
     styles.includes('.transfer-target-strip') &&
+    styles.includes('.sftp-panel-head') &&
+    styles.includes('.sftp-title-copy') &&
+    styles.includes('.transfer-target-strip .transfer-route-item') &&
+    styles.includes('.transfer-pane-title') &&
+    styles.includes('.transfer-pane-path') &&
+    styles.includes('.file-meta') &&
+    styles.includes('.file-type-icon .ui-icon') &&
+    styles.includes('.file-row:hover .file-type-icon.folder') &&
+    !styles.includes('.file-type-icon.folder::before') &&
+    !styles.includes('.file-type-icon.file::after') &&
+    styles.includes('.file-row:hover .file-actions') &&
+    styles.includes('rgba(86, 230, 163, .12)') &&
+    styles.includes('.theme-light .transfer-target-strip .transfer-route-item') &&
+    styles.includes('.theme-light .file-meta span') &&
     styles.includes('.transfer-progress') &&
     styles.includes('.transfer-task-stats') &&
     styles.includes('@keyframes transfer-progress-slide') &&
@@ -2184,6 +2269,7 @@ assert(
 
 assert(
   uiIcon.includes("'arrow-left'") &&
+    uiIcon.includes("'file'") &&
     uiIcon.includes("'download'") &&
     uiIcon.includes("'upload'") &&
     uiIcon.includes("'save'") &&
@@ -2199,7 +2285,9 @@ assert(
     fileTransfer.includes('import UiIcon') &&
     fileTransfer.includes('name="upload"') &&
     fileTransfer.includes('name="download"') &&
-    fileTransfer.includes('name="folder-open"'),
+    fileTransfer.includes('name="folder-open"') &&
+    fileTransfer.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
+    uiIcon.includes("name === 'file'"),
   'AI, script, SFTP, and history surfaces must use UiIcon for common action buttons instead of fragile character glyphs.'
 )
 assert(

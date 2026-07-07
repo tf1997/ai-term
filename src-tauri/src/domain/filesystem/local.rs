@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +28,29 @@ pub fn home_directory() -> Result<String> {
     home_path()
         .map(|path| path_to_string(&path))
         .ok_or_else(|| anyhow::anyhow!("failed to resolve user home directory"))
+}
+
+pub fn open_path(path: &str) -> Result<()> {
+    let home =
+        home_path().ok_or_else(|| anyhow::anyhow!("failed to resolve user home directory"))?;
+    let requested = if path.trim().is_empty() {
+        home
+    } else {
+        expand_tilde(path, &home)
+    };
+
+    if !requested.exists() {
+        bail!("local path does not exist: {}", path_to_string(&requested));
+    }
+
+    let target = if requested.is_absolute() {
+        requested
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current directory")?
+            .join(requested)
+    };
+    open_platform_path(&target)
 }
 
 pub fn list_directory(path: &str) -> Result<LocalDirectoryResponse> {
@@ -154,6 +178,52 @@ fn tilde_path_rest(path: &str) -> Option<&str> {
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[cfg(windows)]
+fn open_platform_path(path: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut command = Command::new("explorer.exe");
+    if path.is_file() {
+        command.arg(format!("/select,{}", path_to_string(path)));
+    } else {
+        command.arg(path);
+    }
+    command
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .with_context(|| format!("failed to open local path {}", path_to_string(path)))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_platform_path(path: &Path) -> Result<()> {
+    let mut command = Command::new("open");
+    if path.is_file() {
+        command.arg("-R").arg(path);
+    } else {
+        command.arg(path);
+    }
+    command
+        .spawn()
+        .with_context(|| format!("failed to open local path {}", path_to_string(path)))?;
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_platform_path(path: &Path) -> Result<()> {
+    let target = if path.is_file() {
+        path.parent().unwrap_or(path)
+    } else {
+        path
+    };
+    Command::new("xdg-open")
+        .arg(target)
+        .spawn()
+        .with_context(|| format!("failed to open local path {}", path_to_string(target)))?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

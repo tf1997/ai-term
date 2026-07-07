@@ -1165,6 +1165,11 @@ function disconnectFromButton() {
   disconnect()
 }
 
+function focusTerminal() {
+  terminal?.focus()
+  terminalHost.value?.focus()
+}
+
 onBeforeUnmount(() => {
   terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
@@ -1181,6 +1186,7 @@ defineExpose({
   clearTerminal,
   disconnectFromButton,
   executeCommand,
+  focusTerminal,
   restartLocalTerminal,
   writeTerminalInput
 })

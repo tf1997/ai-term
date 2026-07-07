@@ -251,6 +251,10 @@ export function localListDirectory(path: string) {
   return invoke<LocalDirectoryResponse>('local_list_directory', { path })
 }
 
+export function localOpenPath(path: string) {
+  return invoke<void>('local_open_path', { path })
+}
+
 export interface SftpTargetOverride {
   targetHost?: string
   targetUsername?: string

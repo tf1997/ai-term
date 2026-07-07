@@ -14,6 +14,7 @@ defineProps<{
     | 'external-link'
     | 'eye'
     | 'eye-off'
+    | 'file'
     | 'folder'
     | 'folder-open'
     | 'history'
@@ -114,6 +115,12 @@ defineProps<{
       <path d="M10.6 10.6a3 3 0 0 0 4.2 4.2" />
       <path d="M9.9 4.3A10.6 10.6 0 0 1 12 4.1c6.5 0 10 7 10 7a18.5 18.5 0 0 1-3.1 4.1" />
       <path d="M6.4 6.6A18.7 18.7 0 0 0 2 12s3.5 7 10 7a10.7 10.7 0 0 0 4-.8" />
+    </template>
+    <template v-else-if="name === 'file'">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 2v6h6" />
+      <path d="M8 13h8" />
+      <path d="M8 17h5" />
     </template>
     <template v-else-if="name === 'folder'">
       <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />

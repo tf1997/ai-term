@@ -10,6 +10,7 @@ import type {
   CommandRecordedEvent,
   ScriptRecording,
   TerminalInputEvent,
+  TerminalOutputDeltaEvent,
   TerminalOutputEvent,
   TerminalSelectionEvent,
   WorkspaceSession
@@ -62,6 +63,7 @@ type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   writeTerminalInput: (data: string) => boolean
   clearTerminal: () => void
   disconnectFromButton: () => void
+  focusTerminal: () => void
   restartLocalTerminal: () => void
 }
 
@@ -155,6 +157,7 @@ const activeTerminalId = ref('local-1')
 const selectedTerminalIds = ref<string[]>(['local-1'])
 const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
+const terminalOutputEvents = ref<Record<string, TerminalOutputDeltaEvent>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
 const workspaceSessionsByConnection = ref<Record<string, WorkspaceSession[]>>({})
 const draftWorkspaceSessionIds = ref<Record<string, boolean>>({})
@@ -169,6 +172,7 @@ const appSettings = ref<AppUserSettings>(loadUserSettings())
 const appTheme = ref<AppTheme>(loadAppTheme())
 const toasts = ref<AppToast[]>([])
 let toastSequence = 0
+let terminalOutputSequence = 0
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
   return profiles.value.find((profile) => profile.id === selectedProfileId.value)
@@ -206,6 +210,10 @@ const terminalTargetTitle = computed(() => {
 
 const activeTerminalSnapshot = computed(() => {
   return terminalSnapshots.value[activeTerminalId.value] ?? ''
+})
+
+const activeTerminalOutputEvent = computed(() => {
+  return terminalOutputEvents.value[activeTerminalId.value]
 })
 
 const activeTerminalSelection = computed(() => {
@@ -1174,6 +1182,7 @@ function closeTerminalTab(tabId: string) {
   const index = terminalTabs.value.findIndex((tab) => tab.id === tabId)
   terminalTabs.value = terminalTabs.value.filter((tab) => tab.id !== tabId)
   delete terminalSnapshots.value[tabId]
+  delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
   delete terminalRefs.value[tabId]
   if (activeTerminalId.value === tabId) {
@@ -1204,6 +1213,15 @@ function updateTerminalOutput(event: TerminalOutputEvent) {
   const previousSnapshot = terminalSnapshots.value[event.terminalId] ?? ''
   const delta = terminalOutputDelta(previousSnapshot, event.snapshot)
   terminalSnapshots.value[event.terminalId] = event.snapshot
+  terminalOutputEvents.value = {
+    ...terminalOutputEvents.value,
+    [event.terminalId]: {
+      terminalId: event.terminalId,
+      snapshot: event.snapshot,
+      delta,
+      sequence: ++terminalOutputSequence
+    }
+  }
   appendRecordingOutput(event.terminalId, delta)
 }
 
@@ -1319,7 +1337,7 @@ function terminalOutputDelta(previousSnapshot: string, nextSnapshot: string) {
   if (!previousSnapshot) return nextSnapshot
   if (nextSnapshot.startsWith(previousSnapshot)) return nextSnapshot.slice(previousSnapshot.length)
   if (nextSnapshot.length > previousSnapshot.length) return nextSnapshot.slice(previousSnapshot.length)
-  return nextSnapshot.slice(-8_000)
+  return nextSnapshot.slice(-80_000)
 }
 
 function commandPreview(command: string) {
@@ -1333,6 +1351,13 @@ function isActiveTerminalOnlyInput(data: string) {
 function writeInputToActiveTerminal(data: string) {
   if (terminalRefs.value[activeTerminalId.value]?.writeTerminalInput(data)) return
   showToast('error', '终端输入未发送', '当前终端不可用或没有活动 shell。')
+}
+
+function focusActiveTerminalFromWorkspace() {
+  rightCollapsed.value = true
+  requestAnimationFrame(() => {
+    terminalRefs.value[activeTerminalId.value]?.focusTerminal()
+  })
 }
 
 function executeCommandOnTargetTerminals(command: string) {
@@ -1745,6 +1770,7 @@ onBeforeUnmount(() => {
       :ai-config="aiConfig"
       :api-key="activeAiRuntimeApiKey"
       :terminal-snapshot="activeTerminalSnapshot"
+      :terminal-output-event="activeTerminalOutputEvent"
       :terminal-selection="activeTerminalSelection"
       :command-history="activeCommandHistory"
       :ai-messages="activeAiMessages"
@@ -1761,6 +1787,7 @@ onBeforeUnmount(() => {
       @set-ai-context-status="setAiContextForTerminal"
       @execute-command="executeCommandOnTargetTerminals"
       @write-terminal-input="writeInputToTargetTerminals"
+      @focus-terminal="focusActiveTerminalFromWorkspace"
       @start-script-recording="startScriptRecording"
       @stop-script-recording="stopScriptRecording"
       @clear-script-recording="clearScriptRecording"

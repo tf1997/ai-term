@@ -21,6 +21,11 @@ export interface TerminalOutputEvent {
   snapshot: string
 }
 
+export interface TerminalOutputDeltaEvent extends TerminalOutputEvent {
+  delta: string
+  sequence: number
+}
+
 export interface TerminalSelectionEvent {
   terminalId: string
   text: string

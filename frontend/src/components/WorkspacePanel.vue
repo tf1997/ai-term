@@ -6,6 +6,7 @@ import type {
   AiMessage,
   CommandHistoryEntry,
   ScriptRecording,
+  TerminalOutputDeltaEvent,
   TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
@@ -26,6 +27,7 @@ defineProps<{
   aiConfig: AiProviderConfig
   apiKey: string
   terminalSnapshot: string
+  terminalOutputEvent?: TerminalOutputDeltaEvent
   terminalSelection?: TerminalSelectionEvent
   commandHistory: CommandHistoryEntry[]
   aiMessages: AiMessage[]
@@ -46,6 +48,7 @@ const emit = defineEmits<{
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
   executeCommand: [command: string]
   writeTerminalInput: [data: string]
+  focusTerminal: []
   startScriptRecording: []
   stopScriptRecording: []
   clearScriptRecording: []
@@ -53,10 +56,12 @@ const emit = defineEmits<{
 
 const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
 const scriptPanelVisited = ref(false)
+const sftpPanelVisited = ref(false)
 
 function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
   activeWorkspaceTab.value = tab
   if (tab === 'scripts') scriptPanelVisited.value = true
+  if (tab === 'sftp') sftpPanelVisited.value = true
   emit('workspaceTabChanged', tab)
 }
 </script>
@@ -158,11 +163,15 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @write-terminal-input="emit('writeTerminalInput', $event)"
     />
     <FileTransferPanel
-      v-if="activeWorkspaceTab === 'sftp'"
+      v-if="sftpPanelVisited"
+      v-show="activeWorkspaceTab === 'sftp'"
+      :terminal-id="terminalId"
       :connection-id="connectionId"
       :profile="connectionProfile"
       :terminal-snapshot="terminalSnapshot"
+      :terminal-output-event="terminalOutputEvent"
       @write-terminal-input="emit('writeTerminalInput', $event)"
+      @focus-terminal="emit('focusTerminal')"
     />
   </aside>
 </template>
