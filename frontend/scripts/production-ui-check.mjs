@@ -37,6 +37,29 @@ const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
+
+assert(
+  styles.includes('[role="button"],') &&
+    styles.includes('.terminal-target-summary,') &&
+    styles.includes('-webkit-user-select: none;') &&
+    styles.includes('user-select: none;') &&
+    styles.includes('input,') &&
+    styles.includes('textarea,') &&
+    styles.includes('pre,') &&
+    styles.includes('code,') &&
+    styles.includes('.xterm-host *') &&
+    styles.includes('.message-body *') &&
+    styles.includes('user-select: text;') &&
+    appShell.includes('selectableTextSelector') &&
+    appShell.includes('handleAppSelectStart') &&
+    appShell.includes("document.addEventListener('selectstart', handleAppSelectStart, true)") &&
+    appShell.includes("document.removeEventListener('selectstart', handleAppSelectStart, true)") &&
+    appShell.includes('handleAppDragStart') &&
+    appShell.includes("document.addEventListener('dragstart', handleAppDragStart, true)") &&
+    appShell.includes('clearChromeSelection'),
+  'Interactive chrome must prevent accidental drag text selection while terminal, code, and form text remain selectable.'
+)
+
 function cssRule(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = styles.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\}`))
@@ -384,7 +407,7 @@ assertStylesMarkersInOrder(
     '/* Light theme dark-surface cleanup. */',
     '/* Light theme state surface cleanup. */',
     '/* Light theme status indicator cleanup. */',
-    '/* Command history expanded action polish. */',
+    '/* Command history preview modal. */',
     '/* Light theme shell structure parity contract. */',
     '/* Light theme color-only surface contract. */',
   ],
@@ -530,19 +553,25 @@ assert(
 )
 
 assertLastCssDeclarations(
-  '.history-row.expanded .history-actions',
+  '.history-preview-modal',
   {
-    order: '-1',
-    position: 'sticky',
-    top: '0',
-    'z-index': '1',
-    'padding-top': '0',
-    'padding-bottom': '6px',
-    'border-top': '0',
-    background: 'inherit',
+    display: 'grid',
+    'grid-template-rows': 'auto minmax(0, 1fr) auto',
+    overflow: 'hidden',
+    padding: '0',
   },
-  'Expanded command history actions must remain visible above long command previews',
-  { afterMarker: '/* Command history expanded action polish. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
+  'Long command history entries must use a dedicated preview modal instead of expanding inline',
+  { afterMarker: '/* Command history preview modal. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
+)
+assertLastCssDeclarations(
+  '.history-preview-body code',
+  {
+    'white-space': 'pre-wrap',
+    'overflow-wrap': 'anywhere',
+    'word-break': 'break-word',
+  },
+  'History command preview must wrap long commands inside the modal without breaking the list layout',
+  { afterMarker: '/* Command history preview modal. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
 )
 assertLastCssDeclarations(
   '.app-shell.theme-light .assistant-panel',
@@ -1620,21 +1649,37 @@ assert(
     commandHistoryPanel.includes('visibleCommands') &&
     commandHistoryPanel.includes('historySearch') &&
     commandHistoryPanel.includes('copyCommand') &&
-    commandHistoryPanel.includes('expandedCommandIds') &&
+    commandHistoryPanel.includes('previewEntry') &&
+    commandHistoryPanel.includes('previewCommand') &&
+    commandHistoryPanel.includes('closePreview') &&
+    commandHistoryPanel.includes('copyPreviewCommand') &&
+    commandHistoryPanel.includes('executePreviewCommand') &&
     commandHistoryPanel.includes('isLongCommand') &&
     commandHistoryPanel.includes('history-command-cell') &&
-    commandHistoryPanel.includes(':aria-expanded="isExpanded(entry)"') &&
+    commandHistoryPanel.includes('预览完整命令') &&
+    commandHistoryPanel.includes('history-preview-trigger') &&
+    commandHistoryPanel.includes('<UiIcon name="eye" />') &&
+    commandHistoryPanel.includes("@dblclick=\"isLongCommand(entry.command) && previewCommand(entry)\"") &&
+    commandHistoryPanel.includes('history-preview-modal') &&
     commandHistoryPanel.includes("emit('rerun'") &&
+    !commandHistoryPanel.includes('expandedCommandIds') &&
+    !commandHistoryPanel.includes('toggleCommand') &&
+    !commandHistoryPanel.includes(':class="{ expanded') &&
+    !commandHistoryPanel.includes(':aria-expanded') &&
     styles.includes('.history-toolbar') &&
     styles.includes('.history-meta') &&
-    styles.includes('.history-row.expanded') &&
-    styles.includes('.history-row.expanded .history-actions') &&
-    styles.includes('grid-template-columns: minmax(0, 1fr);') &&
+    styles.includes('/* Command history preview modal. */') &&
+    styles.includes('/* Command history visual polish. */') &&
+    styles.includes('.history-row.is-long') &&
+    styles.includes('.history-preview-trigger') &&
+    styles.includes('.history-preview-modal') &&
+    styles.includes('.history-preview-body') &&
+    styles.includes('.history-preview-actions') &&
     styles.includes('overflow-wrap: anywhere;') &&
-    styles.includes('/* Command history expanded action polish. */') &&
-    styles.includes('order: -1;') &&
+    !styles.includes('/* Command history expanded action polish. */') &&
+    !styles.includes('order: -1;') &&
     styles.includes('.history-actions'),
-  'CommandHistoryPanel must cap visible command history, support search, copy, long-command expansion, and allow rerunning a command.'
+  'CommandHistoryPanel must cap visible command history, support search, copy, long-command preview modal, and allow rerunning a command.'
 )
 
 assert(
@@ -1930,12 +1975,12 @@ assert(
     styles.includes('/* Design-taste light theme refinement. */') &&
     styles.includes('/* Workspace separation polish. */') &&
     styles.includes('/* Light theme surface hardening. */') &&
-    styles.includes('/* History expansion and light divider polish. */') &&
+    styles.includes('/* History row and light divider polish. */') &&
     styles.includes('/* Light theme layout parity. */') &&
     styles.includes('/* Light theme dark-surface cleanup. */') &&
     styles.includes('/* Light theme state surface cleanup. */') &&
     styles.includes('/* Light theme status indicator cleanup. */') &&
-    styles.includes('/* Command history expanded action polish. */') &&
+    styles.includes('/* Command history preview modal. */') &&
     styles.includes('/* Light theme shell structure parity contract. */') &&
     styles.includes('/* Light theme color-only surface contract. */') &&
     styles.includes('.theme-light .brand') &&

@@ -16,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const historySearch = ref('')
-const expandedCommandIds = ref<Record<string, boolean>>({})
+const previewEntry = ref<CommandHistoryEntry | null>(null)
 
 const filteredCommands = computed(() => {
   const query = historySearch.value.trim().toLowerCase()
@@ -32,15 +32,12 @@ function isLongCommand(command: string) {
   return command.length > LONG_COMMAND_CHARS || command.split(/\r?\n/).length > LONG_COMMAND_LINES
 }
 
-function isExpanded(entry: CommandHistoryEntry) {
-  return expandedCommandIds.value[entry.id] ?? false
+function previewCommand(entry: CommandHistoryEntry) {
+  previewEntry.value = entry
 }
 
-function toggleCommand(entry: CommandHistoryEntry) {
-  expandedCommandIds.value = {
-    ...expandedCommandIds.value,
-    [entry.id]: !isExpanded(entry)
-  }
+function closePreview() {
+  previewEntry.value = null
 }
 
 async function copyCommand(command: string) {
@@ -49,6 +46,17 @@ async function copyCommand(command: string) {
   } catch (error) {
     console.warn('failed to copy command history entry', error)
   }
+}
+
+async function copyPreviewCommand() {
+  if (!previewEntry.value) return
+  await copyCommand(previewEntry.value.command)
+}
+
+function executePreviewCommand() {
+  if (!previewEntry.value) return
+  emit('rerun', previewEntry.value.command)
+  closePreview()
 }
 </script>
 
@@ -71,22 +79,23 @@ async function copyCommand(command: string) {
         v-for="entry in visibleCommands"
         :key="entry.id"
         class="history-row"
-        :class="{ expanded: isExpanded(entry) }"
+        :class="{ 'is-long': isLongCommand(entry.command) }"
+        @dblclick="isLongCommand(entry.command) && previewCommand(entry)"
       >
         <div class="history-command-cell">
-          <code>{{ entry.command }}</code>
+          <code :title="entry.command">{{ entry.command }}</code>
           <span>{{ entry.createdAt }}</span>
         </div>
         <div class="history-actions">
           <button
             v-if="isLongCommand(entry.command)"
-            class="text-button"
+            class="icon-button history-preview-trigger"
             type="button"
-            :title="isExpanded(entry) ? '折叠命令' : '展开命令'"
-            :aria-expanded="isExpanded(entry)"
-            @click="toggleCommand(entry)"
+            title="预览完整命令"
+            aria-label="预览完整命令"
+            @click="previewCommand(entry)"
           >
-            {{ isExpanded(entry) ? '收起' : '展开' }}
+            <UiIcon name="eye" />
           </button>
           <button class="icon-button" type="button" title="复制命令" aria-label="复制命令" @click="copyCommand(entry.command)"><UiIcon name="copy" /></button>
           <button class="icon-button" type="button" title="再次执行" aria-label="再次执行" @click="emit('rerun', entry.command)"><UiIcon name="play" /></button>
@@ -94,4 +103,23 @@ async function copyCommand(command: string) {
       </article>
     </div>
   </section>
+
+  <div v-if="previewEntry" class="modal-backdrop history-preview-backdrop" role="presentation">
+    <article class="modal history-preview-modal" role="dialog" aria-modal="true" aria-label="历史命令预览">
+      <div class="modal-head">
+        <div>
+          <strong>命令预览</strong>
+          <span>{{ previewEntry.createdAt }} · {{ previewEntry.command.length }} 字符</span>
+        </div>
+        <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closePreview"><UiIcon name="close" /></button>
+      </div>
+      <div class="history-preview-body">
+        <pre><code>{{ previewEntry.command }}</code></pre>
+      </div>
+      <div class="modal-actions history-preview-actions">
+        <button class="text-button" type="button" @click="copyPreviewCommand">复制命令</button>
+        <button class="text-button primary-action" type="button" @click="executePreviewCommand">执行</button>
+      </div>
+    </article>
+  </div>
 </template>

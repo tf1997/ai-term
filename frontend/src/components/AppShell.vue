@@ -1490,8 +1490,52 @@ async function loadWorkspaceState(connectionId: string, workspaceSessionId: stri
   }
 }
 
+const selectableTextSelector = [
+  'input',
+  'textarea',
+  'select',
+  '[contenteditable="true"]',
+  '.terminal-body',
+  '.xterm-host',
+  'pre',
+  'code',
+  '.message-body',
+  '.script-risk-preview',
+  '.script-code-overlay',
+  '.script-preview-code'
+].join(',')
+
+function targetElement(target: EventTarget | null) {
+  return target instanceof Element ? target : null
+}
+
+function isSelectableTextTarget(target: EventTarget | null) {
+  return Boolean(targetElement(target)?.closest(selectableTextSelector))
+}
+
+function clearChromeSelection() {
+  const selection = window.getSelection()
+  if (selection && !selection.isCollapsed) selection.removeAllRanges()
+}
+
+function handleAppSelectStart(event: Event) {
+  const element = targetElement(event.target)
+  if (!element?.closest('.app-shell')) return
+  if (isSelectableTextTarget(element)) return
+  event.preventDefault()
+  clearChromeSelection()
+}
+
+function handleAppDragStart(event: DragEvent) {
+  const element = targetElement(event.target)
+  if (!element?.closest('.app-shell')) return
+  if (isSelectableTextTarget(element)) return
+  event.preventDefault()
+}
+
 function handleGlobalClick() {
   closeContextMenu()
+  clearChromeSelection()
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {
@@ -1507,6 +1551,8 @@ onMounted(() => {
   })
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
+  document.addEventListener('selectstart', handleAppSelectStart, true)
+  document.addEventListener('dragstart', handleAppDragStart, true)
 })
 
 watch(activeConnectionId, (connectionId) => {
@@ -1528,6 +1574,8 @@ watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  document.removeEventListener('selectstart', handleAppSelectStart, true)
+  document.removeEventListener('dragstart', handleAppDragStart, true)
 })
 </script>
 
