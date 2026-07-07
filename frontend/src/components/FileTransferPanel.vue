@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   cancelTask,
   localHomeDirectory,
   localListDirectory,
   localOpenPath,
   onSftpTransferProgress,
+  onTauriFileDrop,
+  onTauriFileDropCancelled,
+  onTauriFileDropHover,
   sftpCreateDirectory,
   sftpDeletePath,
   sftpDownloadFile,
@@ -39,6 +42,7 @@ const emit = defineEmits<{
 
 const INLINE_TRANSFER_LIMIT = 700 * 1024
 const IDENT_MARKER_ID_PATTERN = '\\d+_[A-Za-z0-9]+'
+const REMOTE_DIRECTORY_CACHE_TTL_MS = 30_000
 
 interface TerminalTargetIdentity {
   host: string
@@ -79,8 +83,18 @@ interface TransferPanelState {
   status: string
 }
 
+interface RemoteDirectoryCacheEntry {
+  path: string
+  entries: SftpFileEntry[]
+  cachedAt: number
+}
+
+interface LoadDirectoryOptions {
+  force?: boolean
+}
+
 type TransferDirection = 'download' | 'upload'
-type TransferItemKind = 'file' | 'folder'
+type TransferItemKind = 'file' | 'folder' | 'item'
 type TransferTaskState = 'running' | 'done' | 'error' | 'cancelled'
 
 interface ActiveTask {
@@ -122,6 +136,7 @@ interface FileContextMenuState {
 }
 
 const fileInput = ref<HTMLInputElement | null>(null)
+const remoteDropZone = ref<HTMLElement | null>(null)
 const currentPath = ref('.')
 const pathDraft = ref('.')
 const localPath = ref('')
@@ -133,6 +148,7 @@ const entries = ref<SftpFileEntry[]>([])
 const localEntries = ref<LocalFileEntry[]>([])
 const selectedRemoteEntry = ref<SftpFileEntry | null>(null)
 const selectedLocalEntry = ref<LocalFileEntry | null>(null)
+const remoteDropActive = ref(false)
 const loading = ref(false)
 const localLoading = ref(false)
 const identifying = ref(false)
@@ -152,6 +168,13 @@ const pendingDownload = ref<{
 const pendingIdentify = ref<PendingIdentityProbe | null>(null)
 const autoTerminalProbeAttempted = ref(false)
 const transferStateByTerminal = ref<Record<string, TransferPanelState>>({})
+const remoteDirectoryCache = ref<Record<string, RemoteDirectoryCacheEntry>>({})
+const remoteDirectoryRequests = new Map<string, Promise<void>>()
+const fileDropUnlisteners: Array<() => void> = []
+let remoteDropArmed = false
+let remoteDropClearTimer: number | null = null
+let lastDroppedPathSignature = ''
+let lastDroppedAt = 0
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
 const taskInProgress = computed(() => Boolean(activeTask.value))
@@ -198,6 +221,57 @@ const remotePaneSummary = computed(() => {
 
 function transferStateKey(terminalId = props.terminalId, connectionId = props.connectionId) {
   return `${terminalId || 'terminal'}:${connectionId || 'local'}`
+}
+
+function normalizeRemoteDirectoryPath(path: string) {
+  return path.trim() || '.'
+}
+
+function remoteTargetCacheKey() {
+  const target = targetOverride.value
+  if (target?.targetHost) return `target:${target.targetUsername || 'user'}@${target.targetHost}`.toLowerCase()
+  return `profile:${props.connectionId || 'local'}`
+}
+
+function remoteDirectoryCacheKey(path: string, targetKey = remoteTargetCacheKey()) {
+  return `${transferStateKey()}:${targetKey}:${normalizeRemoteDirectoryPath(path)}`
+}
+
+function cachedRemoteDirectory(path: string, targetKey = remoteTargetCacheKey()) {
+  return remoteDirectoryCache.value[remoteDirectoryCacheKey(path, targetKey)]
+}
+
+function applyRemoteDirectoryCache(cached: RemoteDirectoryCacheEntry) {
+  currentPath.value = cached.path
+  pathDraft.value = cached.path
+  entries.value = [...cached.entries]
+  selectedRemoteEntry.value = null
+  status.value = `${cached.entries.length} 项`
+}
+
+function rememberRemoteDirectory(
+  requestedPath: string,
+  responsePath: string,
+  responseEntries: SftpFileEntry[],
+  targetKey = remoteTargetCacheKey()
+) {
+  const cached = {
+    path: responsePath,
+    entries: [...responseEntries],
+    cachedAt: Date.now()
+  }
+  remoteDirectoryCache.value = {
+    ...remoteDirectoryCache.value,
+    [remoteDirectoryCacheKey(requestedPath, targetKey)]: cached,
+    [remoteDirectoryCacheKey(responsePath, targetKey)]: cached
+  }
+}
+
+function invalidateRemoteDirectoryCache(path = currentPath.value) {
+  const next = { ...remoteDirectoryCache.value }
+  delete next[remoteDirectoryCacheKey(path)]
+  delete next[remoteDirectoryCacheKey(currentPath.value)]
+  remoteDirectoryCache.value = next
 }
 
 function saveTransferState(key = transferStateKey()) {
@@ -270,6 +344,12 @@ watch(
 onMounted(() => {
   initializeRemoteBrowser()
   void loadLocalHome()
+  void attachNativeFileDropEvents()
+})
+
+onBeforeUnmount(() => {
+  clearRemoteDropState()
+  detachNativeFileDropEvents()
 })
 
 watch(
@@ -298,23 +378,51 @@ watch(transferMode, (mode) => {
   }
 })
 
-async function loadDirectory(path = currentPath.value) {
+async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
   if (!remoteReady.value) return
-  const taskId = startRemoteTask('读取远端目录')
+  const requestedPath = normalizeRemoteDirectoryPath(path)
+  const targetKey = remoteTargetCacheKey()
+  const cacheKey = remoteDirectoryCacheKey(requestedPath, targetKey)
+  const cached = cachedRemoteDirectory(requestedPath, targetKey)
+  const cacheFresh = cached && Date.now() - cached.cachedAt < REMOTE_DIRECTORY_CACHE_TTL_MS
+
+  if (cached && !options.force) {
+    applyRemoteDirectoryCache(cached)
+    if (cacheFresh) return
+    status.value = `${cached.entries.length} 项 · 正在刷新`
+  }
+
+  const existingRequest = remoteDirectoryRequests.get(cacheKey)
+  if (existingRequest) {
+    try {
+      await existingRequest
+    } catch (err) {
+      if (!cached && !maybeAutoProbeCurrentTerminalSftp(err)) handleTaskError(err)
+    }
+    return
+  }
+
+  const taskId = startRemoteTask(cached ? '刷新远端目录' : '读取远端目录')
   if (!taskId) return
   loading.value = true
   error.value = ''
-  status.value = '正在读取目录...'
-  try {
-    const response = await sftpListDirectory(props.connectionId, path, targetOverride.value, { taskId })
+  if (!cached) status.value = '正在读取目录...'
+  const request = (async () => {
+    const response = await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value, { taskId })
     currentPath.value = response.path
     pathDraft.value = response.path
     entries.value = response.entries
     selectedRemoteEntry.value = null
     status.value = `${response.entries.length} 项`
+    rememberRemoteDirectory(requestedPath, response.path, response.entries, targetKey)
+  })()
+  remoteDirectoryRequests.set(cacheKey, request)
+  try {
+    await request
   } catch (err) {
     if (!maybeAutoProbeCurrentTerminalSftp(err)) handleTaskError(err)
   } finally {
+    remoteDirectoryRequests.delete(cacheKey)
     loading.value = false
     finishRemoteTask(taskId)
   }
@@ -625,6 +733,163 @@ function localParentPath(path: string) {
   return normalized.slice(0, slash)
 }
 
+function canAcceptRemoteDrop() {
+  return transferMode.value === 'sftp' && remoteReady.value && !loading.value && isRemoteDropZoneVisible()
+}
+
+function isRemoteDropZoneVisible() {
+  const element = remoteDropZone.value
+  if (!element) return false
+  const rect = element.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0 && window.getComputedStyle(element).display !== 'none'
+}
+
+async function attachNativeFileDropEvents() {
+  try {
+    fileDropUnlisteners.push(
+      await onTauriFileDrop((paths) => {
+        if (!remoteDropArmed && !canAcceptRemoteDrop()) return
+        clearRemoteDropState()
+        void uploadDroppedLocalPaths(paths)
+      })
+    )
+    fileDropUnlisteners.push(
+      await onTauriFileDropHover((paths) => {
+        if (!paths.length || !canAcceptRemoteDrop()) {
+          clearRemoteDropState()
+          return
+        }
+        showRemoteDropTarget()
+      })
+    )
+    fileDropUnlisteners.push(await onTauriFileDropCancelled(clearRemoteDropState))
+  } catch {
+    // Browser preview mode does not expose Tauri file-drop events.
+  }
+}
+
+function detachNativeFileDropEvents() {
+  fileDropUnlisteners.splice(0).forEach((unlisten) => unlisten())
+}
+
+function handleRemoteDragEnter(event: DragEvent) {
+  if (!dragHasFiles(event) || !canAcceptRemoteDrop()) return
+  event.preventDefault()
+  event.stopPropagation()
+  showRemoteDropTarget(event)
+}
+
+function handleRemoteDragOver(event: DragEvent) {
+  if (!dragHasFiles(event) || !canAcceptRemoteDrop()) return
+  event.preventDefault()
+  event.stopPropagation()
+  showRemoteDropTarget(event)
+}
+
+function handleRemoteDragLeave(event: DragEvent) {
+  const target = event.currentTarget as HTMLElement | null
+  if (target && event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return
+  scheduleRemoteDropClear()
+}
+
+function handleRemoteDrop(event: DragEvent) {
+  if (!canAcceptRemoteDrop()) return
+  event.preventDefault()
+  event.stopPropagation()
+  const paths = dataTransferLocalPaths(event.dataTransfer)
+  clearRemoteDropState()
+  void uploadDroppedLocalPaths(paths)
+}
+
+function showRemoteDropTarget(event?: DragEvent) {
+  if (event?.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  remoteDropActive.value = true
+  remoteDropArmed = true
+  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
+}
+
+function scheduleRemoteDropClear(delay = 140) {
+  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
+  remoteDropClearTimer = window.setTimeout(() => clearRemoteDropState(), delay)
+}
+
+function clearRemoteDropState() {
+  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
+  remoteDropClearTimer = null
+  remoteDropActive.value = false
+  remoteDropArmed = false
+}
+
+function dragHasFiles(event: DragEvent) {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
+}
+
+function dataTransferLocalPaths(dataTransfer: DataTransfer | null) {
+  const paths: string[] = []
+  for (const file of Array.from(dataTransfer?.files ?? [])) {
+    const path = fileLocalPath(file)
+    if (path) paths.push(path)
+  }
+  for (const item of Array.from(dataTransfer?.items ?? [])) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    const path = file ? fileLocalPath(file) : ''
+    if (path) paths.push(path)
+  }
+  return uniqueLocalPaths(paths)
+}
+
+function fileLocalPath(file: File) {
+  return (file as File & { path?: string }).path?.trim() ?? ''
+}
+
+function uniqueLocalPaths(paths: string[]) {
+  return [...new Set(paths.map((path) => path.trim()).filter(Boolean))]
+}
+
+function isDuplicateDroppedPaths(paths: string[]) {
+  const signature = paths.join('\n')
+  const now = Date.now()
+  if (signature && signature === lastDroppedPathSignature && now - lastDroppedAt < 1500) return true
+  lastDroppedPathSignature = signature
+  lastDroppedAt = now
+  return false
+}
+
+async function uploadDroppedLocalPaths(rawPaths: string[]) {
+  const paths = uniqueLocalPaths(rawPaths)
+  if (!paths.length) {
+    error.value = '没有获取到本地文件路径，请从系统文件管理器拖入文件或文件夹。'
+    return
+  }
+  if (!canAcceptRemoteDrop()) {
+    status.value = activeTask.value ? `已有任务进行中：${activeTask.value.label}` : '请先打开远端 SFTP 目录。'
+    return
+  }
+  if (isDuplicateDroppedPaths(paths)) return
+
+  let lastUploadedPath = ''
+  for (const localPath of paths) {
+    const name = localFileName(localPath) || localPath
+    const targetPath = joinRemotePath(currentPath.value, name)
+    const response = await runTransfer(
+      `正在上传 ${name}...`,
+      (taskId) => sftpUploadPath(props.connectionId, localPath, currentPath.value, targetOverride.value, { taskId }),
+      {
+        direction: 'upload',
+        itemKind: 'item',
+        itemName: name,
+        sourcePath: localPath,
+        targetPath
+      }
+    )
+    if (!response) return
+    lastUploadedPath = response.targetPath || response.remotePath || targetPath
+  }
+  invalidateRemoteDirectoryCache(currentPath.value)
+  await loadDirectory(currentPath.value, { force: true })
+  if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
+}
 function triggerUpload() {
   if (!remoteReady.value || loading.value) return
   if (transferMode.value === 'terminal') {
@@ -668,7 +933,8 @@ async function uploadSelectedFiles(event: Event) {
     if (!response) return
     lastUploadedPath = response.targetPath || response.remotePath || targetPath
   }
-  await loadDirectory(currentPath.value)
+  invalidateRemoteDirectoryCache(currentPath.value)
+  await loadDirectory(currentPath.value, { force: true })
   if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
 }
 
@@ -720,7 +986,8 @@ async function uploadSelectedLocalEntry() {
     }
   )
   if (!response) return
-  await loadDirectory(currentPath.value)
+  invalidateRemoteDirectoryCache(currentPath.value)
+  await loadDirectory(currentPath.value, { force: true })
   selectRemoteEntryByPath(response.targetPath || response.remotePath || targetPath)
 }
 
@@ -778,7 +1045,8 @@ async function createDirectory() {
   await runTransfer(`正在创建 ${name.trim()}...`, (taskId) =>
     sftpCreateDirectory(props.connectionId, joinRemotePath(currentPath.value, name.trim()), targetOverride.value, { taskId })
   )
-  await loadDirectory(currentPath.value)
+  invalidateRemoteDirectoryCache(currentPath.value)
+  await loadDirectory(currentPath.value, { force: true })
 }
 
 async function deleteEntry(entry: SftpFileEntry) {
@@ -786,7 +1054,8 @@ async function deleteEntry(entry: SftpFileEntry) {
   await runTransfer(`正在删除 ${entry.name}...`, (taskId) =>
     sftpDeletePath(props.connectionId, entry.path, entry.isDir, targetOverride.value, { taskId })
   )
-  await loadDirectory(currentPath.value)
+  invalidateRemoteDirectoryCache(currentPath.value)
+  await loadDirectory(currentPath.value, { force: true })
 }
 
 async function runTransfer(
@@ -974,7 +1243,9 @@ function transferActionLabel(task: Pick<ActiveTask, 'direction'>) {
 }
 
 function transferKindLabel(task: Pick<ActiveTask, 'itemKind'>) {
-  return task.itemKind === 'folder' ? '文件夹' : '文件'
+  if (task.itemKind === 'folder') return '文件夹'
+  if (task.itemKind === 'item') return '项目'
+  return '文件'
 }
 
 function hasDeterminateProgress(task: ActiveTask) {
@@ -1331,7 +1602,7 @@ function shellQuote(value: string) {
           <span>切换到终端</span>
         </button>
         <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || identifying || loading" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory()"><UiIcon name="refresh" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory"><UiIcon name="folder" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
         <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!remoteReady || loading || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload"><UiIcon name="upload" /></button>
@@ -1484,7 +1755,15 @@ function shellQuote(value: string) {
           </div>
         </section>
 
-        <section class="transfer-pane remote-pane">
+        <section
+          ref="remoteDropZone"
+          class="transfer-pane remote-pane"
+          :class="{ 'drop-active': remoteDropActive }"
+          @dragenter="handleRemoteDragEnter"
+          @dragover="handleRemoteDragOver"
+          @dragleave="handleRemoteDragLeave"
+          @drop="handleRemoteDrop"
+        >
           <div class="transfer-pane-head">
             <div class="transfer-pane-title">
               <strong>远端</strong>
@@ -1498,6 +1777,11 @@ function shellQuote(value: string) {
             <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory(pathDraft)">打开</button>
           </div>
           <div class="file-list">
+            <div v-if="remoteDropActive" class="remote-drop-overlay" aria-live="polite">
+              <UiIcon name="upload" size="22" />
+              <strong>释放后上传到远端目录</strong>
+              <span>{{ currentPath }}</span>
+            </div>
             <p v-if="!remoteReady" class="empty-state">SFTP 需要打开一个远程连接。</p>
             <p v-else-if="loading && entries.length === 0" class="empty-state">正在加载 SFTP 目录...</p>
             <p v-else-if="sortedEntries.length === 0" class="empty-state">当前目录为空</p>

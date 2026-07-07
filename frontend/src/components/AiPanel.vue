@@ -9,15 +9,15 @@ import type {
   WorkspaceSession
 } from '../types/workspace'
 import { cancelTask, chatWithAiProviderStream, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
-import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
-import { codeBlockLabel, looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
+import { parseMessageParts, type MessagePart } from '../lib/aiMarkdown'
+import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import {
   analyzeScriptRisks,
   buildScriptRiskPreviewLines,
   riskLabelsForLine,
-  scriptRiskStatusForContent,
   summarizeScriptRisks
 } from '../lib/scriptRisk'
+import AiMarkdownMessage from './AiMarkdownMessage.vue'
 import UiIcon from './UiIcon.vue'
 
 
@@ -68,6 +68,7 @@ const currentAssistantMessageId = ref('')
 const answerElapsedSeconds = ref(0)
 const answerDurations = ref<Record<string, number>>({})
 const stopRequested = ref(false)
+const contextOpen = ref(false)
 const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
@@ -99,16 +100,25 @@ const activeSession = computed(() => {
   return props.workspaceSessions.find((session) => session.id === props.workspaceSessionId)
 })
 
-const activeSessionTitle = computed(() => activeSession.value?.name?.trim() || 'Untitled')
-const assistantContextSummary = computed(() => {
-  const historyCount = Math.min(props.commandHistory.length, MAX_AI_COMMAND_HISTORY)
-  return `terminal ${props.terminalSnapshot.length} chars - history ${historyCount}/${props.commandHistory.length}`
-})
+const activeSessionTitle = computed(() => activeSession.value?.name?.trim() || '当前会话')
 
 const selectedTerminalContext = computed(() => {
   const selection = props.terminalSelection
   if (!selection?.text.trim()) return undefined
   return selection
+})
+
+const aiModelLabel = computed(() => props.config.model.trim() || props.selectedConfigId || '未选择模型')
+const aiContextHistoryCount = computed(() => Math.min(props.commandHistory.length, MAX_AI_COMMAND_HISTORY))
+const assistantContextSummary = computed(() => `模型 ${aiModelLabel.value}`)
+const contextSummaryLabel = computed(() => {
+  const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
+  return `上下文：${formatCharacterCount(props.terminalSnapshot.length)} · 命令历史 ${aiContextHistoryCount.value} 条${selected}`
+})
+const contextStatusLabel = computed(() => {
+  if (!props.contextStatus) return '未压缩'
+  const chars = formatCharacterCount(props.contextStatus.chars)
+  return props.contextStatus.compressed ? `已压缩至 ${chars}` : `完整上下文 ${chars}`
 })
 
 const filteredSessions = computed(() => {
@@ -130,6 +140,10 @@ const filteredSessions = computed(() => {
     return `${session.name} ${session.summary}`.toLowerCase().includes(keyword)
   })
 })
+
+function formatCharacterCount(count: number) {
+  return `${Math.max(0, count).toLocaleString('zh-CN')} 字符`
+}
 
 function inferCommand(question: string, terminalSnapshot = props.terminalSnapshot, commandHistory = props.commandHistory.map((entry) => entry.command)) {
   const text = question.toLowerCase()
@@ -420,9 +434,6 @@ function shellCommandForPart(part: MessagePart) {
   if (part.type !== 'code') return ''
   return shellCommandFromCodeBlock(part.language, part.content)
 }
-function commandRiskStatus(command: string) {
-  return scriptRiskStatusForContent(command)
-}
 
 function buildAiRiskExplanationPrompt(command: string) {
   const riskLines = pendingAiCommandRisks.value
@@ -590,7 +601,7 @@ function createSession() {
 
 function openRenameSessionDialog(session: WorkspaceSession) {
   renamingSession.value = session
-  sessionNameDraft.value = session.name || 'Untitled'
+  sessionNameDraft.value = session.name || '当前会话'
   historyOpen.value = false
 }
 
@@ -652,10 +663,10 @@ function sessionTimeLabel(session: WorkspaceSession) {
   const minute = 60 * 1000
   const hour = 60 * minute
   const day = 24 * hour
-  if (diff < minute) return 'now'
-  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))}m`
-  if (diff < day) return `${Math.max(1, Math.floor(diff / hour))}h`
-  return `${Math.max(1, Math.floor(diff / day))}d`
+    if (diff < minute) return '刚刚'
+  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))} 分钟前`
+  if (diff < day) return `${Math.max(1, Math.floor(diff / hour))} 小时前`
+  return `${Math.max(1, Math.floor(diff / day))} 天前`
 }
 
 watch(
@@ -685,15 +696,16 @@ watch(
 
 <template>
   <section class="assistant-panel">
-    <div class="panel-head">
+    <div class="panel-head ai-panel-head">
       <div class="ai-session-head">
-        <span class="panel-glyph ai-glyph" aria-hidden="true">AI</span>
+        <span class="panel-glyph ai-glyph" aria-hidden="true"><UiIcon name="ai" size="16" /></span>
         <div>
           <strong>{{ activeSessionTitle }}</strong>
           <span>{{ assistantContextSummary }}</span>
         </div>
       </div>
-      <div class="panel-actions">
+      <div class="panel-actions ai-panel-actions">
+        <span v-if="isAsking" class="ai-live-pill">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
         <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory"><UiIcon name="history" /></button>
         <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession"><UiIcon name="plus" /></button>
       </div>
@@ -714,7 +726,7 @@ watch(
             @keydown.enter.prevent="selectSession(session.id)"
           >
             <span class="session-history-main">
-              <strong>{{ session.name || 'Untitled' }}</strong>
+              <strong>{{ session.name || '当前会话' }}</strong>
               <small v-if="session.summary">{{ session.summary }}</small>
             </span>
             <span class="session-history-time">{{ sessionTimeLabel(session) }}</span>
@@ -732,7 +744,7 @@ watch(
         <div class="modal-head">
           <div>
             <strong>编辑会话名称</strong>
-            <span>{{ renamingSession.name || 'Untitled' }}</span>
+            <span>{{ renamingSession.name || '当前会话' }}</span>
           </div>
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeRenameSessionDialog"><UiIcon name="close" /></button>
         </div>
@@ -785,7 +797,7 @@ watch(
                 <span /><span /><span />AI 正在分析风险...
               </div>
               <p v-if="aiRiskExplanationError">{{ aiRiskExplanationError }}</p>
-              <div v-else-if="aiRiskExplanation" class="markdown-content" v-html="renderMarkdown(aiRiskExplanation)" />
+              <AiMarkdownMessage v-else-if="aiRiskExplanation" :content="aiRiskExplanation" />
               <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
             </div>
           </div>
@@ -818,15 +830,23 @@ watch(
         </div>
       </section>
     </div>
-    <div class="context-strip">
-      <span class="chip">AI {{ selectedConfigId }}</span>
-      <span class="chip">terminal {{ terminalSnapshot.length }} chars</span>
-      <span class="chip">history {{ Math.min(commandHistory.length, MAX_AI_COMMAND_HISTORY) }}/{{ commandHistory.length }}</span>
-      <span v-if="contextStatus" class="chip">
-        {{ contextStatus.compressed ? 'context compressed' : 'context full' }} {{ contextStatus.chars }} chars
-      </span>
-      <span v-if="isAsking" class="chip">模型调用中</span>
-      <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
+    <div class="context-strip ai-context-strip" :class="{ expanded: contextOpen }">
+      <div class="context-strip-main">
+        <button class="context-summary-button" type="button" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
+          <UiIcon name="database" size="14" />
+          <span>{{ contextSummaryLabel }}</span>
+          <UiIcon v-if="contextOpen" name="arrow-up" size="14" />
+          <UiIcon v-else name="arrow-down" size="14" />
+        </button>
+        <span v-if="isAsking" class="chip ai-live-status">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
+        <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
+      </div>
+      <div v-if="contextOpen" class="ai-context-detail">
+        <span><strong>终端</strong>{{ formatCharacterCount(terminalSnapshot.length) }}</span>
+        <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ commandHistory.length }} 条</span>
+        <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
+        <span><strong>上下文</strong>{{ contextStatusLabel }}</span>
+      </div>
     </div>
     <div ref="messageList" class="message-list">
       <p v-if="!hasUsableConfig" class="empty-state">暂无可用 AI 配置，请在左侧配置菜单中新建或完善配置。</p>
@@ -839,23 +859,13 @@ watch(
       >
         <div class="message-title">
           <span class="message-identity">
-            <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : 'U' }}</span>
+            <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : '我' }}</span>
             <strong>
-              {{ message.role === 'assistant' ? 'AI' : 'You' }}
+              {{ message.role === 'assistant' ? 'AI' : '我' }}
               <span v-if="message.streaming" class="streaming-dot">等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
               <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
             </strong>
           </span>
-          <div class="message-actions">
-            <button
-              v-if="shouldCollapseMessage(message)"
-              class="text-button"
-              type="button"
-              @click="toggleMessage(message.id)"
-            >
-              {{ isMessageExpanded(message) ? '收起' : '展开' }}
-            </button>
-          </div>
         </div>
         <div class="message-body">
           <div v-if="message.streaming && !message.text" class="thinking-row">
@@ -864,42 +874,26 @@ watch(
             <span />
             正在回复，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
-          <template v-for="(part, index) in parseMessageParts(message.text)" :key="`${message.id}-${index}`">
-            <div
-              v-if="part.type === 'text' && part.content.trim()"
-              class="markdown-content"
-              v-html="renderMarkdown(part.content)"
-            />
-            <div v-else-if="part.type === 'code'" class="code-block">
-              <div class="code-head">
-                <span>{{ codeBlockLabel(part.language, part.content) }}</span>
-                <span
-                  v-if="shellCommandForPart(part)"
-                  class="command-risk-status"
-                  :class="`risk-${commandRiskStatus(shellCommandForPart(part)).level}`"
-                  :title="commandRiskStatus(shellCommandForPart(part)).message"
-                >
-                  {{ commandRiskStatus(shellCommandForPart(part)).label }}
-                </span>
-                <button
-                  v-if="shellCommandForPart(part)"
-                  class="text-button primary-action"
-                  type="button"
-                  @click="executeGeneratedCommand(shellCommandForPart(part))"
-                >
-                  执行
-                </button>
-              </div>
-              <pre><code>{{ part.content }}</code></pre>
-            </div>
-          </template>
+          <AiMarkdownMessage
+            v-if="message.text"
+            :content="message.text"
+            :interactive-commands="message.role === 'assistant' && !message.error"
+            @execute-command="executeGeneratedCommand"
+          />
+        </div>
+        <div v-if="shouldCollapseMessage(message)" class="message-collapse-footer">
+          <button class="text-button" type="button" @click="toggleMessage(message.id)">
+            <span>{{ isMessageExpanded(message) ? '收起回复' : '展开完整回复' }}</span>
+            <UiIcon v-if="isMessageExpanded(message)" name="arrow-up" size="13" />
+            <UiIcon v-else name="arrow-down" size="13" />
+          </button>
         </div>
       </article>
     </div>
     <div class="assistant-compose" @pointerdown="focusComposer">
       <div v-if="selectedTerminalContext" class="selected-terminal-note">
         <strong>选中终端内容</strong>
-        <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ selectedTerminalContext.text.length }} chars</span>
+        <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ formatCharacterCount(selectedTerminalContext.text.length) }}</span>
       </div>
       <textarea
         ref="composerInput"

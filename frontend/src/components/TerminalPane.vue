@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import type { IDisposable } from '@xterm/xterm'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
@@ -19,6 +19,7 @@ import {
 } from '../lib/tauri'
 import type { AiProviderConfig, AuthEndpoint, ConnectionProfile } from '../types/profile'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import UiIcon from './UiIcon.vue'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
@@ -88,7 +89,9 @@ const QUICK_COMMAND_STORAGE_KEY = 'ai-term:quick-commands:v1'
 const QUICK_COMMAND_LIMIT = 12
 const quickCommands = ref<string[]>(loadQuickCommands())
 const quickCommandSettingsOpen = ref(false)
-const quickCommandDraft = ref(quickCommands.value.join('\n'))
+const quickCommandItems = ref<string[]>([...quickCommands.value])
+const quickCommandRecommendations = ref<string[]>([])
+const quickCommandResetConfirm = ref(false)
 const quickCommandNotice = ref('')
 const quickCommandError = ref('')
 const quickCommandAiLoading = ref(false)
@@ -312,12 +315,88 @@ function normalizeQuickCommandList(commands: string[]) {
   return result.slice(0, QUICK_COMMAND_LIMIT)
 }
 
-function normalizeQuickCommandText(text: string) {
-  return normalizeQuickCommandList(text.split(/\r?\n/))
+const normalizedQuickCommandItems = computed(() => normalizeQuickCommandList(
+  quickCommandItems.value.filter((command) => {
+    const value = command.trim()
+    return value && value.length <= 140 && !isHighRiskQuickCommand(value)
+  })
+))
+const quickCommandEnabledCount = computed(() => normalizedQuickCommandItems.value.length)
+const quickCommandHasBlockingIssues = computed(() =>
+  quickCommandItems.value.some((command) => {
+    const value = command.trim()
+    return Boolean(value && (value.length > 140 || isHighRiskQuickCommand(value)))
+  })
+)
+const quickCommandCanSave = computed(() => quickCommandEnabledCount.value > 0 && !quickCommandHasBlockingIssues.value)
+
+function syncQuickCommandItems(commands: string[]) {
+  quickCommandItems.value = commands.length > 0 ? [...commands] : ['']
+}
+
+function quickCommandDuplicate(command: string, index: number) {
+  const value = command.trim().toLowerCase()
+  if (!value) return false
+  return quickCommandItems.value.some((item, itemIndex) => itemIndex !== index && item.trim().toLowerCase() === value)
+}
+
+function quickCommandStatus(command: string, index: number) {
+  const value = command.trim()
+  if (!value) {
+    return { label: '未启用', level: 'muted', message: '空行不会保存。', blocking: false }
+  }
+  if (value.length > 140) {
+    return { label: '过长', level: 'high', message: '超过 140 个字符，请缩短后保存。', blocking: true }
+  }
+  if (isHighRiskQuickCommand(value)) {
+    return { label: '高风险', level: 'high', message: '高风险命令不能保存为快速命令。', blocking: true }
+  }
+  if (quickCommandDuplicate(command, index)) {
+    return { label: '重复', level: 'medium', message: '重复命令会在保存时自动合并。', blocking: false }
+  }
+  const risk = scriptRiskStatusForContent(value)
+  if (risk.level === 'safe') {
+    return { label: '可用', level: 'safe', message: '未检测到风险。', blocking: false }
+  }
+  return { label: risk.label, level: risk.level, message: risk.message, blocking: false }
+}
+
+function shouldShowQuickCommandMessage(command: string, index: number) {
+  const status = quickCommandStatus(command, index)
+  return status.level !== 'safe'
+}
+
+function addQuickCommandItem(index = quickCommandItems.value.length - 1) {
+  if (quickCommandItems.value.length >= QUICK_COMMAND_LIMIT) {
+    quickCommandNotice.value = `最多保留 ${QUICK_COMMAND_LIMIT} 条快速命令。`
+    return
+  }
+  quickCommandItems.value.splice(index + 1, 0, '')
+  quickCommandError.value = ''
+}
+
+function removeQuickCommandItem(index: number) {
+  if (quickCommandItems.value.length <= 1) {
+    syncQuickCommandItems([''])
+    return
+  }
+  quickCommandItems.value.splice(index, 1)
+}
+
+function moveQuickCommandItem(index: number, direction: -1 | 1) {
+  const nextIndex = index + direction
+  if (nextIndex < 0 || nextIndex >= quickCommandItems.value.length) return
+  const next = [...quickCommandItems.value]
+  const current = next[index]
+  next[index] = next[nextIndex]
+  next[nextIndex] = current
+  quickCommandItems.value = next
 }
 
 function openQuickCommandSettings() {
-  quickCommandDraft.value = quickCommands.value.join('\n')
+  syncQuickCommandItems(quickCommands.value)
+  quickCommandRecommendations.value = []
+  quickCommandResetConfirm.value = false
   quickCommandNotice.value = ''
   quickCommandError.value = ''
   quickCommandSettingsOpen.value = true
@@ -326,23 +405,62 @@ function openQuickCommandSettings() {
 function closeQuickCommandSettings() {
   quickCommandSettingsOpen.value = false
   quickCommandAiLoading.value = false
+  quickCommandRecommendations.value = []
+  quickCommandResetConfirm.value = false
 }
 
 function saveQuickCommandSettings() {
-  const nextCommands = normalizeQuickCommandText(quickCommandDraft.value)
+  if (!quickCommandCanSave.value) {
+    quickCommandError.value = quickCommandEnabledCount.value === 0 ? '至少保留 1 条快速命令。' : '请先处理高风险或过长命令。'
+    return
+  }
+  const nextCommands = normalizedQuickCommandItems.value
   quickCommands.value = nextCommands
-  quickCommandDraft.value = nextCommands.join('\n')
+  syncQuickCommandItems(nextCommands)
   persistQuickCommands(nextCommands)
+  quickCommandRecommendations.value = []
+  quickCommandResetConfirm.value = false
   quickCommandError.value = ''
   quickCommandNotice.value = '快速命令已保存。'
 }
 
 function resetQuickCommandDraft() {
-  quickCommandDraft.value = DEFAULT_QUICK_COMMANDS.join('\n')
+  quickCommandResetConfirm.value = true
+  quickCommandError.value = ''
+  quickCommandNotice.value = ''
+}
+
+function confirmResetQuickCommandDraft() {
+  syncQuickCommandItems(DEFAULT_QUICK_COMMANDS)
+  quickCommandRecommendations.value = []
+  quickCommandResetConfirm.value = false
   quickCommandError.value = ''
   quickCommandNotice.value = '已恢复默认候选，保存后生效。'
 }
 
+function cancelResetQuickCommandDraft() {
+  quickCommandResetConfirm.value = false
+}
+
+function addQuickCommandRecommendation(command: string) {
+  const merged = normalizeQuickCommandList([...quickCommandItems.value, command])
+  syncQuickCommandItems(merged)
+  quickCommandError.value = ''
+  quickCommandNotice.value = '已追加候选，保存后生效。'
+}
+
+function appendQuickCommandRecommendations() {
+  const merged = normalizeQuickCommandList([...quickCommandItems.value, ...quickCommandRecommendations.value])
+  syncQuickCommandItems(merged)
+  quickCommandError.value = ''
+  quickCommandNotice.value = '已追加全部推荐，保存后生效。'
+}
+
+function replaceQuickCommandsWithRecommendations() {
+  syncQuickCommandItems(quickCommandRecommendations.value)
+  quickCommandError.value = ''
+  quickCommandNotice.value = '已替换为推荐候选，保存后生效。'
+}
 function quickCommandHistorySeed() {
   const seen = new Set<string>()
   return historyCommandSuggestions()
@@ -402,6 +520,7 @@ async function recommendQuickCommandsWithAi() {
   quickCommandAiLoading.value = true
   quickCommandError.value = ''
   quickCommandNotice.value = ''
+  quickCommandResetConfirm.value = false
   const history = quickCommandHistorySeed()
   const config = props.aiConfig
   const apiKey = config?.apiKey?.trim() || props.apiKey?.trim() || ''
@@ -417,23 +536,22 @@ async function recommendQuickCommandsWithAi() {
       })
       const recommended = parseQuickCommandRecommendations(response.answer)
       if (recommended.length > 0) {
-        quickCommandDraft.value = recommended.join('\n')
-        quickCommandNotice.value = 'AI 已根据历史命令生成候选。'
+        quickCommandRecommendations.value = recommended
+        quickCommandNotice.value = '已生成推荐候选，可选择追加或替换。'
         return
       }
     }
     const local = localQuickCommandRecommendations()
-    quickCommandDraft.value = local.join('\n')
+    quickCommandRecommendations.value = local
     quickCommandNotice.value = config ? 'AI 未返回可用候选，已使用历史命令推荐。' : '未配置 AI，已使用历史命令推荐。'
   } catch (error) {
     const local = localQuickCommandRecommendations()
-    quickCommandDraft.value = local.join('\n')
-    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已使用历史命令推荐。`
+    quickCommandRecommendations.value = local
+    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已生成本地候选。`
   } finally {
     quickCommandAiLoading.value = false
   }
 }
-
 function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
   const normalizedPrefix = prefix.toLowerCase()
   const seen = new Set<string>()
@@ -1305,31 +1423,98 @@ defineExpose({
     </teleport>
 
     <teleport to="body">
-      <div v-if="quickCommandSettingsOpen" class="modal-backdrop" role="presentation">
+            <div v-if="quickCommandSettingsOpen" class="modal-backdrop quick-command-backdrop" :class="props.appTheme === 'light' ? 'theme-light' : 'theme-dark'" role="presentation">
         <section class="modal quick-command-modal" role="dialog" aria-modal="true" aria-label="快速命令设置">
           <div class="modal-head">
             <div>
               <strong>快速命令</strong>
-              <span>{{ quickCommands.length }} 个已启用</span>
+              <span>{{ quickCommandEnabledCount }} 个将启用</span>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeQuickCommandSettings"><UiIcon name="close" /></button>
           </div>
-          <textarea
-            v-model="quickCommandDraft"
-            class="quick-command-editor"
-            spellcheck="false"
-            placeholder="ping\ndf -h\nfree -m\nsystemctl status"
-            aria-label="快速命令列表"
-          />
+
+          <div class="quick-command-workbench">
+            <div class="quick-command-summary" :class="{ warning: quickCommandHasBlockingIssues }">
+              <span>逐条编辑，Enter 新增下一条</span>
+              <span>{{ quickCommandHasBlockingIssues ? '存在需处理项' : '保存前会自动合并重复命令' }}</span>
+            </div>
+
+            <div class="quick-command-list" role="list">
+              <div
+                v-for="(command, index) in quickCommandItems"
+                :key="index"
+                class="quick-command-row"
+                :class="{ invalid: quickCommandStatus(command, index).blocking }"
+                role="listitem"
+              >
+                <span class="quick-command-index">{{ index + 1 }}</span>
+                <input
+                  v-model="quickCommandItems[index]"
+                  spellcheck="false"
+                  placeholder="输入命令，例如 df -h"
+                  aria-label="快速命令"
+                  @keydown.enter.prevent="addQuickCommandItem(index)"
+                />
+                <span
+                  class="command-risk-status"
+                  :class="`risk-${quickCommandStatus(command, index).level}`"
+                  :title="quickCommandStatus(command, index).message"
+                >
+                  {{ quickCommandStatus(command, index).label }}
+                </span>
+                <div class="quick-command-row-actions">
+                  <button class="icon-button" type="button" title="上移" aria-label="上移" :disabled="index === 0" @click="moveQuickCommandItem(index, -1)"><UiIcon name="arrow-up" /></button>
+                  <button class="icon-button" type="button" title="下移" aria-label="下移" :disabled="index === quickCommandItems.length - 1" @click="moveQuickCommandItem(index, 1)"><UiIcon name="arrow-down" /></button>
+                  <button class="icon-button danger" type="button" title="删除" aria-label="删除" @click="removeQuickCommandItem(index)"><UiIcon name="trash" /></button>
+                </div>
+                <small v-if="shouldShowQuickCommandMessage(command, index)">{{ quickCommandStatus(command, index).message }}</small>
+              </div>
+            </div>
+
+            <button class="text-button quick-command-add-row" type="button" :disabled="quickCommandItems.length >= QUICK_COMMAND_LIMIT" @click="addQuickCommandItem()">
+              <UiIcon name="plus" size="13" />
+              <span>新增命令</span>
+            </button>
+
+            <div v-if="quickCommandRecommendations.length" class="quick-command-recommendations">
+              <div class="quick-command-recommendation-head">
+                <strong>推荐候选</strong>
+                <span>{{ quickCommandRecommendations.length }} 条</span>
+              </div>
+              <div class="quick-command-recommendation-list">
+                <button
+                  v-for="command in quickCommandRecommendations"
+                  :key="command"
+                  class="quick-command-recommendation"
+                  type="button"
+                  @click="addQuickCommandRecommendation(command)"
+                >
+                  <code>{{ command }}</code>
+                  <UiIcon name="plus" size="13" />
+                </button>
+              </div>
+              <div class="quick-command-recommendation-actions">
+                <button class="text-button" type="button" @click="appendQuickCommandRecommendations">全部追加</button>
+                <button class="text-button" type="button" @click="replaceQuickCommandsWithRecommendations">替换为推荐</button>
+              </div>
+            </div>
+
+            <div v-if="quickCommandResetConfirm" class="quick-command-reset-confirm">
+              <span>确认恢复默认快速命令？当前草稿会被替换。</span>
+              <button class="text-button" type="button" @click="cancelResetQuickCommandDraft">取消</button>
+              <button class="text-button danger" type="button" @click="confirmResetQuickCommandDraft">确认恢复</button>
+            </div>
+          </div>
+
           <p v-if="quickCommandError" class="save-feedback error">{{ quickCommandError }}</p>
           <p v-else-if="quickCommandNotice" class="save-feedback ok">{{ quickCommandNotice }}</p>
           <div class="modal-actions quick-command-actions">
             <button class="text-button" type="button" @click="resetQuickCommandDraft">恢复默认</button>
             <button class="text-button" type="button" :disabled="quickCommandAiLoading" @click="recommendQuickCommandsWithAi">
-              {{ quickCommandAiLoading ? '推荐中...' : 'AI 推荐' }}
+              {{ quickCommandAiLoading ? '推荐中...' : '根据历史推荐' }}
             </button>
             <button class="text-button" type="button" @click="closeQuickCommandSettings">取消</button>
-            <button class="text-button primary-action" type="button" @click="saveQuickCommandSettings">保存</button>
+            <button class="text-button primary-action" type="button" :disabled="!quickCommandCanSave" @click="saveQuickCommandSettings">保存</button>
           </div>
         </section>
       </div>

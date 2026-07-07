@@ -1,12 +1,13 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex, OnceLock,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,6 +31,8 @@ const SFTP_READY_GRACE: Duration = Duration::from_millis(1500);
 const SFTP_OUTPUT_QUIET_GRACE: Duration = Duration::from_millis(120);
 const SFTP_PTY_COLS: u16 = 240;
 const SFTP_PTY_ROWS: u16 = 32;
+const NATIVE_SFTP_POOL_TTL: Duration = Duration::from_secs(120);
+const NATIVE_SFTP_POOL_MAX: usize = 8;
 
 pub type SftpCancelToken = Arc<AtomicBool>;
 
@@ -688,7 +691,7 @@ fn try_native_list_directory(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Option<Result<SftpListResponse>> {
-    run_native_sftp_routes(
+    run_cached_native_sftp_routes(
         profile,
         target_override,
         cancel_token,
@@ -971,6 +974,145 @@ struct NativeSftpConnection {
     _ssh: RoutedSshSession,
 }
 
+struct NativeSftpPoolEntry {
+    connection: NativeSftpConnection,
+    last_used: Instant,
+}
+
+static NATIVE_SFTP_POOL: OnceLock<Mutex<HashMap<String, NativeSftpPoolEntry>>> = OnceLock::new();
+
+fn native_sftp_pool() -> &'static Mutex<HashMap<String, NativeSftpPoolEntry>> {
+    NATIVE_SFTP_POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn run_cached_native_sftp_routes<T>(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    mut action: impl FnMut(&NativeSftpConnection, &SftpRoute) -> Result<T>,
+) -> Option<Result<T>> {
+    let routes = native_sftp_routes(profile, target_override);
+    if routes.is_empty() {
+        return None;
+    }
+
+    let mut errors = Vec::new();
+    for route in routes {
+        if let Err(error) = ensure_not_cancelled(cancel_token) {
+            return Some(Err(error));
+        }
+        let cache_key = native_sftp_cache_key(profile, &route);
+        let result = run_cached_native_sftp_route(&route, &cache_key, |connection| {
+            action(connection, &route)
+        });
+        match result {
+            Ok(value) => return Some(Ok(value)),
+            Err(error) => {
+                if !should_try_next_native_sftp_route(&error) {
+                    return Some(Err(error));
+                }
+                errors.push(format!(
+                    "{}: {}",
+                    route_label(&route),
+                    clean_sftp_output(&error.to_string())
+                ));
+            }
+        }
+    }
+
+    Some(Err(anyhow::anyhow!(
+        "原生 SFTP 路线全部失败\n{}",
+        errors.join("\n\n")
+    )))
+}
+
+fn run_cached_native_sftp_route<T>(
+    route: &SftpRoute,
+    cache_key: &str,
+    mut action: impl FnMut(&NativeSftpConnection) -> Result<T>,
+) -> Result<T> {
+    if let Some(connection) = take_cached_native_sftp_connection(cache_key) {
+        match action(&connection) {
+            Ok(value) => {
+                store_cached_native_sftp_connection(cache_key.to_string(), connection);
+                return Ok(value);
+            }
+            Err(_) => {
+                // Drop the stale cached session and retry the readonly listing once.
+            }
+        }
+    }
+
+    let connection = connect_native_sftp_route(route)?;
+    match action(&connection) {
+        Ok(value) => {
+            store_cached_native_sftp_connection(cache_key.to_string(), connection);
+            Ok(value)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn take_cached_native_sftp_connection(cache_key: &str) -> Option<NativeSftpConnection> {
+    let mut pool = native_sftp_pool().lock().ok()?;
+    prune_native_sftp_pool(&mut pool);
+    pool.remove(cache_key).map(|entry| entry.connection)
+}
+
+fn store_cached_native_sftp_connection(cache_key: String, connection: NativeSftpConnection) {
+    let Ok(mut pool) = native_sftp_pool().lock() else {
+        return;
+    };
+    prune_native_sftp_pool(&mut pool);
+    pool.insert(
+        cache_key,
+        NativeSftpPoolEntry {
+            connection,
+            last_used: Instant::now(),
+        },
+    );
+    prune_native_sftp_pool(&mut pool);
+}
+
+fn prune_native_sftp_pool(pool: &mut HashMap<String, NativeSftpPoolEntry>) {
+    let now = Instant::now();
+    pool.retain(|_, entry| now.duration_since(entry.last_used) < NATIVE_SFTP_POOL_TTL);
+    while pool.len() > NATIVE_SFTP_POOL_MAX {
+        let Some(oldest_key) = pool
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        pool.remove(&oldest_key);
+    }
+}
+
+fn native_sftp_cache_key(profile: &ConnectionProfile, route: &SftpRoute) -> String {
+    let proxy = route
+        .proxy
+        .as_ref()
+        .map(native_endpoint_cache_key)
+        .unwrap_or_else(|| "direct".into());
+    format!(
+        "{}|target:{}|proxy:{}",
+        profile.id,
+        native_endpoint_cache_key(&route.target),
+        proxy
+    )
+}
+
+fn native_endpoint_cache_key(endpoint: &AuthEndpoint) -> String {
+    format!(
+        "{}:{}:{}:{:?}:{}",
+        endpoint.host.trim().to_ascii_lowercase(),
+        endpoint.port.unwrap_or(22),
+        endpoint.username.trim(),
+        endpoint.auth_mode,
+        endpoint.credential_ref.as_deref().unwrap_or_default()
+    )
+}
 fn run_native_sftp_routes<T>(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,

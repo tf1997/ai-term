@@ -16,6 +16,7 @@ function assert(condition, message) {
 const appShell = read('src/components/AppShell.vue')
 const terminalPane = read('src/components/TerminalPane.vue')
 const aiPanel = read('src/components/AiPanel.vue')
+const aiMarkdownMessage = read('src/components/AiMarkdownMessage.vue')
 const aiMarkdown = read('src/lib/aiMarkdown.ts')
 const shellCommand = read('src/lib/shellCommand.ts')
 const aiConfig = read('src/components/AiConfigPanel.vue')
@@ -817,9 +818,9 @@ assert(
 assert(
   !aiPanel.includes('executeGeneratedCommand()') &&
     !aiPanel.includes('executableCommands(message)') &&
-    aiPanel.includes('shellCommandForPart(part)') &&
-    aiPanel.includes('codeBlockLabel(part.language, part.content)') &&
-    aiPanel.includes("shellCommandFromCodeBlock(part.language, part.content)") &&
+    aiMarkdownMessage.includes('shellCommandForPart(part)') &&
+    aiMarkdownMessage.includes('codeBlockLabel(part.language, part.content)') &&
+    aiMarkdownMessage.includes("shellCommandFromCodeBlock(part.language, part.content)") &&
     shellCommand.includes('explicitShellLanguages') &&
     shellCommand.includes('shellSessionLanguages') &&
     shellCommand.includes('normalizeCodeLanguage') &&
@@ -847,6 +848,18 @@ assert(
     sftpBackend.includes('SFTP_CHILD_EXIT_GRACE') &&
     !sftpBackend.includes('let _ = process.child.wait();'),
   'SFTP backend must not block indefinitely while waiting for killed child processes; failed auth, cancel, and timeout paths must return so the UI clears loading.'
+)
+assert(
+  sftpBackend.includes('NATIVE_SFTP_POOL_TTL') &&
+    sftpBackend.includes('NATIVE_SFTP_POOL_MAX') &&
+    sftpBackend.includes('run_cached_native_sftp_routes') &&
+    sftpBackend.includes('run_cached_native_sftp_route') &&
+    sftpBackend.includes('native_sftp_cache_key') &&
+    sftpBackend.includes('take_cached_native_sftp_connection') &&
+    sftpBackend.includes('store_cached_native_sftp_connection') &&
+    sftpBackend.includes('run_cached_native_sftp_routes(') &&
+    sftpBackend.includes('|connection, _route| list_directory_native(connection, remote_path)'),
+  'SFTP directory listing should reuse native SFTP sessions so remote directory switching does not reconnect for every folder.'
 )
 assert(
   sftpBackend.includes('fn sftp_line_ending()') &&
@@ -1039,6 +1052,20 @@ assert(
 assert(
   fileTransfer.includes('type="file"') &&
     fileTransfer.includes('triggerUpload') &&
+    fileTransfer.includes('remoteDropActive') &&
+    fileTransfer.includes('handleRemoteDragEnter') &&
+    fileTransfer.includes('handleRemoteDrop') &&
+    fileTransfer.includes('uploadDroppedLocalPaths') &&
+    fileTransfer.includes('onTauriFileDrop') &&
+    fileTransfer.includes('onTauriFileDropHover') &&
+    fileTransfer.includes('onTauriFileDropCancelled') &&
+    fileTransfer.includes('remoteDropZone') &&
+    fileTransfer.includes('isRemoteDropZoneVisible') &&
+    fileTransfer.includes('dataTransferLocalPaths') &&
+    fileTransfer.includes('isDuplicateDroppedPaths') &&
+    fileTransfer.includes('remote-drop-overlay') &&
+    fileTransfer.includes("@drop=\"handleRemoteDrop\"") &&
+    fileTransfer.includes("itemKind: 'item'") &&
     fileTransfer.includes('sftpListDirectory') &&
     fileTransfer.includes('sftpUploadFile') &&
     fileTransfer.includes('sftpUploadPath') &&
@@ -1086,6 +1113,9 @@ assert(
     fileTransfer.includes('remoteReady') &&
     tauri.includes("invoke<LocalDirectoryResponse>('local_list_directory'") &&
     tauri.includes("invoke<void>('local_open_path'") &&
+    tauri.includes("listen<string[]>('tauri://file-drop'") &&
+    tauri.includes("listen<string[]>('tauri://file-drop-hover'") &&
+    tauri.includes("listen('tauri://file-drop-cancelled'") &&
     commands.includes('pub async fn local_open_path') &&
     commands.includes('open_path as open_local_path_impl') &&
     localFilesystem.includes('pub fn open_path') &&
@@ -1103,6 +1133,9 @@ assert(
     styles.includes('grid-column: 3 / 5;') &&
     styles.includes('grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);') &&
     styles.includes('.file-type-icon.folder') &&
+    styles.includes('.remote-pane.drop-active') &&
+    styles.includes('.remote-drop-overlay') &&
+    styles.includes('.theme-light .remote-drop-overlay') &&
     styles.includes('.file-context-menu') &&
     appShell.includes('sftpWorkbenchActive') &&
     appShell.includes('isSftpProfile(profile)') &&
@@ -1169,6 +1202,14 @@ assert(
     fileTransfer.includes('localPaneSummary') &&
     fileTransfer.includes('remotePaneSummary') &&
     fileTransfer.includes('formatRemoteModified') &&
+    fileTransfer.includes('REMOTE_DIRECTORY_CACHE_TTL_MS') &&
+    fileTransfer.includes('remoteDirectoryCache') &&
+    fileTransfer.includes('remoteDirectoryRequests') &&
+    fileTransfer.includes('cachedRemoteDirectory') &&
+    fileTransfer.includes('invalidateRemoteDirectoryCache') &&
+    fileTransfer.includes('options: LoadDirectoryOptions') &&
+    fileTransfer.includes('await loadDirectory(currentPath.value, { force: true })') &&
+    fileTransfer.includes('@click="loadDirectory(currentPath, { force: true })"') &&
     fileTransfer.includes('sftp-title-copy') &&
     fileTransfer.includes('transfer-route-item') &&
     fileTransfer.includes('transfer-pane-title') &&
@@ -1212,6 +1253,14 @@ assert(
     styles.includes('rgba(86, 230, 163, .12)') &&
     styles.includes('.theme-light .transfer-target-strip .transfer-route-item') &&
     styles.includes('.theme-light .file-meta span') &&
+    styles.includes('.theme-light .transfer-pane-head') &&
+    !styles.includes('\n.transfer-pane-head {\n  border-bottom-color: var(--light-border);\n  background: #fafcfb;\n}') &&
+    styles.includes('/* Dark theme SFTP polish. */') &&
+    styles.includes('.app-shell.theme-dark .sftp-transfer-workbench') &&
+    styles.includes('.app-shell.theme-dark .transfer-pane-head') &&
+    styles.includes('.app-shell.theme-dark .file-list') &&
+    styles.includes('.app-shell.theme-dark .transfer-progress span') &&
+    styles.includes('.app-shell.theme-dark .workspace-tabs button.active') &&
     styles.includes('.transfer-progress') &&
     styles.includes('.transfer-task-stats') &&
     styles.includes('@keyframes transfer-progress-slide') &&
@@ -1730,7 +1779,8 @@ assert(
     !aiPanel.includes('selected-context-chip') &&
     !styles.includes('.selected-context-chip') &&
     aiPanel.includes('const commandHistory = props.commandHistory.map') &&
-    aiPanel.includes('context compressed') &&
+    aiPanel.includes('contextStatusLabel') &&
+    aiPanel.includes('已压缩至') &&
     aiPanel.includes('messages: AiMessage[]') &&
     aiPanel.includes('const requestConnectionId = props.connectionId') &&
     aiPanel.includes('const requestWorkspaceSessionId = props.workspaceSessionId') &&
@@ -1774,9 +1824,10 @@ assert(
     aiPanel.includes('ref="messageList"') &&
     aiPanel.includes('thinking-row') &&
     appShell.includes('updateAiMessage') &&
-    aiPanel.includes("import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'") &&
+    aiPanel.includes("import AiMarkdownMessage from './AiMarkdownMessage.vue'") &&
+    aiMarkdownMessage.includes("import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'") &&
     aiPanel.includes('parseMessageParts') &&
-    aiPanel.includes('renderMarkdown') &&
+    aiMarkdownMessage.includes('renderMarkdown') &&
     aiMarkdown.includes('export function parseMessageParts') &&
     aiMarkdown.includes('export function renderMarkdown') &&
     aiMarkdown.includes('parseMarkdownTable') &&
@@ -1786,7 +1837,7 @@ assert(
     aiMarkdown.includes('normalizeCodeFenceInfo') &&
     aiMarkdown.includes('```+|~~~+') &&
     shellCommand.includes('shellCommandFromCodeBlock') &&
-    aiPanel.includes('v-html="renderMarkdown(part.content)"') &&
+    aiMarkdownMessage.includes('v-html="renderMarkdown(part.content)"') &&
     aiPanel.includes('answerElapsedSeconds') &&
     aiPanel.includes('formatAnswerDuration') &&
     aiPanel.includes('message-duration') &&
@@ -1795,16 +1846,29 @@ assert(
     styles.includes('.markdown-table th') &&
     styles.includes('.app-shell.theme-light .markdown-table-wrap') &&
     styles.includes('.message-duration') &&
+    aiPanel.includes('contextSummaryLabel') &&
+    aiPanel.includes('contextOpen') &&
+    aiPanel.includes('ai-context-strip') &&
+    aiMarkdownMessage.includes('ai-code-preview-modal') &&
+    aiMarkdownMessage.includes('预览完整代码') &&
+    aiMarkdownMessage.includes('isPlainTextResult') &&
+    aiMarkdownMessage.includes('ai-result-block') &&
+    aiPanel.includes("message.role === 'assistant' ? 'AI' : '我'") &&
+    aiPanel.includes('展开完整回复') &&
+    styles.includes('.ai-code-preview-modal') &&
+    styles.includes('.ai-context-strip') &&
+    styles.includes('.ai-result-block') &&
+    styles.includes('.message-collapse-footer') &&
     aiPanel.includes('extractPrimaryShellCommand') &&
     aiPanel.includes('../lib/scriptRisk') &&
     aiPanel.includes('aiCommandRiskConfirmOpen') &&
     aiPanel.includes('pendingAiCommandExecution') &&
-    aiPanel.includes('commandRiskStatus') &&
+    aiMarkdownMessage.includes('commandRiskStatus') &&
     aiPanel.includes('executeGeneratedCommand') &&
-    aiPanel.includes('shellCommandForPart(part)') &&
-    aiPanel.includes('codeBlockLabel(part.language, part.content)') &&
+    aiMarkdownMessage.includes('shellCommandForPart(part)') &&
+    aiMarkdownMessage.includes('codeBlockLabel(part.language, part.content)') &&
     aiPanel.includes('confirmPendingAiCommandExecution') &&
-    aiPanel.includes('class="command-risk-status"') &&
+    aiMarkdownMessage.includes('class="command-risk-status"') &&
     aiPanel.includes('script-risk-modal') &&
     !aiPanel.includes('isDangerousCommand') &&
     !aiPanel.includes('window.confirm') &&
@@ -2068,23 +2132,37 @@ assert(
   terminalPane.includes('quick-command-bar') &&
     terminalPane.includes('quickCommands') &&
     terminalPane.includes('quickCommandSettingsOpen') &&
-    terminalPane.includes('quickCommandDraft') &&
+    terminalPane.includes('quickCommandItems') &&
+    terminalPane.includes('quickCommandRecommendations') &&
+    terminalPane.includes('quickCommandEnabledCount') &&
+    terminalPane.includes('quickCommandCanSave') &&
+    terminalPane.includes('shouldShowQuickCommandMessage') &&
+    terminalPane.includes('scriptRiskStatusForContent') &&
     terminalPane.includes('recommendQuickCommandsWithAi') &&
     terminalPane.includes('chatWithAiProvider') &&
     terminalPane.includes('class="modal quick-command-modal"') &&
+    terminalPane.includes('quick-command-backdrop') &&
     !terminalPane.includes('@click.self="closeQuickCommandSettings"') &&
-    terminalPane.includes('v-model="quickCommandDraft"') &&
-    terminalPane.includes('AI 推荐') &&
+    terminalPane.includes('v-model="quickCommandItems[index]"') &&
+    terminalPane.includes('根据历史推荐') &&
+    terminalPane.includes('推荐候选') &&
+    terminalPane.includes('确认恢复') &&
     terminalPane.includes('aiConfig?: AiProviderConfig') &&
     terminalPane.includes('apiKey?: string') &&
     (appShell.match(/:ai-config="aiConfig"/g) ?? []).length >= 2 &&
     (appShell.match(/:api-key="activeAiRuntimeApiKey"/g) ?? []).length >= 2 &&
     styles.includes('.quick-command-modal') &&
-    styles.includes('.quick-command-editor') &&
+    styles.includes('.quick-command-list') &&
+    styles.includes('.quick-command-row') &&
+    styles.includes('.quick-command-row .command-risk-status') &&
+    styles.includes('.theme-light .quick-command-row') &&
+    styles.includes('.quick-command-recommendations') &&
+    styles.includes('.quick-command-reset-confirm') &&
+    styles.includes('.command-risk-status.risk-muted') &&
     terminalPane.includes('terminal-heading') &&
     terminalPane.includes('copyTerminalOutput') &&
     !terminalPane.includes('connection-strip'),
-  'TerminalPane must expose a compact terminal header and quick command bar without the old tall connection summary.'
+  'TerminalPane must expose a compact terminal header and managed quick command settings without the old tall connection summary.'
 )
 
 assert(
@@ -2194,7 +2272,8 @@ assert(
     aiPanel.includes('借助 AI 分析风险') &&
     aiPanel.includes('AI 正在分析风险') &&
     aiPanel.includes('aria-live="polite"') &&
-    aiPanel.includes('v-html="renderMarkdown(aiRiskExplanation)"') &&
+    aiPanel.includes('<AiMarkdownMessage v-else-if="aiRiskExplanation"') &&
+    aiMarkdownMessage.includes('v-html="renderMarkdown(part.content)"') &&
     !aiPanel.includes('@click.self="closeAiCommandRiskConfirm"') &&
     scriptPanel.includes('explainPendingScriptRisk') &&
     scriptPanel.includes('buildScriptRiskExplanationPrompt') &&

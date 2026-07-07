@@ -334,3 +334,14 @@ export function onAiChatStream(requestId: string, handler: (event: AiChatStreamE
 export function onSftpTransferProgress(taskId: string, handler: (event: SftpTransferEvent) => void) {
   return listen<SftpTransferEvent>(sftpTransferEventName(taskId), (event) => handler(event.payload))
 }
+export function onTauriFileDrop(handler: (paths: string[]) => void) {
+  return listen<string[]>('tauri://file-drop', (event) => handler(Array.isArray(event.payload) ? event.payload : []))
+}
+
+export function onTauriFileDropHover(handler: (paths: string[]) => void) {
+  return listen<string[]>('tauri://file-drop-hover', (event) => handler(Array.isArray(event.payload) ? event.payload : []))
+}
+
+export function onTauriFileDropCancelled(handler: () => void) {
+  return listen('tauri://file-drop-cancelled', () => handler())
+}
