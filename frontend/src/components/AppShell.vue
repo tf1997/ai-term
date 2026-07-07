@@ -1326,6 +1326,15 @@ function commandPreview(command: string) {
   return command.length > 120 ? `${command.slice(0, 120)}...` : command
 }
 
+function isActiveTerminalOnlyInput(data: string) {
+  return data.includes('AI_TERM_IDENT_') || data.includes('AI_TERM_DOWNLOAD_') || data.includes('AI_TERM_UPLOAD_')
+}
+
+function writeInputToActiveTerminal(data: string) {
+  if (terminalRefs.value[activeTerminalId.value]?.writeTerminalInput(data)) return
+  showToast('error', '终端输入未发送', '当前终端不可用或没有活动 shell。')
+}
+
 function executeCommandOnTargetTerminals(command: string) {
   const targets = targetTerminalIds.value
   let sentCount = 0
@@ -1341,6 +1350,10 @@ function executeCommandOnTargetTerminals(command: string) {
 
 function writeInputToTargetTerminals(data: string) {
   if (!data) return
+  if (isActiveTerminalOnlyInput(data)) {
+    writeInputToActiveTerminal(data)
+    return
+  }
   let sentCount = 0
   targetTerminalIds.value.forEach((terminalId) => {
     if (terminalRefs.value[terminalId]?.writeTerminalInput(data)) sentCount += 1

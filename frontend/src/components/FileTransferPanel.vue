@@ -34,6 +34,7 @@ const emit = defineEmits<{
 }>()
 
 const INLINE_TRANSFER_LIMIT = 700 * 1024
+const IDENT_MARKER_ID_PATTERN = '\\d+_[A-Za-z0-9]+'
 
 interface TerminalTargetIdentity {
   host: string
@@ -348,8 +349,8 @@ function probeStateFor(candidate: SftpTarget) {
 function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
   if (!remoteReady.value || identifying.value) return
   const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const begin = `__AI_TERM_IDENT_BEGIN_${id}__`
-  const end = `__AI_TERM_IDENT_END_${id}__`
+  const begin = `AI_TERM_IDENT_BEGIN_${id}`
+  const end = `AI_TERM_IDENT_END_${id}`
   pendingIdentify.value = { begin, end, useForSftp: Boolean(options.useForSftp) }
   identifying.value = true
   error.value = ''
@@ -1038,12 +1039,12 @@ function parseTerminalIdentitySnapshot(snapshot: string, pending: { begin: strin
   let fallbackHost = ''
 
   while (searchStart < cleaned.length) {
-    const beginIndex = cleaned.indexOf(pending.begin, searchStart)
-    if (beginIndex === -1) break
-    const endIndex = cleaned.indexOf(pending.end, beginIndex + pending.begin.length)
-    if (endIndex === -1) return { complete: false, values: fallbackValues, ip: fallbackIp, host: fallbackHost }
+    const beginMatch = findIdentityMarker(cleaned, pending.begin, 'BEGIN', searchStart)
+    if (!beginMatch) break
+    const endMatch = findIdentityMarker(cleaned, pending.end, 'END', beginMatch.index + beginMatch.marker.length)
+    if (!endMatch) return { complete: false, values: fallbackValues, ip: fallbackIp, host: fallbackHost }
     sawCompletePair = true
-    const raw = cleaned.slice(beginIndex + pending.begin.length, endIndex)
+    const raw = cleaned.slice(beginMatch.index + beginMatch.marker.length, endMatch.index)
     const values = parseIdentityOutput(raw)
     const ip = firstUsableIp(values.ips) || firstUsableIp(raw)
     const hostname = sanitizeHostCandidate(values.hostname)
@@ -1052,10 +1053,42 @@ function parseTerminalIdentitySnapshot(snapshot: string, pending: { begin: strin
     fallbackIp = ip
     fallbackHost = host
     if (host) return { complete: true, values: { ...values, hostname }, ip, host }
-    searchStart = beginIndex + pending.begin.length
+    searchStart = beginMatch.index + beginMatch.marker.length
   }
 
   return { complete: sawCompletePair, values: fallbackValues, ip: fallbackIp, host: fallbackHost }
+}
+
+function findIdentityMarker(text: string, marker: string, kind: 'BEGIN' | 'END', start: number) {
+  const candidates = markerCandidates(marker)
+  let best: { index: number; marker: string } | null = null
+  for (const candidate of candidates) {
+    const index = text.indexOf(candidate, start)
+    if (index !== -1 && (!best || index < best.index)) best = { index, marker: candidate }
+  }
+  const markerId = identityMarkerId(marker)
+  if (markerId) {
+    const pattern = new RegExp(`_*AI_TERM_IDENT_${kind}_${escapeRegExp(markerId)}_*`, 'g')
+    pattern.lastIndex = start
+    const match = pattern.exec(text)
+    if (match && (!best || match.index < best.index)) {
+      best = { index: match.index, marker: match[0] }
+    }
+  }
+  return best
+}
+
+function markerCandidates(marker: string) {
+  const bare = marker.replace(/^_+|_+$/g, '')
+  return [...new Set([marker, bare])]
+}
+
+function identityMarkerId(marker: string) {
+  return marker.match(new RegExp(`AI_TERM_IDENT_(?:BEGIN|END)_(${IDENT_MARKER_ID_PATTERN})`))?.[1] ?? ''
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function emptyIdentityValues() {
@@ -1069,13 +1102,14 @@ function emptyIdentityValues() {
 
 function parseIdentityOutput(raw: string) {
   const values = emptyIdentityValues()
-  for (const line of raw.split('\n')) {
-    const match = line.trim().match(/(?:^|\s)(user|hostname|ips|pwd)=([^\r\n]*)/)
-    if (!match) continue
+  const matches = [...raw.matchAll(/(user|hostname|ips|pwd)=/g)]
+  matches.forEach((match, index) => {
     const key = match[1] as keyof ReturnType<typeof emptyIdentityValues>
-    const value = sanitizeIdentityValue(match[2], key)
+    const valueStart = (match.index ?? 0) + match[0].length
+    const nextStart = matches[index + 1]?.index ?? raw.length
+    const value = sanitizeIdentityValue(raw.slice(valueStart, nextStart), key)
     if (value) values[key] = value
-  }
+  })
   return values
 }
 

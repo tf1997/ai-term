@@ -918,6 +918,21 @@ assert(
 )
 
 assert(
+  fileTransfer.includes("const begin = `AI_TERM_IDENT_BEGIN_${id}`") &&
+    fileTransfer.includes("const end = `AI_TERM_IDENT_END_${id}`") &&
+    fileTransfer.includes('findIdentityMarker') &&
+    fileTransfer.includes('markerCandidates') &&
+    fileTransfer.includes('identityMarkerId') &&
+    fileTransfer.includes('raw.matchAll(/(user|hostname|ips|pwd)=/g)') &&
+    !fileTransfer.includes('`__AI_TERM_IDENT_BEGIN_${id}__`') &&
+    appShell.includes('function isActiveTerminalOnlyInput') &&
+    appShell.includes("data.includes('AI_TERM_IDENT_')") &&
+    appShell.includes("data.includes('AI_TERM_DOWNLOAD_')") &&
+    appShell.includes("data.includes('AI_TERM_UPLOAD_')") &&
+    appShell.includes('writeInputToActiveTerminal(data)'),
+  'SFTP terminal identity detection must parse robust plain markers and send terminal-channel probes only to the active terminal snapshot.'
+)
+assert(
   fileTransfer.includes('lastTransfer') &&
     fileTransfer.includes('transfer-target-strip') &&
     fileTransfer.includes('transfer-progress') &&
