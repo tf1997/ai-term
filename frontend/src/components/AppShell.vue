@@ -192,9 +192,16 @@ const targetTerminalTabs = computed(() => {
 
 const targetTerminalIds = computed(() => targetTerminalTabs.value.map((tab) => tab.id))
 const multiTerminalInputEnabled = computed(() => targetTerminalIds.value.length > 1)
+const activeTerminalTitle = computed(() => activeTerminal.value?.title ?? '当前终端')
 const terminalTargetLabel = computed(() => {
   const count = targetTerminalIds.value.length
-  return count > 1 ? '同步 ' + count + ' 个终端' : '当前终端'
+  return count > 1 ? `同步 ${count} 个 · 当前 ${activeTerminalTitle.value}` : `当前 ${activeTerminalTitle.value}`
+})
+const terminalTargetTitle = computed(() => {
+  const targets = targetTerminalTabs.value.map((tab) => tab.title).join('、')
+  return multiTerminalInputEnabled.value
+    ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}`
+    : `当前 tab：${activeTerminalTitle.value}；仅发送到当前终端`
 })
 
 const activeTerminalSnapshot = computed(() => {
@@ -345,14 +352,20 @@ function openLocalTerminal() {
   void createLocalTerminalTab()
 }
 
-function normalizeTerminalTargets(preferredId = activeTerminalId.value) {
+function normalizedTerminalTargetIds(ids: string[], requiredId = activeTerminalId.value) {
   const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
-  const next = selectedTerminalIds.value.filter((id) => validIds.has(id))
-  if (next.length === 0 && preferredId && validIds.has(preferredId)) {
-    selectedTerminalIds.value = [preferredId]
-    return
-  }
-  selectedTerminalIds.value = next
+  const next = terminalTabs.value.map((tab) => tab.id).filter((id) => ids.includes(id) && validIds.has(id))
+  if (requiredId && validIds.has(requiredId) && !next.includes(requiredId)) next.push(requiredId)
+  if (next.length > 0) return next
+  return requiredId && validIds.has(requiredId) ? [requiredId] : []
+}
+
+function setTerminalTargets(ids: string[], requiredId = activeTerminalId.value) {
+  selectedTerminalIds.value = normalizedTerminalTargetIds(ids, requiredId)
+}
+
+function normalizeTerminalTargets(preferredId = activeTerminalId.value) {
+  setTerminalTargets(selectedTerminalIds.value, preferredId)
 }
 
 function selectTerminalTab(tabId: string) {
@@ -360,12 +373,10 @@ function selectTerminalTab(tabId: string) {
   const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
   const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
   if (current.length <= 1) {
-    selectedTerminalIds.value = [tabId]
+    setTerminalTargets([tabId], tabId)
     return
   }
-  if (!current.includes(tabId)) {
-    selectedTerminalIds.value = [...current, tabId]
-  }
+  setTerminalTargets(current, tabId)
 }
 
 function isTerminalTargetSelected(tabId: string) {
@@ -375,20 +386,23 @@ function isTerminalTargetSelected(tabId: string) {
 function toggleTerminalTarget(tabId: string) {
   const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
   const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
-  if (current.includes(tabId)) {
-    if (current.length === 1) return
-    selectedTerminalIds.value = current.filter((id) => id !== tabId)
+  if (tabId === activeTerminalId.value) {
+    setTerminalTargets([tabId], tabId)
     return
   }
-  selectedTerminalIds.value = [...current, tabId]
+  if (current.includes(tabId)) {
+    setTerminalTargets(current.filter((id) => id !== tabId))
+    return
+  }
+  setTerminalTargets([...current, tabId])
 }
 
 function selectAllTerminalTargets() {
-  selectedTerminalIds.value = terminalTabs.value.map((tab) => tab.id)
+  setTerminalTargets(terminalTabs.value.map((tab) => tab.id))
 }
 
 function resetTerminalTargetsToActive() {
-  selectedTerminalIds.value = [activeTerminalId.value]
+  setTerminalTargets([activeTerminalId.value])
 }
 
 function openConnectionsPanel() {
@@ -511,8 +525,8 @@ function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
     },
     {
       id: 'toggle-target',
-      label: isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
-      disabled: isTerminalTargetSelected(tab.id) && targetTerminalIds.value.length === 1,
+      label: tab.id === activeTerminalId.value ? '仅同步当前终端' : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
+      disabled: tab.id === activeTerminalId.value && targetTerminalIds.value.length === 1,
       action: () => toggleTerminalTarget(tab.id)
     },
     {
@@ -1150,7 +1164,7 @@ function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: Works
     status: 'idle'
   })
   activeTerminalId.value = id
-  selectedTerminalIds.value = [id]
+  setTerminalTargets([id], id)
   void loadWorkspaceSessionList(connectionId)
   void loadWorkspaceState(connectionId, session.id)
 }
@@ -1536,7 +1550,7 @@ onBeforeUnmount(() => {
                     <span
             class="terminal-target-toggle"
             :class="{ selected: isTerminalTargetSelected(tab.id) }"
-            :title="isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
+            :title="tab.id === activeTerminalId ? (multiTerminalInputEnabled ? '仅同步当前终端' : '当前终端') : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
             aria-hidden="true"
             @click.stop="toggleTerminalTarget(tab.id)"
           >
@@ -1547,7 +1561,7 @@ onBeforeUnmount(() => {
           <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
         </button>
                 <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
-        <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="multiTerminalInputEnabled ? '键盘输入、脚本和命令会同步到已选终端' : '仅发送到当前终端'">
+        <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="terminalTargetTitle">
           <UiIcon name="terminal" size="13" />
           <span>{{ terminalTargetLabel }}</span>
         </span>

@@ -89,6 +89,13 @@ export interface SftpTransferEvent {
   taskId: string
   percent?: number
   text?: string
+  transferredBytes?: number
+  totalBytes?: number
+  bytesPerSecond?: number
+  remainingSeconds?: number
+  etaSeconds?: number
+  estimatedCompletionEpochMs?: number
+  elapsedSeconds?: number
 }
 
 export interface SftpProbeResponse {

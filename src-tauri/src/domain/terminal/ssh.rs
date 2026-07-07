@@ -52,6 +52,18 @@ pub struct NativeSshTerminalSession {
     _forward_guard: Option<LocalForwardGuard>,
 }
 
+pub(crate) struct RoutedSshSession {
+    session: Session,
+    _gateway_session: Option<Session>,
+    _forward_guard: Option<LocalForwardGuard>,
+}
+
+impl RoutedSshSession {
+    pub(crate) fn session(&self) -> &Session {
+        &self.session
+    }
+}
+
 struct LocalForwardGuard {
     stop: Arc<AtomicBool>,
     wake_addr: SocketAddr,
@@ -372,8 +384,52 @@ fn spawn_ssh_launch_plan(
     })
 }
 
-fn connect_endpoint(endpoint: &AuthEndpoint) -> Result<Session> {
+pub(crate) fn connect_endpoint(endpoint: &AuthEndpoint) -> Result<Session> {
     connect_endpoint_via(endpoint, endpoint.host.clone(), endpoint.port.unwrap_or(22))
+}
+
+pub(crate) fn connect_routed_endpoint(
+    target: &AuthEndpoint,
+    proxy: Option<&AuthEndpoint>,
+) -> Result<RoutedSshSession> {
+    let Some(proxy) = proxy else {
+        return Ok(RoutedSshSession {
+            session: connect_endpoint(target)?,
+            _gateway_session: None,
+            _forward_guard: None,
+        });
+    };
+
+    let gateway = connect_endpoint(proxy)
+        .with_context(|| format!("failed to connect bastion {}", endpoint_label(proxy)))?;
+    gateway.set_blocking(false);
+    let target_port = target.port.unwrap_or(22);
+    let forward_guard = start_local_forward(gateway.clone(), target.host.clone(), target_port)
+        .with_context(|| {
+            format!(
+                "failed to open bastion forwarding from {} to {}:{}",
+                endpoint_label(proxy),
+                target.host,
+                target_port
+            )
+        })?;
+    let session = connect_endpoint_via(
+        target,
+        forward_guard.wake_addr.ip().to_string(),
+        forward_guard.wake_addr.port(),
+    )
+    .with_context(|| {
+        format!(
+            "failed to connect target through bastion {}",
+            endpoint_label(target)
+        )
+    })?;
+
+    Ok(RoutedSshSession {
+        session,
+        _gateway_session: Some(gateway),
+        _forward_guard: Some(forward_guard),
+    })
 }
 
 fn connect_endpoint_via(endpoint: &AuthEndpoint, host: String, port: u16) -> Result<Session> {

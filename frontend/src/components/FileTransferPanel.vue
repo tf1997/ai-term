@@ -17,6 +17,7 @@ import {
   type LocalFileEntry,
   type SftpFileEntry,
   type SftpProbeResponse,
+  type SftpTransferEvent,
   type SftpTransferResponse
 } from '../lib/tauri'
 import type { ConnectionProfile } from '../types/profile'
@@ -69,6 +70,13 @@ interface ActiveTask {
   targetPath?: string
   progressPercent?: number | null
   progressText?: string
+  transferredBytes?: number
+  totalBytes?: number
+  bytesPerSecond?: number
+  remainingSeconds?: number
+  etaSeconds?: number
+  estimatedCompletionEpochMs?: number
+  elapsedSeconds?: number
   startedAt?: number
   completedAt?: number
   status?: TransferTaskState
@@ -124,21 +132,6 @@ const pendingIdentify = ref<{
 } | null>(null)
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
-const usesCompositeDirectUsername = computed(() => {
-  const username = props.profile?.target.username.trim() ?? ''
-  return username.split('/').filter(Boolean).length >= 3
-})
-const hasRemoteShellSnapshot = computed(() => {
-  const snapshot = props.terminalSnapshot.trim()
-  if (!remoteReady.value || !snapshot) return false
-  const tailLines = snapshot
-    .slice(-4000)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-  const lastLine = tailLines[tailLines.length - 1] ?? ''
-  return !/^(No active shell|Use New Local Shell|SFTP profile is ready|Opening local shell|Local shell failed|Connecting SSH profile|SSH connection failed|.*password:|.*passphrase:)/i.test(lastLine)
-})
 const taskInProgress = computed(() => Boolean(activeTask.value))
 const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
 const targetOverride = computed(() => {
@@ -230,15 +223,7 @@ async function loadLocalHome() {
 
 function initializeRemoteBrowser() {
   if (!remoteReady.value) return
-  if (usesCompositeDirectUsername.value) {
-    void loadDirectory(currentPath.value)
-    return
-  }
-  if (hasRemoteShellSnapshot.value) {
-    openCurrentTerminalSftp()
-    return
-  }
-  void loadDirectory(currentPath.value)
+  useConfiguredTargetForSftp()
 }
 
 function openCurrentTerminalSftp() {
@@ -248,6 +233,13 @@ function openCurrentTerminalSftp() {
     return
   }
   identifyCurrentTerminalTarget({ useForSftp: true })
+}
+
+function useConfiguredTargetForSftp(message?: string) {
+  selectedTarget.value = null
+  transferMode.value = 'sftp'
+  if (message) status.value = message
+  void loadDirectory(currentPath.value || '.')
 }
 
 async function loadLocalDirectory(path = localPath.value || localHome.value) {
@@ -717,14 +709,21 @@ function startRemoteTask(label: string, details: Partial<ActiveTask> = {}) {
   return id
 }
 
-function updateTransferProgress(taskId: string, event: { percent?: number; text?: string }) {
+function updateTransferProgress(taskId: string, event: SftpTransferEvent) {
   const task = activeTask.value
   if (!task || task.id !== taskId) return
   const percent = typeof event.percent === 'number' ? Math.max(0, Math.min(100, Math.round(event.percent))) : task.progressPercent
   activeTask.value = {
     ...task,
     progressPercent: percent,
-    progressText: event.text || task.progressText
+    progressText: event.text || task.progressText,
+    transferredBytes: numericOr(event.transferredBytes, task.transferredBytes),
+    totalBytes: numericOr(event.totalBytes, task.totalBytes),
+    bytesPerSecond: numericOr(event.bytesPerSecond, task.bytesPerSecond),
+    remainingSeconds: numericOr(event.remainingSeconds, task.remainingSeconds),
+    etaSeconds: numericOr(event.etaSeconds, task.etaSeconds),
+    estimatedCompletionEpochMs: numericOr(event.estimatedCompletionEpochMs, task.estimatedCompletionEpochMs),
+    elapsedSeconds: numericOr(event.elapsedSeconds, task.elapsedSeconds)
   }
 }
 
@@ -865,6 +864,40 @@ function transferStatusLabel(task: ActiveTask) {
   return hasDeterminateProgress(task) ? `${Math.round(task.progressPercent ?? 0)}%` : '传输中'
 }
 
+function numericOr(value: number | undefined, fallback?: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+
+function transferAmountLabel(task: ActiveTask) {
+  if (typeof task.transferredBytes === 'number' && typeof task.totalBytes === 'number') {
+    return `${formatSize(task.transferredBytes)} / ${formatSize(task.totalBytes)}`
+  }
+  if (typeof task.transferredBytes === 'number') return formatSize(task.transferredBytes)
+  return task.progressText || '等待数据'
+}
+
+function transferSpeedLabel(task: ActiveTask) {
+  if (typeof task.bytesPerSecond !== 'number' || task.bytesPerSecond <= 0) return '--'
+  return `${formatSize(task.bytesPerSecond)}/s`
+}
+
+function transferRemainingLabel(task: ActiveTask) {
+  const seconds = task.remainingSeconds ?? task.etaSeconds
+  return formatDuration(seconds)
+}
+
+function transferElapsedLabel(task: ActiveTask) {
+  if (typeof task.elapsedSeconds === 'number') return formatDuration(task.elapsedSeconds)
+  if (!task.startedAt) return '--'
+  const end = task.completedAt ?? Date.now()
+  return formatDuration((end - task.startedAt) / 1000)
+}
+
+function transferCompletionLabel(task: ActiveTask) {
+  return formatClock(task.completedAt ?? task.estimatedCompletionEpochMs)
+}
+
 async function openLastTransferLocation() {
   const task = lastTransfer.value
   if (!task?.targetPath) return
@@ -889,9 +922,24 @@ async function copyLastTransferPath() {
 }
 
 function formatSize(size: number) {
-  if (size < 1024) return `${size} B`
+  if (!Number.isFinite(size) || size <= 0) return '0 B'
+  if (size < 1024) return `${Math.round(size)} B`
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
+  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+function formatDuration(value?: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '--'
+  const seconds = Math.max(0, Math.round(value))
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)}时${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}分`
+  if (seconds >= 60) return `${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, '0')}秒`
+  return `${seconds}秒`
+}
+
+function formatClock(value?: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '--'
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function formatLocalModified(value: string) {
@@ -954,22 +1002,31 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   if (!parsed.complete) return
   const shouldUseForSftp = pending.useForSftp
   if (!parsed.host) {
-    error.value = '没有识别到当前服务器 IP 或主机名。'
-  } else {
-    currentTerminalTarget.value = {
-      host: parsed.host,
-      ip: parsed.ip,
-      username: parsed.values.user || 'user',
-      hostname: parsed.values.hostname || parsed.host,
-      pwd: parsed.values.pwd || '.',
-      label: `${parsed.values.user || 'user'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
+    currentTerminalTarget.value = null
+    identifying.value = false
+    pendingIdentify.value = null
+    if (shouldUseForSftp) {
+      error.value = ''
+      useConfiguredTargetForSftp('未识别到当前终端目标，已使用连接配置目标打开 SFTP。')
+      return
     }
-    terminalRemotePath.value = parsed.values.pwd || terminalRemotePath.value
-    status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
+    error.value = '没有识别到当前服务器 IP 或主机名。直连服务器可直接使用配置目标 SFTP。'
+    return
   }
+
+  currentTerminalTarget.value = {
+    host: parsed.host,
+    ip: parsed.ip,
+    username: parsed.values.user || 'user',
+    hostname: parsed.values.hostname || parsed.host,
+    pwd: parsed.values.pwd || '.',
+    label: `${parsed.values.user || 'user'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
+  }
+  terminalRemotePath.value = parsed.values.pwd || terminalRemotePath.value
+  status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
   identifying.value = false
   pendingIdentify.value = null
-  if (shouldUseForSftp && currentTerminalTarget.value) void useTerminalTargetForSftp()
+  if (shouldUseForSftp) void useTerminalTargetForSftp()
 }
 
 function parseTerminalIdentitySnapshot(snapshot: string, pending: { begin: string; end: string }) {
@@ -1116,6 +1173,12 @@ function shellQuote(value: string) {
         <div class="transfer-progress" :class="{ indeterminate: !hasDeterminateProgress(activeTransferTask) }">
           <span :style="hasDeterminateProgress(activeTransferTask) ? { width: transferProgressWidth(activeTransferTask) } : undefined" />
         </div>
+        <div class="transfer-task-stats">
+          <span><strong>已传</strong>{{ transferAmountLabel(activeTransferTask) }}</span>
+          <span><strong>速度</strong>{{ transferSpeedLabel(activeTransferTask) }}</span>
+          <span><strong>剩余</strong>{{ transferRemainingLabel(activeTransferTask) }}</span>
+          <span><strong>完成</strong>{{ transferCompletionLabel(activeTransferTask) }}</span>
+        </div>
         <div class="transfer-task-paths">
           <span>{{ activeTransferTask.sourcePath }}</span>
           <span>{{ activeTransferTask.targetPath }}</span>
@@ -1128,6 +1191,12 @@ function shellQuote(value: string) {
         </div>
         <div class="transfer-progress complete">
           <span />
+        </div>
+        <div class="transfer-task-stats">
+          <span><strong>已传</strong>{{ transferAmountLabel(lastTransfer) }}</span>
+          <span><strong>平均</strong>{{ transferSpeedLabel(lastTransfer) }}</span>
+          <span><strong>耗时</strong>{{ transferElapsedLabel(lastTransfer) }}</span>
+          <span><strong>完成</strong>{{ transferCompletionLabel(lastTransfer) }}</span>
         </div>
         <div class="transfer-task-paths">
           <span>{{ lastTransfer.sourcePath }}</span>

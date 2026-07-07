@@ -60,4 +60,11 @@ pub struct SftpTransferEvent {
     pub task_id: String,
     pub percent: Option<u8>,
     pub text: String,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub remaining_seconds: Option<u64>,
+    pub eta_seconds: Option<u64>,
+    pub estimated_completion_epoch_ms: Option<u64>,
+    pub elapsed_seconds: Option<u64>,
 }

@@ -806,6 +806,13 @@ where
                     task_id: task_id.clone(),
                     percent: update.percent,
                     text: update.text,
+                    transferred_bytes: update.transferred_bytes,
+                    total_bytes: update.total_bytes,
+                    bytes_per_second: update.bytes_per_second,
+                    remaining_seconds: update.remaining_seconds,
+                    eta_seconds: update.eta_seconds,
+                    estimated_completion_epoch_ms: update.estimated_completion_epoch_ms,
+                    elapsed_seconds: update.elapsed_seconds,
                 },
             );
         };

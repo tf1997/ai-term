@@ -858,7 +858,9 @@ assert(
     fileTransfer.includes('currentTerminalTarget') &&
     fileTransfer.includes('useTerminalTargetForSftp') &&
     fileTransfer.includes('openCurrentTerminalSftp') &&
-    fileTransfer.includes('hasRemoteShellSnapshot') &&
+    fileTransfer.includes('useConfiguredTargetForSftp') &&
+    fileTransfer.includes('未识别到当前终端目标，已使用连接配置目标打开 SFTP。') &&
+    !fileTransfer.includes('hasRemoteShellSnapshot') &&
     fileTransfer.includes('useForSftp') &&
     fileTransfer.includes('writeTerminalInput') &&
     fileTransfer.includes('remoteReady') &&
@@ -890,6 +892,11 @@ assert(
   fileTransfer.includes('lastTransfer') &&
     fileTransfer.includes('transfer-target-strip') &&
     fileTransfer.includes('transfer-progress') &&
+    fileTransfer.includes('transfer-task-stats') &&
+    fileTransfer.includes('transferAmountLabel') &&
+    fileTransfer.includes('transferSpeedLabel') &&
+    fileTransfer.includes('transferRemainingLabel') &&
+    fileTransfer.includes('transferCompletionLabel') &&
     fileTransfer.includes('openLastTransferLocation') &&
     fileTransfer.includes('copyLastTransferPath') &&
     fileTransfer.includes('joinLocalPath') &&
@@ -897,17 +904,25 @@ assert(
     tauri.includes('localPath?: string') &&
     tauri.includes('remotePath?: string') &&
     tauri.includes('targetPath?: string') &&
+    tauri.includes('transferredBytes?: number') &&
+    tauri.includes('bytesPerSecond?: number') &&
+    tauri.includes('estimatedCompletionEpochMs?: number') &&
     tauri.includes('onSftpTransferProgress') &&
     styles.includes('.transfer-target-strip') &&
     styles.includes('.transfer-progress') &&
+    styles.includes('.transfer-task-stats') &&
     styles.includes('@keyframes transfer-progress-slide') &&
     sftpBackend.includes('SftpProgressUpdate') &&
+    sftpBackend.includes('transferred_bytes: Option<u64>') &&
+    sftpBackend.includes('bytes_per_second: Option<u64>') &&
+    sftpBackend.includes('format_duration_compact') &&
     sftpBackend.includes('extract_sftp_progress_percent') &&
     sftpBackend.includes('download_target_path') &&
     commands.includes('SftpTransferEvent') &&
+    commands.includes('estimated_completion_epoch_ms') &&
     commands.includes('upload_path_with_progress') &&
     commands.includes('download_path_with_progress'),
-  'SFTP file and folder transfers must show clear local/remote targets, progress, final paths, and actions to locate or copy completed downloads/uploads.'
+  'SFTP file and folder transfers must show clear local/remote targets, structured speed/size/ETA progress, final paths, and actions to locate or copy completed downloads/uploads.'
 )
 assert(
   appShell.includes('draftWorkspaceSessionIds') &&
@@ -1377,7 +1392,12 @@ assert(
   appShell.includes('selectedTerminalIds') &&
     appShell.includes('targetTerminalIds') &&
     appShell.includes('multiTerminalInputEnabled') &&
+    appShell.includes('activeTerminalTitle') &&
     appShell.includes('terminalTargetLabel') &&
+    appShell.includes('terminalTargetTitle') &&
+    appShell.includes('normalizedTerminalTargetIds') &&
+    appShell.includes('setTerminalTargets') &&
+    !appShell.includes('selectedTerminalIds.value = [id]') &&
     appShell.includes('toggleTerminalTarget') &&
     appShell.includes('selectAllTerminalTargets') &&
     appShell.includes('resetTerminalTargetsToActive') &&
@@ -1385,12 +1405,15 @@ assert(
     appShell.includes('writeInputToTargetTerminals') &&
     appShell.includes('terminal-target-toggle') &&
     appShell.includes('terminal-target-summary') &&
+    appShell.includes('仅同步当前终端') &&
     appShell.includes('{{ terminalTargetLabel }}') &&
+    appShell.includes(':title="terminalTargetTitle"') &&
     styles.includes('.terminal-target-toggle') &&
     styles.includes('.terminal-target-summary') &&
+    styles.includes('max-width: min(260px, 28vw);') &&
     aiPanel.includes('已发送到目标终端') &&
     scriptPanel.includes('已发送到目标终端'),
-  'Terminal tabs must support selecting multiple targets for synchronized input, AI command execution, and script execution.'
+  'Terminal tabs must keep the active terminal anchored while selecting multiple targets for synchronized input, AI command execution, and script execution.'
 )
 
 assert(

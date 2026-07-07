@@ -1,12 +1,14 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::models::{AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode};
 use crate::domain::filesystem::local::home_path;
@@ -15,8 +17,8 @@ use crate::domain::pty::{
     PtySession,
 };
 use crate::domain::terminal::ssh::{
-    app_known_hosts_ssh_args, host_key_warning_hint, output_contains_host_key_warning,
-    output_contains_password_prompt,
+    app_known_hosts_ssh_args, connect_routed_endpoint, host_key_warning_hint,
+    output_contains_host_key_warning, output_contains_password_prompt, RoutedSshSession,
 };
 use portable_pty::Child;
 
@@ -26,6 +28,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const SFTP_CHILD_EXIT_GRACE: Duration = Duration::from_millis(500);
 const SFTP_READY_GRACE: Duration = Duration::from_millis(1500);
 const SFTP_OUTPUT_QUIET_GRACE: Duration = Duration::from_millis(120);
+const SFTP_PTY_COLS: u16 = 240;
+const SFTP_PTY_ROWS: u16 = 32;
 
 pub type SftpCancelToken = Arc<AtomicBool>;
 
@@ -62,6 +66,13 @@ pub struct SftpTransferResponse {
 pub struct SftpProgressUpdate {
     pub percent: Option<u8>,
     pub text: String,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub bytes_per_second: Option<u64>,
+    pub remaining_seconds: Option<u64>,
+    pub eta_seconds: Option<u64>,
+    pub estimated_completion_epoch_ms: Option<u64>,
+    pub elapsed_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,7 +104,19 @@ pub fn build_sftp_launch_plan_with_target(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
 ) -> SftpLaunchPlan {
-    let route = effective_sftp_route(profile, target_override);
+    build_sftp_launch_plan_for_route(effective_sftp_route(profile, target_override))
+}
+
+fn build_sftp_fallback_launch_plan_with_target(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> Option<SftpLaunchPlan> {
+    Some(build_sftp_launch_plan_for_route(
+        composite_username_fallback_route(profile, target_override)?,
+    ))
+}
+
+fn build_sftp_launch_plan_for_route(route: SftpRoute) -> SftpLaunchPlan {
     let mut args = vec!["-o".into(), "BatchMode=no".into()];
     args.extend(app_known_hosts_ssh_args());
     args.extend(["-o".into(), "NumberOfPasswordPrompts=2".into()]);
@@ -129,6 +152,14 @@ pub fn list_directory_with_cancel(
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpListResponse> {
     let remote_path = normalize_remote_path(path);
+    let native_list_error =
+        match try_native_list_directory(profile, &remote_path, target_override, cancel_token) {
+            Some(Ok(response)) => return Ok(response),
+            Some(Err(error)) if !should_fallback_native_sftp_error(&error) => return Err(error),
+            Some(Err(error)) => Some(error),
+            None => None,
+        };
+
     let (output, parsed_path) = match run_sftp_commands(
         profile,
         target_override,
@@ -149,7 +180,29 @@ pub fn list_directory_with_cancel(
         Err(error) => return Err(error),
     };
 
-    parse_list_output(&output, &parsed_path)
+    let parsed = parse_list_output(&output, &parsed_path)?;
+    if !parsed.entries.is_empty() || is_cancelled(cancel_token) {
+        return Ok(parsed);
+    }
+
+    let fallback_output = run_sftp_commands(
+        profile,
+        target_override,
+        list_directory_without_cwd_commands(&parsed_path)?,
+        cancel_token,
+    )?;
+    let fallback = parse_list_output(&fallback_output, &parsed_path)?;
+    if fallback.entries.is_empty() {
+        if let Some(error) = native_list_error {
+            bail!(
+                "原生 SFTP 读取失败，系统 sftp 也没有返回文件项。\n{}",
+                clean_sftp_output(&error.to_string())
+            );
+        }
+        Ok(parsed)
+    } else {
+        Ok(fallback)
+    }
 }
 
 pub fn probe_sftp(
@@ -164,8 +217,9 @@ pub fn probe_sftp_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> SftpProbeResponse {
-    match run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    match run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         vec!["pwd".into(), "bye".into()],
         PROBE_TIMEOUT,
         cancel_token,
@@ -180,8 +234,9 @@ pub fn probe_sftp_with_cancel(
             }
         }
         Err(error) if should_retry_sftp_root_listing(&error) => {
-            match run_sftp_launch_plan(
-                build_sftp_launch_plan_with_target(profile, target_override),
+            match run_sftp_profile_commands_with_progress(
+                profile,
+                target_override,
                 list_directory_without_cwd_commands("/").unwrap_or_else(|_| vec!["bye".into()]),
                 PROBE_TIMEOUT,
                 cancel_token,
@@ -222,6 +277,14 @@ pub fn create_directory_with_cancel(
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpTransferResponse> {
     let remote_path = normalize_remote_path(path);
+    if let Some(response) = native_result_or_fallback(try_native_create_directory(
+        profile,
+        &remote_path,
+        target_override,
+        cancel_token,
+    ))? {
+        return Ok(response);
+    }
     run_sftp_commands(
         profile,
         target_override,
@@ -257,6 +320,15 @@ pub fn delete_path_with_cancel(
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpTransferResponse> {
     let remote_path = normalize_remote_path(path);
+    if let Some(response) = native_result_or_fallback(try_native_delete_path(
+        profile,
+        &remote_path,
+        is_dir,
+        target_override,
+        cancel_token,
+    ))? {
+        return Ok(response);
+    }
     let command = if is_dir { "rmdir" } else { "rm" };
     run_sftp_commands(
         profile,
@@ -308,7 +380,7 @@ pub fn upload_file_with_progress(
     remote_dir: &str,
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
-    progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
     let local_path = expand_tilde(local_path);
     if !Path::new(&local_path).is_file() {
@@ -316,8 +388,20 @@ pub fn upload_file_with_progress(
     }
     let remote_dir = normalize_remote_path(remote_dir);
     let remote_path = upload_target_path(&remote_dir, &local_path);
-    run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    if let Some(response) = native_result_or_fallback(try_native_upload_file(
+        profile,
+        &local_path,
+        &remote_dir,
+        &remote_path,
+        target_override,
+        cancel_token,
+        &mut progress,
+    ))? {
+        return Ok(response);
+    }
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         vec![
             format!("cd {}", quote_sftp_path(&remote_dir)?),
             format!("put {}", quote_sftp_path(&local_path)?),
@@ -368,7 +452,7 @@ pub fn upload_path_with_progress(
     remote_dir: &str,
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
-    progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
     let local_path = expand_tilde(local_path);
     let local = Path::new(&local_path);
@@ -379,13 +463,26 @@ pub fn upload_path_with_progress(
     let is_dir = local.is_dir();
     let remote_dir = normalize_remote_path(remote_dir);
     let remote_path = upload_target_path(&remote_dir, &local_path);
+    if let Some(response) = native_result_or_fallback(try_native_upload_path(
+        profile,
+        &local_path,
+        &remote_dir,
+        &remote_path,
+        is_dir,
+        target_override,
+        cancel_token,
+        &mut progress,
+    ))? {
+        return Ok(response);
+    }
     let put_command = if is_dir {
         format!("put -r {}", quote_sftp_path(&local_path)?)
     } else {
         format!("put {}", quote_sftp_path(&local_path)?)
     };
-    run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         vec![
             format!("cd {}", quote_sftp_path(&remote_dir)?),
             put_command,
@@ -437,12 +534,23 @@ pub fn download_file_with_progress(
     local_path: &str,
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
-    progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
     let remote_path = normalize_remote_path(remote_path);
     let local_path = expand_tilde(local_path);
-    run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    if let Some(response) = native_result_or_fallback(try_native_download_file(
+        profile,
+        &remote_path,
+        &local_path,
+        target_override,
+        cancel_token,
+        &mut progress,
+    ))? {
+        return Ok(response);
+    }
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         vec![
             format!(
                 "get {} {}",
@@ -507,25 +615,38 @@ pub fn download_path_with_progress(
     is_dir: bool,
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
-    progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
     let remote_path = normalize_remote_path(remote_path);
     let local_dir = expand_tilde(local_dir);
     let local = Path::new(&local_dir);
-    std::fs::create_dir_all(local)
+    fs::create_dir_all(local)
         .with_context(|| format!("failed to create local directory: {local_dir}"))?;
     if !local.is_dir() {
         bail!("local path is not a directory: {local_dir}");
     }
 
     let target_path = download_target_path(&local_dir, &remote_path);
+    if let Some(response) = native_result_or_fallback(try_native_download_path(
+        profile,
+        &remote_path,
+        &local_dir,
+        &target_path,
+        is_dir,
+        target_override,
+        cancel_token,
+        &mut progress,
+    ))? {
+        return Ok(response);
+    }
     let get_command = if is_dir {
         format!("get -r {}", quote_sftp_path(&remote_path)?)
     } else {
         format!("get {}", quote_sftp_path(&remote_path)?)
     };
-    run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         vec![
             format!("lcd {}", quote_sftp_path(&local_dir)?),
             get_command,
@@ -549,22 +670,930 @@ fn list_directory_commands(remote_path: &str) -> Result<Vec<String>> {
     Ok(vec![
         format!("cd {}", quote_sftp_path(remote_path)?),
         "pwd".into(),
-        "ls -la1".into(),
+        "ls -l".into(),
         "bye".into(),
     ])
 }
 
 fn list_directory_without_cwd_commands(remote_path: &str) -> Result<Vec<String>> {
     Ok(vec![
-        format!("ls -la1 {}", quote_sftp_path(remote_path)?),
+        format!("ls -l {}", quote_sftp_path(remote_path)?),
         "bye".into(),
     ])
 }
 
+fn try_native_list_directory(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Option<Result<SftpListResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| list_directory_native(connection, remote_path),
+    )
+}
+
+fn try_native_create_directory(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            connection
+                .sftp
+                .mkdir(Path::new(remote_path), 0o755)
+                .with_context(|| format!("failed to create native SFTP directory {remote_path}"))?;
+            Ok(transfer_response(
+                format!("created {remote_path}"),
+                None,
+                Some(remote_path.to_string()),
+                Some(remote_path.to_string()),
+                true,
+            ))
+        },
+    )
+}
+
+fn try_native_delete_path(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    is_dir: bool,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            let path = Path::new(remote_path);
+            if is_dir {
+                connection.sftp.rmdir(path).with_context(|| {
+                    format!("failed to remove native SFTP directory {remote_path}")
+                })?;
+            } else {
+                connection
+                    .sftp
+                    .unlink(path)
+                    .with_context(|| format!("failed to delete native SFTP file {remote_path}"))?;
+            }
+            Ok(transfer_response(
+                format!("deleted {remote_path}"),
+                None,
+                Some(remote_path.to_string()),
+                Some(remote_path.to_string()),
+                is_dir,
+            ))
+        },
+    )
+}
+
+fn try_native_upload_file(
+    profile: &ConnectionProfile,
+    local_path: &str,
+    remote_dir: &str,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            let total = fs::metadata(local_path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let mut transferred = 0;
+            let started = Instant::now();
+            let local = Path::new(local_path);
+            native_ensure_dir(&connection.sftp, remote_dir)?;
+            upload_file_native_to(
+                &connection.sftp,
+                local,
+                remote_path,
+                cancel_token,
+                progress,
+                total,
+                &mut transferred,
+                &started,
+            )?;
+            emit_native_transfer_done(progress, total, transferred, &started);
+            Ok(transfer_response(
+                format!("uploaded {local_path} to {remote_path}"),
+                Some(local_path.to_string()),
+                Some(remote_path.to_string()),
+                Some(remote_path.to_string()),
+                false,
+            ))
+        },
+    )
+}
+
+fn try_native_upload_path(
+    profile: &ConnectionProfile,
+    local_path: &str,
+    remote_dir: &str,
+    remote_path: &str,
+    is_dir: bool,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            native_ensure_dir(&connection.sftp, remote_dir)?;
+            let total = local_transfer_size(Path::new(local_path))?;
+            let mut transferred = 0;
+            let started = Instant::now();
+            upload_path_native_to(
+                &connection.sftp,
+                Path::new(local_path),
+                remote_path,
+                cancel_token,
+                progress,
+                total,
+                &mut transferred,
+                &started,
+            )?;
+            emit_native_transfer_done(progress, total, transferred, &started);
+            Ok(transfer_response(
+                format!("uploaded {local_path} to {remote_path}"),
+                Some(local_path.to_string()),
+                Some(remote_path.to_string()),
+                Some(remote_path.to_string()),
+                is_dir,
+            ))
+        },
+    )
+}
+
+fn try_native_download_file(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    local_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            let stat = connection
+                .sftp
+                .stat(Path::new(remote_path))
+                .with_context(|| format!("failed to stat native SFTP file {remote_path}"))?;
+            let total = stat.size.unwrap_or(0);
+            let mut transferred = 0;
+            let started = Instant::now();
+            download_file_native_to(
+                &connection.sftp,
+                remote_path,
+                Path::new(local_path),
+                cancel_token,
+                progress,
+                total,
+                &mut transferred,
+                &started,
+            )?;
+            emit_native_transfer_done(progress, total, transferred, &started);
+            Ok(transfer_response(
+                format!("downloaded {remote_path} to {local_path}"),
+                Some(local_path.to_string()),
+                Some(remote_path.to_string()),
+                Some(local_path.to_string()),
+                false,
+            ))
+        },
+    )
+}
+
+fn try_native_download_path(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    local_dir: &str,
+    target_path: &str,
+    is_dir: bool,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+) -> Option<Result<SftpTransferResponse>> {
+    run_native_sftp_routes(
+        profile,
+        target_override,
+        cancel_token,
+        |connection, _route| {
+            let total = remote_transfer_size(&connection.sftp, remote_path, is_dir)?;
+            let mut transferred = 0;
+            let started = Instant::now();
+            if is_dir {
+                download_dir_native_to(
+                    &connection.sftp,
+                    remote_path,
+                    Path::new(target_path),
+                    cancel_token,
+                    progress,
+                    total,
+                    &mut transferred,
+                    &started,
+                )?;
+            } else {
+                fs::create_dir_all(local_dir)
+                    .with_context(|| format!("failed to create local directory: {local_dir}"))?;
+                download_file_native_to(
+                    &connection.sftp,
+                    remote_path,
+                    Path::new(target_path),
+                    cancel_token,
+                    progress,
+                    total,
+                    &mut transferred,
+                    &started,
+                )?;
+            }
+            emit_native_transfer_done(progress, total, transferred, &started);
+            Ok(transfer_response(
+                format!("downloaded {remote_path} to {target_path}"),
+                Some(target_path.to_string()),
+                Some(remote_path.to_string()),
+                Some(target_path.to_string()),
+                is_dir,
+            ))
+        },
+    )
+}
+
+fn native_result_or_fallback<T>(result: Option<Result<T>>) -> Result<Option<T>> {
+    match result {
+        Some(Ok(value)) => Ok(Some(value)),
+        Some(Err(error)) if !should_fallback_native_sftp_error(&error) => Err(error),
+        Some(Err(_)) | None => Ok(None),
+    }
+}
+
+fn should_fallback_native_sftp_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    !message.contains("host key")
+        && !message.contains("known_hosts")
+        && !message.contains("authentication")
+        && !message.contains("permission denied")
+        && !message.contains("no such file")
+        && !message.contains("not a directory")
+        && !message.contains("sftp task cancelled")
+}
+
+fn should_try_next_native_sftp_route(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    !message.contains("host key")
+        && !message.contains("known_hosts")
+        && !message.contains("permission denied")
+        && !message.contains("no such file")
+        && !message.contains("not a directory")
+        && !message.contains("sftp task cancelled")
+}
+
+struct NativeSftpConnection {
+    sftp: ssh2::Sftp,
+    _ssh: RoutedSshSession,
+}
+
+fn run_native_sftp_routes<T>(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+    mut action: impl FnMut(&NativeSftpConnection, &SftpRoute) -> Result<T>,
+) -> Option<Result<T>> {
+    let routes = native_sftp_routes(profile, target_override);
+    if routes.is_empty() {
+        return None;
+    }
+
+    let mut errors = Vec::new();
+    for route in routes {
+        if let Err(error) = ensure_not_cancelled(cancel_token) {
+            return Some(Err(error));
+        }
+        let result =
+            connect_native_sftp_route(&route).and_then(|connection| action(&connection, &route));
+        match result {
+            Ok(value) => return Some(Ok(value)),
+            Err(error) => {
+                if !should_try_next_native_sftp_route(&error) {
+                    return Some(Err(error));
+                }
+                errors.push(format!(
+                    "{}: {}",
+                    route_label(&route),
+                    clean_sftp_output(&error.to_string())
+                ));
+            }
+        }
+    }
+
+    Some(Err(anyhow::anyhow!(
+        "原生 SFTP 路线全部失败\n{}",
+        errors.join("\n\n")
+    )))
+}
+
+fn native_sftp_routes(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> Vec<SftpRoute> {
+    if !matches!(
+        profile.file_transfer_mode,
+        FileTransferMode::Auto | FileTransferMode::SftpDirect | FileTransferMode::SftpGateway
+    ) {
+        return Vec::new();
+    }
+
+    let mut routes = vec![effective_sftp_route(profile, target_override)];
+    if let Some(fallback) = composite_username_fallback_route(profile, target_override) {
+        if !routes.contains(&fallback) {
+            routes.push(fallback);
+        }
+    }
+    routes
+}
+
+fn connect_native_sftp_route(route: &SftpRoute) -> Result<NativeSftpConnection> {
+    let ssh = connect_routed_endpoint(&route.target, route.proxy.as_ref())
+        .with_context(|| format!("failed to connect native SFTP route {}", route_label(route)))?;
+    let sftp = ssh
+        .session()
+        .sftp()
+        .context("failed to open native SFTP subsystem")?;
+    Ok(NativeSftpConnection { sftp, _ssh: ssh })
+}
+
+fn route_label(route: &SftpRoute) -> String {
+    match route.proxy.as_ref() {
+        Some(proxy) => format!(
+            "{} via {}",
+            endpoint_destination(&route.target),
+            proxy_jump_destination(proxy)
+        ),
+        None => endpoint_destination(&route.target),
+    }
+}
+
+fn list_directory_native(
+    connection: &NativeSftpConnection,
+    remote_path: &str,
+) -> Result<SftpListResponse> {
+    let requested = normalize_remote_path(remote_path);
+    let request_path = Path::new(&requested);
+    let path = connection
+        .sftp
+        .realpath(request_path)
+        .ok()
+        .map(|path| remote_path_to_string(&path))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| requested.clone());
+
+    let mut entries = Vec::new();
+    for (entry_path, stat) in connection
+        .sftp
+        .readdir(request_path)
+        .with_context(|| format!("failed to read native SFTP directory {requested}"))?
+    {
+        let name = native_entry_name(&entry_path);
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        entries.push(SftpFileEntry {
+            path: native_entry_path(&path, &entry_path, &name),
+            is_dir: native_file_is_dir(&stat),
+            name,
+            size: stat.size.unwrap_or(0),
+            permissions: native_permissions(&stat),
+            modified: stat
+                .mtime
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        });
+    }
+
+    Ok(SftpListResponse { path, entries })
+}
+
+fn remote_path_to_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn native_entry_name(path: &Path) -> String {
+    let value = remote_path_to_string(path);
+    value
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+fn native_entry_path(base: &str, entry_path: &Path, name: &str) -> String {
+    let value = remote_path_to_string(entry_path);
+    if value.starts_with('/') || value.as_bytes().get(1) == Some(&b':') {
+        value
+    } else {
+        join_remote_path(base, name)
+    }
+}
+
+fn native_file_is_dir(stat: &ssh2::FileStat) -> bool {
+    stat.perm.is_some_and(|mode| (mode & 0o170000) == 0o040000)
+}
+
+fn native_permissions(stat: &ssh2::FileStat) -> String {
+    stat.perm.map(format_unix_mode).unwrap_or_default()
+}
+
+fn format_unix_mode(mode: u32) -> String {
+    let mut value = String::with_capacity(10);
+    value.push(match mode & 0o170000 {
+        0o040000 => 'd',
+        0o120000 => 'l',
+        _ => '-',
+    });
+    for (read, write, exec) in [
+        (0o400, 0o200, 0o100),
+        (0o040, 0o020, 0o010),
+        (0o004, 0o002, 0o001),
+    ] {
+        value.push(if mode & read != 0 { 'r' } else { '-' });
+        value.push(if mode & write != 0 { 'w' } else { '-' });
+        value.push(if mode & exec != 0 { 'x' } else { '-' });
+    }
+    value
+}
+fn upload_path_native_to(
+    sftp: &ssh2::Sftp,
+    local_path: &Path,
+    remote_path: &str,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: &mut u64,
+    started: &Instant,
+) -> Result<()> {
+    ensure_not_cancelled(cancel_token)?;
+    if local_path.is_dir() {
+        native_ensure_dir(sftp, remote_path)?;
+        for entry in fs::read_dir(local_path)
+            .with_context(|| format!("failed to read local directory {}", local_path.display()))?
+        {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child_remote = join_remote_path(remote_path, &name);
+            upload_path_native_to(
+                sftp,
+                &entry.path(),
+                &child_remote,
+                cancel_token,
+                progress,
+                total,
+                transferred,
+                started,
+            )?;
+        }
+        return Ok(());
+    }
+
+    upload_file_native_to(
+        sftp,
+        local_path,
+        remote_path,
+        cancel_token,
+        progress,
+        total,
+        transferred,
+        started,
+    )
+}
+
+fn upload_file_native_to(
+    sftp: &ssh2::Sftp,
+    local_path: &Path,
+    remote_path: &str,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: &mut u64,
+    started: &Instant,
+) -> Result<()> {
+    ensure_not_cancelled(cancel_token)?;
+    let mut local = File::open(local_path)
+        .with_context(|| format!("failed to open local file {}", local_path.display()))?;
+    let mut remote = sftp
+        .open_mode(
+            Path::new(remote_path),
+            ssh2::OpenFlags::WRITE | ssh2::OpenFlags::CREATE | ssh2::OpenFlags::TRUNCATE,
+            0o644,
+            ssh2::OpenType::File,
+        )
+        .with_context(|| format!("failed to open native SFTP file for write {remote_path}"))?;
+    copy_with_native_progress(
+        &mut local,
+        &mut remote,
+        cancel_token,
+        progress,
+        total,
+        transferred,
+        started,
+    )
+}
+
+fn download_dir_native_to(
+    sftp: &ssh2::Sftp,
+    remote_path: &str,
+    local_path: &Path,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: &mut u64,
+    started: &Instant,
+) -> Result<()> {
+    ensure_not_cancelled(cancel_token)?;
+    fs::create_dir_all(local_path)
+        .with_context(|| format!("failed to create local directory {}", local_path.display()))?;
+    for (entry_path, stat) in sftp
+        .readdir(Path::new(remote_path))
+        .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?
+    {
+        let name = native_entry_name(&entry_path);
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let child_remote = native_entry_path(remote_path, &entry_path, &name);
+        let child_local = local_path.join(&name);
+        if native_file_is_dir(&stat) {
+            download_dir_native_to(
+                sftp,
+                &child_remote,
+                &child_local,
+                cancel_token,
+                progress,
+                total,
+                transferred,
+                started,
+            )?;
+        } else {
+            download_file_native_to(
+                sftp,
+                &child_remote,
+                &child_local,
+                cancel_token,
+                progress,
+                total,
+                transferred,
+                started,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn download_file_native_to(
+    sftp: &ssh2::Sftp,
+    remote_path: &str,
+    local_path: &Path,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: &mut u64,
+    started: &Instant,
+) -> Result<()> {
+    ensure_not_cancelled(cancel_token)?;
+    if let Some(parent) = local_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create local directory {}", parent.display()))?;
+    }
+    let mut remote = sftp
+        .open(Path::new(remote_path))
+        .with_context(|| format!("failed to open native SFTP file for read {remote_path}"))?;
+    let mut local = File::create(local_path)
+        .with_context(|| format!("failed to create local file {}", local_path.display()))?;
+    copy_with_native_progress(
+        &mut remote,
+        &mut local,
+        cancel_token,
+        progress,
+        total,
+        transferred,
+        started,
+    )
+}
+
+fn copy_with_native_progress<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: &mut u64,
+    started: &Instant,
+) -> Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        ensure_not_cancelled(cancel_token)?;
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..count])?;
+        *transferred = transferred.saturating_add(count as u64);
+        emit_native_transfer_progress(progress, total, *transferred, started);
+    }
+    writer.flush()?;
+    Ok(())
+}
+
+fn native_ensure_dir(sftp: &ssh2::Sftp, remote_path: &str) -> Result<()> {
+    match sftp.mkdir(Path::new(remote_path), 0o755) {
+        Ok(()) => Ok(()),
+        Err(error) if native_path_is_dir(sftp, remote_path) => {
+            let _ = error;
+            Ok(())
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to create native SFTP directory {remote_path}")),
+    }
+}
+
+fn native_path_is_dir(sftp: &ssh2::Sftp, remote_path: &str) -> bool {
+    sftp.stat(Path::new(remote_path))
+        .ok()
+        .is_some_and(|stat| native_file_is_dir(&stat))
+}
+
+fn local_transfer_size(path: &Path) -> Result<u64> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to stat local path {}", path.display()))?;
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+    let mut total = 0u64;
+    for entry in fs::read_dir(path)
+        .with_context(|| format!("failed to read local directory {}", path.display()))?
+    {
+        total = total.saturating_add(local_transfer_size(&entry?.path())?);
+    }
+    Ok(total)
+}
+
+fn remote_transfer_size(sftp: &ssh2::Sftp, remote_path: &str, is_dir: bool) -> Result<u64> {
+    if !is_dir {
+        return Ok(sftp
+            .stat(Path::new(remote_path))
+            .ok()
+            .and_then(|stat| stat.size)
+            .unwrap_or(0));
+    }
+
+    let mut total = 0u64;
+    for (entry_path, stat) in sftp
+        .readdir(Path::new(remote_path))
+        .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?
+    {
+        let name = native_entry_name(&entry_path);
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        if native_file_is_dir(&stat) {
+            total = total.saturating_add(remote_transfer_size(
+                sftp,
+                &native_entry_path(remote_path, &entry_path, &name),
+                true,
+            )?);
+        } else {
+            total = total.saturating_add(stat.size.unwrap_or(0));
+        }
+    }
+    Ok(total)
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SystemSftpProgressDetails {
+    transferred_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+    bytes_per_second: Option<u64>,
+    remaining_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransferProgressStats {
+    bytes_per_second: Option<u64>,
+    remaining_seconds: Option<u64>,
+    estimated_completion_epoch_ms: Option<u64>,
+    elapsed_seconds: u64,
+}
+
+fn emit_native_transfer_progress(
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: u64,
+    started: &Instant,
+) {
+    let Some(callback) = progress.as_deref_mut() else {
+        return;
+    };
+    let percent = if total == 0 {
+        100
+    } else {
+        ((transferred.saturating_mul(100) / total).min(100)) as u8
+    };
+    let stats = transfer_progress_stats(total, transferred, started);
+    callback(SftpProgressUpdate {
+        percent: Some(percent),
+        text: format_transfer_progress_text(transferred, total, &stats),
+        transferred_bytes: Some(transferred),
+        total_bytes: Some(total),
+        bytes_per_second: stats.bytes_per_second,
+        remaining_seconds: stats.remaining_seconds,
+        eta_seconds: stats.remaining_seconds,
+        estimated_completion_epoch_ms: stats.estimated_completion_epoch_ms,
+        elapsed_seconds: Some(stats.elapsed_seconds),
+    });
+}
+
+fn emit_native_transfer_done(
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    total: u64,
+    transferred: u64,
+    started: &Instant,
+) {
+    let Some(callback) = progress.as_deref_mut() else {
+        return;
+    };
+    let display_total = if total == 0 && transferred > 0 {
+        transferred
+    } else {
+        total
+    };
+    let display_transferred = if display_total > 0 {
+        display_total
+    } else {
+        transferred
+    };
+    let stats = transfer_progress_stats(display_total, display_transferred, started);
+    callback(SftpProgressUpdate {
+        percent: Some(100),
+        text: format!(
+            "传输完成 · {}",
+            format_transfer_progress_text(display_transferred, display_total, &stats)
+        ),
+        transferred_bytes: Some(display_transferred),
+        total_bytes: Some(display_total),
+        bytes_per_second: stats.bytes_per_second,
+        remaining_seconds: Some(0),
+        eta_seconds: Some(0),
+        estimated_completion_epoch_ms: unix_timestamp_ms(),
+        elapsed_seconds: Some(stats.elapsed_seconds),
+    });
+}
+
+fn plain_progress_update(percent: Option<u8>, text: impl Into<String>) -> SftpProgressUpdate {
+    SftpProgressUpdate {
+        percent,
+        text: text.into(),
+        transferred_bytes: None,
+        total_bytes: None,
+        bytes_per_second: None,
+        remaining_seconds: None,
+        eta_seconds: None,
+        estimated_completion_epoch_ms: None,
+        elapsed_seconds: None,
+    }
+}
+
+fn transfer_progress_stats(
+    total: u64,
+    transferred: u64,
+    started: &Instant,
+) -> TransferProgressStats {
+    let elapsed = started.elapsed();
+    let elapsed_seconds = elapsed.as_secs();
+    let elapsed_fractional = elapsed.as_secs_f64();
+    let bytes_per_second = if transferred > 0 && elapsed_fractional > 0.0 {
+        Some(((transferred as f64 / elapsed_fractional).round() as u64).max(1))
+    } else {
+        None
+    };
+    let remaining_seconds = if total <= transferred {
+        Some(0)
+    } else {
+        bytes_per_second.map(|speed| div_ceil_u64(total.saturating_sub(transferred), speed.max(1)))
+    };
+    let estimated_completion_epoch_ms = remaining_seconds.and_then(|seconds| {
+        unix_timestamp_ms().map(|now| now.saturating_add(seconds.saturating_mul(1000)))
+    });
+
+    TransferProgressStats {
+        bytes_per_second,
+        remaining_seconds,
+        estimated_completion_epoch_ms,
+        elapsed_seconds,
+    }
+}
+
+fn format_transfer_progress_text(
+    transferred: u64,
+    total: u64,
+    stats: &TransferProgressStats,
+) -> String {
+    let mut parts = vec![format!(
+        "已传输 {} / {}",
+        format_bytes(transferred),
+        format_bytes(total)
+    )];
+    if let Some(speed) = stats.bytes_per_second {
+        parts.push(format!("{}/s", format_bytes(speed)));
+    }
+    if let Some(seconds) = stats.remaining_seconds {
+        parts.push(format!("剩余 {}", format_duration_compact(seconds)));
+    }
+    parts.join(" · ")
+}
+
+fn format_duration_compact(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!("{}小时{:02}分", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}分{:02}秒", seconds / 60, seconds % 60)
+    } else {
+        format!("{}秒", seconds)
+    }
+}
+
+fn div_ceil_u64(value: u64, divisor: u64) -> u64 {
+    if divisor == 0 {
+        return 0;
+    }
+    value.saturating_add(divisor - 1) / divisor
+}
+
+fn unix_timestamp_ms() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn ensure_not_cancelled(cancel_token: Option<&SftpCancelToken>) -> Result<()> {
+    if is_cancelled(cancel_token) {
+        bail!("SFTP task cancelled");
+    }
+    Ok(())
+}
 fn should_retry_sftp_root_listing(error: &anyhow::Error) -> bool {
     let message = error.to_string().to_ascii_lowercase();
     message.contains("need cwd") || message.contains("couldn't canonicalize")
 }
+
+fn should_try_composite_username_fallback(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    !message.contains("sftp task cancelled")
+        && !message.contains("remote host identification has changed")
+        && !message.contains("possible dns spoofing detected")
+        && !message.contains("host key verification failed")
+        && !(message.contains("offending") && message.contains("known_hosts"))
+}
+
 fn run_sftp_commands(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
@@ -581,8 +1610,9 @@ fn run_sftp_commands_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<String> {
-    run_sftp_launch_plan(
-        build_sftp_launch_plan_with_target(profile, target_override),
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
         commands,
         COMMAND_TIMEOUT,
         cancel_token,
@@ -590,26 +1620,83 @@ fn run_sftp_commands_with_progress(
     )
 }
 
-fn run_sftp_launch_plan(
-    plan: SftpLaunchPlan,
+fn run_sftp_profile_commands_with_progress(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
     commands: Vec<String>,
     timeout: Duration,
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<String> {
+    let primary_result = run_sftp_launch_plan_with_progress_ref(
+        build_sftp_launch_plan_with_target(profile, target_override),
+        commands.clone(),
+        timeout,
+        cancel_token,
+        &mut progress,
+    );
+
+    match primary_result {
+        Ok(output) => Ok(output),
+        Err(primary_error) => {
+            if !should_try_composite_username_fallback(&primary_error) {
+                return Err(primary_error);
+            }
+
+            let Some(fallback_plan) =
+                build_sftp_fallback_launch_plan_with_target(profile, target_override)
+            else {
+                return Err(primary_error);
+            };
+
+            if let Some(callback) = progress.as_deref_mut() {
+                callback(plain_progress_update(
+                    None,
+                    "ProxyJump 不可用，正在尝试复合用户名 SFTP...",
+                ));
+            }
+
+            run_sftp_launch_plan_with_progress_ref(
+                fallback_plan,
+                commands,
+                timeout,
+                cancel_token,
+                &mut progress,
+            )
+            .map_err(|fallback_error| {
+                anyhow::anyhow!(
+                    "SFTP ProxyJump 路线失败\n{}\n\nSFTP 复合用户名路线失败\n{}",
+                    clean_sftp_output(&primary_error.to_string()),
+                    clean_sftp_output(&fallback_error.to_string())
+                )
+            })
+        }
+    }
+}
+
+fn run_sftp_launch_plan_with_progress_ref(
+    plan: SftpLaunchPlan,
+    commands: Vec<String>,
+    timeout: Duration,
+    cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+) -> Result<String> {
     if is_cancelled(cancel_token) {
         bail!("SFTP task cancelled");
     }
 
-    let mut process = spawn_pty_process(PtyCommand::new(plan.program, plan.args), 80, 24)?;
+    let mut process = spawn_pty_process(
+        PtyCommand::new(plan.program, plan.args),
+        SFTP_PTY_COLS,
+        SFTP_PTY_ROWS,
+    )?;
     let writer = process.writer.clone();
     let output_rx = spawn_reader_channel(process.reader);
     let line_ending = sftp_line_ending();
-    let commands_payload = format!("{}{}", commands.join(line_ending), line_ending);
+    let mut command_index = 0usize;
     let mut output = Vec::new();
     let mut prompt_window = String::new();
     let mut password_index = 0;
-    let mut commands_sent = false;
     let mut host_key_confirmed = false;
     let started = Instant::now();
     let mut last_output_at = started;
@@ -627,7 +1714,7 @@ fn run_sftp_launch_plan(
                     &mut output,
                     &mut prompt_window,
                     &mut last_output_at,
-                    &mut progress,
+                    progress,
                 );
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -640,7 +1727,7 @@ fn run_sftp_launch_plan(
                 &mut output,
                 &mut prompt_window,
                 &mut last_output_at,
-                &mut progress,
+                progress,
             );
         }
 
@@ -682,21 +1769,36 @@ fn run_sftp_launch_plan(
             continue;
         }
 
-        if !commands_sent
-            && should_send_sftp_commands(
-                &normalized_prompt,
-                started.elapsed(),
-                last_output_at.elapsed(),
-                password_index,
-                plan.passwords.len(),
-            )
-        {
-            write_to_pty(&writer, commands_payload.as_bytes())?;
-            commands_sent = true;
-            prompt_window.clear();
+        if command_index < commands.len() {
+            let ready_for_next_command = if command_index == 0 {
+                should_send_sftp_commands(
+                    &normalized_prompt,
+                    started.elapsed(),
+                    last_output_at.elapsed(),
+                    password_index,
+                    plan.passwords.len(),
+                )
+            } else {
+                should_send_next_sftp_command(&normalized_prompt)
+            };
+
+            if ready_for_next_command {
+                let command_payload = format!("{}{}", commands[command_index], line_ending);
+                write_to_pty(&writer, command_payload.as_bytes())?;
+                command_index += 1;
+                prompt_window.clear();
+            }
         }
 
         if let Some(status) = process.child.try_wait()? {
+            drain_sftp_output(
+                &output_rx,
+                &mut output,
+                &mut prompt_window,
+                &mut last_output_at,
+                progress,
+                SFTP_CHILD_EXIT_GRACE,
+            );
             let text = String::from_utf8_lossy(&output).into_owned();
             if !status.success() {
                 bail!("SFTP command failed\n{}", clean_sftp_output(&text));
@@ -724,6 +1826,36 @@ fn collect_sftp_chunk(
     emit_sftp_progress(chunk, progress);
 }
 
+fn drain_sftp_output(
+    output_rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    output: &mut Vec<u8>,
+    prompt_window: &mut String,
+    last_output_at: &mut Instant,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    max_wait: Duration,
+) {
+    let started = Instant::now();
+    while started.elapsed() < max_wait {
+        match output_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(chunk) => {
+                collect_sftp_chunk(&chunk, output, prompt_window, last_output_at, progress)
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                if started.elapsed() >= Duration::from_millis(80)
+                    && last_output_at.elapsed() >= SFTP_OUTPUT_QUIET_GRACE
+                {
+                    break;
+                }
+            }
+        }
+
+        while let Ok(chunk) = output_rx.try_recv() {
+            collect_sftp_chunk(&chunk, output, prompt_window, last_output_at, progress);
+        }
+    }
+}
+
 fn emit_sftp_progress(chunk: &[u8], progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>) {
     let Some(callback) = progress.as_deref_mut() else {
         return;
@@ -732,10 +1864,111 @@ fn emit_sftp_progress(chunk: &[u8], progress: &mut Option<&mut dyn FnMut(SftpPro
     let Some(percent) = extract_sftp_progress_percent(&text) else {
         return;
     };
-    callback(SftpProgressUpdate {
-        percent: Some(percent),
-        text: last_sftp_progress_line(&text),
+    let line = last_sftp_progress_line(&text);
+    callback(system_sftp_progress_update(percent, line));
+}
+
+fn system_sftp_progress_update(percent: u8, text: String) -> SftpProgressUpdate {
+    let details = parse_system_sftp_progress_details(&text, percent);
+    let estimated_completion_epoch_ms = details.remaining_seconds.and_then(|seconds| {
+        unix_timestamp_ms().map(|now| now.saturating_add(seconds.saturating_mul(1000)))
     });
+    SftpProgressUpdate {
+        percent: Some(percent),
+        text,
+        transferred_bytes: details.transferred_bytes,
+        total_bytes: details.total_bytes,
+        bytes_per_second: details.bytes_per_second,
+        remaining_seconds: details.remaining_seconds,
+        eta_seconds: details.remaining_seconds,
+        estimated_completion_epoch_ms,
+        elapsed_seconds: None,
+    }
+}
+
+fn parse_system_sftp_progress_details(text: &str, percent: u8) -> SystemSftpProgressDetails {
+    let Some((_, suffix)) = text.split_once(&format!("{percent}%")) else {
+        return SystemSftpProgressDetails::default();
+    };
+    let tokens: Vec<&str> = suffix.split_whitespace().collect();
+    let transferred_bytes = tokens
+        .first()
+        .and_then(|token| parse_transfer_size_token(token));
+    let bytes_per_second = tokens
+        .iter()
+        .find(|token| token.to_ascii_lowercase().contains("/s"))
+        .and_then(|token| parse_transfer_speed_token(token));
+    let remaining_seconds = tokens
+        .iter()
+        .rev()
+        .find_map(|token| parse_transfer_duration_token(token));
+    let total_bytes = transferred_bytes.and_then(|bytes| {
+        if percent == 0 {
+            None
+        } else {
+            bytes
+                .checked_mul(100)
+                .map(|value| div_ceil_u64(value, u64::from(percent)))
+        }
+    });
+
+    SystemSftpProgressDetails {
+        transferred_bytes,
+        total_bytes,
+        bytes_per_second,
+        remaining_seconds,
+    }
+}
+
+fn parse_transfer_speed_token(token: &str) -> Option<u64> {
+    parse_transfer_size_token(&token.replace("/s", "").replace("/S", ""))
+}
+
+fn parse_transfer_size_token(token: &str) -> Option<u64> {
+    let normalized = token.trim().trim_matches(',');
+    if normalized.is_empty() {
+        return None;
+    }
+    let split_at = normalized
+        .find(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .unwrap_or(normalized.len());
+    let (number, unit) = normalized.split_at(split_at);
+    let value = number.parse::<f64>().ok()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    let unit = unit.to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "" | "b" => 1.0,
+        "k" | "kb" | "kib" => 1024.0,
+        "m" | "mb" | "mib" => 1024.0 * 1024.0,
+        "g" | "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
+        "t" | "tb" | "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * multiplier).round().max(0.0) as u64)
+}
+
+fn parse_transfer_duration_token(token: &str) -> Option<u64> {
+    let token = token.trim().trim_matches(',');
+    if token.is_empty() || !token.chars().all(|ch| ch.is_ascii_digit() || ch == ':') {
+        return None;
+    }
+    let parts: Vec<u64> = token
+        .split(':')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    match parts.as_slice() {
+        [minutes, seconds] => Some(minutes.saturating_mul(60).saturating_add(*seconds)),
+        [hours, minutes, seconds] => Some(
+            hours
+                .saturating_mul(3600)
+                .saturating_add(minutes.saturating_mul(60))
+                .saturating_add(*seconds),
+        ),
+        _ => None,
+    }
 }
 
 fn extract_sftp_progress_percent(text: &str) -> Option<u8> {
@@ -823,6 +2056,10 @@ fn should_send_sftp_commands(
     elapsed >= SFTP_READY_GRACE && password_index >= password_count
 }
 
+fn should_send_next_sftp_command(normalized_prompt: &str) -> bool {
+    normalized_prompt.contains("sftp>")
+}
+
 fn is_cancelled(cancel_token: Option<&SftpCancelToken>) -> bool {
     cancel_token
         .map(|token| token.load(Ordering::SeqCst))
@@ -877,6 +2114,55 @@ fn infer_direct_login_proxy(
     } else {
         Some(proxy)
     }
+}
+
+fn composite_username_fallback_route(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> Option<SftpRoute> {
+    if !matches!(
+        profile.file_transfer_mode,
+        FileTransferMode::Auto | FileTransferMode::SftpDirect
+    ) {
+        return None;
+    }
+    if !matches!(profile.jump_mode, JumpMode::Direct) {
+        return None;
+    }
+
+    let target_host = target_override
+        .host
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let target_username = target_override
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let mut bastion = non_empty_endpoint(&profile.target)?;
+    let bastion_username = bastion.username.trim().to_string();
+
+    if bastion_username.is_empty()
+        || is_composite_bastion_username(&bastion_username)
+        || target_host.eq_ignore_ascii_case(bastion.host.trim())
+    {
+        return None;
+    }
+
+    bastion.username = format!("{bastion_username}/{target_host}/{target_username}");
+    Some(SftpRoute {
+        target: bastion,
+        proxy: None,
+    })
+}
+
+fn is_composite_bastion_username(username: &str) -> bool {
+    username
+        .split('/')
+        .filter(|part| !part.trim().is_empty())
+        .count()
+        >= 3
 }
 
 fn target_override_has_host(target_override: &SftpTargetOverride) -> bool {
@@ -1010,6 +2296,7 @@ fn expand_tilde(path: &str) -> String {
 
 fn parse_list_output(output: &str, fallback_path: &str) -> Result<SftpListResponse> {
     let cleaned = clean_sftp_listing_output(output);
+    fail_on_sftp_listing_error(&cleaned)?;
     let path =
         parse_remote_working_directory(&cleaned).unwrap_or_else(|| fallback_path.to_string());
 
@@ -1020,6 +2307,29 @@ fn parse_list_output(output: &str, fallback_path: &str) -> Result<SftpListRespon
         .collect();
 
     Ok(SftpListResponse { path, entries })
+}
+
+fn fail_on_sftp_listing_error(output: &str) -> Result<()> {
+    if output.lines().any(is_sftp_listing_error_line) {
+        bail!("SFTP 读取目录失败\n{}", clean_sftp_output(output));
+    }
+    Ok(())
+}
+
+fn is_sftp_listing_error_line(line: &str) -> bool {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with("sftp>") {
+        return false;
+    }
+    let lower = line.to_ascii_lowercase();
+    lower.contains("permission denied")
+        || lower.contains("no such file")
+        || lower.contains("not a directory")
+        || lower.contains("couldn't canonicalize")
+        || lower.contains("need cwd")
+        || lower.contains("remote readdir")
+        || lower.contains("usage:")
+        || lower.contains("failure")
 }
 
 fn clean_sftp_listing_output(output: &str) -> String {
@@ -1045,9 +2355,45 @@ fn parse_remote_working_directory(output: &str) -> Option<String> {
 
 fn parse_ls_line(line: &str, current_path: &str) -> Option<SftpFileEntry> {
     let cleaned = strip_terminal_controls(line);
-    let trimmed = cleaned.trim();
-    let first = trimmed.chars().next()?;
+    let trimmed = trim_to_listing_record(cleaned.trim())?;
+    parse_unix_ls_line(trimmed, current_path)
+        .or_else(|| parse_windows_ls_line(trimmed, current_path))
+}
+
+fn trim_to_listing_record(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("sftp>") {
+        return Some(rest.trim_start());
+    }
+    for (index, _) in trimmed.char_indices() {
+        let candidate = &trimmed[index..];
+        if looks_like_unix_permissions(candidate) {
+            return Some(candidate);
+        }
+    }
+    Some(trimmed)
+}
+
+fn looks_like_unix_permissions(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !matches!(first, 'd' | '-' | 'l') {
+        return false;
+    }
+    chars
+        .take(9)
+        .filter(|ch| matches!(ch, 'r' | 'w' | 'x' | 's' | 'S' | 't' | 'T' | '-'))
+        .count()
+        == 9
+}
+
+fn parse_unix_ls_line(trimmed: &str, current_path: &str) -> Option<SftpFileEntry> {
+    if !looks_like_unix_permissions(trimmed) {
         return None;
     }
 
@@ -1073,6 +2419,54 @@ fn parse_ls_line(line: &str, current_path: &str) -> Option<SftpFileEntry> {
         permissions,
         modified,
     })
+}
+
+fn parse_windows_ls_line(trimmed: &str, current_path: &str) -> Option<SftpFileEntry> {
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() < 4 || !looks_like_windows_date(parts[0]) || !parts[1].contains(':') {
+        return None;
+    }
+
+    let has_meridiem = parts
+        .get(2)
+        .is_some_and(|part| part.eq_ignore_ascii_case("AM") || part.eq_ignore_ascii_case("PM"));
+    let marker_index = if has_meridiem { 3 } else { 2 };
+    let name_index = marker_index + 1;
+    let marker = *parts.get(marker_index)?;
+    let name = parts.get(name_index..)?.join(" ");
+    if name.is_empty() {
+        return None;
+    }
+
+    let is_dir = marker.eq_ignore_ascii_case("<DIR>");
+    let size = if is_dir {
+        0
+    } else {
+        marker.replace(',', "").parse::<u64>().unwrap_or(0)
+    };
+    let modified = if has_meridiem {
+        format!("{} {} {}", parts[0], parts[1], parts[2])
+    } else {
+        format!("{} {}", parts[0], parts[1])
+    };
+    let permissions = if is_dir { "<DIR>" } else { "-" }.to_string();
+
+    Some(SftpFileEntry {
+        path: join_remote_path(current_path, &name),
+        is_dir,
+        name,
+        size,
+        permissions,
+        modified,
+    })
+}
+
+fn looks_like_windows_date(value: &str) -> bool {
+    let parts: Vec<&str> = value.split(|ch| ch == '/' || ch == '-').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn transfer_response(
@@ -1229,7 +2623,7 @@ fn summarize_sftp_error(error: &str) -> String {
         "SFTP 不可用：没有收到 sftp 响应，请检查堡垒机是否允许 ProxyJump/端口转发或目标机是否开放 SFTP。".into()
     } else {
         format!(
-            "SFTP 不可用：{cleaned}\n可切换到终端通道传输小文件，或检查堡垒机是否允许 ProxyJump/端口转发。"
+            "SFTP 不可用：{cleaned}\n可切换到终端通道传输小文件，或检查堡垒机是否允许 ProxyJump/复合用户名 SFTP。"
         )
     }
 }
@@ -1309,6 +2703,77 @@ mod tests {
     }
 
     #[test]
+    fn terminal_target_override_fallback_uses_composite_bastion_username() {
+        let plan = build_sftp_fallback_launch_plan_with_target(
+            &direct_profile_targeting_bastion(),
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        )
+        .expect("terminal target override should support composite username fallback");
+
+        assert!(!plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1].starts_with("ProxyJump=")));
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-P" && pair[1] == "2222"));
+        assert_eq!(
+            plan.args.last().map(String::as_str),
+            Some("ops/10.1.2.3/app@bastion.example.com")
+        );
+        assert_eq!(plan.passwords, vec!["bastion-password"]);
+    }
+    #[test]
+    fn native_sftp_routes_try_proxy_jump_then_composite_username() {
+        let routes = native_sftp_routes(
+            &direct_profile_targeting_bastion(),
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].target.host, "10.1.2.3");
+        assert_eq!(routes[0].target.username, "app");
+        assert_eq!(
+            routes[0]
+                .proxy
+                .as_ref()
+                .map(endpoint_destination)
+                .as_deref(),
+            Some("ops@bastion.example.com")
+        );
+        assert_eq!(routes[1].target.host, "bastion.example.com");
+        assert_eq!(routes[1].target.username, "ops/10.1.2.3/app");
+        assert!(routes[1].proxy.is_none());
+    }
+
+    #[test]
+    fn native_sftp_routes_support_explicit_gateway() {
+        let mut profile = direct_profile_targeting_bastion();
+        profile.file_transfer_mode = FileTransferMode::SftpGateway;
+        profile.gateway = test_endpoint("gateway.example.com", "jump", Some(2200));
+        profile.target = test_endpoint("10.9.8.7", "deploy", Some(22));
+
+        let routes = native_sftp_routes(&profile, &SftpTargetOverride::default());
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].target.host, "10.9.8.7");
+        assert_eq!(
+            routes[0]
+                .proxy
+                .as_ref()
+                .map(proxy_jump_destination)
+                .as_deref(),
+            Some("jump@gateway.example.com:2200")
+        );
+    }
+    #[test]
     fn sftp_direct_target_override_uses_current_connection_as_proxy_jump() {
         let mut profile = direct_profile_targeting_bastion();
         profile.file_transfer_mode = FileTransferMode::SftpDirect;
@@ -1335,7 +2800,7 @@ mod tests {
         assert!(should_retry_sftp_root_listing(&error));
 
         let commands = list_directory_without_cwd_commands("/").unwrap();
-        assert_eq!(commands, vec!["ls -la1 \"/\"", "bye"]);
+        assert_eq!(commands, vec!["ls -l \"/\"", "bye"]);
         assert!(!commands.iter().any(|command| command.starts_with("cd ")));
     }
 
@@ -1345,6 +2810,36 @@ mod tests {
             "\u{1b}[?25h\u{1b}[?25lusage: ssh destination [command]\u{1b}[?25h\r\n",
         );
         assert_eq!(output, "usage: ssh destination [command]");
+    }
+
+    #[test]
+    fn native_sftp_helpers_keep_remote_paths_posix_like() {
+        assert_eq!(
+            native_entry_name(std::path::Path::new("/root/.bashrc")),
+            ".bashrc"
+        );
+        assert_eq!(
+            native_entry_path("/root", std::path::Path::new(".bashrc"), ".bashrc"),
+            "/root/.bashrc"
+        );
+        assert_eq!(
+            native_entry_path("/root", std::path::Path::new("/root/.ssh"), ".ssh"),
+            "/root/.ssh"
+        );
+        assert_eq!(format_unix_mode(0o040755), "drwxr-xr-x");
+        assert_eq!(format_unix_mode(0o100644), "-rw-r--r--");
+    }
+
+    #[test]
+    fn reports_sftp_listing_errors_instead_of_empty_directory() {
+        let error = parse_list_output(
+            "sftp> ls -l /root\nremote readdir(\"/root\"): Permission denied\n",
+            "/root",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("SFTP 读取目录失败"));
+        assert!(error.contains("Permission denied"));
     }
 
     #[test]
@@ -1371,6 +2866,30 @@ mod tests {
         assert_eq!(parsed.entries.len(), 2);
         assert_eq!(parsed.entries[0].name, ".arthas");
         assert_eq!(parsed.entries[1].name, ".cache");
+    }
+    #[test]
+    fn parses_listing_with_sftp_prompt_prefix() {
+        let output = "Remote working directory: /home/app\n\
+                      sftp> drwxr-xr-x    2 app app 4096 Jul 15 2024 releases\n";
+
+        let parsed = parse_list_output(output, ".").unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].name, "releases");
+        assert!(parsed.entries[0].is_dir);
+    }
+
+    #[test]
+    fn parses_windows_style_listing() {
+        let output = "Remote working directory: C:/Users/app\n\
+                      07/06/2026  08:12 PM    <DIR>          Documents\n\
+                      07/06/2026  08:13 PM             1,024 report.txt\n";
+
+        let parsed = parse_list_output(output, ".").unwrap();
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.entries[0].name, "Documents");
+        assert!(parsed.entries[0].is_dir);
+        assert_eq!(parsed.entries[1].name, "report.txt");
+        assert_eq!(parsed.entries[1].size, 1024);
     }
     #[test]
     fn parses_probe_working_directory() {
@@ -1422,6 +2941,24 @@ mod tests {
             Some(100)
         );
         assert_eq!(extract_sftp_progress_percent("Connected to host."), None);
+    }
+
+    #[test]
+    fn parses_system_sftp_transfer_progress_details() {
+        let details =
+            parse_system_sftp_progress_details("release.tar.gz  42% 12MB 1.0MB/s 00:08", 42);
+        assert_eq!(details.transferred_bytes, Some(12 * 1024 * 1024));
+        assert_eq!(details.total_bytes, Some(29_959_315));
+        assert_eq!(details.bytes_per_second, Some(1024 * 1024));
+        assert_eq!(details.remaining_seconds, Some(8));
+    }
+    #[test]
+    fn waits_for_sftp_prompt_before_follow_up_commands() {
+        assert!(should_send_next_sftp_command("sftp> "));
+        assert!(!should_send_next_sftp_command(
+            "drwxr-xr-x 2 root root 4096 Jun 8 data"
+        ));
+        assert!(!should_send_next_sftp_command(""));
     }
     #[test]
     fn sends_sftp_commands_after_windows_ready_markers() {

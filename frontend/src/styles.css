@@ -2023,6 +2023,37 @@ code {
 .transfer-progress.complete span {
   width: 100%;
 }
+.transfer-task-stats {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.transfer-task-stats span {
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(85, 104, 140, .42);
+  border-radius: 6px;
+  background: rgba(10, 16, 25, .58);
+  color: #aeb8c9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-xs);
+  padding: 0 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-task-stats strong {
+  flex: 0 0 auto;
+  color: #d6deeb;
+  font-family: var(--font-sans);
+  font-size: var(--font-xs);
+  font-weight: 650;
+}
 .transfer-task-paths {
   min-width: 0;
   display: grid;
@@ -2553,6 +2584,9 @@ code {
   }
   .transfer-target-strip {
   grid-template-columns: minmax(0, 1fr);
+  }
+  .transfer-task-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .transfer-task-paths {
   grid-template-columns: minmax(0, 1fr);
@@ -4196,6 +4230,17 @@ code {
   color: #8ce7b5;
   background: rgba(10, 30, 24, .76);
 }
+.terminal-target-summary {
+  max-width: min(260px, 28vw);
+  min-width: 0;
+  overflow: hidden;
+}
+.terminal-target-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tab-close {
   display: inline-grid;
   place-items: center;
@@ -5209,6 +5254,14 @@ code {
 }
 .theme-light .transfer-progress span, .theme-light .transfer-progress.complete span {
   background: var(--light-accent);
+}
+.theme-light .transfer-task-stats span {
+  border-color: var(--light-border);
+  background: #f8fafb;
+  color: var(--light-muted);
+}
+.theme-light .transfer-task-stats strong {
+  color: var(--light-accent-strong);
 }
 .theme-light .file-row {
   border-color: transparent;
