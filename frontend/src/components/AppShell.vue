@@ -1526,9 +1526,23 @@ function isSelectableTextTarget(target: EventTarget | null) {
   return Boolean(targetElement(target)?.closest(selectableTextSelector))
 }
 
-function clearChromeSelection() {
+function selectionEndpointElement(node: Node | null) {
+  return node instanceof Element ? node : node?.parentElement ?? null
+}
+
+function clearChromeSelection(target?: EventTarget | null) {
   const selection = window.getSelection()
-  if (selection && !selection.isCollapsed) selection.removeAllRanges()
+  if (!selection || selection.isCollapsed) return
+  const anchorElement = selectionEndpointElement(selection.anchorNode)
+  const focusElement = selectionEndpointElement(selection.focusNode)
+  if (
+    isSelectableTextTarget(target ?? null) ||
+    anchorElement?.closest(selectableTextSelector) ||
+    focusElement?.closest(selectableTextSelector)
+  ) {
+    return
+  }
+  selection.removeAllRanges()
 }
 
 function handleAppSelectStart(event: Event) {
@@ -1546,9 +1560,9 @@ function handleAppDragStart(event: DragEvent) {
   event.preventDefault()
 }
 
-function handleGlobalClick() {
+function handleGlobalClick(event: MouseEvent) {
   closeContextMenu()
-  clearChromeSelection()
+  clearChromeSelection(event.target)
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {

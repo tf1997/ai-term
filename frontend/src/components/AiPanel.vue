@@ -9,6 +9,8 @@ import type {
   WorkspaceSession
 } from '../types/workspace'
 import { cancelTask, chatWithAiProviderStream, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
+import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
+import { codeBlockLabel, looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import {
   analyzeScriptRisks,
   buildScriptRiskPreviewLines,
@@ -18,15 +20,12 @@ import {
 } from '../lib/scriptRisk'
 import UiIcon from './UiIcon.vue'
 
-type MessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'code'; content: string; language: string }
 
 const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
 const MAX_AI_COMMAND_HISTORY = 80
-const SHELL_COMMAND_LANGUAGES = ['bash', 'sh', 'shell', 'zsh', 'bat', 'batch', 'cmd', 'cmd.exe', 'powershell', 'pwsh', 'ps1']
+const STREAM_TIMER_INTERVAL_MS = 1000
 
 const props = defineProps<{
   terminalId: string
@@ -66,6 +65,8 @@ const historyOpen = ref(false)
 const sessionSearch = ref('')
 const currentRequestId = ref('')
 const currentAssistantMessageId = ref('')
+const answerElapsedSeconds = ref(0)
+const answerDurations = ref<Record<string, number>>({})
 const stopRequested = ref(false)
 const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
@@ -77,6 +78,7 @@ const aiRiskExplanationRequestId = ref('')
 const aiCommandExecutionNotice = ref('')
 const aiCommandExecutionNoticeTitle = ref('')
 let aiCommandNoticeTimer: number | undefined
+let answerTimer: number | undefined
 
 const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
@@ -169,6 +171,7 @@ async function sendMessage() {
   const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${requestTerminalId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
+  startAnswerTimer()
   try {
     unlisten = await onAiChatStream(requestId, (event) => {
       if (stopRequested.value || currentRequestId.value !== requestId) return
@@ -227,6 +230,7 @@ async function sendMessage() {
   } finally {
     unlisten?.()
     if (currentRequestId.value === requestId) {
+      finishAnswerTimer(assistantMessage.id)
       currentRequestId.value = ''
       currentAssistantMessageId.value = ''
       stopRequested.value = false
@@ -278,6 +282,7 @@ function stopCurrentAnswer() {
       streaming: false
     })
   }
+  finishAnswerTimer(message?.id ?? currentAssistantMessageId.value)
   currentRequestId.value = ''
   currentAssistantMessageId.value = ''
   isAsking.value = false
@@ -308,6 +313,45 @@ function scrollMessagesToLatest() {
       list.scrollTop = list.scrollHeight
     })
   })
+}
+
+function startAnswerTimer() {
+  stopAnswerTimer()
+  const startedAt = Date.now()
+  answerElapsedSeconds.value = 0
+  answerTimer = window.setInterval(() => {
+    answerElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, STREAM_TIMER_INTERVAL_MS)
+}
+
+function stopAnswerTimer() {
+  if (answerTimer) window.clearInterval(answerTimer)
+  answerTimer = undefined
+}
+
+function finishAnswerTimer(messageId?: string) {
+  const seconds = answerTimer ? Math.max(1, answerElapsedSeconds.value) : answerElapsedSeconds.value
+  if (messageId) {
+    answerDurations.value = {
+      ...answerDurations.value,
+      [messageId]: seconds
+    }
+  }
+  stopAnswerTimer()
+  answerElapsedSeconds.value = 0
+}
+
+function messageAnswerDuration(message: AiMessage) {
+  if (message.streaming && message.id === currentAssistantMessageId.value) return answerElapsedSeconds.value
+  return answerDurations.value[message.id] ?? 0
+}
+
+function formatAnswerDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  if (safeSeconds < 60) return `${safeSeconds} 秒`
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`
 }
 
 function createMessage(
@@ -362,10 +406,8 @@ function formatAiError(error: unknown) {
 
 function extractPrimaryShellCommand(answer: string) {
   const shellBlock = parseMessageParts(answer)
-    .find((part) => part.type === 'code' && isShellLanguage(part.language))
-  if (shellBlock?.type === 'code') {
-    return normalizeShellCommand(shellBlock.content)
-  }
+    .find((part) => part.type === 'code' && shellCommandForPart(part))
+  if (shellBlock?.type === 'code') return shellCommandForPart(shellBlock)
 
   const candidate = answer
     .split('\n')
@@ -374,49 +416,10 @@ function extractPrimaryShellCommand(answer: string) {
   return candidate ? normalizeShellCommand(candidate) : ''
 }
 
-function parseMessageParts(text: string): MessagePart[] {
-  const parts: MessagePart[] = []
-  const pattern = /```([a-zA-Z0-9_.+-]*)[ \t]*\n?([\s\S]*?)```/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) })
-    }
-    parts.push({
-      type: 'code',
-      language: match[1]?.trim() || 'text',
-      content: match[2]?.trimEnd() ?? ''
-    })
-    lastIndex = pattern.lastIndex
-  }
-
-  if (lastIndex < text.length) {
-    parts.push({ type: 'text', content: text.slice(lastIndex) })
-  }
-
-  return parts.length ? parts : [{ type: 'text', content: text }]
+function shellCommandForPart(part: MessagePart) {
+  if (part.type !== 'code') return ''
+  return shellCommandFromCodeBlock(part.language, part.content)
 }
-
-
-function isShellLanguage(language: string) {
-  return SHELL_COMMAND_LANGUAGES.includes(language.trim().toLowerCase())
-}
-
-function looksLikeShellCommand(line: string) {
-  return /^(sudo\s+)?[\w./~$-]+(\s|$)/.test(line) && !line.startsWith('<')
-}
-
-function normalizeShellCommand(command: string) {
-  return command
-    .split('\n')
-    .map((line) => line.trim())
-    .map((line) => line.replace(/^\$ /, '').replace(/^PS\s+[A-Z]:\\[^>]*>\s*/i, '').replace(/^[A-Z]:\\[^>]*>\s*/i, ''))
-    .filter((line) => line && !line.startsWith('#') && !/^rem\b/i.test(line) && !/^::/.test(line))
-    .join(' && ')
-}
-
 function commandRiskStatus(command: string) {
   return scriptRiskStatusForContent(command)
 }
@@ -668,6 +671,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
   if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
+  stopAnswerTimer()
 })
 
 watch(
@@ -781,24 +785,34 @@ watch(
                 <span /><span /><span />AI 正在分析风险...
               </div>
               <p v-if="aiRiskExplanationError">{{ aiRiskExplanationError }}</p>
-              <p v-else-if="aiRiskExplanation">{{ aiRiskExplanation }}</p>
+              <div v-else-if="aiRiskExplanation" class="markdown-content" v-html="renderMarkdown(aiRiskExplanation)" />
               <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
             </div>
           </div>
           <div class="script-risk-preview" role="region" aria-label="命令风险预览">
-            <div
-              v-for="line in pendingAiCommandRiskLines"
-              :key="line.number"
-              class="script-risk-line"
-              :class="[line.riskClass, { flagged: line.risks.length }]"
-            >
-              <span class="script-risk-line-no">{{ line.number }}</span>
-              <code>{{ line.text || ' ' }}</code>
-              <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+            <div class="script-risk-preview-head">
+              <div>
+                <strong>命令预览</strong>
+                <span>高风险行已标红，执行前请逐行核对。</span>
+              </div>
+              <span class="script-risk-preview-count">{{ pendingAiCommandRiskLines.length }} 行</span>
+            </div>
+            <div class="script-risk-lines">
+              <div
+                v-for="line in pendingAiCommandRiskLines"
+                :key="line.number"
+                class="script-risk-line"
+                :class="[line.riskClass, { flagged: line.risks.length }]"
+              >
+                <span class="script-risk-line-no">{{ line.number }}</span>
+                <code>{{ line.text || ' ' }}</code>
+                <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+              </div>
             </div>
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
+          <span class="script-risk-action-hint">确认后将发送到当前终端执行。</span>
           <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
           <button class="text-button danger" type="button" @click="confirmPendingAiCommandExecution">确认执行</button>
         </div>
@@ -826,7 +840,11 @@ watch(
         <div class="message-title">
           <span class="message-identity">
             <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : 'U' }}</span>
-            <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
+            <strong>
+              {{ message.role === 'assistant' ? 'AI' : 'You' }}
+              <span v-if="message.streaming" class="streaming-dot">等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
+              <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
+            </strong>
           </span>
           <div class="message-actions">
             <button
@@ -844,26 +862,30 @@ watch(
             <span />
             <span />
             <span />
-            正在回复...
+            正在回复，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
           <template v-for="(part, index) in parseMessageParts(message.text)" :key="`${message.id}-${index}`">
-            <p v-if="part.type === 'text' && part.content.trim()">{{ part.content.trim() }}</p>
+            <div
+              v-if="part.type === 'text' && part.content.trim()"
+              class="markdown-content"
+              v-html="renderMarkdown(part.content)"
+            />
             <div v-else-if="part.type === 'code'" class="code-block">
               <div class="code-head">
-                <span>{{ part.language || 'text' }}</span>
+                <span>{{ codeBlockLabel(part.language, part.content) }}</span>
                 <span
-                  v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
+                  v-if="shellCommandForPart(part)"
                   class="command-risk-status"
-                  :class="`risk-${commandRiskStatus(normalizeShellCommand(part.content)).level}`"
-                  :title="commandRiskStatus(normalizeShellCommand(part.content)).message"
+                  :class="`risk-${commandRiskStatus(shellCommandForPart(part)).level}`"
+                  :title="commandRiskStatus(shellCommandForPart(part)).message"
                 >
-                  {{ commandRiskStatus(normalizeShellCommand(part.content)).label }}
+                  {{ commandRiskStatus(shellCommandForPart(part)).label }}
                 </span>
                 <button
-                  v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"
+                  v-if="shellCommandForPart(part)"
                   class="text-button primary-action"
                   type="button"
-                  @click="executeGeneratedCommand(normalizeShellCommand(part.content))"
+                  @click="executeGeneratedCommand(shellCommandForPart(part))"
                 >
                   执行
                 </button>

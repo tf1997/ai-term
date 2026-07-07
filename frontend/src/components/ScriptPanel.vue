@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
 import type { CommandHistoryEntry, ScriptRecording, UpdateScript } from '../types/workspace'
 import {
@@ -19,6 +19,8 @@ import {
   onAiChatStream,
   saveUpdateScript
 } from '../lib/tauri'
+import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
+import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import UiIcon from './UiIcon.vue'
 
 interface ScriptChatMessage {
@@ -29,6 +31,8 @@ interface ScriptChatMessage {
   savedScriptId?: string
   streaming?: boolean
   error?: boolean
+  createdAt: string
+  durationSeconds?: number
 }
 
 const props = defineProps<{
@@ -58,6 +62,7 @@ const MAX_SCRIPT_SOURCE_COMMANDS = 80
 const MAX_RECORDED_OUTPUT_CHARS = 80_000
 const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
+const STREAM_TIMER_INTERVAL_MS = 1000
 
 const scripts = ref<UpdateScript[]>([])
 const selectedScriptId = ref('')
@@ -85,6 +90,8 @@ const editingMessageId = ref('')
 const scriptDrafts = ref<Record<string, string>>({})
 const currentRequestId = ref('')
 const currentAssistantMessageId = ref('')
+const answerElapsedSeconds = ref(0)
+const answerDurations = ref<Record<string, number>>({})
 const stopRequested = ref(false)
 const renamingScript = ref<UpdateScript | null>(null)
 const scriptNameDraft = ref('')
@@ -98,6 +105,7 @@ const scriptRiskExplanation = ref('')
 const scriptRiskExplanationError = ref('')
 const scriptRiskExplanationLoading = ref(false)
 const scriptRiskExplanationRequestId = ref('')
+let answerTimer: number | undefined
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
 const selectedScriptContent = computed(() => selectedScriptDraft.value)
@@ -165,6 +173,10 @@ watch(
   scrollMessagesToLatest,
   { flush: 'post' }
 )
+
+onBeforeUnmount(() => {
+  stopAnswerTimer()
+})
 
 async function loadScripts() {
   try {
@@ -235,6 +247,9 @@ function clearRecording() {
 }
 
 function clearConversation() {
+  stopAnswerTimer()
+  answerElapsedSeconds.value = 0
+  answerDurations.value = {}
   messages.value = []
   scriptDrafts.value = {}
   editingMessageId.value = ''
@@ -317,6 +332,7 @@ async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = ha
   const requestId = `${props.connectionId}-${props.workspaceSessionId}-script-${Date.now()}`
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
+  startAnswerTimer()
   const prompt = buildScriptPrompt(text, mode)
   let answer = ''
   let unlisten: (() => void) | undefined
@@ -329,6 +345,7 @@ async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = ha
       }
       if (event.kind === 'error' && event.error) {
         if (stopRequested.value) return
+        finishAnswerTimer(assistantMessage.id)
         updateAssistantMessage(assistantMessage.id, `模型调用失败。\n\n错误详情：${event.error}`, false, true)
       }
     })
@@ -342,6 +359,7 @@ async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = ha
     if (stopRequested.value || currentRequestId.value !== requestId) return
     const finalAnswer = answer || response.answer
     const script = extractBashScript(finalAnswer)
+    finishAnswerTimer(assistantMessage.id)
     updateAssistantMessage(assistantMessage.id, displayAnswerWithoutScript(finalAnswer), false, false, script)
     if (script) {
       applyDraftScript(script, assistantMessage.id)
@@ -349,6 +367,7 @@ async function sendScriptRequest(mode: 'generate' | 'revise' | 'regenerate' = ha
     }
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
+    finishAnswerTimer(assistantMessage.id)
     updateAssistantMessage(assistantMessage.id, `模型调用失败。\n\n错误详情：${formatError(error)}`, false, true)
   } finally {
     unlisten?.()
@@ -370,10 +389,13 @@ function stopScriptGeneration() {
   })
   const message = messages.value.find((item) => item.id === currentAssistantMessageId.value)
   if (message) {
+    finishAnswerTimer(message.id)
     const stoppedText = message.text.trim()
       ? `${message.text.trimEnd()}\n\n[已停止回答]`
       : '[已停止回答]'
     updateAssistantMessage(message.id, stoppedText, false, false, message.scriptContent ?? '')
+  } else {
+    finishAnswerTimer()
   }
   currentRequestId.value = ''
   currentAssistantMessageId.value = ''
@@ -386,7 +408,8 @@ function createMessage(role: ScriptChatMessage['role'], text: string, scriptCont
     role,
     text,
     scriptContent,
-    streaming
+    streaming,
+    createdAt: new Date().toISOString()
   }
 }
 
@@ -714,6 +737,11 @@ function scriptContentForMessage(message: ScriptChatMessage) {
   return scriptDrafts.value[message.id] ?? message.scriptContent ?? ''
 }
 
+function shellCommandForPart(part: MessagePart) {
+  if (part.type !== 'code') return ''
+  return shellCommandFromCodeBlock(part.language, part.content)
+}
+
 function messageContentForCollapse(message: ScriptChatMessage) {
   return [message.text, scriptContentForMessage(message)].filter(Boolean).join('\n')
 }
@@ -941,6 +969,9 @@ function defaultScriptRequest(mode: 'generate' | 'revise' | 'regenerate') {
 
 function createScriptConversation() {
   openGenerateMode()
+  stopAnswerTimer()
+  answerElapsedSeconds.value = 0
+  answerDurations.value = {}
   messages.value = []
   scriptDrafts.value = {}
   editingMessageId.value = ''
@@ -972,6 +1003,47 @@ function scrollMessagesToLatest() {
   })
 }
 
+function startAnswerTimer() {
+  stopAnswerTimer()
+  const startedAt = Date.now()
+  answerElapsedSeconds.value = 0
+  answerTimer = window.setInterval(() => {
+    answerElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, STREAM_TIMER_INTERVAL_MS)
+}
+
+function stopAnswerTimer() {
+  if (answerTimer) window.clearInterval(answerTimer)
+  answerTimer = undefined
+}
+
+function finishAnswerTimer(messageId?: string) {
+  const seconds = answerTimer ? Math.max(1, answerElapsedSeconds.value) : answerElapsedSeconds.value
+  if (messageId) {
+    answerDurations.value = {
+      ...answerDurations.value,
+      [messageId]: seconds
+    }
+    messages.value = messages.value.map((message) => (
+      message.id === messageId ? { ...message, durationSeconds: seconds } : message
+    ))
+  }
+  stopAnswerTimer()
+  answerElapsedSeconds.value = 0
+}
+
+function messageAnswerDuration(message: ScriptChatMessage) {
+  if (message.streaming && message.id === currentAssistantMessageId.value) return answerElapsedSeconds.value
+  return message.durationSeconds ?? answerDurations.value[message.id] ?? 0
+}
+
+function formatAnswerDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  if (safeSeconds < 60) return `${safeSeconds} 秒`
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`
+}
 function buildScriptPrompt(userRequest: string, mode: 'generate' | 'revise' | 'regenerate') {
   const draft = draftScriptContent.value.trim()
   const modeText = mode === 'regenerate' ? '重新生成' : mode === 'revise' ? '继续修改当前草稿' : '生成新脚本'
@@ -1029,14 +1101,26 @@ function isLowSignalCommand(command: string) {
 }
 
 function extractBashScript(answer: string) {
-  const match = answer.match(/```(?:bash|sh|shell|zsh|bat|batch|cmd|powershell|pwsh|ps1)?[ \t]*\n?([\s\S]*?)```/i)
-  return match?.[1]?.trim() ?? ''
+  const shellBlock = parseMessageParts(answer)
+    .find((part) => part.type === 'code' && shellCommandForPart(part))
+  return shellBlock?.type === 'code' ? shellCommandForPart(shellBlock) : ''
 }
 
 function displayAnswerWithoutScript(answer: string) {
-  return answer.replace(/```(?:bash|sh|shell|zsh|bat|batch|cmd|powershell|pwsh|ps1)?[ \t]*\n?[\s\S]*?```/i, '').trim() || '已生成脚本，可在卡片中编辑、保存或执行。'
+  const parts = parseMessageParts(answer)
+  if (!parts.some((part) => part.type === 'code' && shellCommandForPart(part))) return answer.trim()
+  const displayText = parts
+    .map((part) => {
+      if (part.type === 'text') return part.content
+      if (shellCommandForPart(part)) return ''
+      const language = codeBlockLabel(part.language, part.content)
+      return `\`\`\`${language === 'text' ? '' : language}\n${part.content}\n\`\`\``
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return displayText || '已生成脚本，可在卡片中编辑、保存或执行。'
 }
-
 function inferScriptName(content: string, fallback: string) {
   const nameMatch = content.match(/\b(?:SCRIPT_NAME|TASK_NAME|JOB_NAME)=['"]?([a-zA-Z0-9_.-]+)/)
   if (nameMatch?.[1]) return `${nameMatch[1]} 脚本`
@@ -1233,24 +1317,34 @@ function nowText() {
                 <span /><span /><span />AI 正在分析风险...
               </div>
               <p v-if="scriptRiskExplanationError">{{ scriptRiskExplanationError }}</p>
-              <p v-else-if="scriptRiskExplanation">{{ scriptRiskExplanation }}</p>
+              <div v-else-if="scriptRiskExplanation" class="markdown-content" v-html="renderMarkdown(scriptRiskExplanation)" />
               <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
             </div>
           </div>
           <div class="script-risk-preview" role="region" aria-label="脚本风险预览">
-            <div
-              v-for="line in pendingScriptRiskLines"
-              :key="line.number"
-              class="script-risk-line"
-              :class="[line.riskClass, { flagged: line.risks.length }]"
-            >
-              <span class="script-risk-line-no">{{ line.number }}</span>
-              <code>{{ line.text || ' ' }}</code>
-              <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+            <div class="script-risk-preview-head">
+              <div>
+                <strong>脚本预览</strong>
+                <span>命中的风险行已标红，执行前请逐行核对。</span>
+              </div>
+              <span class="script-risk-preview-count">{{ pendingScriptRiskLines.length }} 行</span>
+            </div>
+            <div class="script-risk-lines">
+              <div
+                v-for="line in pendingScriptRiskLines"
+                :key="line.number"
+                class="script-risk-line"
+                :class="[line.riskClass, { flagged: line.risks.length }]"
+              >
+                <span class="script-risk-line-no">{{ line.number }}</span>
+                <code>{{ line.text || ' ' }}</code>
+                <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
+              </div>
             </div>
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
+          <span class="script-risk-action-hint">确认后将把脚本发送到当前终端执行。</span>
           <button class="text-button" type="button" @click="closeScriptRiskConfirm">取消</button>
           <button class="text-button danger" type="button" @click="confirmPendingScriptExecution">确认执行</button>
         </div>
@@ -1399,17 +1493,48 @@ function nowText() {
             <div class="message-title">
               <span class="message-identity">
                 <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : 'U' }}</span>
-                <strong>{{ message.role === 'assistant' ? 'AI' : 'You' }}<span v-if="message.streaming" class="streaming-dot">输出中</span></strong>
+                <strong>
+                  {{ message.role === 'assistant' ? 'AI' : 'You' }}
+                  <span v-if="message.streaming" class="streaming-dot">等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
+                  <span v-else-if="message.role === 'assistant' && messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
+                </strong>
               </span>
               <div class="script-reply-actions">
+                <button v-if="message.role === 'assistant' && message.streaming" class="text-button danger" type="button" @click="stopScriptGeneration">
+                  停止
+                </button>
                 <button v-if="shouldCollapseMessage(message)" class="text-button" type="button" @click="toggleMessage(message.id)">
                   {{ isMessageExpanded(message) ? '收起' : '展开' }}
                 </button>
               </div>
             </div>
             <div class="message-body">
-              <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在处理脚本...</div>
-              <p v-if="message.text">{{ message.text }}</p>
+              <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在处理脚本，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</div>
+              <template v-for="(part, index) in parseMessageParts(message.text)" :key="`${message.id}-${index}`">
+                <div
+                  v-if="part.type === 'text' && part.content.trim()"
+                  class="markdown-content"
+                  v-html="renderMarkdown(part.content)"
+                />
+                <div v-else-if="part.type === 'code'" class="code-block">
+                  <div class="code-head">
+                    <span>{{ codeBlockLabel(part.language, part.content) }}</span>
+                    <span
+                      v-if="shellCommandForPart(part)"
+                      class="command-risk-status"
+                      :class="`risk-${scriptRiskStatusForContent(shellCommandForPart(part)).level}`"
+                      :title="scriptRiskStatusForContent(shellCommandForPart(part)).message"
+                    >
+                      {{ scriptRiskStatusForContent(shellCommandForPart(part)).label }}
+                    </span>
+                    <div v-if="shellCommandForPart(part)" class="script-reply-code-actions">
+                      <button class="text-button" type="button" @click="applyDraftScript(shellCommandForPart(part), message.id)">设为草稿</button>
+                      <button class="text-button primary-action" type="button" @click="executeScriptContent(shellCommandForPart(part))">执行</button>
+                    </div>
+                  </div>
+                  <pre><code>{{ part.content }}</code></pre>
+                </div>
+              </template>
               <div v-if="message.scriptContent" class="code-block script-code-card">
                 <div class="code-head">
                   <span>{{ message.savedScriptId ? '已保存' : '草稿' }}</span>
@@ -1452,7 +1577,8 @@ function nowText() {
           :aria-label="isGenerating ? '停止回答' : '生成脚本'"
           @click="isGenerating ? stopScriptGeneration() : sendScriptRequest()"
         >
-          {{ isGenerating ? '\u25a0' : '\u2192' }}
+          <UiIcon v-if="isGenerating" name="stop" />
+          <UiIcon v-else name="arrow-right" />
         </button>
       </div>
     </div>

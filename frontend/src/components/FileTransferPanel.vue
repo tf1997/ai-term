@@ -131,6 +131,7 @@ const pendingIdentify = ref<{
   end: string
   useForSftp: boolean
 } | null>(null)
+const autoTerminalProbeAttempted = ref(false)
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
 const taskInProgress = computed(() => Boolean(activeTask.value))
@@ -166,6 +167,7 @@ watch(
     sftpProbeByHost.value = {}
     currentTerminalTarget.value = null
     pendingIdentify.value = null
+    autoTerminalProbeAttempted.value = false
     status.value = ''
     error.value = ''
     initializeRemoteBrowser()
@@ -206,7 +208,7 @@ async function loadDirectory(path = currentPath.value) {
     selectedRemoteEntry.value = null
     status.value = `${response.entries.length} 项`
   } catch (err) {
-    handleTaskError(err)
+    if (!maybeAutoProbeCurrentTerminalSftp(err)) handleTaskError(err)
   } finally {
     loading.value = false
     finishRemoteTask(taskId)
@@ -238,9 +240,32 @@ function openCurrentTerminalSftp() {
 
 function useConfiguredTargetForSftp(message?: string) {
   selectedTarget.value = null
+  autoTerminalProbeAttempted.value = false
   transferMode.value = 'sftp'
   if (message) status.value = message
   void loadDirectory(currentPath.value || '.')
+}
+
+function maybeAutoProbeCurrentTerminalSftp(err: unknown) {
+  const message = formatTaskError(err)
+  if (isTaskCancelledMessage(message)) return false
+  if (
+    !remoteReady.value ||
+    transferMode.value !== 'sftp' ||
+    selectedTarget.value ||
+    identifying.value ||
+    pendingIdentify.value ||
+    autoTerminalProbeAttempted.value
+  ) {
+    return false
+  }
+  autoTerminalProbeAttempted.value = true
+  entries.value = []
+  selectedRemoteEntry.value = null
+  error.value = ''
+  status.value = '配置目标 SFTP 失败，正在自动识别当前终端服务器...'
+  identifyCurrentTerminalTarget({ useForSftp: true })
+  return true
 }
 
 async function loadLocalDirectory(path = localPath.value || localHome.value) {
@@ -328,6 +353,7 @@ async function probeSelectedTarget(candidate: SftpTarget) {
 
 function clearSelectedTarget() {
   selectedTarget.value = null
+  autoTerminalProbeAttempted.value = false
   currentPath.value = '.'
   pathDraft.value = '.'
   void loadDirectory('.')

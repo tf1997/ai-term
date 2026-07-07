@@ -257,7 +257,7 @@ async function confirmSshHostKeyReset() {
     const notice = removed > 0
       ? `\r\n[AI Term] 已移除 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
       : `\r\n[AI Term] 没有找到 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
-    terminal?.write(notice)
+    writeTerminalView(notice, true)
     appendTerminalOutput(notice)
     await connectRemote()
   } catch (error) {
@@ -514,27 +514,85 @@ function renderIdlePrompt(term: Terminal) {
   term.writeln('No active shell.')
   term.writeln('Use New Local Shell to start a local terminal.')
   term.writeln('')
+  scrollTerminalToBottom()
 }
 
 function isSftpProfile(profile?: ConnectionProfile) {
   return profile?.fileTransferMode === 'sftp-direct' || profile?.fileTransferMode === 'sftp-gateway'
 }
 
-function estimateTerminalSize(element: HTMLElement) {
+function cssPixel(value: string) {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function terminalContentBox(element: HTMLElement) {
+  const style = window.getComputedStyle(element)
+  const horizontalPadding = cssPixel(style.paddingLeft) + cssPixel(style.paddingRight)
+  const verticalPadding = cssPixel(style.paddingTop) + cssPixel(style.paddingBottom)
   return {
-    cols: Math.max(40, Math.floor(element.clientWidth / 8)),
-    rows: Math.max(12, Math.floor(element.clientHeight / 18))
+    width: Math.max(0, element.clientWidth - horizontalPadding),
+    height: Math.max(0, element.clientHeight - verticalPadding)
   }
+}
+
+function measureTerminalCell(element: HTMLElement) {
+  const settings = resolvedTerminalSettings()
+  const probe = document.createElement('span')
+  probe.textContent = 'mmmmmmmmmm'
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.pointerEvents = 'none'
+  probe.style.whiteSpace = 'pre'
+  probe.style.fontFamily = settings.terminalFontFamily
+  probe.style.fontSize = `${settings.terminalFontSize}px`
+  probe.style.lineHeight = 'normal'
+  element.appendChild(probe)
+  const rect = probe.getBoundingClientRect()
+  probe.remove()
+  return {
+    width: Math.max(6, rect.width / 10 || settings.terminalFontSize * 0.62),
+    height: Math.max(12, rect.height || settings.terminalFontSize * 1.18)
+  }
+}
+
+function estimateTerminalSize(element: HTMLElement) {
+  const box = terminalContentBox(element)
+  const cell = measureTerminalCell(element)
+  return {
+    cols: Math.max(40, Math.floor(box.width / cell.width)),
+    rows: Math.max(12, Math.floor(box.height / cell.height))
+  }
+}
+
+function scrollTerminalToBottom() {
+  window.requestAnimationFrame(() => terminal?.scrollToBottom())
+}
+
+function terminalIsPinnedToBottom() {
+  if (!terminal) return true
+  const buffer = terminal.buffer.active
+  return buffer.viewportY >= buffer.baseY - 1
+}
+
+function writeTerminalView(data: string, forceScroll = false) {
+  if (!terminal || !data) return
+  const shouldScroll = forceScroll || terminalIsPinnedToBottom()
+  terminal.write(data, () => {
+    if (shouldScroll) scrollTerminalToBottom()
+  })
 }
 
 function syncTerminalSize() {
   if (!terminal || !terminalHost.value) return
   const size = estimateTerminalSize(terminalHost.value)
+  const changed = size.cols !== terminal.cols || size.rows !== terminal.rows
   terminalSize.value = size
-  terminal.resize(size.cols, size.rows)
-  if (sessionId) {
+  if (changed) terminal.resize(size.cols, size.rows)
+  if (sessionId && changed) {
     void terminalResize(sessionId, size.cols, size.rows)
   }
+  scrollTerminalToBottom()
 }
 
 function appendTerminalOutput(data: string) {
@@ -723,6 +781,7 @@ function applyTerminalAppearance() {
   terminal.options.fontSize = settings.terminalFontSize
   terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
   terminal.refresh(0, terminal.rows - 1)
+  syncTerminalSize()
 }
 
 onMounted(async () => {
@@ -811,7 +870,7 @@ function handleTerminalSessionClosed(reason: string) {
   sessionId = ''
   status.value = 'idle'
   const message = `\r\nShell exited: ${reason}\r\n`
-  terminal?.write(message)
+  writeTerminalView(message, true)
   appendTerminalOutput(message)
   void disconnectTerminal(closedSessionId)
 }
@@ -837,7 +896,7 @@ async function attachTerminalEvents() {
   if (!sessionId) return
   unlisten = await onTerminalData(sessionId, (event) => {
     if (event.sessionId === sessionId) {
-      terminal?.write(event.data)
+      writeTerminalView(event.data)
       appendTerminalOutput(event.data)
     }
   })
@@ -857,6 +916,7 @@ async function connectRemote() {
     terminal.clear()
     const size = estimateTerminalSize(terminalHost.value)
     terminal.writeln(`Connecting SSH profile: ${activeSessionProfile.value.name}`)
+    scrollTerminalToBottom()
     terminalOutputBuffer = `Connecting SSH profile: ${activeSessionProfile.value.name}\n`
     emit('terminalOutput', {
       terminalId: props.terminalId,
@@ -874,7 +934,7 @@ async function connectRemote() {
     status.value = 'error'
     const detail = formatError(error)
     const message = `\r\nSSH connection failed: ${detail}\r\n`
-    terminal.write(message)
+    writeTerminalView(message, true)
     appendTerminalOutput(message)
     if (shouldAskForSshHostKeyReset(error)) {
       openSshHostKeyPrompt(detail)
@@ -895,6 +955,7 @@ async function connectLocal() {
     activeSessionProfile.value = undefined
     terminal.clear()
     terminal.writeln('Opening local shell...')
+    scrollTerminalToBottom()
     terminalOutputBuffer = 'Opening local shell...\n'
     emit('terminalOutput', {
       terminalId: props.terminalId,
@@ -945,6 +1006,7 @@ function enterLocalShellErrorMode(error: unknown) {
   terminal?.writeln(detail)
   terminal?.writeln('')
   terminal?.writeln('Use New Local Shell to retry.')
+  scrollTerminalToBottom()
   appendTerminalOutput(`${message}\nUse New Local Shell to retry.\n`)
 }
 
@@ -957,7 +1019,7 @@ function enterPreviewMode() {
   terminal?.writeln('\x1b[33mTauri backend is not available in browser preview.\x1b[0m')
   terminal?.writeln('Run `cargo run` inside src-tauri to attach a local shell.')
   terminal?.writeln('')
-  terminal?.write('\x1b[94mpreview\x1b[0m$ ')
+  writeTerminalView('\x1b[94mpreview\x1b[0m$ ', true)
   appendTerminalOutput('Tauri backend is not available in browser preview.\nRun `cargo run` inside src-tauri to attach a local shell.\npreview$ ')
 }
 
@@ -975,6 +1037,7 @@ function enterSftpProfileMode() {
   terminal.writeln(`Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连'}`)
   terminal.writeln('')
   terminal.writeln('Use the SFTP workspace on the right to browse, upload, and download files.')
+  scrollTerminalToBottom()
   terminalOutputBuffer = [
     'SFTP profile is ready.',
     `Profile: ${props.profile.name}`,
@@ -1017,7 +1080,7 @@ function executeCommand(command: string) {
   }
   if (status.value === 'preview') {
     const previewLine = `${value}\r\n`
-    terminal?.write(previewLine)
+    writeTerminalView(previewLine, true)
     appendTerminalOutput(previewLine)
     recordCommand(value)
     return true
@@ -1033,7 +1096,7 @@ function writeTerminalInput(data: string) {
     return true
   }
   if (status.value === 'preview') {
-    terminal?.write(data)
+    writeTerminalView(data, true)
     appendTerminalOutput(data)
     return true
   }

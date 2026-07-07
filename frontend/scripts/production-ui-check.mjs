@@ -16,6 +16,8 @@ function assert(condition, message) {
 const appShell = read('src/components/AppShell.vue')
 const terminalPane = read('src/components/TerminalPane.vue')
 const aiPanel = read('src/components/AiPanel.vue')
+const aiMarkdown = read('src/lib/aiMarkdown.ts')
+const shellCommand = read('src/lib/shellCommand.ts')
 const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
 const scriptPanel = read('src/components/ScriptPanel.vue')
@@ -56,7 +58,9 @@ assert(
     appShell.includes("document.removeEventListener('selectstart', handleAppSelectStart, true)") &&
     appShell.includes('handleAppDragStart') &&
     appShell.includes("document.addEventListener('dragstart', handleAppDragStart, true)") &&
-    appShell.includes('clearChromeSelection'),
+    appShell.includes('clearChromeSelection(target?: EventTarget | null)') &&
+    appShell.includes('selectionEndpointElement') &&
+    appShell.includes('clearChromeSelection(event.target)'),
   'Interactive chrome must prevent accidental drag text selection while terminal, code, and form text remain selectable.'
 )
 
@@ -552,6 +556,35 @@ assert(
   'Light theme must not duplicate layout geometry; shared app layout should come from base rules.'
 )
 
+assert(
+  styles.includes('grid-template-columns: calc(var(--rail-width) + var(--sidebar-width)) minmax(0, 1fr);') &&
+    styles.includes('grid-template-columns: var(--rail-width) minmax(0, 1fr);') &&
+    styles.includes('padding: 8px 8px 6px 0;') &&
+    styles.includes('margin: 0 8px 6px 0;') &&
+    !styles.includes('grid-template-columns: 336px minmax(0, 1fr);') &&
+    !styles.includes('grid-template-columns: 326px minmax(0, 1fr);') &&
+    !styles.includes('grid-template-columns: 278px minmax(0, 1fr);') &&
+    !styles.includes('grid-template-columns: 56px minmax(0, 1fr);'),
+  'Titlebar divider and terminal content edge must align to the same rail/sidebar grid boundary.'
+)
+
+assertLastCssDeclarations(
+  '.rail-button',
+  { 'box-shadow': 'none' },
+  'Left rail buttons must stay flat without decorative shadows',
+  { afterMarker: '/* Rail parity and SFTP directory polish. */', beforeMarker: '/* Workspace separation polish. */' }
+)
+assertLastCssDeclarations(
+  '.rail-button.active',
+  { 'box-shadow': 'none' },
+  'Active left rail buttons must stay flat without decorative shadows',
+  { afterMarker: '/* Rail parity and SFTP directory polish. */', beforeMarker: '/* Workspace separation polish. */' }
+)
+assert(
+  !styles.includes('box-shadow .22s cubic-bezier(.16, 1, .3, 1)'),
+  'Left rail button transitions must not animate decorative shadows.'
+)
+
 assertLastCssDeclarations(
   '.history-preview-modal',
   {
@@ -612,6 +645,130 @@ assertLastCssDeclarations(
   'Light theme SFTP file browser divider must be light, not dark',
   { afterMarker: '/* Light theme color-only surface contract. */' }
 )
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-modal',
+  {
+    'border-color': '#dbe3ee',
+    background: '#ffffff',
+    color: '#172033',
+  },
+  'Light theme risk modal must use a neutral product surface instead of an all-red panel',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-ai',
+  {
+    'border-color': '#bfe9d3',
+    background: '#f0fbf5',
+  },
+  'Light theme risk AI helper must use the green product theme instead of an unrelated blue surface',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-preview',
+  {
+    'border-color': '#d7e0eb',
+    background: '#f8fafc',
+    color: '#172033',
+  },
+  'Light theme risk command preview must use a readable neutral code surface',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-chip.high',
+  {
+    'border-color': '#eea8b4',
+    background: '#fff1f3',
+  },
+  'Light theme high-risk chip must keep danger emphasis without washing out text',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-line.flagged',
+  {
+    'border-left-color': '#e11d48',
+    background: '#fff7f8',
+    color: '#172033',
+  },
+  'Light theme flagged command line must be softly highlighted while preserving code contrast',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-line-label',
+  {
+    background: '#fff1f3',
+    color: '#be123c',
+  },
+  'Light theme risk line pill must stay legible on the command preview surface',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-light .script-risk-actions',
+  {
+    'border-top-color': '#e5ebf2',
+    background: '#fbfcfd',
+  },
+  'Light theme risk modal actions must use a neutral footer instead of a pink footer',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+assertLastCssDeclarations(
+  '.app-shell.theme-dark .script-risk-modal',
+  {
+    'border-color': '#2a3446',
+    background: '#0b1018',
+    color: '#e5edf7',
+  },
+  'Dark theme risk modal must use a neutral product surface instead of an all-red panel',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-dark .script-risk-ai',
+  {
+    'border-color': '#1f6d4a',
+    background: '#0d1f19',
+  },
+  'Dark theme risk AI helper must use the green product theme instead of an unrelated blue surface',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-dark .script-risk-preview',
+  {
+    'border-color': '#253044',
+    background: '#070b12',
+    color: '#e2e8f0',
+  },
+  'Dark theme risk command preview must use a readable neutral code surface',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-dark .script-risk-line.flagged',
+  {
+    'border-left-color': '#fb7185',
+    background: '#201119',
+    color: '#f8fafc',
+  },
+  'Dark theme flagged command line must use restrained danger emphasis instead of a saturated red block',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
+
+assertLastCssDeclarations(
+  '.app-shell.theme-dark .script-risk-actions',
+  {
+    'border-top-color': '#293246',
+    background: '#090e16',
+  },
+  'Dark theme risk modal actions must use a neutral footer',
+  { afterMarker: '/* Light theme color-only surface contract. */' }
+)
 
 assertCssRuleIncludes(
   '.assistant-panel',
@@ -648,13 +805,17 @@ assert(
 assert(
   !aiPanel.includes('executeGeneratedCommand()') &&
     !aiPanel.includes('executableCommands(message)') &&
-    aiPanel.includes('v-if="isShellLanguage(part.language) && normalizeShellCommand(part.content)"') &&
-    aiPanel.includes('SHELL_COMMAND_LANGUAGES') &&
-    aiPanel.includes("'bat'") &&
-    aiPanel.includes("'cmd'") &&
-    aiPanel.includes("'powershell'") &&
-    !aiPanel.includes("['bash', 'sh', 'shell', 'zsh', '']"),
-  'AI execute buttons must only appear on explicit shell code blocks, including bash and Windows bat/cmd/powershell blocks.'
+    aiPanel.includes('shellCommandForPart(part)') &&
+    aiPanel.includes('codeBlockLabel(part.language, part.content)') &&
+    aiPanel.includes("shellCommandFromCodeBlock(part.language, part.content)") &&
+    shellCommand.includes('explicitShellLanguages') &&
+    shellCommand.includes('shellSessionLanguages') &&
+    shellCommand.includes('normalizeCodeLanguage') &&
+    shellCommand.includes('hasShellSignal') &&
+    shellCommand.includes("'bat'") &&
+    shellCommand.includes("'cmd'") &&
+    shellCommand.includes("'powershell'"),
+  'AI execute buttons must appear on recognized shell-like code blocks, including bash, shell sessions, and Windows bat/cmd/powershell blocks.'
 )
 
 assert(
@@ -763,8 +924,18 @@ assert(
     appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
     styles.includes('.terminal-completion') &&
     styles.includes('.terminal-native-code') &&
-    styles.includes('.xterm-host .xterm-rows'),
-  'TerminalPane must provide native-feeling terminal code styling plus command completion from system commands and same-connection user command history.'
+    styles.includes('.xterm-host .xterm-rows') &&
+    styles.includes('.xterm-host {\n  width: 100%;') &&
+    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 18px;') &&
+    terminalPane.includes('terminalContentBox(element)') &&
+    terminalPane.includes('measureTerminalCell(element)') &&
+    terminalPane.includes('element.clientHeight - verticalPadding') &&
+    terminalPane.includes('scrollTerminalToBottom') &&
+    terminalPane.includes('terminal.buffer.active') &&
+    terminalPane.includes('writeTerminalView(event.data)') &&
+    terminalPane.includes('if (changed) terminal.resize(size.cols, size.rows)') &&
+    !terminalPane.includes('Math.floor(element.clientHeight / 18)'),
+  'TerminalPane must provide native-feeling terminal code styling, command completion, accurate measured sizing, and bottom-pinned output.'
 )
 
 
@@ -888,6 +1059,9 @@ assert(
     fileTransfer.includes('useTerminalTargetForSftp') &&
     fileTransfer.includes('openCurrentTerminalSftp') &&
     fileTransfer.includes('useConfiguredTargetForSftp') &&
+    fileTransfer.includes('maybeAutoProbeCurrentTerminalSftp') &&
+    fileTransfer.includes('autoTerminalProbeAttempted') &&
+    fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...') &&
     fileTransfer.includes('未识别到当前终端目标，已使用连接配置目标打开 SFTP。') &&
     !fileTransfer.includes('hasRemoteShellSnapshot') &&
     fileTransfer.includes('useForSftp') &&
@@ -1428,7 +1602,7 @@ assert(
   !terminalPane.includes('class="status-bar"') &&
     !terminalPane.includes('local-shell') &&
     !terminalPane.includes('gateway:{{') &&
-    styles.includes('grid-template-rows: minmax(0, 1fr) auto;'),
+    styles.includes('grid-template-rows: minmax(0, 1fr) min-content;'),
   'Terminal pane must not render the old bottom local status footer.'
 )
 
@@ -1515,13 +1689,35 @@ assert(
     aiPanel.includes('ref="messageList"') &&
     aiPanel.includes('thinking-row') &&
     appShell.includes('updateAiMessage') &&
+    aiPanel.includes("import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'") &&
     aiPanel.includes('parseMessageParts') &&
+    aiPanel.includes('renderMarkdown') &&
+    aiMarkdown.includes('export function parseMessageParts') &&
+    aiMarkdown.includes('export function renderMarkdown') &&
+    aiMarkdown.includes('parseMarkdownTable') &&
+    aiMarkdown.includes('splitMarkdownTableRow') &&
+    aiMarkdown.includes('isMarkdownTableSeparatorCell') &&
+    aiMarkdown.includes('safeMarkdownUrl') &&
+    aiMarkdown.includes('normalizeCodeFenceInfo') &&
+    aiMarkdown.includes('```+|~~~+') &&
+    shellCommand.includes('shellCommandFromCodeBlock') &&
+    aiPanel.includes('v-html="renderMarkdown(part.content)"') &&
+    aiPanel.includes('answerElapsedSeconds') &&
+    aiPanel.includes('formatAnswerDuration') &&
+    aiPanel.includes('message-duration') &&
+    styles.includes('.markdown-content') &&
+    styles.includes('.markdown-table-wrap') &&
+    styles.includes('.markdown-table th') &&
+    styles.includes('.app-shell.theme-light .markdown-table-wrap') &&
+    styles.includes('.message-duration') &&
     aiPanel.includes('extractPrimaryShellCommand') &&
     aiPanel.includes('../lib/scriptRisk') &&
     aiPanel.includes('aiCommandRiskConfirmOpen') &&
     aiPanel.includes('pendingAiCommandExecution') &&
     aiPanel.includes('commandRiskStatus') &&
     aiPanel.includes('executeGeneratedCommand') &&
+    aiPanel.includes('shellCommandForPart(part)') &&
+    aiPanel.includes('codeBlockLabel(part.language, part.content)') &&
     aiPanel.includes('confirmPendingAiCommandExecution') &&
     aiPanel.includes('class="command-risk-status"') &&
     aiPanel.includes('script-risk-modal') &&
@@ -1580,6 +1776,23 @@ assert(
     scriptPanel.includes('cancelTask') &&
     scriptPanel.includes('stopScriptGeneration') &&
     scriptPanel.includes('onAiChatStream') &&
+    scriptPanel.includes("import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'") &&
+    scriptPanel.includes('answerElapsedSeconds') &&
+    scriptPanel.includes('answerDurations') &&
+    scriptPanel.includes('durationSeconds') &&
+    scriptPanel.includes('formatAnswerDuration') &&
+    scriptPanel.includes('messageAnswerDuration') &&
+    scriptPanel.includes('createdAt: new Date().toISOString()') &&
+    scriptPanel.includes('parseMessageParts(message.text)') &&
+    scriptPanel.includes('v-html="renderMarkdown(part.content)"') &&
+    scriptPanel.includes('message-duration') &&
+    scriptPanel.includes("message.role === 'assistant' && message.streaming") &&
+    scriptPanel.includes('@click="stopScriptGeneration"') &&
+    scriptPanel.includes('name="stop"') &&
+    scriptPanel.includes("import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'") &&
+    scriptPanel.includes('shellCommandForPart(part)') &&
+    scriptPanel.includes('codeBlockLabel(part.language, part.content)') &&
+    scriptPanel.includes('@click="executeScriptContent(shellCommandForPart(part))"') &&
     scriptPanel.includes('extractBashScript') &&
     scriptPanel.includes('saveUpdateScript') &&
     scriptPanel.includes('deleteUpdateScript') &&
@@ -1599,12 +1812,30 @@ assert(
     scriptPanel.includes('writeScriptToTerminal') &&
     scriptPanel.includes('script-risk-modal') &&
     scriptPanel.includes('script-risk-preview') &&
+    aiPanel.includes('script-risk-preview-head') &&
+    aiPanel.includes('pendingAiCommandRiskLines.length') &&
+    aiPanel.includes('script-risk-action-hint') &&
+    scriptPanel.includes('script-risk-preview-head') &&
+    scriptPanel.includes('pendingScriptRiskLines.length') &&
+    scriptPanel.includes('script-risk-action-hint') &&
     scriptPanel.includes(':class="[line.riskClass, { flagged: line.risks.length }]"') &&
     !scriptPanel.includes('检测到高风险脚本，确认要在当前终端执行吗？') &&
     !scriptPanel.includes('window.confirm(`妫€娴嬪埌楂橀闄╄剼鏈') &&
     styles.includes('.script-risk-modal') &&
+    styles.includes('.script-risk-preview-head') &&
+    styles.includes('.script-risk-preview-count') &&
+    styles.includes('.script-risk-lines') &&
+    styles.includes('.script-risk-action-hint') &&
     styles.includes('.script-risk-line') &&
     styles.includes('.script-risk-line.flagged') &&
+    styles.includes('max-height: min(640px, calc(100vh - 44px));') &&
+    styles.includes('overflow-x: hidden;') &&
+    styles.includes('grid-template-rows: auto minmax(0, 1fr);') &&
+    styles.includes('.script-risk-line {\n  min-width: 0;') &&
+    styles.includes('grid-template-columns: 38px minmax(0, 1fr) auto;') &&
+    styles.includes('white-space: pre-wrap;') &&
+    styles.includes('overflow-wrap: anywhere;') &&
+    !styles.includes('.script-risk-line code {\n  white-space: pre;') &&
     styles.includes('.risk-delete') &&
     styles.includes('.risk-edit') &&
     styles.includes('.risk-reboot') &&
@@ -1786,12 +2017,17 @@ assert(
   tauriConfig.includes('"width": 1280') &&
     tauriConfig.includes('"minWidth": 980') &&
     styles.includes('min-width: 980px') &&
+    styles.includes('--workspace-width: clamp(380px, 28vw, 520px);') &&
+    styles.includes('grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(0, 1fr) var(--workspace-width);') &&
     styles.includes('@media (max-width: 1280px)') &&
+    styles.includes('Shell columns stay proportional') &&
     styles.includes('@media (max-width: 1080px)') &&
-    styles.includes('position: absolute') &&
-    styles.includes('right-panel') &&
+    styles.includes('--workspace-width: clamp(300px, 34vw, 360px);') &&
+    styles.includes('.xterm-host {\n  width: 100%;') &&
+    styles.includes('overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 18px;') &&
+    !styles.includes('width: min(380px, calc(100vw - 56px));') &&
     !styles.includes('.app-shell:not(.right-collapsed) .right-panel {\n    display: none;'),
-  'Frontend layout must adapt to the 1280 default and 980 minimum Tauri window widths without horizontal clipping.'
+  'Frontend layout must keep the right workspace as a proportional grid column at the 1280 default and 980 minimum window widths without terminal overlap or workspace shrinkage.'
 )
 
 assert(
@@ -1873,6 +2109,7 @@ assert(
     aiPanel.includes('借助 AI 分析风险') &&
     aiPanel.includes('AI 正在分析风险') &&
     aiPanel.includes('aria-live="polite"') &&
+    aiPanel.includes('v-html="renderMarkdown(aiRiskExplanation)"') &&
     !aiPanel.includes('@click.self="closeAiCommandRiskConfirm"') &&
     scriptPanel.includes('explainPendingScriptRisk') &&
     scriptPanel.includes('buildScriptRiskExplanationPrompt') &&
@@ -1882,11 +2119,13 @@ assert(
     scriptPanel.includes('借助 AI 分析风险') &&
     scriptPanel.includes('AI 正在分析风险') &&
     scriptPanel.includes('aria-live="polite"') &&
+    scriptPanel.includes('v-html="renderMarkdown(scriptRiskExplanation)"') &&
     !scriptPanel.includes('@click.self="closeScriptRiskConfirm"') &&
     styles.includes('.script-risk-ai') &&
     styles.includes('.script-risk-ai-output') &&
     styles.includes('.script-risk-thinking') &&
-    styles.includes('.script-risk-ai-placeholder'),
+    styles.includes('.script-risk-ai-placeholder') &&
+    styles.includes('.script-risk-ai-output .markdown-content'),
   'Risk confirmation modals must stay open on backdrop clicks and stream AI risk explanations with an active answering state.'
 )
 
@@ -2007,6 +2246,8 @@ assert(
     styles.includes('.theme-light .quick-command-modal') &&
     styles.includes('.theme-light .script-preview-modal') &&
     styles.includes('.theme-light .script-risk-modal .modal-head') &&
+    styles.includes('.app-shell.theme-light .script-risk-chip strong') &&
+    styles.includes('.app-shell.theme-light .script-risk-line-no') &&
     styles.includes('.theme-light .file-context-menu') &&
     styles.includes('.theme-light .terminal-completion') &&
     styles.includes('.app-shell.theme-light .terminal-native-code .xterm-host .composition-view') &&
