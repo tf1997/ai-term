@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 
 function read(path) {
-  return readFileSync(resolve(root, path), 'utf8')
+  return readFileSync(resolve(root, path), 'utf8').replace(/\r\n?/g, '\n')
 }
 
 function assert(condition, message) {
