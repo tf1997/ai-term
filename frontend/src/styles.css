@@ -7874,16 +7874,18 @@ code {
 }
 .script-editor-toolbar {
   min-height: 36px;
+  grid-template-columns: minmax(112px, 1fr) auto;
   border-color: #1f2a3b;
   background: #0b121d;
 }
 .script-file-tab {
   height: 36px;
-  max-width: min(172px, 44%);
+  max-width: none;
   gap: 8px;
   padding: 0 10px;
   border-right-color: #172234;
   color: #e5edf7;
+  overflow: visible;
 }
 .script-file-icon {
   width: 22px;
@@ -7898,7 +7900,26 @@ code {
   height: 13px;
   stroke-width: 1.9;
 }
+.script-file-tab strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.script-file-tab .record-dot {
+  display: none;
+}
+.script-file-tab .script-editor-risk {
+  flex: 0 0 auto;
+  min-width: max-content;
+  max-width: none;
+  height: 22px;
+  margin-left: 0;
+  padding: 0 9px;
+  overflow: visible;
+}
 .script-editor-tools {
+  min-width: max-content;
   gap: 5px;
   padding: 0 6px;
 }

@@ -991,6 +991,10 @@ assert(
     terminalPane.includes('systemCommandSuggestions') &&
     terminalPane.includes('historyCommandSuggestions') &&
     terminalPane.includes('acceptCompletionSuggestion') &&
+    !terminalPane.includes("data === '\\t'") &&
+    terminalPane.includes('handleTerminalCustomKeyEvent') &&
+    terminalPane.includes('terminal.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent)') &&
+    terminalPane.includes("event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space'") &&
     terminalPane.includes('class="terminal-completion"') &&
     appShell.includes(':command-history="commandHistoryForTab(tab)"') &&
     appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
@@ -1471,6 +1475,12 @@ assert(
     styles.includes('caret-color') &&
     styles.includes('.script-editor-toolbar') &&
     styles.includes('.script-file-tab') &&
+    styles.includes('grid-template-columns: minmax(112px, 1fr) auto') &&
+    styles.includes('.script-file-tab .record-dot') &&
+    styles.includes('display: none;') &&
+    styles.includes('.script-file-tab .script-editor-risk') &&
+    styles.includes('min-width: max-content') &&
+    styles.includes('max-width: none') &&
     styles.includes('/* Draft editor inline action rail. */') &&
     styles.includes('/* Uniform draft editor icon buttons. */') &&
     styles.includes('.script-editor-tools .icon-button:hover:not(:disabled)') &&
@@ -1780,7 +1790,17 @@ assert(
     terminalPane.includes('clearTerminalSelectionOverlay') &&
     terminalPane.includes('terminalSelectionCellToViewport') &&
     terminalPane.includes('terminal?.buffer.active.viewportY') &&
-    terminalPane.includes('cell.y - viewportY - 1') &&
+    terminalPane.includes('cell.y - viewportY') &&
+    terminalPane.includes('rawStart') &&
+    terminalPane.includes('rawEnd') &&
+    terminalPane.includes('isReverseSelection') &&
+    terminalPane.includes('isReverseMultiLineSelection') &&
+    terminalPane.includes('TerminalSelectionViewportCell') &&
+    terminalPane.includes('terminalPointerViewportCell') &&
+    terminalPane.includes('terminalSelectionDragStart') &&
+    terminalPane.includes('terminalSelectionDragCurrent') &&
+    terminalPane.includes('isPointerReverseSelection') &&
+    terminalPane.includes('startTerminalSelectionDrag(event)') &&
     terminalPane.includes('ai-term-selection-overlay') &&
     terminalPane.includes('ai-term-selection-line') &&
     terminalPane.includes("host.classList.add('ai-term-selection-polished')") &&

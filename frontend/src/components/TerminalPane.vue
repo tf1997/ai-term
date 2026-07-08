@@ -26,6 +26,7 @@ type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
 type CompletionSuggestionSource = 'system' | 'history' | 'session'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
+type TerminalSelectionViewportCell = { x: number; y: number }
 
 interface TerminalVisualSettings {
   terminalFontFamily: string
@@ -75,6 +76,8 @@ let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalSelectionPolishFrame = 0
 let terminalSelectionDragging = false
+let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
+let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
 let pendingInputControlSequence = ''
@@ -607,15 +610,18 @@ function acceptCompletionSuggestion(suggestion = completionSuggestions.value[com
   return true
 }
 
-function handleCompletionInput(data: string) {
-  if (data === '\t') {
+function handleTerminalCustomKeyEvent(event: KeyboardEvent) {
+  if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space') {
     if (terminalCompletionOpen.value) {
       cycleCompletion(1)
     } else {
       refreshCompletionSuggestions()
     }
-    return terminalCompletionOpen.value
+    return false
   }
+  return true
+}
+function handleCompletionInput(data: string) {
   if (!terminalCompletionOpen.value) return false
   if (data === '\x1b[A') {
     cycleCompletion(-1)
@@ -811,8 +817,23 @@ function clearTerminalSelectionOverlay() {
 function terminalSelectionCellToViewport(cell: { x: number; y: number }) {
   const viewportY = terminal?.buffer.active.viewportY ?? 0
   return {
-    x: Math.max(0, cell.x - 1),
-    y: Math.max(0, cell.y - viewportY - 1)
+    x: Math.max(0, cell.x),
+    y: Math.max(0, cell.y - viewportY)
+  }
+}
+
+function terminalPointerViewportCell(event: PointerEvent): TerminalSelectionViewportCell | undefined {
+  const host = terminalHost.value
+  const firstRow = host?.querySelector<HTMLElement>('.xterm-rows > div')
+  if (!host || !firstRow) return undefined
+
+  const cell = measureTerminalCell(host)
+  const firstRowRect = firstRow.getBoundingClientRect()
+  const rowHeight = Math.max(1, firstRowRect.height || cell.height)
+  const rowCount = Math.max(1, terminal?.rows ?? host.querySelectorAll('.xterm-rows > div').length)
+  return {
+    x: Math.max(0, Math.floor((event.clientX - firstRowRect.left) / cell.width)),
+    y: Math.max(0, Math.min(rowCount - 1, Math.floor((event.clientY - firstRowRect.top) / rowHeight)))
   }
 }
 
@@ -830,15 +851,25 @@ function polishTerminalSelection() {
   host.classList.add('ai-term-selection-polished')
   if (!rows.length) return
 
-  const start = terminalSelectionCellToViewport(selectionPosition.start)
-  const end = terminalSelectionCellToViewport(selectionPosition.end)
-  if (start.y > end.y || (start.y === end.y && start.x > end.x)) {
+  const rawStart = terminalSelectionCellToViewport(selectionPosition.start)
+  const rawEnd = terminalSelectionCellToViewport(selectionPosition.end)
+  const isReverseSelection = rawStart.y > rawEnd.y || (rawStart.y === rawEnd.y && rawStart.x > rawEnd.x)
+  const start = { ...rawStart }
+  const end = { ...rawEnd }
+  if (isReverseSelection) {
     const previousStart = { ...start }
     start.x = end.x
     start.y = end.y
     end.x = previousStart.x
     end.y = previousStart.y
   }
+  const isPointerReverseSelection = Boolean(
+    terminalSelectionDragStart &&
+      terminalSelectionDragCurrent &&
+      (terminalSelectionDragCurrent.y < terminalSelectionDragStart.y ||
+        (terminalSelectionDragCurrent.y === terminalSelectionDragStart.y && terminalSelectionDragCurrent.x < terminalSelectionDragStart.x))
+  )
+  const isReverseMultiLineSelection = (isReverseSelection || isPointerReverseSelection) && start.y !== end.y
 
   const cellWidth = measureTerminalCell(host).width
   const screenRect = screen.getBoundingClientRect()
@@ -855,7 +886,9 @@ function polishTerminalSelection() {
     let left = rowRect.left
     let right = contentRight
 
-    if (rowIndex === start.y) left = rowRect.left + start.x * cellWidth
+    if (rowIndex === start.y) {
+      left = rowRect.left + (isReverseMultiLineSelection ? 0 : start.x) * cellWidth
+    }
     if (rowIndex === end.y) right = Math.min(right, rowRect.left + end.x * cellWidth)
 
     left = Math.max(rowRect.left, Math.min(left, contentRight))
@@ -884,6 +917,7 @@ function scheduleTerminalSelectionPolish() {
 }
 function handleTerminalSelectionPointerMove(event: PointerEvent) {
   if (!terminalSelectionDragging || (event.buttons & 1) === 0) return
+  terminalSelectionDragCurrent = terminalPointerViewportCell(event) ?? terminalSelectionDragCurrent
   scheduleTerminalSelectionPolish()
 }
 
@@ -896,8 +930,10 @@ function stopTerminalSelectionDrag() {
   scheduleTerminalSelectionPolish()
 }
 
-function startTerminalSelectionDrag() {
+function startTerminalSelectionDrag(event: PointerEvent) {
   terminalSelectionDragging = true
+  terminalSelectionDragStart = terminalPointerViewportCell(event)
+  terminalSelectionDragCurrent = terminalSelectionDragStart
   scheduleTerminalSelectionPolish()
   window.addEventListener('pointermove', handleTerminalSelectionPointerMove, true)
   window.addEventListener('pointerup', stopTerminalSelectionDrag, true)
@@ -1075,6 +1111,7 @@ onMounted(async () => {
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
   terminal.open(terminalHost.value)
+  terminal.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent)
   syncTerminalSize()
   terminal.focus()
   renderIdlePrompt(terminal)
@@ -1407,7 +1444,7 @@ function requestTerminalPaste(event: MouseEvent | PointerEvent) {
 
 function handleTerminalPointerDown(event: PointerEvent) {
   if (event.button === 0) {
-    startTerminalSelectionDrag()
+    startTerminalSelectionDrag(event)
     return
   }
   if (event.button !== 2) return
