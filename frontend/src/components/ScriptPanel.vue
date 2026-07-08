@@ -1216,10 +1216,10 @@ function nowText() {
 
       <div class="panel-actions">
         <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
-        <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation">+ 新建脚本</button>
+        <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation"><UiIcon name="plus" />新建脚本</button>
         <button v-if="!props.recording.isRecording" class="text-button primary-action" type="button" @click="startRecording"><UiIcon name="play" />开始录制</button>
-        <button v-else class="text-button danger" type="button" @click="stopRecording">结束录制</button>
-        <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" @click="clearRecording"><UiIcon name="trash" /></button>
+        <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />结束录制</button>
+        <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" :disabled="!recordingHasData && !props.recording.isRecording" @click="clearRecording"><UiIcon name="trash" /></button>
       </div>
     </div>
 
@@ -1393,7 +1393,7 @@ function nowText() {
         <div class="script-library-editor">
           <div class="script-editor-toolbar">
             <div class="script-file-tab">
-              <span class="script-file-icon">sh</span>
+              <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
               <strong>{{ selectedScript.name }}</strong>
               <span class="record-dot active" aria-hidden="true" />
               <span class="script-editor-risk" :class="`risk-${selectedScriptRiskStatus.level}`">{{ selectedScriptRiskStatus.label }}</span>
@@ -1415,6 +1415,7 @@ function nowText() {
               :value="selectedScriptContent"
               spellcheck="false"
               aria-label="编辑脚本"
+              placeholder="在这里编辑保存的脚本..."
               @input="updateSelectedScriptDraft(($event.target as HTMLTextAreaElement).value)"
               @scroll="syncSelectedScriptLineRail"
             />
@@ -1444,7 +1445,7 @@ function nowText() {
 
           <div class="script-editor-toolbar">
             <div class="script-file-tab">
-              <span class="script-file-icon">sh</span>
+              <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
               <span class="record-dot active" aria-hidden="true" />
               <span class="script-editor-risk" :class="`risk-${draftScriptRiskStatus.level}`">{{ draftScriptRiskStatus.label }}</span>
             </div>
@@ -1464,6 +1465,7 @@ function nowText() {
               :value="draftScriptContent"
               spellcheck="false"
               aria-label="脚本草稿"
+              placeholder="在这里粘贴或编写 shell、bat、PowerShell 脚本..."
               @input="updateDraftScriptContent(($event.target as HTMLTextAreaElement).value)"
               @scroll="syncDraftLineRail"
             />

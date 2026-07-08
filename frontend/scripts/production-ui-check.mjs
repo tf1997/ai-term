@@ -55,6 +55,13 @@ assert(
     styles.includes('.xterm-host *') &&
     styles.includes('.message-body *') &&
     styles.includes('user-select: text;') &&
+    appShell.includes('themeToggleButton') &&
+    appShell.includes('handleThemeTogglePointerDown') &&
+    appShell.includes("addEventListener('pointerdown', handleThemeTogglePointerDown, true)") &&
+    appShell.includes("addEventListener('mousedown', handleThemeTogglePointerDown, true)") &&
+    appShell.includes("addEventListener('click', handleThemeTogglePointerDown, true)") &&
+    appShell.includes('lastThemeToggleAt') &&
+    appShell.includes('stopImmediatePropagation') &&
     appShell.includes('selectableTextSelector') &&
     appShell.includes('handleAppSelectStart') &&
     appShell.includes("document.addEventListener('selectstart', handleAppSelectStart, true)") &&
@@ -466,6 +473,46 @@ assert(
     styles.includes('--shell-gap: 8px;') &&
     styles.includes('--shell-gap-tight: 6px;'),
   'Terminal, quick-command bar, and workspace tabs must share the same shell spacing tokens across themes and responsive widths.'
+)
+
+assert(
+  styles.includes('/* Native terminal code surface and completion menu. */') &&
+    styles.includes('background: rgba(226, 232, 240, .26) !important;') &&
+    styles.includes('overflow: hidden;') &&
+    styles.includes('.xterm-host .xterm-selection {') &&
+    styles.includes('z-index: 4 !important;') &&
+    styles.includes('pointer-events: none;') &&
+    styles.includes('Native xterm selection is replaced by ai-term-selection-overlay.') &&
+    styles.includes('opacity: 0 !important;') &&
+    styles.includes('.xterm-host .ai-term-selection-overlay') &&
+    styles.includes('.xterm-host .ai-term-selection-line') &&
+    styles.includes('.app-shell.theme-light .xterm-host .ai-term-selection-line') &&
+    styles.includes('.app-shell.theme-light .xterm-host .xterm-selection div') &&
+    styles.includes('background: rgba(16, 185, 129, .20) !important;') &&
+    styles.includes('border-color: rgba(16, 185, 129, .42);') &&
+    styles.includes('background: rgba(16, 185, 129, .12);') &&
+    styles.includes('outline: 1px solid rgba(16, 185, 129, .34);') &&
+    styles.includes('.xterm-host .xterm-rows * {') &&
+    styles.includes('.xterm-host .xterm-rows *::selection') &&
+    styles.includes('color: inherit !important;') &&
+    styles.includes('.xterm-host .xterm-accessibility-tree:not(.debug) *::selection') &&
+    styles.includes('background: transparent !important;') &&
+    styles.includes('-webkit-user-select: none;') &&
+    !styles.includes('0 24px 70px') &&
+    !styles.includes('rgba(96, 165, 250, .42)') &&
+    !styles.includes('rgba(30, 64, 175, .28)'),
+  'Terminal surface must stay grounded without heavy shadows, use neutral selection colors in both themes, and keep the green accent for focus and completion states.'
+)
+
+assert(
+  styles.includes('/* AI panel reading rhythm polish. */') &&
+    styles.includes('.assistant-panel .message {') &&
+    styles.includes('.assistant-panel .message.ai {') &&
+    styles.includes('.assistant-panel .message.error {') &&
+    styles.includes('.app-shell.theme-light .assistant-panel .message.ai {') &&
+    styles.includes('.ai-code-run.text-button.primary-action:hover') &&
+    styles.includes('.app-shell.theme-light .ai-code-run.text-button.primary-action:hover'),
+  'AI assistant panel must keep compact message rhythm, neutral cards, green command actions, and matching light-theme surfaces.'
 )
 
 const lightThemeLayoutParityPairs = [
@@ -1443,6 +1490,27 @@ assert(
 )
 
 assert(
+  scriptPanel.includes('<UiIcon name="plus" />') &&
+    scriptPanel.includes('<UiIcon name="stop" />') &&
+    scriptPanel.includes(':disabled="!recordingHasData && !props.recording.isRecording"') &&
+    scriptPanel.includes('<span class="script-file-icon"><UiIcon name="script" size="13" /></span>') &&
+    !scriptPanel.includes('<span class="script-file-icon">sh</span>') &&
+    scriptPanel.includes('placeholder="在这里编辑保存的脚本..."') &&
+    scriptPanel.includes('placeholder="在这里粘贴或编写 shell、bat、PowerShell 脚本..."') &&
+    styles.includes('/* Script panel black/white theme polish. */') &&
+    styles.includes('.script-head .panel-actions') &&
+    styles.includes('.script-recorder > div') &&
+    styles.includes('.script-file-icon .ui-icon') &&
+    styles.includes('.script-editor-shell textarea::placeholder') &&
+    styles.includes('.script-editor-shell textarea::selection') &&
+    styles.includes('background: rgba(16, 185, 129, .28);') &&
+    styles.includes('.app-shell.theme-light .script-editor-shell textarea::placeholder') &&
+    styles.includes('.app-shell.theme-light .script-file-icon') &&
+    styles.includes('height: calc(100% - 16px);') &&
+    styles.includes('.app-shell.theme-light .script-library-empty'),
+  'Script panel must use icon-based script tabs, compact recording controls, visible editor placeholders, green editor selection, full-width workbench layout, stronger script-library empty states, and matching black/light theme surfaces.'
+)
+assert(
   sidebar.includes('v-model="selectedProfile.target.host"') &&
     sidebar.includes('v-model="selectedProfile.target.username"') &&
     sidebar.includes('v-model.number="selectedProfile.target.port"') &&
@@ -1699,6 +1767,23 @@ assert(
     terminalPane.includes('onSelectionChange') &&
     terminalPane.includes('getSelectionPosition') &&
     terminalPane.includes('copySelectionToClipboard') &&
+    terminalPane.includes('normalizedTerminalSelectionText') &&
+    terminalPane.includes('polishTerminalSelection') &&
+    terminalPane.includes('scheduleTerminalSelectionPolish') &&
+    terminalPane.includes('terminalSelectionOverlay') &&
+    terminalPane.includes('terminalSelectionDragging') &&
+    terminalPane.includes('handleTerminalSelectionPointerMove') &&
+    terminalPane.includes('startTerminalSelectionDrag') &&
+    terminalPane.includes('stopTerminalSelectionDrag') &&
+    terminalPane.includes("window.addEventListener('pointermove', handleTerminalSelectionPointerMove, true)") &&
+    terminalPane.includes("window.removeEventListener('pointermove', handleTerminalSelectionPointerMove, true)") &&
+    terminalPane.includes('clearTerminalSelectionOverlay') &&
+    terminalPane.includes('terminalSelectionCellToViewport') &&
+    terminalPane.includes('terminal?.buffer.active.viewportY') &&
+    terminalPane.includes('cell.y - viewportY - 1') &&
+    terminalPane.includes('ai-term-selection-overlay') &&
+    terminalPane.includes('ai-term-selection-line') &&
+    terminalPane.includes("host.classList.add('ai-term-selection-polished')") &&
     terminalPane.includes('pasteClipboardToTerminal') &&
     terminalPane.includes("@tauri-apps/api/clipboard") &&
     terminalPane.includes('readClipboardText') &&
@@ -2319,7 +2404,9 @@ assert(
     appShell.includes('updateUserSettings') &&
     appShell.includes('showToast') &&
     !appShell.includes('class="app-status-bar"') &&
-    appShell.includes('class="toast-stack"') &&
+    appShell.includes('class=\"toast-stack\"') &&
+    appShell.includes('toastKey') &&
+    appShell.includes('slice(-3)') &&
     terminalPane.includes('terminalSettings?: TerminalVisualSettings') &&
     terminalPane.includes('applyTerminalAppearance') &&
     terminalPane.includes('terminalThemeOptions') &&
@@ -2329,7 +2416,8 @@ assert(
     styles.includes('.settings-config-list') &&
     styles.includes('.settings-empty') &&
     styles.includes('.app-toast') &&
-    styles.includes('.toast-stack'),
+    styles.includes('.toast-stack') &&
+    styles.includes('top: 72px;'),
   'Settings center must keep the visible settings surface focused, use selectable terminal fonts, hide terminal theme controls, and retain shared toasts.'
 )
 
@@ -2423,6 +2511,7 @@ assert(
     styles.includes('.app-shell.theme-light .status-dot.live') &&
     styles.includes('.app-shell.theme-light .badge') &&
     styles.includes('.rail-button.active::before') &&
+    styles.includes('border-radius: 14px;') &&
     styles.includes('.rail-button .ui-icon') &&
     styles.includes('.theme-light .local-pathbar') &&
     styles.includes('.theme-light .file-actions .icon-button:hover:not(:disabled)') &&
@@ -2449,5 +2538,20 @@ assert(
     !styles.includes('.app-shell.theme-light .server-card {\n  min-height') &&
     !styles.includes('.app-shell.theme-light .quick-command-bar {\n  margin'),
   'Light theme must inherit base geometry; theme-specific rules should not duplicate shell, rail, sidebar, terminal, or workspace layout.'
+)
+assert(
+  fileTransfer.includes('浏览器预览中无法使用本地文件和 SFTP 能力，请在 AI Term 桌面端中操作。') &&
+    fileTransfer.includes('isTauriPreviewUnavailable') &&
+    styles.includes('/* Workspace empty-state and quick command modal polish. */') &&
+    styles.includes('.history-list > .empty-state') &&
+    styles.includes('.file-list > .empty-state') &&
+    styles.includes('.assistant-panel .message-list > .empty-state') &&
+    styles.includes('.quick-command-modal .modal-head') &&
+    styles.includes('.theme-light .quick-command-modal .modal-head') &&
+    terminalPane.includes('quickCommandSettingsButton') &&
+    terminalPane.includes('handleQuickCommandSettingsPointerDown') &&
+    terminalPane.includes("addEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)") &&
+    styles.includes('grid-template-rows: auto minmax(0, 1fr) auto auto;'),
+  'Right workspace empty states, SFTP browser-preview feedback, and quick-command modal chrome must be polished across dark and light themes.'
 )
 console.log('production-ui-check passed')

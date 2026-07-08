@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   cancelTask,
@@ -1354,7 +1354,15 @@ function formatRemoteModified(value: string) {
 }
 
 function formatError(err: unknown) {
-  return err instanceof Error ? err.message : String(err)
+  const message = err instanceof Error ? err.message : String(err)
+  if (isTauriPreviewUnavailable(message)) {
+    return '浏览器预览中无法使用本地文件和 SFTP 能力，请在 AI Term 桌面端中操作。'
+  }
+  return message
+}
+
+function isTauriPreviewUnavailable(message: string) {
+  return message.includes('__TAURI_IPC__') || message.includes('window.__TAURI_IPC__') || message.includes('invoke')
 }
 
 async function copyText(value: string) {

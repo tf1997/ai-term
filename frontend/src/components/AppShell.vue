@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
 
@@ -170,7 +170,9 @@ const loadedSessionLists = ref<Record<string, boolean>>({})
 const contextMenu = ref<ContextMenuState | null>(null)
 const appSettings = ref<AppUserSettings>(loadUserSettings())
 const appTheme = ref<AppTheme>(loadAppTheme())
+const themeToggleButton = ref<HTMLButtonElement | null>(null)
 const toasts = ref<AppToast[]>([])
+let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
 const selectedProfile = computed(() => {
@@ -807,6 +809,16 @@ function toggleAppTheme() {
   appTheme.value = appTheme.value === 'light' ? 'dark' : 'light'
   showToast('info', '主题已切换', appTheme.value === 'light' ? '已切换为白色主题。' : '已切换为深色主题。')
 }
+function handleThemeTogglePointerDown(event: Event) {
+  event.preventDefault()
+  event.stopPropagation()
+  ;(event as Event & { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.()
+  const now = performance.now()
+  if (now - lastThemeToggleAt < 160) return
+  lastThemeToggleAt = now
+  toggleAppTheme()
+}
+
 function updateUserSettings(settings: AppUserSettings) {
   appSettings.value = { ...settings }
   showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
@@ -818,7 +830,9 @@ function checkForUpdates() {
 
 function showToast(kind: ToastKind, title: string, message = '') {
   const id = `toast-${Date.now()}-${toastSequence++}`
-  toasts.value = [...toasts.value, { id, kind, title, message }].slice(-4)
+  const toastKey = `${kind}\u0000${title}\u0000${message}`
+  const nextToasts = toasts.value.filter((toast) => `${toast.kind}\u0000${toast.title}\u0000${toast.message ?? ''}` !== toastKey)
+  toasts.value = [...nextToasts, { id, kind, title, message }].slice(-3)
   window.setTimeout(() => dismissToast(id), kind === 'error' ? 6200 : 3600)
 }
 
@@ -1603,6 +1617,9 @@ onMounted(() => {
   })
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
+  themeToggleButton.value?.addEventListener('pointerdown', handleThemeTogglePointerDown, true)
+  themeToggleButton.value?.addEventListener('mousedown', handleThemeTogglePointerDown, true)
+  themeToggleButton.value?.addEventListener('click', handleThemeTogglePointerDown, true)
   document.addEventListener('selectstart', handleAppSelectStart, true)
   document.addEventListener('dragstart', handleAppDragStart, true)
 })
@@ -1626,6 +1643,9 @@ watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  themeToggleButton.value?.removeEventListener('pointerdown', handleThemeTogglePointerDown, true)
+  themeToggleButton.value?.removeEventListener('mousedown', handleThemeTogglePointerDown, true)
+  themeToggleButton.value?.removeEventListener('click', handleThemeTogglePointerDown, true)
   document.removeEventListener('selectstart', handleAppSelectStart, true)
   document.removeEventListener('dragstart', handleAppDragStart, true)
 })
@@ -1687,6 +1707,7 @@ onBeforeUnmount(() => {
         <UiIcon name="settings" />
       </button>
       <button
+        ref="themeToggleButton"
         class="rail-button theme-toggle-button"
         type="button"
         :title="appTheme === 'light' ? '切换深色主题' : '切换白色主题'"

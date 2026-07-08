@@ -64,6 +64,7 @@ const emit = defineEmits<{
 }>()
 
 const terminalHost = ref<HTMLDivElement | null>(null)
+const quickCommandSettingsButton = ref<HTMLButtonElement | null>(null)
 let terminal: Terminal | undefined
 let sessionId = ''
 let connectionAttempt = 0
@@ -72,6 +73,8 @@ let unlistenClosed: (() => void) | undefined
 let resizeObserver: ResizeObserver | undefined
 let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
+let terminalSelectionPolishFrame = 0
+let terminalSelectionDragging = false
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
 let pendingInputControlSequence = ''
@@ -391,6 +394,12 @@ function moveQuickCommandItem(index: number, direction: -1 | 1) {
   next[index] = next[nextIndex]
   next[nextIndex] = current
   quickCommandItems.value = next
+}
+
+function handleQuickCommandSettingsPointerDown(event: PointerEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  openQuickCommandSettings()
 }
 
 function openQuickCommandSettings() {
@@ -723,7 +732,8 @@ function appendTerminalOutput(data: string) {
 
 function activeBufferLine(y: number) {
   if (!terminal) return y
-  return terminal.buffer.active.baseY + y
+  if (y > terminal.rows) return y
+  return terminal.buffer.active.viewportY + y
 }
 
 function selectedLineRange(text: string) {
@@ -742,8 +752,160 @@ function selectedLineRange(text: string) {
   }
 }
 
+function normalizedTerminalSelectionText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n+$/g, '')
+}
+
+function terminalRowContentRight(row: HTMLElement) {
+  const rowRect = row.getBoundingClientRect()
+  const text = row.textContent ?? ''
+  const contentLength = text.trimEnd().length
+  if (!contentLength) return rowRect.left
+
+  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+  let remaining = contentLength
+  let right = rowRect.left
+  let node = walker.nextNode() as Text | null
+
+  while (node && remaining > 0) {
+    const take = Math.min(node.data.length, remaining)
+    if (take > 0) {
+      const range = document.createRange()
+      range.setStart(node, 0)
+      range.setEnd(node, take)
+      const rect = range.getBoundingClientRect()
+      right = Math.max(right, rect.right)
+      range.detach()
+      remaining -= take
+    }
+    node = walker.nextNode() as Text | null
+  }
+
+  if (right > rowRect.left) return right
+  return rowRect.left + contentLength * measureTerminalCell(row).width
+}
+
+function terminalSelectionOverlay() {
+  const host = terminalHost.value
+  const screen = host?.querySelector<HTMLElement>('.xterm-screen')
+  if (!host || !screen) return undefined
+  let overlay = screen.querySelector<HTMLElement>('.ai-term-selection-overlay')
+  if (!overlay) {
+    overlay = document.createElement('div')
+    overlay.className = 'ai-term-selection-overlay'
+    screen.appendChild(overlay)
+  }
+  return { host, screen, overlay }
+}
+
+function clearTerminalSelectionOverlay() {
+  const host = terminalHost.value
+  host?.classList.remove('ai-term-selection-polished')
+  host?.querySelector<HTMLElement>('.ai-term-selection-overlay')?.replaceChildren()
+}
+
+function terminalSelectionCellToViewport(cell: { x: number; y: number }) {
+  const viewportY = terminal?.buffer.active.viewportY ?? 0
+  return {
+    x: Math.max(0, cell.x - 1),
+    y: Math.max(0, cell.y - viewportY - 1)
+  }
+}
+
+function polishTerminalSelection() {
+  const overlayTarget = terminalSelectionOverlay()
+  const selectionPosition = terminal?.getSelectionPosition()
+  if (!overlayTarget || !selectionPosition) {
+    clearTerminalSelectionOverlay()
+    return
+  }
+
+  const { host, screen, overlay } = overlayTarget
+  const rows = Array.from(host.querySelectorAll<HTMLElement>('.xterm-rows > div'))
+  overlay.replaceChildren()
+  host.classList.add('ai-term-selection-polished')
+  if (!rows.length) return
+
+  const start = terminalSelectionCellToViewport(selectionPosition.start)
+  const end = terminalSelectionCellToViewport(selectionPosition.end)
+  if (start.y > end.y || (start.y === end.y && start.x > end.x)) {
+    const previousStart = { ...start }
+    start.x = end.x
+    start.y = end.y
+    end.x = previousStart.x
+    end.y = previousStart.y
+  }
+
+  const cellWidth = measureTerminalCell(host).width
+  const screenRect = screen.getBoundingClientRect()
+  const startY = Math.max(0, Math.min(rows.length - 1, start.y))
+  const endY = Math.max(0, Math.min(rows.length - 1, end.y))
+
+  for (let rowIndex = startY; rowIndex <= endY; rowIndex += 1) {
+    const row = rows[rowIndex]
+    const textLength = (row.textContent ?? '').trimEnd().length
+    if (!textLength) continue
+
+    const rowRect = row.getBoundingClientRect()
+    const contentRight = terminalRowContentRight(row)
+    let left = rowRect.left
+    let right = contentRight
+
+    if (rowIndex === start.y) left = rowRect.left + start.x * cellWidth
+    if (rowIndex === end.y) right = Math.min(right, rowRect.left + end.x * cellWidth)
+
+    left = Math.max(rowRect.left, Math.min(left, contentRight))
+    right = Math.max(rowRect.left, Math.min(right, contentRight))
+    const width = Math.ceil(right - left)
+    if (width <= 0) continue
+
+    const line = document.createElement('div')
+    line.className = 'ai-term-selection-line'
+    line.style.left = `${Math.floor(left - screenRect.left)}px`
+    line.style.top = `${Math.floor(rowRect.top - screenRect.top)}px`
+    line.style.width = `${width}px`
+    line.style.height = `${Math.ceil(rowRect.height)}px`
+    overlay.appendChild(line)
+  }
+}
+
+function scheduleTerminalSelectionPolish() {
+  if (terminalSelectionPolishFrame) {
+    window.cancelAnimationFrame(terminalSelectionPolishFrame)
+  }
+  terminalSelectionPolishFrame = window.requestAnimationFrame(() => {
+    terminalSelectionPolishFrame = 0
+    polishTerminalSelection()
+  })
+}
+function handleTerminalSelectionPointerMove(event: PointerEvent) {
+  if (!terminalSelectionDragging || (event.buttons & 1) === 0) return
+  scheduleTerminalSelectionPolish()
+}
+
+function stopTerminalSelectionDrag() {
+  if (!terminalSelectionDragging) return
+  terminalSelectionDragging = false
+  window.removeEventListener('pointermove', handleTerminalSelectionPointerMove, true)
+  window.removeEventListener('pointerup', stopTerminalSelectionDrag, true)
+  window.removeEventListener('pointercancel', stopTerminalSelectionDrag, true)
+  scheduleTerminalSelectionPolish()
+}
+
+function startTerminalSelectionDrag() {
+  terminalSelectionDragging = true
+  scheduleTerminalSelectionPolish()
+  window.addEventListener('pointermove', handleTerminalSelectionPointerMove, true)
+  window.addEventListener('pointerup', stopTerminalSelectionDrag, true)
+  window.addEventListener('pointercancel', stopTerminalSelectionDrag, true)
+}
+
 function emitTerminalSelection(text: string) {
-  const normalized = text.trimEnd()
+  const normalized = normalizedTerminalSelectionText(text)
   if (!normalized) {
     emit('terminalSelection', {
       terminalId: props.terminalId,
@@ -763,7 +925,7 @@ function emitTerminalSelection(text: string) {
 }
 
 async function copySelectionToClipboard() {
-  const selectedText = terminal?.getSelection() ?? ''
+  const selectedText = normalizedTerminalSelectionText(terminal?.getSelection() ?? '')
   emitTerminalSelection(selectedText)
   if (!selectedText.trim()) return
   try {
@@ -926,10 +1088,12 @@ onMounted(async () => {
     }
   })
   selectionDisposable = terminal.onSelectionChange(() => {
+    scheduleTerminalSelectionPolish()
     void copySelectionToClipboard()
   })
   terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
+  quickCommandSettingsButton.value?.addEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
 
   resizeObserver = new ResizeObserver(() => {
     syncTerminalSize()
@@ -1242,6 +1406,10 @@ function requestTerminalPaste(event: MouseEvent | PointerEvent) {
 }
 
 function handleTerminalPointerDown(event: PointerEvent) {
+  if (event.button === 0) {
+    startTerminalSelectionDrag()
+    return
+  }
   if (event.button !== 2) return
   requestTerminalPaste(event)
 }
@@ -1291,6 +1459,9 @@ function focusTerminal() {
 onBeforeUnmount(() => {
   terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
+  quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
+  stopTerminalSelectionDrag()
+  if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
   disconnect(false)
   resizeObserver?.disconnect()
   unlisten?.()
@@ -1350,7 +1521,7 @@ defineExpose({
       <button v-for="command in quickCommands" :key="command" @click="runQuickCommand(command)">
         {{ command }}
       </button>
-      <button class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置" @click="openQuickCommandSettings"><UiIcon name="settings" /></button>
+      <button ref="quickCommandSettingsButton" class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
     </section>
 
     <teleport to="body">
