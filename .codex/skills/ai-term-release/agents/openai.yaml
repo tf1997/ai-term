@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Term Release"
+  short_description: "Commit, tag, and verify ai-term releases"
+  default_prompt: "Use $ai-term-release to push develop, update a test tag, and verify the Release workflow."

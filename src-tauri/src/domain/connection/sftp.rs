@@ -107,19 +107,35 @@ pub fn build_sftp_launch_plan_with_target(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
 ) -> SftpLaunchPlan {
-    build_sftp_launch_plan_for_route(effective_sftp_route(profile, target_override))
+    build_sftp_launch_plan_with_initial_path(profile, target_override, None)
 }
 
-fn build_sftp_fallback_launch_plan_with_target(
+fn build_sftp_launch_plan_with_initial_path(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
+    initial_remote_path: Option<&str>,
+) -> SftpLaunchPlan {
+    build_sftp_launch_plan_for_route(
+        effective_sftp_route(profile, target_override),
+        initial_remote_path,
+    )
+}
+
+fn build_sftp_fallback_launch_plan_with_initial_path(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    initial_remote_path: Option<&str>,
 ) -> Option<SftpLaunchPlan> {
     Some(build_sftp_launch_plan_for_route(
         composite_username_fallback_route(profile, target_override)?,
+        initial_remote_path,
     ))
 }
 
-fn build_sftp_launch_plan_for_route(route: SftpRoute) -> SftpLaunchPlan {
+fn build_sftp_launch_plan_for_route(
+    route: SftpRoute,
+    initial_remote_path: Option<&str>,
+) -> SftpLaunchPlan {
     let mut args = vec!["-o".into(), "BatchMode=no".into()];
     args.extend(app_known_hosts_ssh_args());
     args.extend(["-o".into(), "NumberOfPasswordPrompts=2".into()]);
@@ -131,7 +147,7 @@ fn build_sftp_launch_plan_for_route(route: SftpRoute) -> SftpLaunchPlan {
 
     args.push("-P".into());
     args.push(route.target.port.unwrap_or(22).to_string());
-    args.push(endpoint_destination(&route.target));
+    args.push(sftp_destination(&route.target, initial_remote_path));
 
     SftpLaunchPlan {
         program: "sftp".into(),
@@ -172,11 +188,12 @@ pub fn list_directory_with_cancel(
         Ok(output) => (output, remote_path.clone()),
         Err(error) if should_retry_sftp_root_listing(&error) => {
             let fallback_path = "/".to_string();
-            let output = run_sftp_commands(
+            let output = run_sftp_commands_with_initial_path(
                 profile,
                 target_override,
                 list_directory_without_cwd_commands(&fallback_path)?,
                 cancel_token,
+                &fallback_path,
             )?;
             (output, fallback_path)
         }
@@ -237,13 +254,14 @@ pub fn probe_sftp_with_cancel(
             }
         }
         Err(error) if should_retry_sftp_root_listing(&error) => {
-            match run_sftp_profile_commands_with_progress(
+            match run_sftp_profile_commands_with_initial_path(
                 profile,
                 target_override,
                 list_directory_without_cwd_commands("/").unwrap_or_else(|_| vec!["bye".into()]),
                 PROBE_TIMEOUT,
                 cancel_token,
                 None,
+                "/",
             ) {
                 Ok(_) => SftpProbeResponse {
                     available: true,
@@ -1723,17 +1741,25 @@ fn ensure_not_cancelled(cancel_token: Option<&SftpCancelToken>) -> Result<()> {
     Ok(())
 }
 fn should_retry_sftp_root_listing(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    message.contains("need cwd") || message.contains("couldn't canonicalize")
+    let message = error.to_string().to_lowercase();
+    !contains_host_key_verification_failure(&message)
+        && (message.contains("need cwd") || message.contains("couldn't canonicalize"))
 }
 
 fn should_try_composite_username_fallback(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    !message.contains("sftp task cancelled")
-        && !message.contains("remote host identification has changed")
-        && !message.contains("possible dns spoofing detected")
-        && !message.contains("host key verification failed")
-        && !(message.contains("offending") && message.contains("known_hosts"))
+    let message = error.to_string().to_lowercase();
+    !message.contains("sftp task cancelled") && !contains_host_key_verification_failure(&message)
+}
+
+fn contains_host_key_verification_failure(message: &str) -> bool {
+    message.contains("remote host identification has changed")
+        || message.contains("possible dns spoofing detected")
+        || message.contains("host key verification failed")
+        || message.contains("ssh host key verification failed")
+        || message.contains("ssh 主机密钥校验失败")
+        || message.contains("known_hosts 旧记录")
+        || message.contains("stricthostkeychecking")
+        || (message.contains("offending") && message.contains("known_hosts"))
 }
 
 fn run_sftp_commands(
@@ -1743,6 +1769,24 @@ fn run_sftp_commands(
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<String> {
     run_sftp_commands_with_progress(profile, target_override, commands, cancel_token, None)
+}
+
+fn run_sftp_commands_with_initial_path(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    commands: Vec<String>,
+    cancel_token: Option<&SftpCancelToken>,
+    initial_remote_path: &str,
+) -> Result<String> {
+    run_sftp_profile_commands_with_initial_path(
+        profile,
+        target_override,
+        commands,
+        COMMAND_TIMEOUT,
+        cancel_token,
+        None,
+        initial_remote_path,
+    )
 }
 
 fn run_sftp_commands_with_progress(
@@ -1768,10 +1812,31 @@ fn run_sftp_profile_commands_with_progress(
     commands: Vec<String>,
     timeout: Duration,
     cancel_token: Option<&SftpCancelToken>,
-    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<String> {
+    run_sftp_profile_commands_with_initial_path(
+        profile,
+        target_override,
+        commands,
+        timeout,
+        cancel_token,
+        progress,
+        "",
+    )
+}
+
+fn run_sftp_profile_commands_with_initial_path(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    commands: Vec<String>,
+    timeout: Duration,
+    cancel_token: Option<&SftpCancelToken>,
+    mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    initial_remote_path: &str,
+) -> Result<String> {
+    let initial_remote_path = non_empty_initial_remote_path(initial_remote_path);
     let primary_result = run_sftp_launch_plan_with_progress_ref(
-        build_sftp_launch_plan_with_target(profile, target_override),
+        build_sftp_launch_plan_with_initial_path(profile, target_override, initial_remote_path),
         commands.clone(),
         timeout,
         cancel_token,
@@ -1785,9 +1850,11 @@ fn run_sftp_profile_commands_with_progress(
                 return Err(primary_error);
             }
 
-            let Some(fallback_plan) =
-                build_sftp_fallback_launch_plan_with_target(profile, target_override)
-            else {
+            let Some(fallback_plan) = build_sftp_fallback_launch_plan_with_initial_path(
+                profile,
+                target_override,
+                initial_remote_path,
+            ) else {
                 return Err(primary_error);
             };
 
@@ -2337,6 +2404,23 @@ fn endpoint_destination(endpoint: &AuthEndpoint) -> String {
     }
 }
 
+fn sftp_destination(endpoint: &AuthEndpoint, initial_remote_path: Option<&str>) -> String {
+    let destination = endpoint_destination(endpoint);
+    let Some(path) = initial_remote_path.and_then(non_empty_initial_remote_path) else {
+        return destination;
+    };
+    format!("{destination}:{path}")
+}
+
+fn non_empty_initial_remote_path(path: &str) -> Option<&str> {
+    let path = path.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
 fn proxy_jump_destination(endpoint: &AuthEndpoint) -> String {
     let destination = endpoint_destination(endpoint);
     match endpoint.port {
@@ -2846,12 +2930,13 @@ mod tests {
 
     #[test]
     fn terminal_target_override_fallback_uses_composite_bastion_username() {
-        let plan = build_sftp_fallback_launch_plan_with_target(
+        let plan = build_sftp_fallback_launch_plan_with_initial_path(
             &direct_profile_targeting_bastion(),
             &SftpTargetOverride {
                 host: Some("10.1.2.3".into()),
                 username: Some("app".into()),
             },
+            None,
         )
         .expect("terminal target override should support composite username fallback");
 
@@ -2944,6 +3029,56 @@ mod tests {
         let commands = list_directory_without_cwd_commands("/").unwrap();
         assert_eq!(commands, vec!["ls -l \"/\"", "bye"]);
         assert!(!commands.iter().any(|command| command.starts_with("cd ")));
+    }
+
+    #[test]
+    fn need_cwd_retry_starts_sftp_at_remote_root() {
+        let plan = build_sftp_launch_plan_with_initial_path(
+            &direct_profile_targeting_bastion(),
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+            Some("/"),
+        );
+
+        assert_eq!(plan.args.last().map(String::as_str), Some("app@10.1.2.3:/"));
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ProxyJump=ops@bastion.example.com:2222"));
+    }
+
+    #[test]
+    fn need_cwd_fallback_starts_composite_sftp_at_remote_root() {
+        let plan = build_sftp_fallback_launch_plan_with_initial_path(
+            &direct_profile_targeting_bastion(),
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+            Some("/"),
+        )
+        .expect("terminal target override should support composite username fallback");
+
+        assert_eq!(
+            plan.args.last().map(String::as_str),
+            Some("ops/10.1.2.3/app@bastion.example.com:/")
+        );
+        assert!(!plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1].starts_with("ProxyJump=")));
+    }
+
+    #[test]
+    fn host_key_warning_does_not_try_fallback_or_need_cwd_retry() {
+        let error = anyhow::anyhow!(
+            "[AI Term] SSH 主机密钥校验失败。堡垒机或目标机的 host key 与本机 known_hosts 旧记录不一致。\nNeed cwd"
+        );
+
+        assert!(!should_try_composite_username_fallback(&error));
+        assert!(!should_retry_sftp_root_listing(&error));
     }
 
     #[test]
