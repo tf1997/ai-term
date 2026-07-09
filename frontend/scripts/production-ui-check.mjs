@@ -1398,6 +1398,12 @@ assert(
     !scriptPanel.includes('编写、优化和执行脚本') &&
     scriptPanel.includes('class="script-editor-toolbar"') &&
     scriptPanel.includes('class="script-file-tab"') &&
+    scriptPanel.includes('function scriptEditorRiskStatus') &&
+    scriptPanel.includes("level: 'muted'") &&
+    scriptPanel.includes('hasSelectedScriptContent') &&
+    scriptPanel.includes('v-if="props.recording.isRecording || recordingHasData" class="script-recorder"') &&
+    scriptPanel.includes(':disabled="!hasDraftScript"') &&
+    scriptPanel.includes(':disabled="!hasSelectedScriptContent"') &&
     scriptPanel.includes('class="script-editor-tools"') &&
     scriptPanel.includes('title="保存脚本草稿"') &&
     scriptPanel.includes('title="重新生成脚本"') &&
@@ -1429,9 +1435,9 @@ assert(
     scriptPanel.includes('class="script-replies-list"') &&
     scriptPanel.includes("当前脚本草稿为空，无法复制。") &&
     scriptPanel.includes("当前脚本草稿为空，无法执行。") &&
-    !scriptPanel.includes(':disabled="!hasDraftScript" @click="saveDraftScript"') &&
-    !scriptPanel.includes(':disabled="!hasDraftScript" @click="executeDraftScript"') &&
-    !scriptPanel.includes(':disabled="!hasDraftScript" @click="copyDraftScript"') &&
+    scriptPanel.includes(':disabled="!hasDraftScript" @click="saveDraftScript"') &&
+    scriptPanel.includes(':disabled="!hasDraftScript" @click="executeDraftScript"') &&
+    scriptPanel.includes(':disabled="!hasDraftScript" @click="copyDraftScript"') &&
     !scriptPanel.includes(':disabled="!hasDraftScript || isGenerating || !hasUsableConfig"') &&
     !scriptPanel.includes(':disabled="isGenerating || !hasUsableConfig"') &&
     !scriptPanel.includes(':disabled="!isGenerating && !hasUsableConfig"') &&
@@ -2096,6 +2102,8 @@ assert(
     styles.includes('.risk-upgrade') &&
     styles.includes('.command-risk-status') &&
     styles.includes('.script-editor-risk') &&
+    styles.includes('.script-editor-risk.risk-muted') &&
+    styles.includes('.theme-light .command-risk-status.risk-muted, .theme-light .script-editor-risk.risk-muted') &&
     schema.includes('CREATE TABLE IF NOT EXISTS update_scripts') &&
     sqlite.includes('pub fn save_update_script') &&
     sqlite.includes('pub fn list_update_scripts') &&

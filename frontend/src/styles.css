@@ -4761,6 +4761,10 @@ code {
   border-color: rgba(239, 68, 68, .58);
   background: rgba(127, 29, 29, .34);
   color: #fecdd3;
+}.command-risk-status.risk-muted, .script-editor-risk.risk-muted {
+  border-color: rgba(100, 116, 139, .34);
+  background: rgba(51, 65, 85, .18);
+  color: #94a3b8;
 }
 .context-strip .command-risk-status {
   max-width: min(360px, 100%);
@@ -6538,6 +6542,10 @@ code {
   border-color: #f3c6cb;
   background: #fff1f2;
   color: #be123c;
+}.theme-light .command-risk-status.risk-muted, .theme-light .script-editor-risk.risk-muted {
+  border-color: #dbe4e9;
+  background: #f8fafb;
+  color: var(--light-muted);
 }
 .theme-light .bastion-targets, .theme-light .selected-target, .theme-light .target-list article, .theme-light .terminal-target-card, .theme-light .sftp-feedback {
   border-color: var(--light-border);
@@ -7873,26 +7881,32 @@ code {
   border-radius: 8px 8px 0 0;
 }
 .script-editor-toolbar {
-  min-height: 36px;
+  min-height: 40px;
   grid-template-columns: minmax(112px, 1fr) auto;
+  column-gap: 8px;
+  padding: 0 6px 0 8px;
   border-color: #1f2a3b;
-  background: #0b121d;
+  background: linear-gradient(180deg, #0c1420 0%, #0a111b 100%);
 }
 .script-file-tab {
-  height: 36px;
-  max-width: none;
-  gap: 8px;
-  padding: 0 10px;
-  border-right-color: #172234;
+  width: fit-content;
+  max-width: min(100%, 320px);
+  height: 28px;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid rgba(16, 185, 129, .22);
+  border-radius: 8px;
+  background: rgba(16, 185, 129, .07);
   color: #e5edf7;
-  overflow: visible;
+  overflow: hidden;
 }
 .script-file-icon {
-  width: 22px;
-  height: 22px;
-  border: 1px solid rgba(16, 185, 129, .25);
-  border-radius: 7px;
-  background: rgba(16, 185, 129, .11);
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(16, 185, 129, .13);
   color: #8be8bb;
 }
 .script-file-icon .ui-icon {
@@ -7913,10 +7927,16 @@ code {
   flex: 0 0 auto;
   min-width: max-content;
   max-width: none;
-  height: 22px;
+  height: 20px;
   margin-left: 0;
-  padding: 0 9px;
+  padding: 0 8px;
+  border-radius: 999px;
   overflow: visible;
+}
+.script-file-tab .script-editor-risk.risk-muted {
+  border-color: transparent;
+  background: transparent;
+  color: #93a4b8;
 }
 .script-editor-tools {
   min-width: max-content;
@@ -8047,13 +8067,19 @@ code {
   background: #fbfcfd;
 }
 .app-shell.theme-light .script-file-tab {
-  border-right-color: var(--light-border);
+  border-color: #ccebdd;
+  background: #f3fbf7;
   color: var(--light-text);
 }
 .app-shell.theme-light .script-file-icon {
-  border-color: #bfe9d3;
-  background: #eaf8f1;
+  border-color: transparent;
+  background: #dff6eb;
   color: var(--light-accent-strong);
+}
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-muted {
+  border-color: transparent;
+  background: transparent;
+  color: var(--light-muted);
 }
 .app-shell.theme-light .script-editor-tools .icon-button {
   border-color: transparent;
@@ -8208,6 +8234,40 @@ code {
   border-top-color: var(--light-border);
   background: #fbfcfd;
 }
+/* Dock the script prompt with the same rhythm as the AI panel composer. */
+.script-generate {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+.script-generate > .script-recorder {
+  grid-row: 1;
+}
+.script-generate > .script-workbench {
+  grid-row: 2;
+}
+.script-generate > .script-replies-panel {
+  grid-row: 3;
+}
+.script-generate > .script-compose {
+  grid-row: 4;
+  align-self: end;
+}
+.assistant-compose.script-compose {
+  --composer-pad-x: 8px;
+  --composer-pad-bottom: 8px;
+  min-height: 0;
+  padding: 7px var(--composer-pad-x) var(--composer-pad-bottom);
+}
+.assistant-compose.script-compose textarea {
+  min-height: 52px;
+  max-height: 112px;
+  padding: 7px calc(var(--icon-size) + 14px) calc(var(--icon-size) + 4px) 10px;
+  resize: vertical;
+}
+.assistant-compose.script-compose .icon-button {
+  right: calc(var(--composer-pad-x) + 6px);
+  bottom: calc(var(--composer-pad-bottom) + 5px);
+}
+
 /* Light theme color-only surface contract. */
 .app-shell.theme-light .assistant-panel, .app-shell.theme-light .history-panel, .app-shell.theme-light .script-panel, .app-shell.theme-light .files-panel, .app-shell.theme-light .settings-center, .app-shell.theme-light .settings-hub, .app-shell.theme-light .settings-section, .app-shell.theme-light .transfer-pane, .app-shell.theme-light .modal, .app-shell.theme-light .profile-editor-modal, .app-shell.theme-light .ai-config-modal, .app-shell.theme-light .quick-command-modal, .app-shell.theme-light .script-preview-modal, .app-shell.theme-light .script-risk-modal, .app-shell.theme-light .context-menu, .app-shell.theme-light .file-context-menu, .app-shell.theme-light .session-history-popover, .app-shell.theme-light .terminal-completion {
   border-color: var(--light-border);

@@ -118,6 +118,7 @@ const recordedOutput = computed(() => {
 })
 const recordingHasData = computed(() => recordedCommands.value.length > 0 || recordedOutput.value.trim().length > 0)
 const hasDraftScript = computed(() => draftScriptContent.value.trim().length > 0)
+const hasSelectedScriptContent = computed(() => selectedScriptContent.value.trim().length > 0)
 const showScriptComposer = computed(() => scriptPanelMode.value === 'generate')
 const hasScriptReplies = computed(() => messages.value.length > 0)
 const scriptReplyCountText = computed(() => `${messages.value.length} 条消息`)
@@ -130,9 +131,21 @@ const expandedScriptLineNumbers = computed(() => lineNumbersForScript(expandedSc
 const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value))
 const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value))
 const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value))
-const draftScriptRiskStatus = computed(() => scriptRiskStatusForContent(draftScriptContent.value))
-const selectedScriptRiskStatus = computed(() => scriptRiskStatusForContent(selectedScriptContent.value))
-const expandedScriptRiskStatus = computed(() => scriptRiskStatusForContent(expandedScriptContent.value))
+function scriptEditorRiskStatus(content: string) {
+  if (!content.trim()) {
+    return {
+      level: 'muted',
+      label: '\u672a\u626b\u63cf',
+      message: '\u8f93\u5165\u811a\u672c\u540e\u5c06\u81ea\u52a8\u626b\u63cf\u98ce\u9669',
+      risks: []
+    }
+  }
+  return scriptRiskStatusForContent(content)
+}
+
+const draftScriptRiskStatus = computed(() => scriptEditorRiskStatus(draftScriptContent.value))
+const selectedScriptRiskStatus = computed(() => scriptEditorRiskStatus(selectedScriptContent.value))
+const expandedScriptRiskStatus = computed(() => scriptEditorRiskStatus(expandedScriptContent.value))
 const pendingScriptRisks = computed(() => analyzeScriptRisks(pendingScriptExecution.value))
 const scriptRiskConfirmOpen = computed(() => pendingScriptExecution.value.trim().length > 0)
 const pendingScriptRiskSummary = computed(() => summarizeScriptRisks(pendingScriptRisks.value))
@@ -1401,11 +1414,11 @@ function nowText() {
             <div class="script-editor-tools">
 
               <button class="icon-button" type="button" title="返回列表" aria-label="返回列表" @click="returnToScriptList"><UiIcon name="arrow-left" /></button>
-              <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" @click="saveSelectedScript"><UiIcon name="save" /></button>
-              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="regenerateSelectedScript"><UiIcon name="refresh" /></button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeSelectedScript"><UiIcon name="play" /></button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copySelectedScript"><UiIcon name="copy" /></button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('selected')"><UiIcon name="maximize" /></button>
+              <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!hasSelectedScriptContent" @click="saveSelectedScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating || !hasSelectedScriptContent" @click="regenerateSelectedScript"><UiIcon name="refresh" /></button>
+              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!hasSelectedScriptContent" @click="executeSelectedScript"><UiIcon name="play" /></button>
+              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" :disabled="!hasSelectedScriptContent" @click="copySelectedScript"><UiIcon name="copy" /></button>
+              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" :disabled="!hasSelectedScriptContent" @click="openScriptPreview('selected')"><UiIcon name="maximize" /></button>
             </div>
           </div>
           <div class="script-editor-shell">
@@ -1421,7 +1434,7 @@ function nowText() {
             />
           </div>
           <div class="script-editor-statusbar">
-            <span>行 1, 列 1</span>
+            <span>{{ hasSelectedScriptContent ? '\u884c 1, \u5217 1' : '\u7b49\u5f85\u8f93\u5165\u811a\u672c' }}</span>
             <span>UTF-8</span>
             <span>LF</span>
             <span>总字符数: {{ selectedScriptContent.length }}</span>
@@ -1432,7 +1445,7 @@ function nowText() {
     </div>
 
     <div v-else class="script-generate">
-      <div class="script-recorder">
+      <div v-if="props.recording.isRecording || recordingHasData" class="script-recorder">
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
           <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
@@ -1451,11 +1464,11 @@ function nowText() {
             </div>
             <div class="script-editor-tools">
 
-              <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" @click="saveDraftScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" :disabled="!hasDraftScript" @click="saveDraftScript"><UiIcon name="save" /></button>
               <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="sendScriptRequest('regenerate')"><UiIcon name="refresh" /></button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeDraftScript"><UiIcon name="play" /></button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyDraftScript"><UiIcon name="copy" /></button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" @click="openScriptPreview('draft')"><UiIcon name="maximize" /></button>
+              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!hasDraftScript" @click="executeDraftScript"><UiIcon name="play" /></button>
+              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" :disabled="!hasDraftScript" @click="copyDraftScript"><UiIcon name="copy" /></button>
+              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" :disabled="!hasDraftScript" @click="openScriptPreview('draft')"><UiIcon name="maximize" /></button>
             </div>
           </div>
           <div class="script-editor-shell">
@@ -1471,7 +1484,7 @@ function nowText() {
             />
           </div>
           <div class="script-editor-statusbar">
-            <span>行 1, 列 1</span>
+            <span>{{ hasDraftScript ? '\u884c 1, \u5217 1' : '\u7b49\u5f85\u8f93\u5165\u811a\u672c' }}</span>
             <span>UTF-8</span>
             <span>LF</span>
             <span>总字符数: {{ draftScriptContent.length }}</span>
