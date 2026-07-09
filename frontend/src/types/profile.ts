@@ -1,4 +1,5 @@
 export type AuthMode = 'auto' | 'password' | 'key'
+export type ConnectionRole = 'direct' | 'bastion'
 export type JumpMode = 'direct' | 'interactive-menu'
 export type FileTransferMode =
   | 'auto'
@@ -29,6 +30,7 @@ export interface AuthEndpoint {
 export interface ConnectionProfile {
   id: string
   name: string
+  connectionRole: ConnectionRole
   gateway: AuthEndpoint
   target: AuthEndpoint
   jumpMode: JumpMode

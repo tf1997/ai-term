@@ -11,7 +11,9 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::models::{AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode};
+use super::models::{
+    AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
+};
 use crate::domain::filesystem::local::home_path;
 use crate::domain::pty::{
     append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
@@ -107,16 +109,17 @@ pub fn build_sftp_launch_plan_with_target(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
 ) -> SftpLaunchPlan {
-    build_sftp_launch_plan_for_route(effective_sftp_route(profile, target_override))
+    build_sftp_launch_plan_for_route(primary_sftp_route(profile, target_override))
 }
 
 fn build_sftp_fallback_launch_plan_with_target(
     profile: &ConnectionProfile,
     target_override: &SftpTargetOverride,
 ) -> Option<SftpLaunchPlan> {
-    Some(build_sftp_launch_plan_for_route(
-        composite_username_fallback_route(profile, target_override)?,
-    ))
+    Some(build_sftp_launch_plan_for_route(fallback_sftp_route(
+        profile,
+        target_override,
+    )?))
 }
 
 fn build_sftp_launch_plan_for_route(route: SftpRoute) -> SftpLaunchPlan {
@@ -1163,8 +1166,8 @@ fn native_sftp_routes(
         return Vec::new();
     }
 
-    let mut routes = vec![effective_sftp_route(profile, target_override)];
-    if let Some(fallback) = composite_username_fallback_route(profile, target_override) {
+    let mut routes = vec![primary_sftp_route(profile, target_override)];
+    if let Some(fallback) = fallback_sftp_route(profile, target_override) {
         if !routes.contains(&fallback) {
             routes.push(fallback);
         }
@@ -1794,7 +1797,7 @@ fn run_sftp_profile_commands_with_progress(
             if let Some(callback) = progress.as_deref_mut() {
                 callback(plain_progress_update(
                     None,
-                    "ProxyJump 不可用，正在尝试复合用户名 SFTP...",
+                    "SFTP 主路线不可用，正在尝试备用路线...",
                 ));
             }
 
@@ -1807,7 +1810,7 @@ fn run_sftp_profile_commands_with_progress(
             )
             .map_err(|fallback_error| {
                 anyhow::anyhow!(
-                    "SFTP ProxyJump 路线失败\n{}\n\nSFTP 复合用户名路线失败\n{}",
+                    "SFTP 主路线失败\n{}\n\nSFTP 备用路线失败\n{}",
                     clean_sftp_output(&primary_error.to_string()),
                     clean_sftp_output(&fallback_error.to_string())
                 )
@@ -2223,6 +2226,39 @@ fn effective_sftp_route(
         .or_else(|| infer_direct_login_proxy(profile, target_override, &target));
 
     SftpRoute { target, proxy }
+}
+
+fn primary_sftp_route(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> SftpRoute {
+    if prefers_composite_username_sftp(profile) {
+        if let Some(route) = composite_username_fallback_route(profile, target_override) {
+            return route;
+        }
+    }
+    effective_sftp_route(profile, target_override)
+}
+
+fn fallback_sftp_route(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) -> Option<SftpRoute> {
+    if prefers_composite_username_sftp(profile) {
+        let composite = composite_username_fallback_route(profile, target_override)?;
+        let route = effective_sftp_route(profile, target_override);
+        if composite == route {
+            None
+        } else {
+            Some(route)
+        }
+    } else {
+        composite_username_fallback_route(profile, target_override)
+    }
+}
+
+fn prefers_composite_username_sftp(profile: &ConnectionProfile) -> bool {
+    matches!(profile.connection_role, ConnectionRole::Bastion)
 }
 
 fn explicit_sftp_gateway(profile: &ConnectionProfile) -> Option<AuthEndpoint> {
@@ -2791,6 +2827,7 @@ mod tests {
         ConnectionProfile {
             id: "direct-bastion".into(),
             name: "direct-bastion".into(),
+            connection_role: ConnectionRole::Direct,
             gateway: test_endpoint("", "", None),
             target,
             jump_mode: JumpMode::Direct,
@@ -2893,6 +2930,49 @@ mod tests {
         assert_eq!(routes[1].target.host, "bastion.example.com");
         assert_eq!(routes[1].target.username, "ops/10.1.2.3/app");
         assert!(routes[1].proxy.is_none());
+    }
+
+    #[test]
+    fn bastion_role_prioritizes_composite_username_sftp() {
+        let mut profile = direct_profile_targeting_bastion();
+        profile.connection_role = ConnectionRole::Bastion;
+
+        let plan = build_sftp_launch_plan_with_target(
+            &profile,
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+
+        assert!(!plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1].starts_with("ProxyJump=")));
+        assert_eq!(
+            plan.args.last().map(String::as_str),
+            Some("ops/10.1.2.3/app@bastion.example.com")
+        );
+
+        let routes = native_sftp_routes(
+            &profile,
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+        assert_eq!(routes[0].target.host, "bastion.example.com");
+        assert_eq!(routes[0].target.username, "ops/10.1.2.3/app");
+        assert!(routes[0].proxy.is_none());
+        assert_eq!(routes[1].target.host, "10.1.2.3");
+        assert_eq!(
+            routes[1]
+                .proxy
+                .as_ref()
+                .map(endpoint_destination)
+                .as_deref(),
+            Some("ops@bastion.example.com")
+        );
     }
 
     #[test]

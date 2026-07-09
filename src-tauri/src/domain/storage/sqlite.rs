@@ -6,8 +6,8 @@ use crate::domain::auth::credentials::{
     CredentialStore, MemoryCredentialStore, SystemCredentialStore,
 };
 use crate::domain::connection::models::{
-    AiProviderConfig, AiProviderType, AuthEndpoint, AuthMode, ConnectionProfile, ContextPolicy,
-    FileTransferMode, JumpMode,
+    AiProviderConfig, AiProviderType, AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole,
+    ContextPolicy, FileTransferMode, JumpMode,
 };
 use crate::domain::workspace::{
     AiConversationMessage, AiMessageRole, CommandHistoryRecord, UpdateScript, WorkspaceSession,
@@ -74,6 +74,7 @@ impl SqliteConfigStore {
             INSERT INTO connection_profiles (
               id,
               name,
+              connection_role,
               gateway_host,
               gateway_port,
               gateway_username,
@@ -91,9 +92,10 @@ impl SqliteConfigStore {
               file_transfer_mode,
               updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, CURRENT_TIMESTAMP)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
+              connection_role = excluded.connection_role,
               gateway_host = excluded.gateway_host,
               gateway_port = excluded.gateway_port,
               gateway_username = excluded.gateway_username,
@@ -114,6 +116,7 @@ impl SqliteConfigStore {
             params![
                 stored.id,
                 stored.name,
+                connection_role_to_str(&stored.connection_role),
                 stored.gateway.host,
                 stored.gateway.port.unwrap_or(22),
                 stored.gateway.username,
@@ -142,6 +145,7 @@ impl SqliteConfigStore {
             SELECT
               id,
               name,
+              connection_role,
               gateway_host,
               gateway_port,
               gateway_username,
@@ -163,32 +167,34 @@ impl SqliteConfigStore {
         )?;
 
         let rows = statement.query_map([], |row| {
-            let gateway_auth_mode: String = row.get(5)?;
-            let target_auth_mode: String = row.get(11)?;
-            let jump_mode: String = row.get(14)?;
-            let file_transfer_mode: String = row.get(16)?;
+            let connection_role: String = row.get(2)?;
+            let gateway_auth_mode: String = row.get(6)?;
+            let target_auth_mode: String = row.get(12)?;
+            let jump_mode: String = row.get(15)?;
+            let file_transfer_mode: String = row.get(17)?;
 
             Ok(ConnectionProfile {
                 id: row.get(0)?,
                 name: row.get(1)?,
+                connection_role: connection_role_from_str(&connection_role),
                 gateway: AuthEndpoint {
-                    host: row.get(2)?,
-                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(3)?),
-                    username: row.get(4)?,
+                    host: row.get(3)?,
+                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(4)?),
+                    username: row.get(5)?,
                     auth_mode: auth_mode_from_str(&gateway_auth_mode),
-                    credential_ref: row.get(6)?,
-                    password: row.get(7)?,
+                    credential_ref: row.get(7)?,
+                    password: row.get(8)?,
                 },
                 target: AuthEndpoint {
-                    host: row.get(8)?,
-                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(9)?),
-                    username: row.get(10)?,
+                    host: row.get(9)?,
+                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(10)?),
+                    username: row.get(11)?,
                     auth_mode: auth_mode_from_str(&target_auth_mode),
-                    credential_ref: row.get(12)?,
-                    password: row.get(13)?,
+                    credential_ref: row.get(13)?,
+                    password: row.get(14)?,
                 },
                 jump_mode: jump_mode_from_str(&jump_mode),
-                menu_profile_id: row.get(15)?,
+                menu_profile_id: row.get(16)?,
                 file_transfer_mode: file_transfer_mode_from_str(&file_transfer_mode),
             })
         })?;
@@ -902,6 +908,12 @@ fn migrate_connection_profiles(connection: &Connection) -> Result<()> {
     ensure_column(
         connection,
         "connection_profiles",
+        "connection_role",
+        "TEXT NOT NULL DEFAULT 'direct'",
+    )?;
+    ensure_column(
+        connection,
+        "connection_profiles",
         "gateway_password",
         "TEXT",
     )?;
@@ -1064,6 +1076,20 @@ fn auth_mode_from_str(value: &str) -> AuthMode {
         "password" => AuthMode::Password,
         "key" => AuthMode::Key,
         _ => AuthMode::Auto,
+    }
+}
+
+fn connection_role_to_str(value: &ConnectionRole) -> &'static str {
+    match value {
+        ConnectionRole::Direct => "direct",
+        ConnectionRole::Bastion => "bastion",
+    }
+}
+
+fn connection_role_from_str(value: &str) -> ConnectionRole {
+    match value {
+        "bastion" => ConnectionRole::Bastion,
+        _ => ConnectionRole::Direct,
     }
 }
 

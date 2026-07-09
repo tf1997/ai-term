@@ -288,6 +288,7 @@ function createProfile() {
   const profile: ConnectionProfile = {
     id,
     name: id,
+    connectionRole: 'direct',
     gateway: {
       host: '',
       port: 22,
@@ -896,6 +897,7 @@ function normalizeConnectionProfileForSave(profile: ConnectionProfile): Connecti
   normalized.target.host = normalized.target.host.trim()
   normalized.target.username = normalized.target.username.trim()
   normalized.target.port = normalizePort(normalized.target.port, 'SSH port', 22)
+  normalized.connectionRole = normalized.connectionRole === 'bastion' ? 'bastion' : 'direct'
   normalized.jumpMode = 'direct'
   normalized.menuProfileId = ''
   normalized.fileTransferMode = 'auto'

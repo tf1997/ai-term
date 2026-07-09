@@ -10,6 +10,19 @@ pub enum AuthMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+pub enum ConnectionRole {
+    Direct,
+    Bastion,
+}
+
+impl Default for ConnectionRole {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum JumpMode {
     Direct,
     InteractiveMenu,
@@ -41,6 +54,8 @@ pub struct AuthEndpoint {
 pub struct ConnectionProfile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub connection_role: ConnectionRole,
     pub gateway: AuthEndpoint,
     pub target: AuthEndpoint,
     pub jump_mode: JumpMode,

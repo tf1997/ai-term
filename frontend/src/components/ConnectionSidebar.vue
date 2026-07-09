@@ -65,6 +65,10 @@ function targetUsernamePlaceholder(_profile: ConnectionProfile) {
   return '堡垒机用户名 或 堡垒机用户名/服务器IP/服务器用户名'
 }
 
+function connectionRoleLabel(profile: ConnectionProfile) {
+  return profile.connectionRole === 'bastion' ? '堡垒机' : '直连'
+}
+
 function shouldShowTargetPassword(profile: ConnectionProfile) {
   return profile.target.authMode !== 'key'
 }
@@ -127,7 +131,7 @@ function profileReadyToConnect(profile: ConnectionProfile) {
               class="badge"
               :class="{ ok: profile.id !== connectingProfileId, warn: profile.id === connectingProfileId }"
             >
-              {{ profile.id === connectingProfileId ? '连接中' : '直连' }}
+              {{ profile.id === connectingProfileId ? '连接中' : connectionRoleLabel(profile) }}
             </span>
           </div>
           <div class="server-meta">
@@ -170,6 +174,13 @@ function profileReadyToConnect(profile: ConnectionProfile) {
             <label class="wide">
               <span>连接名</span>
               <input v-model="selectedProfile.name" placeholder="prod-app-01" />
+            </label>
+            <label>
+              <span>连接模式</span>
+              <select v-model="selectedProfile.connectionRole">
+                <option value="direct">直接主机</option>
+                <option value="bastion">堡垒机</option>
+              </select>
             </label>
             <label>
               <span>SSH 主机</span>

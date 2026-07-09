@@ -1566,6 +1566,8 @@ assert(
   sidebar.includes('v-model="selectedProfile.target.host"') &&
     sidebar.includes('v-model="selectedProfile.target.username"') &&
     sidebar.includes('v-model.number="selectedProfile.target.port"') &&
+    sidebar.includes('v-model="selectedProfile.connectionRole"') &&
+    appShell.includes("normalized.connectionRole = normalized.connectionRole === 'bastion' ? 'bastion' : 'direct'") &&
     appShell.includes("normalized.gateway = {") &&
     appShell.includes("normalized.jumpMode = 'direct'") &&
     appShell.includes("normalized.fileTransferMode = 'auto'") &&
@@ -1720,6 +1722,7 @@ assert(
 
 assert(
   appShell.includes("jumpMode: 'direct'") &&
+    appShell.includes("connectionRole: 'direct'") &&
     appShell.includes("menuProfileId: ''"),
   'New connection drafts must default to ordinary direct SSH instead of requiring bastion fields.'
 )
@@ -2269,6 +2272,7 @@ assert(
   sidebar.includes('class="section-head"') &&
     sidebar.includes("emit('create')") &&
     sidebar.includes('SSH 主机') &&
+    sidebar.includes('连接模式') &&
     sidebar.includes('登录用户名') &&
     sidebar.includes('SSH / SFTP') &&
     !sidebar.includes('selectedProfile.jumpMode') &&
@@ -2414,6 +2418,7 @@ assert(
     sidebar.includes('SSH 密码') &&
     sidebar.includes('v-model="selectedProfile.target.password"') &&
     appShell.includes('if (!normalized.target.password?.trim()) normalized.target.password = undefined') &&
+    appShell.includes("normalized.connectionRole = normalized.connectionRole === 'bastion' ? 'bastion' : 'direct'") &&
     appShell.includes("normalized.jumpMode = 'direct'") &&
     appShell.includes("normalized.fileTransferMode = 'auto'"),
   'Direct SSH profiles must keep the server password visible when needed and normalize away legacy bastion mode fields.'

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS connection_profiles (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
+  connection_role TEXT NOT NULL DEFAULT 'direct',
   gateway_host TEXT NOT NULL,
   gateway_port INTEGER NOT NULL DEFAULT 22,
   gateway_username TEXT NOT NULL,

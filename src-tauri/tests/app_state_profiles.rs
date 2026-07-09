@@ -1,6 +1,6 @@
 use ai_term_lib::app::state::AppState;
 use ai_term_lib::domain::connection::models::{
-    AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode,
+    AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
 };
 use ai_term_lib::domain::storage::sqlite::SqliteConfigStore;
 
@@ -19,6 +19,7 @@ fn profile(id: &str, name: &str) -> ConnectionProfile {
     ConnectionProfile {
         id: id.into(),
         name: name.into(),
+        connection_role: ConnectionRole::Direct,
         gateway: endpoint("ssh.company.com", "company.user"),
         target: endpoint("10.12.8.21", "app"),
         jump_mode: JumpMode::InteractiveMenu,

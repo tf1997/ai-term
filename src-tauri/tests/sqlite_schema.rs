@@ -11,6 +11,7 @@ fn schema_contains_required_config_tables() {
 
 #[test]
 fn schema_keeps_credential_refs_and_legacy_secret_columns_for_migration() {
+    assert!(SCHEMA.contains("connection_role"));
     assert!(SCHEMA.contains("gateway_credential_ref"));
     assert!(SCHEMA.contains("target_credential_ref"));
     assert!(SCHEMA.contains("gateway_password"));

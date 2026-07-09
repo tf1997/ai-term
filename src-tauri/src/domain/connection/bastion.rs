@@ -242,7 +242,9 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::connection::models::{AuthEndpoint, AuthMode, FileTransferMode, JumpMode};
+    use crate::domain::connection::models::{
+        AuthEndpoint, AuthMode, ConnectionRole, FileTransferMode, JumpMode,
+    };
 
     fn endpoint(host: &str, username: &str) -> AuthEndpoint {
         AuthEndpoint {
@@ -259,6 +261,7 @@ mod tests {
         ConnectionProfile {
             id: "prod".into(),
             name: "prod".into(),
+            connection_role: ConnectionRole::Direct,
             gateway: endpoint("ssh.company.com", "me"),
             target: endpoint("10.1.1.1", "app"),
             jump_mode: JumpMode::InteractiveMenu,

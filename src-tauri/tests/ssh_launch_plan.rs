@@ -1,5 +1,5 @@
 use ai_term_lib::domain::connection::models::{
-    AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode,
+    AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
 };
 use ai_term_lib::domain::terminal::ssh::{
     build_ssh_launch_plan, host_key_warning_hint, known_hosts_line_matches_endpoint,
@@ -37,6 +37,7 @@ fn profile(jump_mode: JumpMode) -> ConnectionProfile {
     ConnectionProfile {
         id: "prod-1".into(),
         name: "prod-1".into(),
+        connection_role: ConnectionRole::Direct,
         gateway: endpoint("ssh.company.com", 2222, "company.user"),
         target: endpoint("10.12.8.21", 2201, "app"),
         jump_mode,

@@ -1,6 +1,6 @@
 use ai_term_lib::domain::auth::credentials::{CredentialStore, MemoryCredentialStore};
 use ai_term_lib::domain::connection::models::{
-    AuthEndpoint, AuthMode, ConnectionProfile, FileTransferMode, JumpMode,
+    AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
 };
 use ai_term_lib::domain::storage::sqlite::SqliteConfigStore;
 use rusqlite::Connection;
@@ -21,6 +21,7 @@ fn profile(id: &str, name: &str) -> ConnectionProfile {
     ConnectionProfile {
         id: id.into(),
         name: name.into(),
+        connection_role: ConnectionRole::Direct,
         gateway: endpoint("ssh.company.com", "company.user"),
         target: endpoint("10.12.8.21", "app"),
         jump_mode: JumpMode::InteractiveMenu,
@@ -88,6 +89,7 @@ fn sqlite_store_roundtrips_direct_connection_profiles() {
     let direct = ConnectionProfile {
         id: "direct-prod-1".into(),
         name: "direct-prod-1".into(),
+        connection_role: ConnectionRole::Direct,
         gateway: endpoint("", ""),
         target: endpoint("10.12.8.21", "app"),
         jump_mode: JumpMode::Direct,
@@ -98,6 +100,19 @@ fn sqlite_store_roundtrips_direct_connection_profiles() {
     store.save_connection_profile(&direct).unwrap();
 
     assert_eq!(store.list_connection_profiles().unwrap(), vec![direct]);
+}
+
+#[test]
+fn sqlite_store_roundtrips_bastion_connection_role() {
+    let store = SqliteConfigStore::new(temp_db_path("profiles-bastion-role"));
+    store.initialize().unwrap();
+
+    let mut bastion = profile("bastion-prod-1", "bastion-prod-1");
+    bastion.connection_role = ConnectionRole::Bastion;
+
+    store.save_connection_profile(&bastion).unwrap();
+
+    assert_eq!(store.list_connection_profiles().unwrap(), vec![bastion]);
 }
 
 #[test]
