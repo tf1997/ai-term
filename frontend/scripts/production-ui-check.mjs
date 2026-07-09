@@ -1156,6 +1156,11 @@ assert(
     fileTransfer.includes('useConfiguredTargetForSftp') &&
     fileTransfer.includes('maybeAutoProbeCurrentTerminalSftp') &&
     fileTransfer.includes('autoTerminalProbeAttempted') &&
+    fileTransfer.includes('active: boolean') &&
+    fileTransfer.includes('initializeRemoteBrowserIfActive') &&
+    fileTransfer.includes('() => props.active') &&
+    fileTransfer.includes('options.useForSftp && !props.active') &&
+    workspacePanel.includes(':active="activeWorkspaceTab === \'sftp\'"') &&
     fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...') &&
     fileTransfer.includes('未识别到当前终端目标，已使用连接配置目标打开 SFTP。') &&
     !fileTransfer.includes('hasRemoteShellSnapshot') &&
@@ -1520,6 +1525,8 @@ assert(
     styles.includes('.script-editor-shell textarea::placeholder') &&
     styles.includes('.script-editor-shell textarea::selection') &&
     styles.includes('background: rgba(16, 185, 129, .28);') &&
+    styles.includes('.app-shell.theme-light .script-editor-shell textarea') &&
+    styles.includes('background: transparent !important;') &&
     styles.includes('.app-shell.theme-light .script-editor-shell textarea::placeholder') &&
     styles.includes('.app-shell.theme-light .script-file-icon') &&
     styles.includes('height: calc(100% - 16px);') &&
@@ -2325,6 +2332,9 @@ assert(
     styles.includes('.settings-card-head') &&
     styles.includes('.settings-card-main') &&
     styles.includes('.settings-card .card-actions') &&
+    styles.includes('.theme-light .settings-option-icon') &&
+    styles.includes('.theme-light .settings-option:hover .settings-option-icon, .theme-light .settings-option.active .settings-option-icon') &&
+    styles.includes('.theme-light .settings-card .icon-button.danger:hover:not(:disabled)') &&
     styles.includes('grid-template-columns: repeat(2, 26px);') &&
     schema.includes('api_key TEXT') &&
     sqlite.includes('api_key = excluded.api_key') &&
@@ -2410,15 +2420,19 @@ assert(
   settingsSidebar.includes('terminalFontFamily') &&
     settingsSidebar.includes('terminalFontSize') &&
     settingsSidebar.includes('defaultShell') &&
-    settingsSidebar.includes('proxyUrl') &&
+    settingsSidebar.includes('terminal-settings-panel') &&
+    settingsSidebar.includes('terminal-settings-form') &&
+    settingsSidebar.includes('影响终端正文、命令补全和脚本输出。') &&
+    !settingsSidebar.includes('proxyUrl') &&
     settingsSidebar.includes('\u7ec8\u7aef\u5916\u89c2') &&
-    settingsSidebar.includes('\u7f51\u7edc\u4e0e\u4ee3\u7406') &&
+    !settingsSidebar.includes('\u7f51\u7edc\u4e0e\u4ee3\u7406') &&
     settingsSidebar.includes('\u9009\u62e9\u7ec8\u7aef\u5b57\u4f53') &&
     settingsSidebar.includes('Cascadia Mono') &&
     !settingsSidebar.includes('\u7ec8\u7aef\u4e3b\u9898') &&
     !settingsSidebar.includes('v-model="draft.terminalTheme"') &&
     !settingsSidebar.includes('\u5b89\u5168\u4e0e\u5bc6\u94a5') &&
     !settingsSidebar.includes('\u66f4\u65b0\u4e0e\u6570\u636e') &&
+    !settingsSidebar.includes("activeSection === 'network'") &&
     !settingsSidebar.includes("activeSection === 'security'") &&
     !settingsSidebar.includes("activeSection === 'data'") &&
     settingsSidebar.includes('aiConfigSearch') &&
@@ -2440,13 +2454,17 @@ assert(
     terminalPane.includes('terminalThemeOptions') &&
     appShell.includes(':terminal-settings="appSettings"') &&
     styles.includes('.settings-controls') &&
+    styles.includes('.terminal-settings-panel') &&
+    styles.includes('.terminal-settings-form') &&
+    styles.includes('.app-shell.theme-light .terminal-settings-panel .settings-field > span') &&
+    styles.includes('.app-shell.theme-light .settings-option.active') &&
     styles.includes('.settings-search') &&
     styles.includes('.settings-config-list') &&
     styles.includes('.settings-empty') &&
     styles.includes('.app-toast') &&
     styles.includes('.toast-stack') &&
     styles.includes('top: 72px;'),
-  'Settings center must keep the visible settings surface focused, use selectable terminal fonts, hide terminal theme controls, and retain shared toasts.'
+  'Settings center must keep the visible settings surface focused, use selectable terminal fonts, hide terminal theme and network proxy controls, and retain shared toasts.'
 )
 
 assert(

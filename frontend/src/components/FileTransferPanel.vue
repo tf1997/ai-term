@@ -31,6 +31,7 @@ const props = defineProps<{
   terminalId: string
   connectionId: string
   profile?: ConnectionProfile
+  active: boolean
   terminalSnapshot: string
   terminalOutputEvent?: TerminalOutputDeltaEvent
 }>()
@@ -336,13 +337,16 @@ watch(
   (key, previousKey) => {
     if (previousKey) saveTransferState(previousKey)
     resetRemoteBrowserState()
-    if (restoreTransferState(key)) return
-    initializeRemoteBrowser()
+    if (restoreTransferState(key)) {
+      initializeRemoteBrowserIfActive()
+      return
+    }
+    initializeRemoteBrowserIfActive()
   }
 )
 
 onMounted(() => {
-  initializeRemoteBrowser()
+  initializeRemoteBrowserIfActive()
   void loadLocalHome()
   void attachNativeFileDropEvents()
 })
@@ -373,10 +377,15 @@ watch(
 )
 
 watch(transferMode, (mode) => {
-  if (mode === 'sftp' && remoteReady.value && !selectedTarget.value && entries.value.length === 0) {
-    initializeRemoteBrowser()
-  }
+  if (mode === 'sftp') initializeRemoteBrowserIfActive()
 })
+
+watch(
+  () => props.active,
+  (active) => {
+    if (active) initializeRemoteBrowserIfActive()
+  }
+)
 
 async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
   if (!remoteReady.value) return
@@ -437,8 +446,17 @@ async function loadLocalHome() {
   }
 }
 
+function initializeRemoteBrowserIfActive() {
+  if (!props.active || transferMode.value !== 'sftp' || !remoteReady.value || loading.value || pendingIdentify.value) return
+  if (selectedTarget.value) {
+    if (entries.value.length === 0) void loadDirectory(currentPath.value || '.')
+    return
+  }
+  if (entries.value.length === 0) initializeRemoteBrowser()
+}
+
 function initializeRemoteBrowser() {
-  if (!remoteReady.value) return
+  if (!props.active || !remoteReady.value) return
   useConfiguredTargetForSftp()
 }
 
@@ -452,6 +470,7 @@ function openCurrentTerminalSftp() {
 }
 
 function useConfiguredTargetForSftp(message?: string) {
+  if (!props.active) return
   selectedTarget.value = null
   autoTerminalProbeAttempted.value = false
   transferMode.value = 'sftp'
@@ -463,6 +482,7 @@ function maybeAutoProbeCurrentTerminalSftp(err: unknown) {
   const message = formatTaskError(err)
   if (isTaskCancelledMessage(message)) return false
   if (
+    !props.active ||
     !remoteReady.value ||
     transferMode.value !== 'sftp' ||
     selectedTarget.value ||
@@ -499,7 +519,7 @@ async function loadLocalDirectory(path = localPath.value || localHome.value) {
 }
 
 async function useTerminalTargetForSftp() {
-  if (!currentTerminalTarget.value) return
+  if (!props.active || !currentTerminalTarget.value) return
   const target = {
     host: currentTerminalTarget.value.host,
     username: currentTerminalTarget.value.username,
@@ -586,7 +606,7 @@ function probeStateFor(candidate: SftpTarget) {
 }
 
 function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
-  if (!remoteReady.value || identifying.value) return
+  if (!remoteReady.value || identifying.value || (options.useForSftp && !props.active)) return
   const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const begin = `AI_TERM_IDENT_BEGIN_${id}`
   const end = `AI_TERM_IDENT_END_${id}`
@@ -1425,8 +1445,10 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
     identifying.value = false
     pendingIdentify.value = null
     if (shouldUseForSftp) {
-      error.value = ''
-      useConfiguredTargetForSftp('未识别到当前终端目标，已使用连接配置目标打开 SFTP。')
+      if (props.active) {
+        error.value = ''
+        useConfiguredTargetForSftp('未识别到当前终端目标，已使用连接配置目标打开 SFTP。')
+      }
       return
     }
     error.value = '没有识别到当前服务器 IP 或主机名。直连服务器可直接使用配置目标 SFTP。'
@@ -1445,7 +1467,7 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
   identifying.value = false
   pendingIdentify.value = null
-  if (shouldUseForSftp) void useTerminalTargetForSftp()
+  if (shouldUseForSftp && props.active) void useTerminalTargetForSftp()
 }
 
 function parseTerminalIdentitySnapshot(snapshot: string, pending: { begin: string; end: string }) {

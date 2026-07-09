@@ -54,9 +54,7 @@ const defaultUserSettings: AppUserSettings = {
   terminalFontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
   terminalFontSize: 13,
   terminalTheme: 'midnight',
-  defaultShell: 'system',
-  proxyUrl: '',
-  updateChannel: 'stable'
+  defaultShell: 'system'
 }
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   executeCommand: (command: string) => boolean
@@ -73,15 +71,12 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 type ToastKind = 'success' | 'error' | 'warning' | 'info'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type AppTheme = 'dark' | 'light'
-type UpdateChannel = 'stable' | 'preview'
 
 interface AppUserSettings {
   terminalFontFamily: string
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
-  proxyUrl: string
-  updateChannel: UpdateChannel
 }
 
 interface AppToast {
@@ -773,8 +768,7 @@ function loadUserSettings(): AppUserSettings {
       ...defaultUserSettings,
       ...parsed,
       terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
-      terminalTheme: 'midnight',
-      updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable'
+      terminalTheme: 'midnight'
     }
   } catch {
     return { ...defaultUserSettings }
@@ -824,9 +818,6 @@ function updateUserSettings(settings: AppUserSettings) {
   showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
 }
 
-function checkForUpdates() {
-  showToast('info', '更新检查', `当前选择 ${appSettings.value.updateChannel === 'preview' ? '预览版' : '稳定版'} 通道，自动检查入口已预留。`)
-}
 
 function showToast(kind: ToastKind, title: string, message = '') {
   const id = `toast-${Date.now()}-${toastSequence++}`
@@ -1756,7 +1747,6 @@ onBeforeUnmount(() => {
       @close-ai-config="closeAiConfigEditor"
       @save-ai-config="saveAiConfig"
       @update-settings="updateUserSettings"
-      @check-update="checkForUpdates"
     />
     <section class="terminal-stack" @contextmenu.prevent="openTerminalAreaContextMenu">
       <TerminalPane

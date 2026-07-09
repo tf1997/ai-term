@@ -5567,6 +5567,34 @@ code {
   border-color: #ccebdd;
   background: var(--light-accent-soft);
 }
+.theme-light .settings-option-icon {
+  border-color: #d4e9df;
+  background: #f0fbf5;
+  color: var(--light-accent-strong);
+}
+.theme-light .settings-option:hover .settings-option-icon, .theme-light .settings-option.active .settings-option-icon {
+  border-color: #bfe9d3;
+  background: #dff6eb;
+  color: #06724f;
+}
+.theme-light .settings-card .icon-button {
+  border-color: #dce5ea;
+  background: #f8fafb;
+  color: #536271;
+}
+.theme-light .settings-card .icon-button:hover:not(:disabled) {
+  border-color: #ccebdd;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
+}
+.theme-light .settings-card .icon-button.danger {
+  color: #64748b;
+}
+.theme-light .settings-card .icon-button.danger:hover:not(:disabled) {
+  border-color: #f3c6cb;
+  background: #fff1f2;
+  color: #be123c;
+}
 .theme-light .message-list, .theme-light .script-chat-list, .theme-light .script-library-body, .theme-light .file-list {
   background:     linear-gradient(180deg, rgba(72, 102, 255, .045), transparent 36%),     #f7f9fd;
 }
@@ -8104,6 +8132,9 @@ code {
   color: #172033;
 }
 .app-shell.theme-light .script-editor-shell textarea {
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
   caret-color: var(--light-accent-strong);
 }
 .app-shell.theme-light .script-editor-shell textarea::placeholder {
@@ -8266,6 +8297,106 @@ code {
 .assistant-compose.script-compose .icon-button {
   right: calc(var(--composer-pad-x) + 6px);
   bottom: calc(var(--composer-pad-bottom) + 5px);
+}
+
+/* Settings terminal appearance refinement. */
+.settings-option:hover {
+  border-color: rgba(54, 200, 117, .38);
+  background: rgba(18, 30, 28, .9);
+}
+.settings-option.active {
+  border-color: rgba(54, 200, 117, .52);
+  background: rgba(15, 36, 31, .92);
+  box-shadow: inset 3px 0 0 rgba(54, 200, 117, .68);
+}
+.settings-option.active .settings-option-icon {
+  border-color: rgba(54, 200, 117, .44);
+  background: rgba(54, 200, 117, .12);
+  color: #8ce7b5;
+}
+.terminal-settings-panel {
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 10px 12px;
+}
+.terminal-settings-panel .settings-section-head {
+  border-bottom: 1px solid #1c2534;
+  padding: 2px 0 8px;
+}
+.terminal-settings-form {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.terminal-settings-panel .settings-field {
+  border: 1px solid #1c2534;
+  border-radius: 10px;
+  background: rgba(12, 18, 27, .72);
+  gap: 8px;
+  padding: 10px;
+}
+.terminal-settings-panel .settings-field > span {
+  color: #e8eef8;
+  font-size: var(--font-xs);
+  font-weight: 700;
+}
+.terminal-settings-panel .settings-field.inline {
+  grid-template-columns: minmax(0, 1fr) 84px;
+  gap: 10px;
+}
+.terminal-settings-panel .settings-field input,
+.terminal-settings-panel .settings-field select {
+  height: 34px;
+}
+.terminal-settings-panel .settings-actions {
+  border-top: 1px solid #1c2534;
+  justify-content: flex-end;
+  padding-top: 10px;
+}
+.app-shell.theme-light .settings-option:hover {
+  border-color: #ccebdd;
+  background: #f8fffb;
+}
+.app-shell.theme-light .settings-option.active {
+  border-color: #bfe9d3;
+  background: #fff;
+  box-shadow: inset 3px 0 0 var(--light-accent);
+}
+.app-shell.theme-light .settings-option.active .settings-option-icon {
+  border-color: #bfe9d3;
+  background: #e8f8ef;
+  color: var(--light-accent-strong);
+}
+.app-shell.theme-light .terminal-settings-panel {
+  background: #fff;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-section-head {
+  border-bottom-color: #e1e8f0;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-section-head span {
+  color: #64748b;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field {
+  border-color: #dbe4e9;
+  background: #fbfdfc;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field > span {
+  color: #26364a;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field small {
+  color: #69788e;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field input,
+.app-shell.theme-light .terminal-settings-panel .settings-field select {
+  border-color: #ccd8e6;
+  background: #fff;
+  color: #172033;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-actions {
+  border-top-color: #e1e8f0;
 }
 
 /* Light theme color-only surface contract. */

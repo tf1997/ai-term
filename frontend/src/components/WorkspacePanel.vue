@@ -168,6 +168,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :terminal-id="terminalId"
       :connection-id="connectionId"
       :profile="connectionProfile"
+      :active="activeWorkspaceTab === 'sftp'"
       :terminal-snapshot="terminalSnapshot"
       :terminal-output-event="terminalOutputEvent"
       @write-terminal-input="emit('writeTerminalInput', $event)"

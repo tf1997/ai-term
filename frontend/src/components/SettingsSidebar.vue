@@ -4,17 +4,14 @@ import type { AiProviderConfig } from '../types/profile'
 import AiConfigPanel from './AiConfigPanel.vue'
 import UiIcon from './UiIcon.vue'
 
-type SettingsSection = 'ai' | 'terminal' | 'network'
+type SettingsSection = 'ai' | 'terminal'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
-type UpdateChannel = 'stable' | 'preview'
 
 interface AppUserSettings {
   terminalFontFamily: string
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
-  proxyUrl: string
-  updateChannel: UpdateChannel
 }
 
 const props = defineProps<{
@@ -37,7 +34,6 @@ const emit = defineEmits<{
   closeAiConfig: []
   saveAiConfig: [config: AiProviderConfig, apiKey: string]
   updateSettings: [settings: AppUserSettings]
-  checkUpdate: []
 }>()
 
 const activeSection = ref<SettingsSection>('ai')
@@ -46,15 +42,14 @@ const draft = reactive<AppUserSettings>({ ...props.settings })
 
 const settingsGroups: Array<{
   key: SettingsSection
-  icon: 'ai' | 'terminal' | 'network'
+  icon: 'ai' | 'terminal'
   title: string
   description: string
   status: string
   ready: boolean
 }> = [
   { key: 'ai', icon: 'ai', title: 'AI 配置', description: '模型、API 地址和密钥', status: '已接入', ready: true },
-  { key: 'terminal', icon: 'terminal', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true },
-  { key: 'network', icon: 'network', title: '网络与代理', description: '代理地址、超时和远程请求策略', status: '偏好', ready: true }
+  { key: 'terminal', icon: 'terminal', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true }
 ]
 
 const sortedAiConfigs = computed(() => {
@@ -118,7 +113,6 @@ function saveSettings() {
     terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || 13)),
     terminalFontFamily: draft.terminalFontFamily.trim() || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     terminalTheme: 'midnight',
-    proxyUrl: draft.proxyUrl.trim(),
     defaultShell: draft.defaultShell.trim() || 'system'
   })
 }
@@ -161,57 +155,44 @@ function resetTerminalAppearance() {
         </button>
       </section>
 
-      <section v-if="activeSection === 'terminal'" class="settings-section settings-controls" aria-label="终端外观设置">
+      <section v-if="activeSection === 'terminal'" class="settings-section settings-controls terminal-settings-panel" aria-label="终端外观设置">
         <div class="settings-section-head">
           <strong>终端外观</strong>
           <span>即时应用到所有终端</span>
         </div>
-        <label class="settings-field">
-          <span>字体</span>
-          <select v-model="draft.terminalFontFamily" aria-label="选择终端字体">
-            <option value="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">系统等宽</option>
-            <option value="Cascadia Mono, Cascadia Code, Consolas, monospace">Cascadia Mono</option>
-            <option value="Consolas, Lucida Console, monospace">Consolas</option>
-            <option value="JetBrains Mono, Consolas, monospace">JetBrains Mono</option>
-            <option value="Fira Code, Consolas, monospace">Fira Code</option>
-            <option value="Menlo, Monaco, Consolas, monospace">Menlo / Monaco</option>
-          </select>
-        </label>
-        <label class="settings-field inline">
-          <span>字号</span>
-          <input v-model.number="draft.terminalFontSize" type="number" min="11" max="22" />
-        </label>
-        <label class="settings-field">
-          <span>默认 Shell 偏好</span>
-          <select v-model="draft.defaultShell">
-            <option value="system">跟随系统</option>
-            <option value="powershell">PowerShell</option>
-            <option value="cmd">cmd.exe</option>
-            <option value="bash">bash/zsh</option>
-          </select>
-          <small>当前仅保存偏好，后续接入本地终端启动命令。</small>
-        </label>
+        <div class="terminal-settings-form">
+          <label class="settings-field">
+            <span>字体</span>
+            <select v-model="draft.terminalFontFamily" aria-label="选择终端字体">
+              <option value="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">系统等宽</option>
+              <option value="Cascadia Mono, Cascadia Code, Consolas, monospace">Cascadia Mono</option>
+              <option value="Consolas, Lucida Console, monospace">Consolas</option>
+              <option value="JetBrains Mono, Consolas, monospace">JetBrains Mono</option>
+              <option value="Fira Code, Consolas, monospace">Fira Code</option>
+              <option value="Menlo, Monaco, Consolas, monospace">Menlo / Monaco</option>
+            </select>
+            <small>影响终端正文、命令补全和脚本输出。</small>
+          </label>
+          <label class="settings-field inline">
+            <span>字号</span>
+            <input v-model.number="draft.terminalFontSize" type="number" min="11" max="22" />
+          </label>
+          <label class="settings-field">
+            <span>默认 Shell 偏好</span>
+            <select v-model="draft.defaultShell">
+              <option value="system">跟随系统</option>
+              <option value="powershell">PowerShell</option>
+              <option value="cmd">cmd.exe</option>
+              <option value="bash">bash/zsh</option>
+            </select>
+            <small>当前仅保存偏好，后续接入本地终端启动命令。</small>
+          </label>
+        </div>
         <div class="settings-actions">
           <button class="text-button" type="button" @click="resetTerminalAppearance">恢复默认</button>
           <button class="text-button primary-action" type="button" @click="saveSettings">保存设置</button>
         </div>
       </section>
-
-      <section v-else-if="activeSection === 'network'" class="settings-section settings-controls" aria-label="网络与代理">
-        <div class="settings-section-head">
-          <strong>网络与代理</strong>
-          <span>先保存偏好，再接入 Rust 请求层</span>
-        </div>
-        <label class="settings-field">
-          <span>代理地址</span>
-          <input v-model="draft.proxyUrl" placeholder="http://127.0.0.1:7890" />
-          <small>当前用于记录偏好，后续可传给 AI 请求和更新检查。</small>
-        </label>
-        <div class="settings-actions">
-          <button class="text-button primary-action" type="button" @click="saveSettings">保存网络偏好</button>
-        </div>
-      </section>
-
       <section v-else class="settings-section settings-ai-list" aria-label="AI 配置列表">
         <div class="settings-section-head">
           <strong>AI 配置</strong>
