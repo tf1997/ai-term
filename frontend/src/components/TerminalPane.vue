@@ -764,8 +764,9 @@ function terminalContentBox(element: HTMLElement) {
   const style = window.getComputedStyle(element)
   const horizontalPadding = cssPixel(style.paddingLeft) + cssPixel(style.paddingRight)
   const verticalPadding = cssPixel(style.paddingTop) + cssPixel(style.paddingBottom)
+  const scrollbarGutter = cssPixel(style.getPropertyValue('--terminal-scrollbar-gutter'))
   return {
-    width: Math.max(0, element.clientWidth - horizontalPadding),
+    width: Math.max(0, element.clientWidth - horizontalPadding - scrollbarGutter),
     height: Math.max(0, element.clientHeight - verticalPadding)
   }
 }
