@@ -71,6 +71,7 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 type ToastKind = 'success' | 'error' | 'warning' | 'info'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type AppTheme = 'dark' | 'light'
+type AboutSignalIcon = 'ai' | 'database' | 'network' | 'shield' | 'terminal'
 
 interface AppUserSettings {
   terminalFontFamily: string
@@ -100,6 +101,12 @@ interface ContextMenuState {
   items: ContextMenuItem[]
 }
 
+interface AboutSignal {
+  icon: AboutSignalIcon
+  label: string
+  value: string
+}
+
 const defaultAiConfig: AiProviderConfig = {
   id: 'default',
   provider: 'open-ai-compatible',
@@ -113,6 +120,18 @@ const defaultAiConfig: AiProviderConfig = {
 }
 const LOCAL_CONNECTION_ID = 'local'
 const LOCAL_DEFAULT_SESSION_ID = 'local:default'
+const APP_VERSION = '0.1.0'
+const APP_CHANNEL = 'Stable'
+const APP_LICENSE = 'Apache-2.0'
+const APP_AUTHOR = 'tf1997'
+const APP_REPOSITORY = 'https://github.com/tf1997/ai-term'
+const aboutSignals: AboutSignal[] = [
+  { icon: 'terminal', label: 'Terminal Core', value: 'PTY / SSH' },
+  { icon: 'ai', label: 'AI Runtime', value: 'Command / Script' },
+  { icon: 'network', label: 'Transfer Mesh', value: 'SFTP / Bastion' },
+  { icon: 'shield', label: 'Safety Layer', value: 'Keys / Risk' },
+  { icon: 'database', label: 'Local Store', value: 'SQLite / Keychain' }
+]
 
 const profiles = ref<ConnectionProfile[]>([])
 const aiConfigs = ref<AiProviderConfig[]>([{ ...defaultAiConfig }])
@@ -133,6 +152,7 @@ const connectionDraft = ref<ConnectionProfile | undefined>()
 const aiConfigEditorOpen = ref(false)
 const aiConfigEditorMode = ref<'create' | 'edit'>('edit')
 const aiConfigDraft = ref<AiProviderConfig | undefined>()
+const aboutOpen = ref(false)
 const leftPanelMode = ref<LeftPanelMode>('connections')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
@@ -248,6 +268,13 @@ const activeScriptRecording = computed(() => {
 const activeWorkspaceSessions = computed(() => {
   return workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
 })
+
+const aboutRuntimeStats = computed(() => [
+  { label: '终端', value: String(terminalTabs.value.length) },
+  { label: '连接', value: String(profiles.value.length) },
+  { label: '会话', value: String(activeWorkspaceSessions.value.length) },
+  { label: '主题', value: appTheme.value === 'light' ? 'Light' : 'Dark' }
+])
 
 const sftpWorkbenchActive = computed(() => !rightCollapsed.value && workspacePanelTab.value === 'sftp')
 
@@ -435,6 +462,15 @@ function toggleSettingsPanel() {
     return
   }
   openSettingsPanel()
+}
+
+function openAboutPage() {
+  aboutOpen.value = true
+  closeContextMenu()
+}
+
+function closeAboutPage() {
+  aboutOpen.value = false
 }
 
 function isLeftPanelActive(mode: LeftPanelMode) {
@@ -819,6 +855,30 @@ function updateUserSettings(settings: AppUserSettings) {
   showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
 }
 
+async function copyAboutInfo() {
+  if (!navigator.clipboard?.writeText) {
+    showToast('error', '复制失败', '当前环境不支持剪贴板写入。')
+    return
+  }
+  const info = [
+    `AI Term v${APP_VERSION}`,
+    `Author: ${APP_AUTHOR}`,
+    `GitHub: ${APP_REPOSITORY}`,
+    `Channel: ${APP_CHANNEL}`,
+    `License: ${APP_LICENSE}`,
+    `Theme: ${appTheme.value}`,
+    `Terminal tabs: ${terminalTabs.value.length}`,
+    `Saved connections: ${profiles.value.length}`,
+    `Active workspace sessions: ${activeWorkspaceSessions.value.length}`,
+    `Workspace panel: ${rightCollapsed.value ? 'collapsed' : workspacePanelTab.value}`
+  ].join('\n')
+  try {
+    await navigator.clipboard.writeText(info)
+    showToast('success', '关于信息已复制', '版本与运行状态已写入剪贴板。')
+  } catch (error) {
+    showToast('error', '复制失败', formatError(error))
+  }
+}
 
 function showToast(kind: ToastKind, title: string, message = '') {
   const id = `toast-${Date.now()}-${toastSequence++}`
@@ -1598,7 +1658,10 @@ function handleGlobalClick(event: MouseEvent) {
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeContextMenu()
+  if (event.key === 'Escape') {
+    closeContextMenu()
+    closeAboutPage()
+  }
 }
 
 onMounted(() => {
@@ -1709,6 +1772,16 @@ onBeforeUnmount(() => {
       >
         <UiIcon :name="appTheme === 'light' ? 'moon' : 'sun'" />
       </button>
+      <button
+        class="rail-button"
+        :class="{ active: aboutOpen }"
+        type="button"
+        title="关于 AI Term"
+        aria-label="关于 AI Term"
+        @click="openAboutPage"
+      >
+        <UiIcon name="ai" />
+      </button>
     </aside>
     <ConnectionSidebar
       v-if="leftPanelMode === 'connections'"
@@ -1816,6 +1889,108 @@ onBeforeUnmount(() => {
     >
       工作区
     </button>
+    <div v-if="aboutOpen" class="modal-backdrop about-backdrop" role="presentation" @click.self="closeAboutPage">
+      <section class="modal about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title" aria-describedby="about-summary">
+        <div class="modal-head about-head">
+          <div>
+            <strong id="about-title">关于 AI Term</strong>
+            <span>v{{ APP_VERSION }} · {{ APP_CHANNEL }} · {{ APP_LICENSE }}</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAboutPage"><UiIcon name="close" /></button>
+        </div>
+        <div class="about-body">
+          <section class="about-hero">
+            <div class="about-copy">
+              <span class="about-kicker">AI TERM / SECURE OPS</span>
+              <h2>AI Term</h2>
+              <p id="about-summary">面向服务器操作的 AI 终端工作台。</p>
+              <div class="about-version-strip" aria-label="版本信息">
+                <span>v{{ APP_VERSION }}</span>
+                <span>{{ APP_CHANNEL }}</span>
+                <span>{{ APP_LICENSE }}</span>
+              </div>
+              <div class="about-source" aria-label="作者与仓库">
+                <span>作者 {{ APP_AUTHOR }}</span>
+                <a :href="APP_REPOSITORY" target="_blank" rel="noreferrer">
+                  <UiIcon name="external-link" size="14" />
+                  <span>{{ APP_REPOSITORY }}</span>
+                </a>
+              </div>
+            </div>
+            <div class="about-visual" aria-hidden="true">
+              <div class="about-visual-top">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div class="about-scan-grid">
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+              </div>
+              <div class="about-terminal-lines">
+                <span>$ ai-term boot --workspace</span>
+                <span>ssh route ........... online</span>
+                <span>sftp mesh ........... ready</span>
+                <span>script guard ........ armed</span>
+              </div>
+            </div>
+          </section>
+          <section class="about-runtime" aria-label="运行信息">
+            <article v-for="item in aboutRuntimeStats" :key="item.label">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </article>
+          </section>
+          <section class="about-signal-grid" aria-label="能力矩阵">
+            <article v-for="item in aboutSignals" :key="item.label" class="about-signal">
+              <span class="about-signal-icon"><UiIcon :name="item.icon" /></span>
+              <div>
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.value }}</small>
+              </div>
+            </article>
+          </section>
+          <section class="about-command-panel" aria-label="运行摘要">
+            <div class="about-command-head">
+              <span>runtime://summary</span>
+              <strong>ready</strong>
+            </div>
+            <div class="about-build-grid">
+              <article>
+                <span>Version</span>
+                <strong>{{ APP_VERSION }}</strong>
+              </article>
+              <article>
+                <span>Channel</span>
+                <strong>{{ APP_CHANNEL }}</strong>
+              </article>
+              <article>
+                <span>Theme</span>
+                <strong>{{ appTheme }}</strong>
+              </article>
+              <article>
+                <span>Workspace</span>
+                <strong>{{ rightCollapsed ? 'compact' : workspacePanelTab }}</strong>
+              </article>
+            </div>
+          </section>
+        </div>
+        <div class="modal-actions about-actions">
+          <button type="button" @click="copyAboutInfo">
+            <UiIcon name="copy" size="14" />
+            <span>复制信息</span>
+          </button>
+          <button class="primary" type="button" @click="closeAboutPage">完成</button>
+        </div>
+      </section>
+    </div>
     <div v-if="toasts.length" class="toast-stack" aria-live="polite" aria-atomic="false">
       <article v-for="toast in toasts" :key="toast.id" class="app-toast" :class="toast.kind">
         <span>
