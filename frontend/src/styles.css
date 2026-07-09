@@ -3361,23 +3361,74 @@ code {
   object-fit: contain;
 }
 .session-tabs {
-  display: flex;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   height: 100%;
   padding: 0 12px;
+  overflow: hidden;
 }
-.session-tabs {
+.session-tab-scrollarea {
   min-width: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 7px;
+  align-items: center;
+}
+.session-tab-strip {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scroll-padding-inline: 8px;
+}
+.session-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+.session-tab-scrollbar {
+  position: relative;
+  height: 4px;
+  align-self: start;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(35, 45, 62, .82);
+  cursor: pointer;
+}
+.session-tab-scrollbar-thumb {
+  position: absolute;
+  inset-block: 0;
+  min-width: 28px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #37d99e, #60a5fa);
+  box-shadow: 0 0 16px rgba(86, 230, 163, .28);
+  cursor: grab;
+  touch-action: none;
+}
+.session-tab-scrollbar-thumb:active {
+  cursor: grabbing;
+}
+.session-tab-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .tab {
+  flex: 0 0 auto;
+  min-width: 112px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   max-width: 220px;
   border-color: transparent;
   color: #9aa5b1;
+  padding-inline: 10px 8px;
   white-space: nowrap;
 }
 .tab.target {
@@ -3385,7 +3436,9 @@ code {
   background: rgba(20, 36, 32, .7);
 }
 .tab-title {
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 152px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -6103,6 +6156,12 @@ code {
   border-color: #d3ddec;
   background: rgba(248, 251, 255, .92);
   color: #526279;
+}
+.theme-light .session-tab-scrollbar {
+  background: #d9e3ee;
+}
+.theme-light .session-tab-scrollbar-thumb {
+  background: linear-gradient(90deg, #0f8a63, #2563eb);
 }
 .theme-light .workspace-tabs button.active {
   border-color: #bfe9d3;

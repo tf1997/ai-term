@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
@@ -186,10 +186,16 @@ const contextMenu = ref<ContextMenuState | null>(null)
 const appSettings = ref<AppUserSettings>(loadUserSettings())
 const appTheme = ref<AppTheme>(loadAppTheme())
 const themeToggleButton = ref<HTMLButtonElement | null>(null)
+const sessionTabStrip = ref<HTMLDivElement | null>(null)
+const sessionTabButtons = ref<Record<string, HTMLButtonElement | null>>({})
+const sessionTabScrollLeft = ref(0)
+const sessionTabClientWidth = ref(1)
+const sessionTabScrollWidth = ref(1)
 const toasts = ref<AppToast[]>([])
 let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
+let sessionTabResizeObserver: ResizeObserver | null = null
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
   return profiles.value.find((profile) => profile.id === selectedProfileId.value)
@@ -223,6 +229,18 @@ const terminalTargetTitle = computed(() => {
   return multiTerminalInputEnabled.value
     ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}`
     : `当前 tab：${activeTerminalTitle.value}；仅发送到当前终端`
+})
+const sessionTabOverflow = computed(() => sessionTabScrollWidth.value - sessionTabClientWidth.value > 2)
+const sessionTabThumbStyle = computed(() => {
+  const clientWidth = Math.max(1, sessionTabClientWidth.value)
+  const scrollWidth = Math.max(clientWidth, sessionTabScrollWidth.value)
+  const scrollableWidth = Math.max(1, scrollWidth - clientWidth)
+  const widthPercent = Math.max(8, (clientWidth / scrollWidth) * 100)
+  const leftPercent = (sessionTabScrollLeft.value / scrollableWidth) * (100 - widthPercent)
+  return {
+    left: `${leftPercent}%`,
+    width: `${widthPercent}%`
+  }
 })
 
 const activeTerminalSnapshot = computed(() => {
@@ -410,6 +428,91 @@ function selectTerminalTab(tabId: string) {
     return
   }
   setTerminalTargets(current, tabId)
+}
+
+function setSessionTabButton(tabId: string, element: unknown) {
+  sessionTabButtons.value[tabId] = element instanceof HTMLButtonElement ? element : null
+}
+
+function updateSessionTabScrollMetrics() {
+  const strip = sessionTabStrip.value
+  if (!strip) return
+  sessionTabScrollLeft.value = strip.scrollLeft
+  sessionTabClientWidth.value = Math.max(1, strip.clientWidth)
+  sessionTabScrollWidth.value = Math.max(1, strip.scrollWidth)
+}
+
+function handleSessionTabScroll() {
+  updateSessionTabScrollMetrics()
+}
+
+function handleSessionTabWheel(event: WheelEvent) {
+  const strip = sessionTabStrip.value
+  if (!strip || !sessionTabOverflow.value) return
+  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+  if (!delta) return
+  const nextLeft = Math.max(0, Math.min(strip.scrollLeft + delta, strip.scrollWidth - strip.clientWidth))
+  if (nextLeft === strip.scrollLeft) return
+  event.preventDefault()
+  strip.scrollLeft = nextLeft
+  updateSessionTabScrollMetrics()
+}
+
+function handleSessionTabScrollbarPointerDown(event: PointerEvent) {
+  if (event.target !== event.currentTarget) return
+  const strip = sessionTabStrip.value
+  const track = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  if (!strip || !track || !sessionTabOverflow.value) return
+  const trackRect = track.getBoundingClientRect()
+  const widthRatio = sessionTabClientWidth.value / sessionTabScrollWidth.value
+  const thumbWidth = Math.max(28, trackRect.width * widthRatio)
+  const targetLeft = event.clientX - trackRect.left - thumbWidth / 2
+  const scrollableTrack = Math.max(1, trackRect.width - thumbWidth)
+  const scrollableContent = Math.max(1, strip.scrollWidth - strip.clientWidth)
+  strip.scrollLeft = Math.max(0, Math.min(targetLeft / scrollableTrack, 1)) * scrollableContent
+  updateSessionTabScrollMetrics()
+}
+
+function handleSessionTabThumbPointerDown(event: PointerEvent) {
+  const strip = sessionTabStrip.value
+  const thumb = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  const track = thumb?.parentElement
+  if (!strip || !thumb || !track || !sessionTabOverflow.value) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startLeft = strip.scrollLeft
+  const trackWidth = track.clientWidth
+  const thumbWidth = thumb.clientWidth
+  const scrollableTrack = Math.max(1, trackWidth - thumbWidth)
+  const scrollableContent = Math.max(1, strip.scrollWidth - strip.clientWidth)
+  const scrollPerPixel = scrollableContent / scrollableTrack
+
+  const handlePointerMove = (moveEvent: PointerEvent) => {
+    const nextLeft = startLeft + (moveEvent.clientX - startX) * scrollPerPixel
+    strip.scrollLeft = Math.max(0, Math.min(nextLeft, scrollableContent))
+    updateSessionTabScrollMetrics()
+  }
+  const stopDragging = () => {
+    window.removeEventListener('pointermove', handlePointerMove)
+    window.removeEventListener('pointerup', stopDragging)
+    window.removeEventListener('pointercancel', stopDragging)
+  }
+
+  thumb.setPointerCapture?.(event.pointerId)
+  window.addEventListener('pointermove', handlePointerMove)
+  window.addEventListener('pointerup', stopDragging, { once: true })
+  window.addEventListener('pointercancel', stopDragging, { once: true })
+}
+
+function scrollActiveTerminalTabIntoView() {
+  void nextTick(() => {
+    sessionTabButtons.value[activeTerminalId.value]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'nearest'
+    })
+    updateSessionTabScrollMetrics()
+  })
 }
 
 function isTerminalTargetSelected(tabId: string) {
@@ -1678,6 +1781,14 @@ onMounted(() => {
   themeToggleButton.value?.addEventListener('click', handleThemeTogglePointerDown, true)
   document.addEventListener('selectstart', handleAppSelectStart, true)
   document.addEventListener('dragstart', handleAppDragStart, true)
+  void nextTick(() => {
+    updateSessionTabScrollMetrics()
+    if (typeof ResizeObserver !== 'undefined' && sessionTabStrip.value) {
+      sessionTabResizeObserver = new ResizeObserver(updateSessionTabScrollMetrics)
+      sessionTabResizeObserver.observe(sessionTabStrip.value)
+    }
+  })
+  window.addEventListener('resize', updateSessionTabScrollMetrics)
 })
 
 watch(activeConnectionId, (connectionId) => {
@@ -1687,6 +1798,16 @@ watch(activeConnectionId, (connectionId) => {
 watch(activeWorkspaceKey, () => {
   void loadWorkspaceState(activeConnectionId.value, activeWorkspaceSessionId.value)
 })
+
+watch(
+  () => [activeTerminalId.value, terminalTabs.value.length],
+  scrollActiveTerminalTabIntoView
+)
+
+watch(
+  () => [leftCollapsed.value, rightCollapsed.value],
+  () => void nextTick(updateSessionTabScrollMetrics)
+)
 
 watch(
   appSettings,
@@ -1704,6 +1825,9 @@ onBeforeUnmount(() => {
   themeToggleButton.value?.removeEventListener('click', handleThemeTogglePointerDown, true)
   document.removeEventListener('selectstart', handleAppSelectStart, true)
   document.removeEventListener('dragstart', handleAppDragStart, true)
+  window.removeEventListener('resize', updateSessionTabScrollMetrics)
+  sessionTabResizeObserver?.disconnect()
+  sessionTabResizeObserver = null
 })
 </script>
 
@@ -1715,32 +1839,42 @@ onBeforeUnmount(() => {
         <span>AI Term</span>
       </div>
       <nav class="session-tabs" aria-label="终端会话">
-        <button
-          v-for="tab in terminalTabs"
-          :key="tab.id"
-          class="tab"
-          :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id) }"
-          @click="selectTerminalTab(tab.id)"
-          @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
-        >
-                    <span
-            class="terminal-target-toggle"
-            :class="{ selected: isTerminalTargetSelected(tab.id) }"
-            :title="tab.id === activeTerminalId ? (multiTerminalInputEnabled ? '仅同步当前终端' : '当前终端') : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
-            aria-hidden="true"
-            @click.stop="toggleTerminalTarget(tab.id)"
-          >
-            <span />
+        <div class="session-tab-scrollarea">
+          <div ref="sessionTabStrip" class="session-tab-strip" @scroll="handleSessionTabScroll" @wheel="handleSessionTabWheel">
+            <button
+              v-for="tab in terminalTabs"
+              :key="tab.id"
+              :ref="(element) => setSessionTabButton(tab.id, element)"
+              class="tab"
+              :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id) }"
+              @click="selectTerminalTab(tab.id)"
+              @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
+            >
+              <span
+                class="terminal-target-toggle"
+                :class="{ selected: isTerminalTargetSelected(tab.id) }"
+                :title="tab.id === activeTerminalId ? (multiTerminalInputEnabled ? '仅同步当前终端' : '当前终端') : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
+                aria-hidden="true"
+                @click.stop="toggleTerminalTarget(tab.id)"
+              >
+                <span />
+              </span>
+              <span class="status-dot" :class="terminalStatusClass(tab.status)" />
+              <span class="tab-title">{{ tab.title }}</span>
+              <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
+            </button>
+          </div>
+          <div v-if="sessionTabOverflow" class="session-tab-scrollbar" aria-hidden="true" @pointerdown="handleSessionTabScrollbarPointerDown">
+            <span class="session-tab-scrollbar-thumb" :style="sessionTabThumbStyle" @pointerdown.stop="handleSessionTabThumbPointerDown" />
+          </div>
+        </div>
+        <div class="session-tab-actions">
+          <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
+          <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="terminalTargetTitle">
+            <UiIcon name="terminal" size="13" />
+            <span>{{ terminalTargetLabel }}</span>
           </span>
-          <span class="status-dot" :class="terminalStatusClass(tab.status)" />
-          <span class="tab-title">{{ tab.title }}</span>
-          <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
-        </button>
-                <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
-        <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="terminalTargetTitle">
-          <UiIcon name="terminal" size="13" />
-          <span>{{ terminalTargetLabel }}</span>
-        </span>
+        </div>
       </nav>
     </header>
     <aside class="app-rail" aria-label="主导航">
