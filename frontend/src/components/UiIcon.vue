@@ -18,6 +18,7 @@ defineProps<{
     | 'folder'
     | 'folder-open'
     | 'history'
+    | 'info'
     | 'key'
     | 'list'
     | 'maximize'
@@ -133,6 +134,11 @@ defineProps<{
       <path d="M3 12a9 9 0 1 0 3-6.7" />
       <path d="M3 3v6h6" />
       <path d="M12 7v5l3 2" />
+    </template>
+    <template v-else-if="name === 'info'">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
     </template>
     <template v-else-if="name === 'key'">
       <circle cx="7.5" cy="15.5" r="5.5" />

@@ -1910,11 +1910,11 @@ onBeforeUnmount(() => {
         class="rail-button"
         :class="{ active: aboutOpen }"
         type="button"
-        title="关于 AI Term"
-        aria-label="关于 AI Term"
+        title="&#20851;&#20110; AI Term"
+        aria-label="&#20851;&#20110; AI Term"
         @click="openAboutPage"
       >
-        <UiIcon name="ai" />
+        <UiIcon name="info" />
       </button>
     </aside>
     <ConnectionSidebar

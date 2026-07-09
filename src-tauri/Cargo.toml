@@ -24,6 +24,11 @@ tauri = { version = "1", features = ["shell-open", "http-api"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 portable-pty = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+ssh2 = "0.9.6"
+
+[target.'cfg(not(windows))'.dependencies]
 ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 [build-dependencies]
 

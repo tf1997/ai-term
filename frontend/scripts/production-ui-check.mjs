@@ -44,6 +44,15 @@ const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
 
 assert(
+  uiIcon.includes("| 'info'") &&
+    uiIcon.includes("name === 'info'") &&
+    appShell.includes('title="&#20851;&#20110; AI Term"') &&
+    appShell.includes('aria-label="&#20851;&#20110; AI Term"') &&
+    appShell.includes('<UiIcon name="info" />') &&
+    !/title="(?:&#20851;&#20110;|关于|鍏充簬) AI Term"[\s\S]*?<UiIcon name="ai" \/>/.test(appShell),
+  'About rail button must use a dedicated info icon instead of reusing the AI icon.'
+)
+assert(
   styles.includes('[role="button"],') &&
     styles.includes('.terminal-target-summary,') &&
     styles.includes('-webkit-user-select: none;') &&
@@ -1031,7 +1040,7 @@ assert(
     styles.includes('.terminal-native-code') &&
     styles.includes('.xterm-host .xterm-rows') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
-    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 18px;') &&
+    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 6px 16px 18px;') &&
     terminalPane.includes('terminalContentBox(element)') &&
     terminalPane.includes('measureTerminalCell(element)') &&
     terminalPane.includes('element.clientHeight - verticalPadding') &&
@@ -2344,7 +2353,7 @@ assert(
     styles.includes('@media (max-width: 1080px)') &&
     styles.includes('--workspace-width: clamp(300px, 34vw, 360px);') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
-    styles.includes('overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 18px;') &&
+    styles.includes('overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 6px 16px 18px;') &&
     !styles.includes('width: min(380px, calc(100vw - 56px));') &&
     !styles.includes('.app-shell:not(.right-collapsed) .right-panel {\n    display: none;'),
   'Frontend layout must keep the right workspace as a proportional grid column at the 1280 default and 980 minimum window widths without terminal overlap or workspace shrinkage.'

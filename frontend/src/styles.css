@@ -1479,7 +1479,7 @@ code,
   display: grid;
   overflow: hidden;
   box-sizing: border-box;
-  padding: 16px 18px;
+  padding: 16px 6px 16px 18px;
 }
 .xterm-host .xterm {
   width: 100%;
