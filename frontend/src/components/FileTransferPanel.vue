@@ -462,10 +462,11 @@ function initializeRemoteBrowser() {
 
 function openCurrentTerminalSftp() {
   if (!remoteReady.value) return
-  if (currentTerminalTarget.value) {
-    void useTerminalTargetForSftp()
-    return
-  }
+  currentTerminalTarget.value = null
+  selectedTarget.value = null
+  entries.value = []
+  selectedRemoteEntry.value = null
+  autoTerminalProbeAttempted.value = false
   identifyCurrentTerminalTarget({ useForSftp: true })
 }
 
