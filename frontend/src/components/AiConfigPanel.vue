@@ -37,7 +37,7 @@ function save() {
     <div class="config-top">
       <strong>Custom AI Provider</strong>
       <span class="badge" :class="{ ok: draft.baseUrl && draft.model }">
-        {{ draft.baseUrl && draft.model ? 'configured' : 'required' }}
+        {{ draft.baseUrl && draft.model ? '已配置' : '待配置' }}
       </span>
     </div>
     <div class="config-grid">

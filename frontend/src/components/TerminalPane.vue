@@ -27,6 +27,7 @@ type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
 type CompletionSuggestionSource = 'system' | 'history' | 'session'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type TerminalSelectionViewportCell = { x: number; y: number }
+type TerminalInputTrackResult = 'idle' | 'changed' | 'submitted'
 
 interface TerminalVisualSettings {
   terminalFontFamily: string
@@ -65,6 +66,7 @@ const emit = defineEmits<{
 }>()
 
 const terminalHost = ref<HTMLDivElement | null>(null)
+const terminalBodyWrap = ref<HTMLDivElement | null>(null)
 const quickCommandSettingsButton = ref<HTMLButtonElement | null>(null)
 let terminal: Terminal | undefined
 let sessionId = ''
@@ -80,6 +82,7 @@ let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
 let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
+let completionDebounceTimer: number | undefined
 let pendingInputControlSequence = ''
 let lastRightClickPasteAt = 0
 const status = ref<TerminalRuntimeStatus>('idle')
@@ -89,7 +92,22 @@ const activeSessionProfile = ref<ConnectionProfile | undefined>(undefined)
 const terminalCompletionOpen = ref(false)
 const completionSuggestions = ref<CompletionSuggestion[]>([])
 const completionActiveIndex = ref(0)
+const completionKeyboardMode = ref(false)
+const completionSummary = computed(() => {
+  const historyCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'history').length
+  const sessionCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'session').length
+  const systemCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'system').length
+  const parts = [
+    historyCount ? `历史 ${historyCount}` : '',
+    sessionCount ? `本次 ${sessionCount}` : '',
+    systemCount ? `系统 ${systemCount}` : ''
+  ].filter(Boolean)
+  return parts.length ? parts.join(' · ') : '没有匹配的命令'
+})
 const localCommandHistory = ref<string[]>([])
+const COMPLETION_DEBOUNCE_MS = 200
+const COMPLETION_LIMIT = 12
+const COMPLETION_VISIBLE_ROWS = 3
 const DEFAULT_QUICK_COMMANDS = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
 const QUICK_COMMAND_STORAGE_KEY = 'ai-term:quick-commands:v1'
 const QUICK_COMMAND_LIMIT = 12
@@ -566,42 +584,116 @@ async function recommendQuickCommandsWithAi() {
 }
 function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
   const normalizedPrefix = prefix.toLowerCase()
-  const seen = new Set<string>()
-  const add = (command: string, source: CompletionSuggestionSource) => {
+  const historyStats = new Map<string, { command: string; count: number; source: CompletionSuggestionSource; lastIndex: number }>()
+  const matchesPrefix = (command: string) => !normalizedPrefix || command.toLowerCase().startsWith(normalizedPrefix)
+  const addHistory = (command: string, source: CompletionSuggestionSource, index: number) => {
     const value = command.trim()
     if (!value) return
-    if (normalizedPrefix && !value.toLowerCase().startsWith(normalizedPrefix)) return
+    if (!matchesPrefix(value)) return
     const key = value.toLowerCase()
-    if (seen.has(key)) return
-    seen.add(key)
-    suggestions.push({ command: value, source })
+    const current = historyStats.get(key)
+    if (current) {
+      current.count += 1
+      current.lastIndex = Math.max(current.lastIndex, index)
+      if (source === 'session') current.source = source
+      return
+    }
+    historyStats.set(key, { command: value, count: 1, source, lastIndex: index })
   }
-  const suggestions: CompletionSuggestion[] = []
-  historyCommandSuggestions().slice().reverse().forEach((command) => add(command, 'history'))
-  systemCommandSuggestions().forEach((command) => add(command, 'system'))
-  return suggestions.slice(0, 9)
+
+  const historyCommands = props.commandHistory.map((entry) => entry.command)
+  historyCommands.forEach((command, index) => addHistory(command, 'history', index))
+  localCommandHistory.value.forEach((command, index) => addHistory(command, 'session', historyCommands.length + index))
+
+  const historySuggestions = [...historyStats.values()]
+    .sort((a, b) => b.count - a.count || b.lastIndex - a.lastIndex || a.command.localeCompare(b.command))
+    .map(({ command, source }) => ({ command, source }))
+
+  const seen = new Set(historySuggestions.map((suggestion) => suggestion.command.toLowerCase()))
+  const systemSuggestions = systemCommandSuggestions()
+    .map((command) => command.trim())
+    .filter((command) => command && matchesPrefix(command) && !seen.has(command.toLowerCase()))
+    .map((command) => ({ command, source: 'system' as CompletionSuggestionSource }))
+
+  return [...historySuggestions, ...systemSuggestions].slice(0, COMPLETION_LIMIT)
 }
 
-function refreshCompletionSuggestions() {
+function refreshCompletionSuggestions(options: { force?: boolean; keyboard?: boolean } = {}) {
+  const force = options.force ?? false
+  const keyboard = options.keyboard ?? false
   completionSuggestions.value = buildCompletionSuggestions()
   completionActiveIndex.value = Math.min(completionActiveIndex.value, Math.max(0, completionSuggestions.value.length - 1))
-  terminalCompletionOpen.value = completionSuggestions.value.length > 0
+  completionKeyboardMode.value = keyboard
+  terminalCompletionOpen.value = force || completionSuggestions.value.length > 0
+}
+
+function clearCompletionTimer() {
+  if (completionDebounceTimer === undefined) return
+  window.clearTimeout(completionDebounceTimer)
+  completionDebounceTimer = undefined
+}
+
+function scheduleCompletionSuggestions() {
+  clearCompletionTimer()
+  completionKeyboardMode.value = false
+  completionDebounceTimer = window.setTimeout(() => {
+    completionDebounceTimer = undefined
+    if (!inputCommandBuffer.trim()) {
+      closeCompletion()
+      return
+    }
+    refreshCompletionSuggestions({ force: false, keyboard: false })
+  }, COMPLETION_DEBOUNCE_MS)
+}
+
+function updateCompletionAfterInput(result: TerminalInputTrackResult) {
+  if (result === 'submitted') {
+    closeCompletion()
+    return
+  }
+  if (result === 'changed') {
+    scheduleCompletionSuggestions()
+  }
 }
 
 function closeCompletion() {
+  clearCompletionTimer()
   terminalCompletionOpen.value = false
   completionSuggestions.value = []
   completionActiveIndex.value = 0
+  completionKeyboardMode.value = false
+}
+
+function scrollActiveCompletionIntoView() {
+  void nextTick(() => {
+    const active = terminalBodyWrap.value?.querySelector<HTMLButtonElement>('.terminal-completion button.active')
+    active?.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 function cycleCompletion(delta: number) {
   if (!completionSuggestions.value.length) return
+  completionKeyboardMode.value = true
   completionActiveIndex.value = (completionActiveIndex.value + delta + completionSuggestions.value.length) % completionSuggestions.value.length
+  scrollActiveCompletionIntoView()
+}
+
+function completionSourceLabel(source: CompletionSuggestionSource) {
+  if (source === 'system') return '系统'
+  if (source === 'history') return '历史'
+  return '本次'
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!terminalCompletionOpen.value) return
+  const target = event.target instanceof Node ? event.target : null
+  if (target && terminalBodyWrap.value?.contains(target)) return
+  closeCompletion()
 }
 
 function acceptCompletionSuggestion(suggestion = completionSuggestions.value[completionActiveIndex.value]) {
   if (!suggestion) return false
-  const current = inputCommandBuffer
+  const current = inputCommandBuffer.trimStart()
   if (!suggestion.command.toLowerCase().startsWith(current.toLowerCase())) return false
   const tail = suggestion.command.slice(current.length)
   if (tail) writeTerminalInput(tail)
@@ -612,10 +704,11 @@ function acceptCompletionSuggestion(suggestion = completionSuggestions.value[com
 
 function handleTerminalCustomKeyEvent(event: KeyboardEvent) {
   if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space') {
-    if (terminalCompletionOpen.value) {
+    clearCompletionTimer()
+    if (terminalCompletionOpen.value && completionKeyboardMode.value) {
       cycleCompletion(1)
     } else {
-      refreshCompletionSuggestions()
+      refreshCompletionSuggestions({ force: true, keyboard: true })
     }
     return false
   }
@@ -630,6 +723,14 @@ function handleCompletionInput(data: string) {
   if (data === '\x1b[B') {
     cycleCompletion(1)
     return true
+  }
+  if (!completionKeyboardMode.value) {
+    if (data === '\x1b') {
+      closeCompletion()
+      return true
+    }
+    closeCompletion()
+    return false
   }
   if (data === '\r' || data === '\n' || data === '\x1b[C') {
     return acceptCompletionSuggestion()
@@ -997,19 +1098,24 @@ function recordCommand(command: string) {
   })
 }
 
-function trackUserInput(data: string) {
+function trackUserInput(data: string): TerminalInputTrackResult {
   const commandInput = stripCommandInputControlSequences(data)
+  let result: TerminalInputTrackResult = 'idle'
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
       recordCommand(inputCommandBuffer)
       inputCommandBuffer = ''
+      result = 'submitted'
     } else if (code === 127) {
       inputCommandBuffer = inputCommandBuffer.slice(0, -1)
+      result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
     } else if (character >= ' ') {
       inputCommandBuffer += character
+      result = 'changed'
     }
   }
+  return result
 }
 
 function stripCommandInputControlSequences(data: string) {
@@ -1105,7 +1211,7 @@ onMounted(async () => {
 
   terminal = new Terminal({
     cursorBlink: true,
-    convertEol: true,
+    convertEol: false,
     fontFamily: resolvedTerminalSettings().terminalFontFamily,
     fontSize: resolvedTerminalSettings().terminalFontSize,
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
@@ -1119,7 +1225,8 @@ onMounted(async () => {
   dataDisposable = terminal.onData((data) => {
     if (handleCompletionInput(data)) return
     if (sessionId) {
-      trackUserInput(data)
+      const inputResult = trackUserInput(data)
+      updateCompletionAfterInput(inputResult)
       emit('terminalInput', { terminalId: props.terminalId, data })
       void terminalWrite(sessionId, data)
     }
@@ -1130,6 +1237,7 @@ onMounted(async () => {
   })
   terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true)
   quickCommandSettingsButton.value?.addEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
 
   resizeObserver = new ResizeObserver(() => {
@@ -1393,6 +1501,7 @@ function executeCommand(command: string) {
   if (!value) return false
   if (sessionId) {
     recordCommand(value)
+    closeCompletion()
     void terminalWrite(sessionId, `${value}\r`)
     void nextTick(() => terminal?.focus())
     return true
@@ -1426,7 +1535,8 @@ async function pasteClipboardToTerminal() {
   try {
     const text = await readClipboard()
     if (!text) return
-    trackUserInput(text)
+    const inputResult = trackUserInput(text)
+    updateCompletionAfterInput(inputResult)
     emit('terminalInput', { terminalId: props.terminalId, data: text })
     writeTerminalInput(text)
   } catch (error) {
@@ -1496,6 +1606,8 @@ function focusTerminal() {
 onBeforeUnmount(() => {
   terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
+  clearCompletionTimer()
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
   stopTerminalSelectionDrag()
   if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
@@ -1536,19 +1648,29 @@ defineExpose({
             <button class="icon-button" type="button" title="断开连接" aria-label="断开连接" @click="disconnectFromButton"><UiIcon name="close" /></button>
           </div>
         </div>
-        <div class="terminal-body-wrap">
+        <div ref="terminalBodyWrap" class="terminal-body-wrap">
           <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
-          <div v-if="terminalCompletionOpen" class="terminal-completion" role="listbox" aria-label="命令补全">
-            <button
-              v-for="(suggestion, index) in completionSuggestions"
-              :key="`${suggestion.source}-${suggestion.command}`"
-              type="button"
-              :class="{ active: index === completionActiveIndex }"
-              @pointerdown.prevent="acceptCompletionSuggestion(suggestion)"
-            >
-              <code>{{ suggestion.command }}</code>
-              <span>{{ suggestion.source === 'system' ? '系统' : suggestion.source === 'history' ? '历史' : '本次' }}</span>
-            </button>
+          <div v-if="terminalCompletionOpen" class="terminal-completion" :class="{ 'keyboard-mode': completionKeyboardMode }" :style="{ '--completion-visible-rows': COMPLETION_VISIBLE_ROWS }" role="listbox" aria-label="命令推荐">
+            <div class="terminal-completion-head">
+              <div>
+                <strong>命令推荐</strong>
+                <span>{{ completionSummary }}</span>
+              </div>
+              <small>输入停顿 200ms 推荐 · <kbd>&uarr;</kbd><kbd>&darr;</kbd> 选择 · <kbd>Ctrl</kbd><kbd>Space</kbd></small>
+            </div>
+            <p v-if="!completionSuggestions.length" class="terminal-completion-empty">当前连接还没有匹配的历史命令，继续输入后再试。</p>
+            <template v-else>
+              <button
+                v-for="(suggestion, index) in completionSuggestions"
+                :key="`${suggestion.source}-${suggestion.command}`"
+                type="button"
+                :class="{ active: completionKeyboardMode && index === completionActiveIndex }"
+                @pointerdown.prevent="acceptCompletionSuggestion(suggestion)"
+              >
+                <code>{{ suggestion.command }}</code>
+                <span>{{ completionSourceLabel(suggestion.source) }}</span>
+              </button>
+            </template>
           </div>
         </div>
       </div>

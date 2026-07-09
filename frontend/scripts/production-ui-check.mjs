@@ -489,8 +489,8 @@ assert(
     styles.includes('.app-shell.theme-light .xterm-host .ai-term-selection-line') &&
     styles.includes('.app-shell.theme-light .xterm-host .xterm-selection div') &&
     styles.includes('background: rgba(16, 185, 129, .20) !important;') &&
-    styles.includes('border-color: rgba(16, 185, 129, .42);') &&
-    styles.includes('background: rgba(16, 185, 129, .12);') &&
+    styles.includes('border-color: rgba(16, 185, 129, .28);') &&
+    styles.includes('background: rgba(16, 185, 129, .10);') &&
     styles.includes('outline: 1px solid rgba(16, 185, 129, .34);') &&
     styles.includes('.xterm-host .xterm-rows * {') &&
     styles.includes('.xterm-host .xterm-rows *::selection') &&
@@ -991,14 +991,43 @@ assert(
     terminalPane.includes('systemCommandSuggestions') &&
     terminalPane.includes('historyCommandSuggestions') &&
     terminalPane.includes('acceptCompletionSuggestion') &&
+    terminalPane.includes('completionSummary') &&
+    terminalPane.includes('completionSourceLabel') &&
+    terminalPane.includes('handleDocumentPointerDown') &&
+    terminalPane.includes('terminalBodyWrap.value?.contains(target)') &&
+    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 200') &&
+    terminalPane.includes('COMPLETION_LIMIT = 12') &&
+    terminalPane.includes('COMPLETION_VISIBLE_ROWS = 3') &&
+    terminalPane.includes('completionKeyboardMode') &&
+    terminalPane.includes('scrollActiveCompletionIntoView') &&
+    terminalPane.includes("active?.scrollIntoView({ block: 'nearest' })") &&
+    terminalPane.includes('scheduleCompletionSuggestions') &&
+    terminalPane.includes('updateCompletionAfterInput') &&
+    terminalPane.includes('const inputResult = trackUserInput(data)') &&
+    terminalPane.includes("data === '\\x1b[A'") &&
+    terminalPane.includes("data === '\\x1b[B'") &&
+    terminalPane.includes('if (!completionKeyboardMode.value)') &&
+    terminalPane.includes('terminalCompletionOpen.value = force || completionSuggestions.value.length > 0') &&
+    terminalPane.includes('inputCommandBuffer.trimStart()') &&
     !terminalPane.includes("data === '\\t'") &&
+    !terminalPane.includes("event.key === 'Tab'") &&
     terminalPane.includes('handleTerminalCustomKeyEvent') &&
     terminalPane.includes('terminal.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent)') &&
+    terminalPane.includes('convertEol: false') &&
     terminalPane.includes("event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space'") &&
+    terminalPane.includes('<kbd>&uarr;</kbd><kbd>&darr;</kbd>') &&
+    terminalPane.includes('<kbd>Ctrl</kbd><kbd>Space</kbd>') &&
+    terminalPane.includes('200ms') &&
     terminalPane.includes('class="terminal-completion"') &&
     appShell.includes(':command-history="commandHistoryForTab(tab)"') &&
     appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
     styles.includes('.terminal-completion') &&
+    styles.includes('.terminal-completion-head') &&
+    styles.includes('.terminal-completion-empty') &&
+    styles.includes('grid-template-rows: minmax(0, 1fr) auto;') &&
+    styles.includes('max-height: calc(38px + (var(--completion-visible-rows, 3) * 30px));') &&
+    styles.includes('backdrop-filter: none;') &&
+    styles.includes('.theme-light .terminal-completion kbd') &&
     styles.includes('.terminal-native-code') &&
     styles.includes('.xterm-host .xterm-rows') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
@@ -2291,6 +2320,10 @@ assert(
     workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
     workspacePanel.includes('SFTP') &&
     aiConfig.includes('Custom AI Provider') &&
+    aiConfig.includes('已配置') &&
+    aiConfig.includes('待配置') &&
+    !aiConfig.includes('configured') &&
+    !aiConfig.includes('required') &&
     settingsSidebar.includes('AiConfigPanel') &&
     !aiPanel.includes('AiConfigPanel'),
   'Workspace must use the prototype AI assistant tab labels and AI configuration must live in the left settings menu.'
@@ -2547,6 +2580,10 @@ assert(
     styles.includes('.theme-light .quick-command-modal') &&
     styles.includes('.theme-light .script-preview-modal') &&
     styles.includes('.theme-light .script-risk-modal .modal-head') &&
+    styles.includes('.theme-light .modal-head .icon-button') &&
+    styles.includes('.theme-light .modal-head .icon-button:hover:not(:disabled)') &&
+    styles.includes('.theme-light .ai-config .badge.ok') &&
+    styles.includes('.theme-light .ai-config .badge') &&
     styles.includes('.app-shell.theme-light .script-risk-chip strong') &&
     styles.includes('.app-shell.theme-light .script-risk-line-no') &&
     styles.includes('.theme-light .file-context-menu') &&
