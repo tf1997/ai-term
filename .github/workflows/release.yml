@@ -376,6 +376,7 @@ jobs:
                 npm \
                 openssl-dev \
                 pax-utils \
+                perl \
                 pkgconf \
                 webkit2gtk-dev \
                 wget
