@@ -2319,12 +2319,9 @@ fn composite_username_fallback_route(
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     let mut bastion = non_empty_endpoint(&profile.target)?;
-    let bastion_username = bastion.username.trim().to_string();
+    let bastion_username = bastion_login_username(&bastion.username)?;
 
-    if bastion_username.is_empty()
-        || is_composite_bastion_username(&bastion_username)
-        || target_host.eq_ignore_ascii_case(bastion.host.trim())
-    {
+    if target_host.eq_ignore_ascii_case(bastion.host.trim()) {
         return None;
     }
 
@@ -2341,6 +2338,21 @@ fn is_composite_bastion_username(username: &str) -> bool {
         .filter(|part| !part.trim().is_empty())
         .count()
         >= 3
+}
+
+fn bastion_login_username(username: &str) -> Option<String> {
+    let trimmed = username.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if is_composite_bastion_username(trimmed) {
+        return trimmed
+            .split('/')
+            .map(str::trim)
+            .find(|part| !part.is_empty())
+            .map(str::to_string);
+    }
+    Some(trimmed.to_string())
 }
 
 fn target_override_has_host(target_override: &SftpTargetOverride) -> bool {
@@ -2973,6 +2985,41 @@ mod tests {
                 .as_deref(),
             Some("ops@bastion.example.com")
         );
+    }
+
+    #[test]
+    fn composite_configured_bastion_username_rebuilds_for_terminal_target() {
+        let mut profile = direct_profile_targeting_bastion();
+        profile.connection_role = ConnectionRole::Bastion;
+        profile.target.username = "ops/10.9.8.7/deploy".into();
+
+        let plan = build_sftp_launch_plan_with_target(
+            &profile,
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+
+        assert!(!plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1].starts_with("ProxyJump=")));
+        assert_eq!(
+            plan.args.last().map(String::as_str),
+            Some("ops/10.1.2.3/app@bastion.example.com")
+        );
+
+        let routes = native_sftp_routes(
+            &profile,
+            &SftpTargetOverride {
+                host: Some("10.1.2.3".into()),
+                username: Some("app".into()),
+            },
+        );
+        assert_eq!(routes[0].target.host, "bastion.example.com");
+        assert_eq!(routes[0].target.username, "ops/10.1.2.3/app");
+        assert!(routes[0].proxy.is_none());
     }
 
     #[test]
