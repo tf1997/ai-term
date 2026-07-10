@@ -501,10 +501,13 @@ assert(
     aiPanel.includes('return `${title} 命令`') &&
     styles.includes('/* Quiet workspace redesign: terminal-first geometry with restrained operational chrome. */') &&
     styles.includes('/* Compact settings navigation and second-pass workspace cleanup. */') &&
+    styles.includes('/* AI workspace final density pass. */') &&
     styles.includes('.app-shell .settings-sidebar {\n  grid-template-rows: 46px minmax(0, 1fr);') &&
     styles.includes('.settings-center > .settings-section') &&
     styles.includes('flex: 1 1 auto;') &&
     styles.includes('.assistant-panel .message:not(.ai):not(.error)') &&
+    styles.includes('.assistant-panel .ai-code-meta .command-risk-status') &&
+    styles.includes('.assistant-panel .message-collapse-footer') &&
     styles.includes('.app-shell.theme-light .assistant-panel .message.ai') &&
     styles.includes('.tab:hover .terminal-target-toggle') &&
     styles.includes('.terminal-target-summary.active') &&
@@ -2092,6 +2095,8 @@ assert(
     aiPanel.includes('ai-context-strip') &&
     aiMarkdownMessage.includes('ai-code-preview-modal') &&
     aiMarkdownMessage.includes('预览完整代码') &&
+    aiMarkdownMessage.includes('shouldShowCodePreview') &&
+    aiMarkdownMessage.includes('commandRiskLabel') &&
     aiMarkdownMessage.includes('isPlainTextResult') &&
     aiMarkdownMessage.includes('ai-result-block') &&
     aiPanel.includes("message.role === 'assistant' ? 'AI' : '我'") &&
@@ -2626,10 +2631,12 @@ assert(
     uiIcon.includes("'upload'") &&
     uiIcon.includes("'save'") &&
     uiIcon.includes("'maximize'") &&
+    uiIcon.includes("'list'") &&
     uiIcon.includes("'search'") &&
     uiIcon.includes("'stop'") &&
     aiPanel.includes('import UiIcon') &&
-    aiPanel.includes('name="history"') &&
+    aiPanel.includes('title="会话列表"') &&
+    aiPanel.includes('name="list"') &&
     aiPanel.includes('name="arrow-right"') &&
     scriptPanel.includes('import UiIcon') &&
     scriptPanel.includes('name="save"') &&

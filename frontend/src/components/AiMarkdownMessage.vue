@@ -35,6 +35,17 @@ function commandRiskStatus(command: string) {
   return scriptRiskStatusForContent(command)
 }
 
+function commandRiskLabel(command: string) {
+  const status = commandRiskStatus(command)
+  return status.level === 'safe' ? '安全' : status.label
+}
+
+function shouldShowCodePreview(part: MessagePart) {
+  if (part.type !== 'code') return false
+  const content = part.content.trim()
+  return content.length > 100 || content.split('\n').length > 1
+}
+
 function displayCodeLabel(part: MessagePart) {
   if (part.type !== 'code') return 'text'
   const command = shellCommandForPart(part)
@@ -141,14 +152,15 @@ onBeforeUnmount(() => {
               :class="`risk-${commandRiskStatus(shellCommandForPart(part)).level}`"
               :title="commandRiskStatus(shellCommandForPart(part)).message"
             >
-              {{ commandRiskStatus(shellCommandForPart(part)).label }}
+              <UiIcon v-if="commandRiskStatus(shellCommandForPart(part)).level === 'safe'" name="shield" size="11" />
+              <span>{{ commandRiskLabel(shellCommandForPart(part)) }}</span>
             </span>
           </div>
           <div class="ai-code-actions">
             <button class="icon-button" type="button" :title="copied ? '已复制' : '复制代码'" :aria-label="copied ? '已复制' : '复制代码'" @click="copyText(part.content)">
               <UiIcon name="copy" size="14" />
             </button>
-            <button class="icon-button" type="button" title="预览完整代码" aria-label="预览完整代码" @click="openPreview(part)">
+            <button v-if="shouldShowCodePreview(part)" class="icon-button" type="button" title="预览完整代码" aria-label="预览完整代码" @click="openPreview(part)">
               <UiIcon name="maximize" size="14" />
             </button>
             <button

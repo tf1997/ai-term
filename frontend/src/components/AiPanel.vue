@@ -21,8 +21,8 @@ import AiMarkdownMessage from './AiMarkdownMessage.vue'
 import UiIcon from './UiIcon.vue'
 
 
-const LONG_MESSAGE_CHARS = 900
-const LONG_MESSAGE_LINES = 12
+const LONG_MESSAGE_CHARS = 1400
+const LONG_MESSAGE_LINES = 18
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
 const MAX_AI_COMMAND_HISTORY = 80
 const STREAM_TIMER_INTERVAL_MS = 1000
@@ -113,7 +113,7 @@ const aiContextHistoryCount = computed(() => Math.min(props.commandHistory.lengt
 const assistantContextSummary = computed(() => `模型 ${aiModelLabel.value}`)
 const contextSummaryLabel = computed(() => {
   const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
-  return `上下文：${formatCharacterCount(props.terminalSnapshot.length)} · 命令历史 ${aiContextHistoryCount.value} 条${selected}`
+  return `上下文 ${formatCharacterCount(props.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
 })
 const contextStatusLabel = computed(() => {
   if (!props.contextStatus) return '未压缩'
@@ -659,7 +659,7 @@ function normalizeGeneratedSessionTitle(generatedTitle: string, userMessage: str
 }
 
 function formatSessionDisplayTitle(name?: string) {
-  const title = name?.trim() || '当前会话'
+  const title = (name?.trim() || '当前会话').replace(/([^\d\s])(\d+)$/, '$1 $2')
   return /^[a-z0-9._-]{1,3}$/i.test(title) ? `${title} 命令` : title
 }
 
@@ -719,7 +719,7 @@ watch(
       </div>
       <div class="panel-actions ai-panel-actions">
         <span v-if="isAsking" class="ai-live-pill">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
-        <button ref="historyButton" class="icon-button" type="button" title="历史会话" aria-label="历史会话" @click="toggleHistory"><UiIcon name="history" /></button>
+        <button ref="historyButton" class="icon-button" type="button" title="会话列表" aria-label="会话列表" @click="toggleHistory"><UiIcon name="list" /></button>
         <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession"><UiIcon name="plus" /></button>
       </div>
       <div v-if="historyOpen" ref="historyPopover" class="session-history-popover">
@@ -912,7 +912,7 @@ watch(
         ref="composerInput"
         v-model="askText"
         :disabled="!hasUsableConfig"
-        rows="3"
+        rows="2"
         :placeholder="composerPlaceholder"
         :title="composerPlaceholder"
         aria-label="询问 AI"

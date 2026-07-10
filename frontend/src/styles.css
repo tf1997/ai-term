@@ -10043,8 +10043,8 @@ body.workspace-resizing * {
 .theme-light .workspace-tabs button.active,
 .app-shell.theme-dark .workspace-tabs button.active {
   border: 0;
-  background: transparent;
-  color: var(--workbench-text-strong);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 
 .workspace-tabs button.active::after,
@@ -10516,6 +10516,134 @@ body.workspace-resizing * {
   opacity: 1;
 }
 
+/* AI workspace final density pass. */
+.assistant-panel {
+  grid-template-rows: 52px auto minmax(0, 1fr) auto;
+}
+
+.ai-panel-head {
+  min-height: 52px;
+}
+
+.ai-context-strip {
+  min-height: 30px;
+  gap: 4px;
+  padding: 3px 8px;
+}
+
+.context-strip-main {
+  gap: 4px;
+}
+
+.context-summary-button {
+  width: auto;
+  max-width: 100%;
+  height: 24px;
+  flex: 0 1 auto;
+  gap: 5px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  padding-inline: 4px;
+  font-size: 10.5px;
+}
+
+.assistant-panel .message-list {
+  padding: 10px 12px 16px;
+}
+
+.assistant-panel .message {
+  margin-bottom: 16px;
+}
+
+.assistant-panel .message-identity {
+  grid-template-columns: 22px minmax(0, auto);
+  gap: 6px;
+}
+
+.assistant-panel .message-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 9.5px;
+}
+
+.assistant-panel .message-title {
+  min-height: 22px;
+}
+
+.assistant-panel .message-body {
+  margin-top: 6px;
+  padding-left: 28px;
+}
+
+.assistant-panel .message-body p,
+.assistant-panel .markdown-content {
+  line-height: 1.58;
+}
+
+.assistant-panel .ai-markdown-message {
+  gap: 8px;
+}
+
+.assistant-panel .ai-code-head {
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
+}
+
+.assistant-panel .ai-code-meta {
+  gap: 5px;
+}
+
+.assistant-panel .ai-code-meta .command-risk-status {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-inline: 6px;
+  font-size: 10px;
+}
+
+.assistant-panel .ai-code-actions {
+  gap: 2px;
+}
+
+.assistant-panel .ai-code-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.assistant-panel .ai-code-run.text-button.primary-action {
+  height: 26px;
+  padding-inline: 8px;
+}
+
+.assistant-panel .ai-code-block pre {
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.assistant-panel .message-collapse-footer {
+  justify-content: flex-end;
+  margin: 4px 0 0 28px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.assistant-panel .message-collapse-footer .text-button {
+  height: 24px;
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 5px;
+  font-size: 10.5px;
+}
+
+.assistant-panel > .assistant-compose textarea {
+  min-height: 50px;
+  max-height: 112px;
+}
+
 /* Light theme color-only surface contract. */
 .app-shell.theme-light .assistant-panel {
   background: #fff;
@@ -10525,6 +10653,18 @@ body.workspace-resizing * {
 .app-shell.theme-light .assistant-panel .message.ai {
   border-color: transparent;
   background: transparent;
+}
+
+.app-shell.theme-light .context-summary-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--light-muted);
+}
+
+.app-shell.theme-light .workspace-tabs button.active {
+  border-color: transparent;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
 }
 
 .app-shell.theme-light .files-panel {
