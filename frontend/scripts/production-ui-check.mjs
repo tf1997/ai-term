@@ -485,6 +485,35 @@ assert(
 )
 
 assert(
+  appShell.includes("WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'") &&
+    appShell.includes('workspaceLayoutStyle') &&
+    appShell.includes('beginWorkspaceResize') &&
+    appShell.includes('handleWorkspaceResizeKeydown') &&
+    appShell.includes('class="workspace-resizer"') &&
+    appShell.includes('role="separator"') &&
+    appShell.includes('tabindex="0"') &&
+    sidebar.includes('<span class="section-title">连接</span>') &&
+    sidebar.includes('placeholder="搜索主机、用户或标签"') &&
+    settingsSidebar.includes('<span class="section-title">设置</span>') &&
+    settingsSidebar.includes('<span>AI 配置</span>') &&
+    aiPanel.includes('normalizeGeneratedSessionTitle') &&
+    aiPanel.includes('formatSessionDisplayTitle') &&
+    aiPanel.includes('return `${title} 命令`') &&
+    styles.includes('/* Quiet workspace redesign: terminal-first geometry with restrained operational chrome. */') &&
+    styles.includes('/* Compact settings navigation and second-pass workspace cleanup. */') &&
+    styles.includes('.app-shell .settings-sidebar {\n  grid-template-rows: 46px minmax(0, 1fr);') &&
+    styles.includes('.settings-center > .settings-section') &&
+    styles.includes('flex: 1 1 auto;') &&
+    styles.includes('.assistant-panel .message:not(.ai):not(.error)') &&
+    styles.includes('.app-shell.theme-light .assistant-panel .message.ai') &&
+    styles.includes('.tab:hover .terminal-target-toggle') &&
+    styles.includes('.terminal-target-summary.active') &&
+    styles.includes('.workspace-tabs button.active::after') &&
+    styles.includes('body.workspace-resizing'),
+  'The quiet workspace redesign must keep compact shell geometry, a resizable right workspace, flat navigation, and lightweight AI messages.'
+)
+
+assert(
   styles.includes('/* Native terminal code surface and completion menu. */') &&
     styles.includes('background: rgba(226, 232, 240, .26) !important;') &&
     styles.includes('overflow: hidden;') &&

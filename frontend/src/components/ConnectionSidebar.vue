@@ -102,13 +102,13 @@ function profileReadyToConnect(profile: ConnectionProfile) {
 <template>
   <aside class="sidebar">
     <div class="section-head">
-      <span class="section-title">连接管理</span>
+      <span class="section-title">连接</span>
       <button class="primary" type="button" title="新建连接" aria-label="新建连接" @click="emit('create')">
         <UiIcon name="plus" />
-        <span>新建连接</span>
+        <span>新建</span>
       </button>
     </div>
-    <input v-model="query" class="search-input" placeholder="搜索连接..." aria-label="搜索连接" />
+    <input v-model="query" class="search-input" placeholder="搜索主机、用户或标签" aria-label="搜索连接" />
     <div class="server-list">
       <p v-if="filteredProfiles.length === 0" class="empty-state">暂无连接</p>
       <article

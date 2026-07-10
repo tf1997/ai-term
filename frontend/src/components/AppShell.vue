@@ -50,6 +50,7 @@ interface TerminalTab {
 const COMMAND_HISTORY_CACHE_LIMIT = 300
 const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
 const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
+const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
 const defaultUserSettings: AppUserSettings = {
   terminalFontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
   terminalFontSize: 13,
@@ -186,6 +187,8 @@ const loadedSessionLists = ref<Record<string, boolean>>({})
 const contextMenu = ref<ContextMenuState | null>(null)
 const appSettings = ref<AppUserSettings>(loadUserSettings())
 const appTheme = ref<AppTheme>(loadAppTheme())
+const workspaceWidth = ref(loadWorkspaceWidth())
+const workspaceResizing = ref(false)
 const themeToggleButton = ref<HTMLButtonElement | null>(null)
 const sessionTabStrip = ref<HTMLDivElement | null>(null)
 const sessionTabButtons = ref<Record<string, HTMLButtonElement | null>>({})
@@ -197,6 +200,7 @@ let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
 let sessionTabResizeObserver: ResizeObserver | null = null
+const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
   return profiles.value.find((profile) => profile.id === selectedProfileId.value)
@@ -934,6 +938,63 @@ function persistAppTheme(theme: AppTheme) {
   root.dataset.theme = theme
   root.classList.toggle('theme-light', theme === 'light')
   root.classList.toggle('theme-dark', theme === 'dark')
+}
+
+function loadWorkspaceWidth() {
+  try {
+    const value = Number(localStorage.getItem(WORKSPACE_WIDTH_STORAGE_KEY))
+    return Number.isFinite(value) ? Math.max(360, Math.min(560, value)) : 420
+  } catch {
+    return 420
+  }
+}
+
+function persistWorkspaceWidth() {
+  try {
+    localStorage.setItem(WORKSPACE_WIDTH_STORAGE_KEY, String(workspaceWidth.value))
+  } catch {
+    // Resizing remains available when storage is unavailable.
+  }
+}
+
+function beginWorkspaceResize(event: PointerEvent) {
+  if (event.button !== 0 || rightCollapsed.value || sftpWorkbenchActive.value) return
+  workspaceResizing.value = true
+  document.body.classList.add('workspace-resizing')
+  window.addEventListener('pointermove', handleWorkspaceResize)
+  window.addEventListener('pointerup', endWorkspaceResize)
+  window.addEventListener('pointercancel', endWorkspaceResize)
+  event.preventDefault()
+}
+
+function handleWorkspaceResize(event: PointerEvent) {
+  if (!workspaceResizing.value) return
+  const leftWidth = leftCollapsed.value ? 48 : 296
+  const maxForTerminal = Math.max(360, window.innerWidth - leftWidth - 560)
+  const maxWidth = Math.min(560, maxForTerminal)
+  workspaceWidth.value = Math.round(Math.max(360, Math.min(maxWidth, window.innerWidth - event.clientX)))
+}
+
+function endWorkspaceResize() {
+  if (!workspaceResizing.value) return
+  workspaceResizing.value = false
+  document.body.classList.remove('workspace-resizing')
+  window.removeEventListener('pointermove', handleWorkspaceResize)
+  window.removeEventListener('pointerup', endWorkspaceResize)
+  window.removeEventListener('pointercancel', endWorkspaceResize)
+  persistWorkspaceWidth()
+}
+
+function handleWorkspaceResizeKeydown(event: KeyboardEvent) {
+  let nextWidth = workspaceWidth.value
+  if (event.key === 'ArrowLeft') nextWidth += 20
+  else if (event.key === 'ArrowRight') nextWidth -= 20
+  else if (event.key === 'Home') nextWidth = 360
+  else if (event.key === 'End') nextWidth = 560
+  else return
+  event.preventDefault()
+  workspaceWidth.value = Math.max(360, Math.min(560, nextWidth))
+  persistWorkspaceWidth()
 }
 
 function toggleAppTheme() {
@@ -1815,6 +1876,7 @@ watch(
 )
 watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
+  endWorkspaceResize()
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
   themeToggleButton.value?.removeEventListener('pointerdown', handleThemeTogglePointerDown, true)
@@ -1829,7 +1891,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }">
+  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
     <header class="titlebar">
       <div class="brand">
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
@@ -1976,6 +2038,19 @@ onBeforeUnmount(() => {
         @profile-updated="refreshConnectionProfilesAfterTerminalAuth"
       />
     </section>
+    <div
+      v-if="!rightCollapsed && !sftpWorkbenchActive"
+      class="workspace-resizer"
+      role="separator"
+      tabindex="0"
+      aria-label="调整工作区宽度"
+      aria-orientation="vertical"
+      :aria-valuenow="workspaceWidth"
+      aria-valuemin="360"
+      aria-valuemax="560"
+      @pointerdown="beginWorkspaceResize"
+      @keydown="handleWorkspaceResizeKeydown"
+    />
     <WorkspacePanel
       :collapsed="rightCollapsed"
       :terminal-id="activeTerminalId"

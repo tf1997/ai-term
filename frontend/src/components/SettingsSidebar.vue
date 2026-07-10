@@ -127,7 +127,7 @@ function resetTerminalAppearance() {
 <template>
   <aside class="sidebar settings-sidebar">
     <div class="section-head">
-      <span class="section-title">设置中心</span>
+      <span class="section-title">设置</span>
       <button class="primary" type="button" title="新建 AI 配置" aria-label="新建 AI 配置" @click="requestCreateAiConfig">
         <UiIcon name="plus" />
         <span>AI 配置</span>

@@ -100,7 +100,7 @@ const activeSession = computed(() => {
   return props.workspaceSessions.find((session) => session.id === props.workspaceSessionId)
 })
 
-const activeSessionTitle = computed(() => activeSession.value?.name?.trim() || '当前会话')
+const activeSessionTitle = computed(() => formatSessionDisplayTitle(activeSession.value?.name))
 
 const selectedTerminalContext = computed(() => {
   const selection = props.terminalSelection
@@ -641,13 +641,26 @@ function maybeGenerateSessionTitle(
     commandHistory
   })
     .then((response) => {
-      const title = response.title.trim()
+      const title = normalizeGeneratedSessionTitle(response.title, userMessage)
       if (!title || !isAutoSessionName(currentName)) return
       emit('updateSessionTitle', connectionId, sessionId, title)
     })
     .catch((error) => {
       console.error('failed to generate AI session title', error)
     })
+}
+
+function normalizeGeneratedSessionTitle(generatedTitle: string, userMessage: string) {
+  const title = generatedTitle.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').slice(0, 36)
+  if (/^[a-z0-9._-]{1,3}$/i.test(title)) return `${title} 命令`
+  if (title) return title
+  const fallback = userMessage.trim().replace(/\s+/g, ' ').slice(0, 24)
+  return fallback || '当前会话'
+}
+
+function formatSessionDisplayTitle(name?: string) {
+  const title = name?.trim() || '当前会话'
+  return /^[a-z0-9._-]{1,3}$/i.test(title) ? `${title} 命令` : title
 }
 
 function isAutoSessionName(name: string) {
@@ -726,7 +739,7 @@ watch(
             @keydown.enter.prevent="selectSession(session.id)"
           >
             <span class="session-history-main">
-              <strong>{{ session.name || '当前会话' }}</strong>
+              <strong>{{ formatSessionDisplayTitle(session.name) }}</strong>
               <small v-if="session.summary">{{ session.summary }}</small>
             </span>
             <span class="session-history-time">{{ sessionTimeLabel(session) }}</span>
