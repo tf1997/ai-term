@@ -59,6 +59,7 @@ const defaultUserSettings: AppUserSettings = {
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   executeCommand: (command: string) => boolean
   writeTerminalInput: (data: string) => boolean
+  writeSyncedTerminalInput: (data: string) => boolean
   clearTerminal: () => void
   disconnectFromButton: () => void
   focusTerminal: () => void
@@ -265,11 +266,7 @@ const activeCommandHistory = computed(() => {
 
 function commandHistoryForTab(tab: TerminalTab) {
   const currentKey = workspaceKey(tab.connectionId, tab.workspaceSessionId)
-  const current = commandHistoryBySession.value[currentKey] ?? []
-  const sameConnection = Object.entries(commandHistoryBySession.value)
-    .filter(([key]) => key !== currentKey && key.startsWith(`${tab.connectionId}:`))
-    .flatMap(([, commands]) => commands)
-  return [...current, ...sameConnection]
+  return commandHistoryBySession.value[currentKey] ?? []
 }
 const activeAiMessages = computed(() => {
   return aiMessagesBySession.value[activeWorkspaceKey.value] ?? []
@@ -1563,7 +1560,7 @@ function syncTerminalInputToTargets(event: TerminalInputEvent) {
   if (!targetTerminalIds.value.includes(event.terminalId)) return
   targetTerminalIds.value.forEach((terminalId) => {
     if (terminalId === event.terminalId) return
-    terminalRefs.value[terminalId]?.writeTerminalInput(event.data)
+    terminalRefs.value[terminalId]?.writeSyncedTerminalInput(event.data)
   })
 }
 

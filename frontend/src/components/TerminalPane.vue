@@ -28,6 +28,7 @@ type CompletionSuggestionSource = 'system' | 'history' | 'session'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type TerminalSelectionViewportCell = { x: number; y: number }
 type TerminalInputTrackResult = 'idle' | 'changed' | 'submitted'
+type TerminalInputContext = 'shell' | 'sensitive' | 'unknown'
 
 interface TerminalVisualSettings {
   terminalFontFamily: string
@@ -43,6 +44,12 @@ interface SshHostKeyTarget {
 interface CompletionSuggestion {
   command: string
   source: CompletionSuggestionSource
+  count?: number
+}
+
+interface QuickCommandsChangedDetail {
+  storageKey: string
+  commands: string[]
 }
 
 const props = defineProps<{
@@ -67,6 +74,7 @@ const emit = defineEmits<{
 
 const terminalHost = ref<HTMLDivElement | null>(null)
 const terminalBodyWrap = ref<HTMLDivElement | null>(null)
+const terminalCompletion = ref<HTMLDivElement | null>(null)
 const quickCommandSettingsButton = ref<HTMLButtonElement | null>(null)
 let terminal: Terminal | undefined
 let sessionId = ''
@@ -82,34 +90,28 @@ let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
 let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
 let terminalOutputBuffer = ''
 let inputCommandBuffer = ''
+let inputCommandCursor = 0
+let inputCommandReliable = true
+let terminalInputContext: TerminalInputContext = 'unknown'
 let completionDebounceTimer: number | undefined
 let pendingInputControlSequence = ''
 let lastRightClickPasteAt = 0
+let quickCommandBarNoticeTimer: number | undefined
 const status = ref<TerminalRuntimeStatus>('idle')
 const terminalSize = ref({ cols: 80, rows: 24 })
 const activeSession = ref<TerminalSessionKind>('local')
 const activeSessionProfile = ref<ConnectionProfile | undefined>(undefined)
 const terminalCompletionOpen = ref(false)
 const completionSuggestions = ref<CompletionSuggestion[]>([])
-const completionActiveIndex = ref(0)
-const completionKeyboardMode = ref(false)
-const completionSummary = computed(() => {
-  const historyCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'history').length
-  const sessionCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'session').length
-  const systemCount = completionSuggestions.value.filter((suggestion) => suggestion.source === 'system').length
-  const parts = [
-    historyCount ? `历史 ${historyCount}` : '',
-    sessionCount ? `本次 ${sessionCount}` : '',
-    systemCount ? `系统 ${systemCount}` : ''
-  ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '没有匹配的命令'
-})
+const selectedCompletionIndex = ref(-1)
+const completionPrefixLength = ref(0)
+const completionPlacement = ref<'above' | 'below'>('below')
+const completionPositionStyle = ref<Record<string, string>>({ left: '8px', top: '8px', width: 'min(430px, calc(100% - 16px))' })
 const localCommandHistory = ref<string[]>([])
-const COMPLETION_DEBOUNCE_MS = 200
-const COMPLETION_LIMIT = 12
-const COMPLETION_VISIBLE_ROWS = 3
-const DEFAULT_QUICK_COMMANDS = ['ping', 'top', 'htop', 'df -h', 'free -m', 'ls -la']
-const QUICK_COMMAND_STORAGE_KEY = 'ai-term:quick-commands:v1'
+const COMPLETION_DEBOUNCE_MS = 350
+const COMPLETION_LIMIT = 6
+const DEFAULT_QUICK_COMMANDS = ['pwd', 'ls -la', 'df -h', 'free -m', 'ps aux', 'git status']
+const QUICK_COMMAND_STORAGE_KEY_PREFIX = 'ai-term:quick-commands:v1'
 const QUICK_COMMAND_LIMIT = 12
 const quickCommands = ref<string[]>(loadQuickCommands())
 const quickCommandSettingsOpen = ref(false)
@@ -119,6 +121,8 @@ const quickCommandResetConfirm = ref(false)
 const quickCommandNotice = ref('')
 const quickCommandError = ref('')
 const quickCommandAiLoading = ref(false)
+const quickCommandBarNotice = ref('')
+const QUICK_COMMANDS_CHANGED_EVENT = 'ai-term:quick-commands-changed'
 const sshAuthPromptOpen = ref(false)
 const sshAuthPassword = ref('')
 const sshAuthError = ref('')
@@ -296,9 +300,15 @@ async function confirmSshHostKeyReset() {
 
 function systemCommandSuggestions() {
   const common = ['cd', 'ls', 'pwd', 'cat', 'grep', 'find', 'mkdir', 'touch', 'cp', 'mv', 'rm', 'echo', 'curl', 'wget', 'ssh', 'scp', 'rsync', 'tar', 'chmod', 'chown', 'ps', 'top', 'htop', 'kill', 'df -h', 'du -sh', 'free -m', 'ping', 'git status', 'git pull', 'git checkout', 'git log --oneline', 'docker ps', 'docker logs', 'kubectl get pods']
+  const windows = ['dir', 'cd', 'cls', 'type', 'copy', 'move', 'del', 'findstr', 'where', 'tasklist', 'taskkill', 'ipconfig', 'netstat -ano', 'powershell', 'Get-Process', 'Get-Service', 'Get-ChildItem']
+  if (activeSession.value === 'remote') {
+    const recent = terminalOutputBuffer.slice(-4_000)
+    if (/(?:^|\n)(?:PS\s+[A-Z]:\\[^>]*>|[A-Z]:\\[^>]*>)\s*$/im.test(recent)) return [...windows, 'git status', 'docker ps']
+    return ['systemctl status', 'journalctl -xe', 'ss -tulpn', 'ip addr', ...common]
+  }
   const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase()
   if (platform.includes('win')) {
-    return ['dir', 'cd', 'cls', 'type', 'copy', 'move', 'del', 'findstr', 'where', 'tasklist', 'taskkill', 'ipconfig', 'netstat -ano', 'powershell', 'wmic cpu get loadpercentage', 'Get-Process', 'Get-Service', 'Get-ChildItem', ...common]
+    return [...windows, 'wmic cpu get loadpercentage', ...common]
   }
   if (platform.includes('mac')) {
     return ['brew update', 'brew upgrade', 'open .', 'pbcopy', 'pbpaste', 'sw_vers', 'system_profiler', ...common]
@@ -312,10 +322,10 @@ function historyCommandSuggestions() {
 
 function loadQuickCommands() {
   try {
-    const raw = window.localStorage.getItem(QUICK_COMMAND_STORAGE_KEY)
+    const raw = window.localStorage.getItem(quickCommandStorageKey()) ?? window.localStorage.getItem(QUICK_COMMAND_STORAGE_KEY_PREFIX)
     if (!raw) return [...DEFAULT_QUICK_COMMANDS]
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) return normalizeQuickCommandList(parsed)
+    if (Array.isArray(parsed)) return safeQuickCommandList(parsed)
   } catch (error) {
     console.warn('failed to load quick commands', error)
   }
@@ -323,14 +333,30 @@ function loadQuickCommands() {
 }
 
 function persistQuickCommands(commands: string[]) {
-  window.localStorage.setItem(QUICK_COMMAND_STORAGE_KEY, JSON.stringify(commands))
+  window.localStorage.setItem(quickCommandStorageKey(), JSON.stringify(commands))
+}
+
+function handleQuickCommandsChanged(event: Event) {
+  const detail = (event as CustomEvent<QuickCommandsChangedDetail>).detail
+  if (!detail || detail.storageKey !== quickCommandStorageKey() || !Array.isArray(detail.commands)) return
+  quickCommands.value = safeQuickCommandList(detail.commands)
+}
+
+function quickCommandStorageKey() {
+  return `${QUICK_COMMAND_STORAGE_KEY_PREFIX}:${props.profile?.id || 'local'}`
+}
+
+function safeQuickCommandList(commands: string[]) {
+  return normalizeQuickCommandList(commands).filter((command) => (
+    !isHighRiskQuickCommand(command) && scriptRiskStatusForContent(command).level !== 'high'
+  ))
 }
 
 function normalizeQuickCommandList(commands: string[]) {
   const seen = new Set<string>()
   const result: string[] = []
   commands.forEach((command) => {
-    const value = command.replace(/\s+/g, ' ').trim()
+    const value = command.trim()
     const key = value.toLowerCase()
     if (!value || seen.has(key) || value.length > 140) return
     seen.add(key)
@@ -342,14 +368,14 @@ function normalizeQuickCommandList(commands: string[]) {
 const normalizedQuickCommandItems = computed(() => normalizeQuickCommandList(
   quickCommandItems.value.filter((command) => {
     const value = command.trim()
-    return value && value.length <= 140 && !isHighRiskQuickCommand(value)
+    return value && value.length <= 140 && !isHighRiskQuickCommand(value) && scriptRiskStatusForContent(value).level !== 'high'
   })
 ))
 const quickCommandEnabledCount = computed(() => normalizedQuickCommandItems.value.length)
 const quickCommandHasBlockingIssues = computed(() =>
   quickCommandItems.value.some((command) => {
     const value = command.trim()
-    return Boolean(value && (value.length > 140 || isHighRiskQuickCommand(value)))
+    return Boolean(value && (value.length > 140 || isHighRiskQuickCommand(value) || scriptRiskStatusForContent(value).level === 'high'))
   })
 )
 const quickCommandCanSave = computed(() => quickCommandEnabledCount.value > 0 && !quickCommandHasBlockingIssues.value)
@@ -379,6 +405,9 @@ function quickCommandStatus(command: string, index: number) {
     return { label: '重复', level: 'medium', message: '重复命令会在保存时自动合并。', blocking: false }
   }
   const risk = scriptRiskStatusForContent(value)
+  if (risk.level === 'high') {
+    return { label: risk.label, level: risk.level, message: risk.message, blocking: true }
+  }
   if (risk.level === 'safe') {
     return { label: '可用', level: 'safe', message: '未检测到风险。', blocking: false }
   }
@@ -448,6 +477,9 @@ function saveQuickCommandSettings() {
   quickCommands.value = nextCommands
   syncQuickCommandItems(nextCommands)
   persistQuickCommands(nextCommands)
+  window.dispatchEvent(new CustomEvent<QuickCommandsChangedDetail>(QUICK_COMMANDS_CHANGED_EVENT, {
+    detail: { storageKey: quickCommandStorageKey(), commands: nextCommands }
+  }))
   quickCommandRecommendations.value = []
   quickCommandResetConfirm.value = false
   quickCommandError.value = ''
@@ -523,7 +555,7 @@ function parseQuickCommandRecommendations(answer: string) {
       .replace(/```/g, '')
       .split(/\r?\n/)
       .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)、])\s*/, '').replace(/^`|`$/g, '').trim())
-      .filter((command) => command && !isHighRiskQuickCommand(command))
+      .filter((command) => command && !isHighRiskQuickCommand(command) && scriptRiskStatusForContent(command).level !== 'high')
   )
 }
 
@@ -534,7 +566,7 @@ function isHighRiskQuickCommand(command: string) {
 function localQuickCommandRecommendations() {
   const counts = new Map<string, number>()
   quickCommandHistorySeed().forEach((command) => {
-    if (isHighRiskQuickCommand(command)) return
+    if (isHighRiskQuickCommand(command) || scriptRiskStatusForContent(command).level === 'high') return
     counts.set(command, (counts.get(command) ?? 0) + 1)
   })
   return normalizeQuickCommandList(
@@ -601,30 +633,40 @@ function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
     historyStats.set(key, { command: value, count: 1, source, lastIndex: index })
   }
 
-  const historyCommands = props.commandHistory.map((entry) => entry.command)
-  historyCommands.forEach((command, index) => addHistory(command, 'history', index))
-  localCommandHistory.value.forEach((command, index) => addHistory(command, 'session', historyCommands.length + index))
+  const historyCommandKeys = new Set<string>()
+  props.commandHistory.forEach((entry, index) => {
+    const key = entry.command.trim().toLowerCase()
+    if (key) historyCommandKeys.add(key)
+    addHistory(entry.command, entry.terminalId === props.terminalId ? 'session' : 'history', index)
+  })
+  localCommandHistory.value.forEach((command, index) => {
+    if (historyCommandKeys.has(command.trim().toLowerCase())) return
+    addHistory(command, 'session', props.commandHistory.length + index)
+  })
 
   const historySuggestions = [...historyStats.values()]
     .sort((a, b) => b.count - a.count || b.lastIndex - a.lastIndex || a.command.localeCompare(b.command))
-    .map(({ command, source }) => ({ command, source }))
+    .map(({ command, source, count }) => ({ command, source, count }))
 
   const seen = new Set(historySuggestions.map((suggestion) => suggestion.command.toLowerCase()))
   const systemSuggestions = systemCommandSuggestions()
     .map((command) => command.trim())
     .filter((command) => command && matchesPrefix(command) && !seen.has(command.toLowerCase()))
-    .map((command) => ({ command, source: 'system' as CompletionSuggestionSource }))
+    .map((command) => ({ command, source: 'system' as CompletionSuggestionSource, count: 0 }))
 
   return [...historySuggestions, ...systemSuggestions].slice(0, COMPLETION_LIMIT)
 }
 
-function refreshCompletionSuggestions(options: { force?: boolean; keyboard?: boolean } = {}) {
-  const force = options.force ?? false
-  const keyboard = options.keyboard ?? false
+function refreshCompletionSuggestions() {
+  if (!canOfferCompletion() || !inputCommandBuffer.trim()) {
+    closeCompletion()
+    return
+  }
   completionSuggestions.value = buildCompletionSuggestions()
-  completionActiveIndex.value = Math.min(completionActiveIndex.value, Math.max(0, completionSuggestions.value.length - 1))
-  completionKeyboardMode.value = keyboard
-  terminalCompletionOpen.value = force || completionSuggestions.value.length > 0
+  selectedCompletionIndex.value = -1
+  completionPrefixLength.value = inputCommandBuffer.trimStart().length
+  terminalCompletionOpen.value = completionSuggestions.value.length > 0
+  if (terminalCompletionOpen.value) scheduleCompletionPosition()
 }
 
 function clearCompletionTimer() {
@@ -635,14 +677,13 @@ function clearCompletionTimer() {
 
 function scheduleCompletionSuggestions() {
   clearCompletionTimer()
-  completionKeyboardMode.value = false
+  if (!canOfferCompletion() || !inputCommandBuffer.trim()) {
+    closeCompletion()
+    return
+  }
   completionDebounceTimer = window.setTimeout(() => {
     completionDebounceTimer = undefined
-    if (!inputCommandBuffer.trim()) {
-      closeCompletion()
-      return
-    }
-    refreshCompletionSuggestions({ force: false, keyboard: false })
+    refreshCompletionSuggestions()
   }, COMPLETION_DEBOUNCE_MS)
 }
 
@@ -651,37 +692,66 @@ function updateCompletionAfterInput(result: TerminalInputTrackResult) {
     closeCompletion()
     return
   }
-  if (result === 'changed') {
-    scheduleCompletionSuggestions()
-  }
+  if (result === 'changed') scheduleCompletionSuggestions()
 }
 
 function closeCompletion() {
   clearCompletionTimer()
   terminalCompletionOpen.value = false
   completionSuggestions.value = []
-  completionActiveIndex.value = 0
-  completionKeyboardMode.value = false
-}
-
-function scrollActiveCompletionIntoView() {
-  void nextTick(() => {
-    const active = terminalBodyWrap.value?.querySelector<HTMLButtonElement>('.terminal-completion button.active')
-    active?.scrollIntoView({ block: 'nearest' })
-  })
-}
-
-function cycleCompletion(delta: number) {
-  if (!completionSuggestions.value.length) return
-  completionKeyboardMode.value = true
-  completionActiveIndex.value = (completionActiveIndex.value + delta + completionSuggestions.value.length) % completionSuggestions.value.length
-  scrollActiveCompletionIntoView()
+  selectedCompletionIndex.value = -1
+  completionPrefixLength.value = 0
 }
 
 function completionSourceLabel(source: CompletionSuggestionSource) {
   if (source === 'system') return '系统'
   if (source === 'history') return '历史'
   return '本次'
+}
+
+function scheduleCompletionPosition() {
+  void nextTick(() => {
+    window.requestAnimationFrame(positionTerminalCompletion)
+  })
+}
+
+function positionTerminalCompletion() {
+  const wrap = terminalBodyWrap.value
+  const host = terminalHost.value
+  const popup = terminalCompletion.value
+  const screen = host?.querySelector<HTMLElement>('.xterm-screen')
+  if (!terminal || !wrap || !popup || !screen || !terminalCompletionOpen.value) return
+
+  const wrapRect = wrap.getBoundingClientRect()
+  const screenRect = screen.getBoundingClientRect()
+  if (!wrapRect.width || !wrapRect.height || !screenRect.width || !screenRect.height) return
+
+  const cellWidth = screenRect.width / Math.max(1, terminal.cols)
+  const cellHeight = screenRect.height / Math.max(1, terminal.rows)
+  const cursorX = Math.max(0, Math.min(terminal.cols - 1, terminal.buffer.active.cursorX))
+  const cursorY = Math.max(0, Math.min(terminal.rows - 1, terminal.buffer.active.cursorY))
+  const cursorLeft = screenRect.left - wrapRect.left + cursorX * cellWidth
+  const cursorTop = screenRect.top - wrapRect.top + cursorY * cellHeight
+  const maxWidth = Math.max(1, Math.min(430, wrap.clientWidth - 16))
+  const popupHeight = popup.offsetHeight
+  const popupWidth = Math.min(popup.offsetWidth || maxWidth, maxWidth)
+  const gap = 6
+  const spaceAbove = cursorTop
+  const spaceBelow = wrap.clientHeight - cursorTop - cellHeight
+  const placement = spaceBelow >= popupHeight + gap || spaceBelow >= spaceAbove ? 'below' : 'above'
+  const maxLeft = Math.max(8, wrap.clientWidth - popupWidth - 8)
+  const left = Math.min(Math.max(8, cursorLeft), maxLeft)
+  const desiredTop = placement === 'below'
+    ? cursorTop + cellHeight + gap
+    : cursorTop - popupHeight - gap
+  const top = Math.min(Math.max(8, desiredTop), Math.max(8, wrap.clientHeight - popupHeight - 8))
+
+  completionPlacement.value = placement
+  completionPositionStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${maxWidth}px`
+  }
 }
 
 function handleDocumentPointerDown(event: PointerEvent) {
@@ -691,53 +761,46 @@ function handleDocumentPointerDown(event: PointerEvent) {
   closeCompletion()
 }
 
-function acceptCompletionSuggestion(suggestion = completionSuggestions.value[completionActiveIndex.value]) {
+function acceptCompletionSuggestion(suggestion: CompletionSuggestion) {
   if (!suggestion) return false
   const current = inputCommandBuffer.trimStart()
   if (!suggestion.command.toLowerCase().startsWith(current.toLowerCase())) return false
   const tail = suggestion.command.slice(current.length)
-  if (tail) writeTerminalInput(tail)
-  inputCommandBuffer = suggestion.command
+  if (!tail) {
+    closeCompletion()
+    return false
+  }
+  if (tail && !sendInteractiveTerminalInput(tail)) return false
   closeCompletion()
   return true
 }
 
-function handleTerminalCustomKeyEvent(event: KeyboardEvent) {
-  if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space') {
-    clearCompletionTimer()
-    if (terminalCompletionOpen.value && completionKeyboardMode.value) {
-      cycleCompletion(1)
-    } else {
-      refreshCompletionSuggestions({ force: true, keyboard: true })
-    }
-    return false
+function moveCompletionSelection(direction: -1 | 1) {
+  const count = completionSuggestions.value.length
+  if (!count) return false
+  if (selectedCompletionIndex.value < 0) {
+    selectedCompletionIndex.value = direction > 0 ? 0 : count - 1
+  } else {
+    selectedCompletionIndex.value = (selectedCompletionIndex.value + direction + count) % count
   }
   return true
 }
+
 function handleCompletionInput(data: string) {
   if (!terminalCompletionOpen.value) return false
-  if (data === '\x1b[A') {
-    cycleCompletion(-1)
-    return true
-  }
-  if (data === '\x1b[B') {
-    cycleCompletion(1)
-    return true
-  }
-  if (!completionKeyboardMode.value) {
-    if (data === '\x1b') {
-      closeCompletion()
-      return true
-    }
-    closeCompletion()
-    return false
-  }
-  if (data === '\r' || data === '\n' || data === '\x1b[C') {
-    return acceptCompletionSuggestion()
-  }
   if (data === '\x1b') {
     closeCompletion()
     return true
+  }
+  if (data === '\x1b[A' || data === '\x1bOA') {
+    return moveCompletionSelection(-1)
+  }
+  if (data === '\x1b[B' || data === '\x1bOB') {
+    return moveCompletionSelection(1)
+  }
+  if ((data === '\r' || data === '\n') && selectedCompletionIndex.value >= 0) {
+    const suggestion = completionSuggestions.value[selectedCompletionIndex.value]
+    if (suggestion && acceptCompletionSuggestion(suggestion)) return true
   }
   closeCompletion()
   return false
@@ -815,6 +878,7 @@ function writeTerminalView(data: string, forceScroll = false) {
   const shouldScroll = forceScroll || terminalIsPinnedToBottom()
   terminal.write(data, () => {
     if (shouldScroll) scrollTerminalToBottom()
+    if (terminalCompletionOpen.value) scheduleCompletionPosition()
   })
 }
 
@@ -828,10 +892,13 @@ function syncTerminalSize() {
     void terminalResize(sessionId, size.cols, size.rows)
   }
   scrollTerminalToBottom()
+  if (terminalCompletionOpen.value) scheduleCompletionPosition()
 }
 
 function appendTerminalOutput(data: string) {
   terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
+  updateTerminalInputContextFromOutput()
+  if (terminalCompletionOpen.value) scheduleCompletionPosition()
   emit('terminalOutput', {
     terminalId: props.terminalId,
     snapshot: terminalOutputBuffer
@@ -1099,20 +1166,152 @@ function recordCommand(command: string) {
   })
 }
 
+function resetTrackedTerminalInput(context: TerminalInputContext = terminalInputContext) {
+  inputCommandBuffer = ''
+  inputCommandCursor = 0
+  inputCommandReliable = true
+  terminalInputContext = context
+}
+
+function markTrackedTerminalInputAsShell() {
+  if (!inputCommandReliable) {
+    resetTrackedTerminalInput('shell')
+    return
+  }
+  terminalInputContext = 'shell'
+  if (inputCommandBuffer.trim()) scheduleCompletionSuggestions()
+}
+
+function invalidateTrackedTerminalInput() {
+  inputCommandBuffer = ''
+  inputCommandCursor = 0
+  inputCommandReliable = false
+  closeCompletion()
+}
+
+function canOfferCompletion() {
+  return terminalInputContext === 'shell' && inputCommandReliable
+}
+
+function terminalLineReadyForAppInput() {
+  return canOfferCompletion() && inputCommandBuffer.trim().length === 0
+}
+
+function updateTerminalInputContextFromOutput() {
+  const text = terminalOutputBuffer
+    .slice(-2_000)
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\r/g, '')
+  const lastLine = text.split('\n').pop()?.trimEnd() ?? ''
+  if (!lastLine) return
+  if (/(?:password|passphrase|verification code|one[- ]time(?: password| code)?|otp|pin|token)[^\n]{0,40}[:：]?\s*$/i.test(lastLine)) {
+    resetTrackedTerminalInput('sensitive')
+    closeCompletion()
+    return
+  }
+  if (/^(?:PS\s+[^>]*>|[A-Za-z]:\\[^>]*>|.*[$#%>❯➜›λ»])\s*$/.test(lastLine)) {
+    markTrackedTerminalInputAsShell()
+  }
+}
+
+function insertTrackedTerminalText(text: string) {
+  if (!text || terminalInputContext === 'sensitive') return
+  inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor)}${text}${inputCommandBuffer.slice(inputCommandCursor)}`
+  inputCommandCursor += text.length
+}
+
+function deleteTrackedTerminalWord() {
+  if (inputCommandCursor <= 0) return
+  const before = inputCommandBuffer.slice(0, inputCommandCursor)
+  const start = before.search(/\s*\S+\s*$/)
+  const deleteFrom = start === -1 ? 0 : start
+  inputCommandBuffer = `${inputCommandBuffer.slice(0, deleteFrom)}${inputCommandBuffer.slice(inputCommandCursor)}`
+  inputCommandCursor = deleteFrom
+}
+
 function trackUserInput(data: string): TerminalInputTrackResult {
+  if (data === '\x1b[A' || data === '\x1b[B') {
+    invalidateTrackedTerminalInput()
+    return 'idle'
+  }
+  if (data === '\x1b[D') {
+    if (inputCommandReliable) inputCommandCursor = Math.max(0, inputCommandCursor - 1)
+    closeCompletion()
+    return 'idle'
+  }
+  if (data === '\x1b[C') {
+    if (inputCommandReliable) inputCommandCursor = Math.min(inputCommandBuffer.length, inputCommandCursor + 1)
+    closeCompletion()
+    return 'idle'
+  }
+  if (data === '\x1b[H' || data === '\x1bOH') {
+    if (inputCommandReliable) inputCommandCursor = 0
+    closeCompletion()
+    return 'idle'
+  }
+  if (data === '\x1b[F' || data === '\x1bOF') {
+    if (inputCommandReliable) inputCommandCursor = inputCommandBuffer.length
+    closeCompletion()
+    return 'idle'
+  }
+  if (data === '\x1b[3~') {
+    if (inputCommandReliable && inputCommandCursor < inputCommandBuffer.length) {
+      inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor)}${inputCommandBuffer.slice(inputCommandCursor + 1)}`
+    }
+    closeCompletion()
+    return 'changed'
+  }
+  if (data === '\t') {
+    invalidateTrackedTerminalInput()
+    return 'idle'
+  }
+  if (data.includes('\x1b') && !data.includes('\x1b[200~') && !data.includes('\x1b[201~')) {
+    invalidateTrackedTerminalInput()
+    return 'idle'
+  }
+
   const commandInput = stripCommandInputControlSequences(data)
   let result: TerminalInputTrackResult = 'idle'
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
-      recordCommand(inputCommandBuffer)
-      inputCommandBuffer = ''
+      if (terminalInputContext === 'shell' && inputCommandReliable) recordCommand(inputCommandBuffer)
+      resetTrackedTerminalInput('unknown')
       result = 'submitted'
-    } else if (code === 127) {
-      inputCommandBuffer = inputCommandBuffer.slice(0, -1)
+    } else if (code === 127 || code === 8) {
+      if (terminalInputContext !== 'sensitive' && inputCommandReliable && inputCommandCursor > 0) {
+        inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor - 1)}${inputCommandBuffer.slice(inputCommandCursor)}`
+        inputCommandCursor -= 1
+      }
       result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
+    } else if (code === 1) {
+      if (inputCommandReliable) inputCommandCursor = 0
+    } else if (code === 3) {
+      resetTrackedTerminalInput('unknown')
+      result = 'submitted'
+    } else if (code === 5) {
+      if (inputCommandReliable) inputCommandCursor = inputCommandBuffer.length
+    } else if (code === 11) {
+      if (inputCommandReliable) inputCommandBuffer = inputCommandBuffer.slice(0, inputCommandCursor)
+      result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
+    } else if (code === 21) {
+      if (inputCommandReliable) {
+        inputCommandBuffer = inputCommandBuffer.slice(inputCommandCursor)
+        inputCommandCursor = 0
+      } else {
+        inputCommandBuffer = ''
+        inputCommandCursor = 0
+        inputCommandReliable = true
+      }
+      result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
+    } else if (code === 23) {
+      if (inputCommandReliable) deleteTrackedTerminalWord()
+      result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
+    } else if (code < 32) {
+      invalidateTrackedTerminalInput()
     } else if (character >= ' ') {
-      inputCommandBuffer += character
+      insertTrackedTerminalText(character)
       result = 'changed'
     }
   }
@@ -1218,7 +1417,6 @@ onMounted(async () => {
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
   terminal.open(terminalHost.value)
-  terminal.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent)
   syncTerminalSize()
   terminal.focus()
   renderIdlePrompt(terminal)
@@ -1239,6 +1437,7 @@ onMounted(async () => {
   terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
   document.addEventListener('pointerdown', handleDocumentPointerDown, true)
+  window.addEventListener(QUICK_COMMANDS_CHANGED_EVENT, handleQuickCommandsChanged)
   quickCommandSettingsButton.value?.addEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
 
   resizeObserver = new ResizeObserver(() => {
@@ -1297,6 +1496,8 @@ function handleTerminalSessionClosed(reason: string) {
   const closedSessionId = sessionId
   sessionId = ''
   status.value = 'idle'
+  resetTrackedTerminalInput('unknown')
+  closeCompletion()
   const message = `\r\nShell exited: ${reason}\r\n`
   writeTerminalView(message, true)
   appendTerminalOutput(message)
@@ -1493,28 +1694,68 @@ function restartLocalTerminal() {
   void connectLocal()
 }
 
+function showQuickCommandBarNotice(message: string) {
+  quickCommandBarNotice.value = message
+  if (quickCommandBarNoticeTimer !== undefined) window.clearTimeout(quickCommandBarNoticeTimer)
+  quickCommandBarNoticeTimer = window.setTimeout(() => {
+    quickCommandBarNotice.value = ''
+    quickCommandBarNoticeTimer = undefined
+  }, 2600)
+}
+
 function runQuickCommand(command: string) {
-  executeCommand(command)
+  const value = command.trim()
+  if (!value) return
+  if (!terminalLineReadyForAppInput()) {
+    showQuickCommandBarNotice(inputCommandBuffer.trim() ? '当前命令行已有输入，请先提交或清空。' : '当前终端不在可识别的命令提示符。')
+    focusTerminal()
+    return
+  }
+  closeCompletion()
+  if (sendInteractiveTerminalInput(value)) {
+    showQuickCommandBarNotice('已填入终端，按 Enter 执行。')
+  } else {
+    showQuickCommandBarNotice('当前终端不可用。')
+  }
 }
 
 function executeCommand(command: string) {
   const value = command.trim()
   if (!value) return false
   if (sessionId) {
+    if (!terminalLineReadyForAppInput()) return false
     recordCommand(value)
     closeCompletion()
+    resetTrackedTerminalInput('unknown')
     void terminalWrite(sessionId, `${value}\r`)
     void nextTick(() => terminal?.focus())
     return true
   }
   if (status.value === 'preview') {
+    if (!terminalLineReadyForAppInput()) return false
     const previewLine = `${value}\r\n`
     writeTerminalView(previewLine, true)
     appendTerminalOutput(previewLine)
     recordCommand(value)
+    resetTrackedTerminalInput('shell')
     return true
   }
   return false
+}
+
+function sendInteractiveTerminalInput(data: string) {
+  if (!data || (!sessionId && status.value !== 'preview')) return false
+  const inputResult = trackUserInput(data)
+  updateCompletionAfterInput(inputResult)
+  emit('terminalInput', { terminalId: props.terminalId, data })
+  return writeTerminalInput(data)
+}
+
+function writeSyncedTerminalInput(data: string) {
+  if (!data || (!sessionId && status.value !== 'preview')) return false
+  const inputResult = trackUserInput(data)
+  updateCompletionAfterInput(inputResult)
+  return writeTerminalInput(data)
 }
 
 function writeTerminalInput(data: string) {
@@ -1536,10 +1777,7 @@ async function pasteClipboardToTerminal() {
   try {
     const text = await readClipboard()
     if (!text) return
-    const inputResult = trackUserInput(text)
-    updateCompletionAfterInput(inputResult)
-    emit('terminalInput', { terminalId: props.terminalId, data: text })
-    writeTerminalInput(text)
+    sendInteractiveTerminalInput(text)
   } catch (error) {
     console.warn('failed to paste terminal clipboard', error)
   }
@@ -1585,6 +1823,8 @@ function disconnect(renderReady = true, cancelPending = true) {
   activeSession.value = 'local'
   activeSessionProfile.value = undefined
   status.value = 'idle'
+  resetTrackedTerminalInput('unknown')
+  closeCompletion()
   unlisten?.()
   unlistenClosed?.()
   unlisten = undefined
@@ -1608,7 +1848,8 @@ onBeforeUnmount(() => {
   terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
-  clearCompletionTimer()
+  window.removeEventListener(QUICK_COMMANDS_CHANGED_EVENT, handleQuickCommandsChanged)
+  if (quickCommandBarNoticeTimer !== undefined) window.clearTimeout(quickCommandBarNoticeTimer)
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
   stopTerminalSelectionDrag()
   if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
@@ -1627,7 +1868,8 @@ defineExpose({
   executeCommand,
   focusTerminal,
   restartLocalTerminal,
-  writeTerminalInput
+  writeTerminalInput,
+  writeSyncedTerminalInput
 })
 </script>
 
@@ -1651,36 +1893,42 @@ defineExpose({
         </div>
         <div ref="terminalBodyWrap" class="terminal-body-wrap">
           <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
-          <div v-if="terminalCompletionOpen" class="terminal-completion" :class="{ 'keyboard-mode': completionKeyboardMode }" :style="{ '--completion-visible-rows': COMPLETION_VISIBLE_ROWS }" role="listbox" aria-label="命令推荐">
-            <div class="terminal-completion-head">
-              <div>
-                <strong>命令推荐</strong>
-                <span>{{ completionSummary }}</span>
-              </div>
-              <small>输入停顿 200ms 推荐 · <kbd>&uarr;</kbd><kbd>&darr;</kbd> 选择 · <kbd>Ctrl</kbd><kbd>Space</kbd></small>
-            </div>
-            <p v-if="!completionSuggestions.length" class="terminal-completion-empty">当前连接还没有匹配的历史命令，继续输入后再试。</p>
-            <template v-else>
-              <button
-                v-for="(suggestion, index) in completionSuggestions"
-                :key="`${suggestion.source}-${suggestion.command}`"
-                type="button"
-                :class="{ active: completionKeyboardMode && index === completionActiveIndex }"
-                @pointerdown.prevent="acceptCompletionSuggestion(suggestion)"
-              >
-                <code>{{ suggestion.command }}</code>
-                <span>{{ completionSourceLabel(suggestion.source) }}</span>
-              </button>
-            </template>
+          <div
+            v-if="terminalCompletionOpen"
+            ref="terminalCompletion"
+            class="terminal-completion"
+            :data-side="completionPlacement"
+            :style="completionPositionStyle"
+            role="listbox"
+            aria-label="命令推荐"
+          >
+            <button
+              v-for="(suggestion, index) in completionSuggestions"
+              :key="`${suggestion.source}-${suggestion.command}`"
+              type="button"
+              role="option"
+              :class="{ selected: index === selectedCompletionIndex }"
+              :aria-selected="index === selectedCompletionIndex"
+              @pointerdown.prevent="acceptCompletionSuggestion(suggestion)"
+            >
+              <code>
+                <mark>{{ suggestion.command.slice(0, completionPrefixLength) }}</mark><span class="completion-tail">{{ suggestion.command.slice(completionPrefixLength) }}</span>
+              </code>
+              <span class="completion-meta">
+                <span class="completion-source" :class="suggestion.source">{{ completionSourceLabel(suggestion.source) }}</span>
+                <span v-if="suggestion.count" class="completion-count">{{ suggestion.count }}×</span>
+              </span>
+            </button>
           </div>
         </div>
       </div>
     </section>
     <section class="quick-command-bar" aria-label="快速命令">
       <span>快速命令</span>
-      <button v-for="command in quickCommands" :key="command" @click="runQuickCommand(command)">
+      <button v-for="command in quickCommands" :key="command" type="button" title="填入终端" @click="runQuickCommand(command)">
         {{ command }}
       </button>
+      <span v-if="quickCommandBarNotice" class="quick-command-bar-notice" aria-live="polite">{{ quickCommandBarNotice }}</span>
       <button ref="quickCommandSettingsButton" class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
     </section>
 

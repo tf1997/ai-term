@@ -32,6 +32,7 @@ const props = defineProps<{
   connectionId: string
   profile?: ConnectionProfile
   active: boolean
+  activationSequence: number
   terminalSnapshot: string
   terminalOutputEvent?: TerminalOutputDeltaEvent
 }>()
@@ -180,6 +181,7 @@ let lastDroppedAt = 0
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
 const taskInProgress = computed(() => Boolean(activeTask.value))
 const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
+const isBastionConnection = computed(() => props.profile?.connectionRole === 'bastion')
 const targetOverride = computed(() => {
   if (!selectedTarget.value) return undefined
   return {
@@ -337,16 +339,11 @@ watch(
   (key, previousKey) => {
     if (previousKey) saveTransferState(previousKey)
     resetRemoteBrowserState()
-    if (restoreTransferState(key)) {
-      initializeRemoteBrowserIfActive()
-      return
-    }
-    initializeRemoteBrowserIfActive()
+    restoreTransferState(key)
   }
 )
 
 onMounted(() => {
-  initializeRemoteBrowserIfActive()
   void loadLocalHome()
   void attachNativeFileDropEvents()
 })
@@ -376,15 +373,14 @@ watch(
   }
 )
 
-watch(transferMode, (mode) => {
-  if (mode === 'sftp') initializeRemoteBrowserIfActive()
-})
-
 watch(
-  () => props.active,
-  (active) => {
-    if (active) initializeRemoteBrowserIfActive()
-  }
+  () => props.activationSequence,
+  (sequence) => {
+    if (sequence <= 0) return
+    transferMode.value = 'sftp'
+    activateSftpTab()
+  },
+  { immediate: true, flush: 'post' }
 )
 
 async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
@@ -455,6 +451,29 @@ function initializeRemoteBrowserIfActive() {
   if (entries.value.length === 0) initializeRemoteBrowser()
 }
 
+function activateSftpTab() {
+  if (
+    !props.active ||
+    transferMode.value !== 'sftp' ||
+    !remoteReady.value ||
+    loading.value ||
+    identifying.value ||
+    pendingIdentify.value
+  ) {
+    return
+  }
+  if (isBastionConnection.value) {
+    openCurrentTerminalSftp()
+    return
+  }
+  initializeRemoteBrowserIfActive()
+}
+
+function selectTransferMode(mode: 'sftp' | 'terminal') {
+  transferMode.value = mode
+  if (mode === 'sftp') activateSftpTab()
+}
+
 function initializeRemoteBrowser() {
   if (!props.active || !remoteReady.value) return
   useConfiguredTargetForSftp()
@@ -521,11 +540,20 @@ async function loadLocalDirectory(path = localPath.value || localHome.value) {
 
 async function useTerminalTargetForSftp() {
   if (!props.active || !currentTerminalTarget.value) return
+  const terminalTarget = currentTerminalTarget.value
+  if (isBastionConnection.value && (!terminalTarget.ip.trim() || !terminalTarget.username.trim())) {
+    const missing = [!terminalTarget.ip.trim() ? '服务器 IP' : '', !terminalTarget.username.trim() ? '服务器用户名' : '']
+      .filter(Boolean)
+      .join('和')
+    error.value = `未能从当前终端解析${missing}，已停止 SFTP 探测。`
+    status.value = ''
+    return
+  }
   const target = {
-    host: currentTerminalTarget.value.host,
-    username: currentTerminalTarget.value.username,
-    label: currentTerminalTarget.value.label,
-    sourceLine: currentTerminalTarget.value.label
+    host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host,
+    username: terminalTarget.username || undefined,
+    label: terminalTarget.label,
+    sourceLine: terminalTarget.label
   }
   selectedTarget.value = target
   transferMode.value = 'sftp'
@@ -537,7 +565,7 @@ async function useTerminalTargetForSftp() {
     status.value = ''
     return
   }
-  currentPath.value = currentTerminalTarget.value.pwd || probe.path || '.'
+  currentPath.value = terminalTarget.pwd || probe.path || '.'
   pathDraft.value = currentPath.value
   await loadDirectory(currentPath.value)
 }
@@ -1446,6 +1474,11 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
     identifying.value = false
     pendingIdentify.value = null
     if (shouldUseForSftp) {
+      if (isBastionConnection.value) {
+        error.value = '未能从当前终端解析服务器 IP 和服务器用户名，已停止 SFTP 探测。'
+        status.value = ''
+        return
+      }
       if (props.active) {
         error.value = ''
         useConfiguredTargetForSftp('未识别到当前终端目标，已使用连接配置目标打开 SFTP。')
@@ -1459,10 +1492,10 @@ function finishTerminalIdentifyIfReady(snapshot: string) {
   currentTerminalTarget.value = {
     host: parsed.host,
     ip: parsed.ip,
-    username: parsed.values.user || 'user',
+    username: parsed.values.user,
     hostname: parsed.values.hostname || parsed.host,
     pwd: parsed.values.pwd || '.',
-    label: `${parsed.values.user || 'user'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
+    label: `${parsed.values.user || '未知用户'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
   }
   terminalRemotePath.value = parsed.values.pwd || terminalRemotePath.value
   status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
@@ -1560,7 +1593,8 @@ function sanitizeIdentityValue(value: string, key: keyof ReturnType<typeof empty
   if (key === 'hostname') return sanitizeHostCandidate(trimmed)
   if (key === 'ips') return extractIpv4Candidates(trimmed).join(' ')
   if (key === 'pwd') return trimmed.startsWith('/') || trimmed === '.' || trimmed.startsWith('~') ? trimmed : ''
-  return trimmed.split(/\s+/)[0] ?? ''
+  const username = trimmed.split(/\s+/)[0] ?? ''
+  return username === 'unknown' ? '' : username
 }
 
 function sanitizeHostCandidate(value: string) {
@@ -1624,8 +1658,8 @@ function shellQuote(value: string) {
         <span>{{ sftpHeaderSummary }}</span>
       </div>
       <div class="transfer-mode-tabs" role="tablist" aria-label="传输模式">
-        <button type="button" :class="{ active: transferMode === 'sftp' }" role="tab" :aria-selected="transferMode === 'sftp'" @click="transferMode = 'sftp'">SFTP</button>
-        <button type="button" :class="{ active: transferMode === 'terminal' }" role="tab" :aria-selected="transferMode === 'terminal'" @click="transferMode = 'terminal'">终端通道</button>
+        <button type="button" :class="{ active: transferMode === 'sftp' }" role="tab" :aria-selected="transferMode === 'sftp'" @click="selectTransferMode('sftp')">SFTP</button>
+        <button type="button" :class="{ active: transferMode === 'terminal' }" role="tab" :aria-selected="transferMode === 'terminal'" @click="selectTransferMode('terminal')">终端通道</button>
       </div>
       <div class="panel-actions">
         <button class="text-button sftp-terminal-switch" type="button" title="切换到当前终端" aria-label="切换到当前终端" @click="emit('focusTerminal')">

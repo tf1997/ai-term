@@ -57,11 +57,15 @@ const emit = defineEmits<{
 const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
 const scriptPanelVisited = ref(false)
 const sftpPanelVisited = ref(false)
+const sftpTabActivationSequence = ref(0)
 
 function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
   activeWorkspaceTab.value = tab
   if (tab === 'scripts') scriptPanelVisited.value = true
-  if (tab === 'sftp') sftpPanelVisited.value = true
+  if (tab === 'sftp') {
+    sftpPanelVisited.value = true
+    sftpTabActivationSequence.value += 1
+  }
   emit('workspaceTabChanged', tab)
 }
 </script>
@@ -169,6 +173,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :connection-id="connectionId"
       :profile="connectionProfile"
       :active="activeWorkspaceTab === 'sftp'"
+      :activation-sequence="sftpTabActivationSequence"
       :terminal-snapshot="terminalSnapshot"
       :terminal-output-event="terminalOutputEvent"
       @write-terminal-input="emit('writeTerminalInput', $event)"

@@ -498,8 +498,9 @@ assert(
     styles.includes('.app-shell.theme-light .xterm-host .ai-term-selection-line') &&
     styles.includes('.app-shell.theme-light .xterm-host .xterm-selection div') &&
     styles.includes('background: rgba(16, 185, 129, .20) !important;') &&
-    styles.includes('border-color: rgba(16, 185, 129, .28);') &&
-    styles.includes('background: rgba(16, 185, 129, .10);') &&
+    styles.includes('background: rgba(104, 211, 145, .09);') &&
+    styles.includes('.terminal-completion button:hover::before') &&
+    styles.includes('background: #68d391;') &&
     styles.includes('outline: 1px solid rgba(16, 185, 129, .34);') &&
     styles.includes('.xterm-host .xterm-rows * {') &&
     styles.includes('.xterm-host .xterm-rows *::selection') &&
@@ -997,46 +998,66 @@ assert(
     terminalPane.includes('handleCompletionInput(data)') &&
     terminalPane.includes('terminalCompletionOpen') &&
     terminalPane.includes('completionSuggestions') &&
+    terminalPane.includes('selectedCompletionIndex') &&
     terminalPane.includes('systemCommandSuggestions') &&
     terminalPane.includes('historyCommandSuggestions') &&
     terminalPane.includes('acceptCompletionSuggestion') &&
-    terminalPane.includes('completionSummary') &&
     terminalPane.includes('completionSourceLabel') &&
     terminalPane.includes('handleDocumentPointerDown') &&
     terminalPane.includes('terminalBodyWrap.value?.contains(target)') &&
-    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 200') &&
-    terminalPane.includes('COMPLETION_LIMIT = 12') &&
-    terminalPane.includes('COMPLETION_VISIBLE_ROWS = 3') &&
-    terminalPane.includes('completionKeyboardMode') &&
-    terminalPane.includes('scrollActiveCompletionIntoView') &&
-    terminalPane.includes("active?.scrollIntoView({ block: 'nearest' })") &&
+    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 350') &&
+    terminalPane.includes('COMPLETION_LIMIT = 6') &&
+    !terminalPane.includes('completionKeyboardMode') &&
     terminalPane.includes('scheduleCompletionSuggestions') &&
     terminalPane.includes('updateCompletionAfterInput') &&
+    terminalPane.includes('moveCompletionSelection') &&
+    terminalPane.includes("data === '\\x1bOA'") &&
+    terminalPane.includes("data === '\\x1bOB'") &&
     terminalPane.includes('const inputResult = trackUserInput(data)') &&
     terminalPane.includes("data === '\\x1b[A'") &&
     terminalPane.includes("data === '\\x1b[B'") &&
-    terminalPane.includes('if (!completionKeyboardMode.value)') &&
-    terminalPane.includes('terminalCompletionOpen.value = force || completionSuggestions.value.length > 0') &&
+    terminalPane.includes("data === '\\x1b[D'") &&
+    terminalPane.includes("data === '\\x1b[C'") &&
+    terminalPane.includes("terminalInputContext === 'shell'") &&
+    terminalPane.includes("resetTrackedTerminalInput('sensitive')") &&
+    terminalPane.includes('inputCommandReliable') &&
+    terminalPane.includes('terminalCompletionOpen.value = completionSuggestions.value.length > 0') &&
     terminalPane.includes('inputCommandBuffer.trimStart()') &&
-    !terminalPane.includes("data === '\\t'") &&
+    terminalPane.includes('positionTerminalCompletion') &&
+    terminalPane.includes('terminal.buffer.active.cursorX') &&
+    terminalPane.includes('terminal.buffer.active.cursorY') &&
+    terminalPane.includes("completionPlacement.value = placement") &&
+    terminalPane.includes('completionPositionStyle.value = {') &&
+    terminalPane.includes('ref="terminalCompletion"') &&
+    terminalPane.includes(':data-side="completionPlacement"') &&
+    terminalPane.includes('<mark>{{ suggestion.command.slice(0, completionPrefixLength) }}</mark>') &&
+    terminalPane.includes('class="completion-meta"') &&
+    terminalPane.includes(':aria-selected="index === selectedCompletionIndex"') &&
     !terminalPane.includes("event.key === 'Tab'") &&
-    terminalPane.includes('handleTerminalCustomKeyEvent') &&
-    terminalPane.includes('terminal.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent)') &&
+    !terminalPane.includes('handleTerminalCustomKeyEvent') &&
+    !terminalPane.includes('terminal.attachCustomKeyEventHandler') &&
     terminalPane.includes('convertEol: false') &&
-    terminalPane.includes("event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space'") &&
-    terminalPane.includes('<kbd>&uarr;</kbd><kbd>&darr;</kbd>') &&
-    terminalPane.includes('<kbd>Ctrl</kbd><kbd>Space</kbd>') &&
-    terminalPane.includes('200ms') &&
+    !terminalPane.includes("event.code === 'Space'") &&
+    !terminalPane.includes('<kbd>Ctrl</kbd><kbd>Space</kbd>') &&
     terminalPane.includes('class="terminal-completion"') &&
     appShell.includes(':command-history="commandHistoryForTab(tab)"') &&
-    appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
+    !appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
+    appShell.includes('writeSyncedTerminalInput(event.data)') &&
     styles.includes('.terminal-completion') &&
-    styles.includes('.terminal-completion-head') &&
-    styles.includes('.terminal-completion-empty') &&
-    styles.includes('grid-template-rows: minmax(0, 1fr) auto;') &&
-    styles.includes('max-height: calc(38px + (var(--completion-visible-rows, 3) * 30px));') &&
+    !styles.includes('.terminal-completion-head') &&
+    !styles.includes('.terminal-completion-empty') &&
+    styles.includes('.terminal-body-wrap {\n  position: relative;') &&
+    styles.includes('display: block;\n  overflow: hidden;') &&
+    styles.includes('.terminal-completion {\n  position: absolute;') &&
+    styles.includes('max-height: 206px;') &&
     styles.includes('backdrop-filter: none;') &&
-    styles.includes('.theme-light .terminal-completion kbd') &&
+    !styles.includes('.terminal-completion kbd') &&
+    styles.includes('.terminal-completion button.selected') &&
+    styles.includes('.terminal-completion button.selected::before') &&
+    styles.includes('.terminal-completion mark') &&
+    styles.includes('.terminal-completion .completion-source.session') &&
+    styles.includes('.theme-light .terminal-completion mark') &&
+    styles.includes('.theme-light .terminal-completion .completion-source.system') &&
     styles.includes('.terminal-native-code') &&
     styles.includes('.xterm-host .xterm-rows') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
@@ -1050,6 +1071,22 @@ assert(
     terminalPane.includes('if (changed) terminal.resize(size.cols, size.rows)') &&
     !terminalPane.includes('Math.floor(element.clientHeight / 18)'),
   'TerminalPane must provide native-feeling terminal code styling, command completion, accurate measured sizing, and bottom-pinned output.'
+)
+
+assert(
+  terminalPane.includes("type TerminalInputContext = 'shell' | 'sensitive' | 'unknown'") &&
+    terminalPane.includes('inputCommandCursor') &&
+    terminalPane.includes('deleteTrackedTerminalWord') &&
+    terminalPane.includes('code === 3') &&
+    terminalPane.includes('code === 21') &&
+    terminalPane.includes('code === 23') &&
+    terminalPane.includes("terminalInputContext === 'shell' && inputCommandReliable") &&
+    terminalPane.includes("resetTrackedTerminalInput('unknown')") &&
+    terminalPane.includes("resetTrackedTerminalInput('sensitive')") &&
+    terminalPane.includes('writeSyncedTerminalInput') &&
+    terminalPane.includes('sendInteractiveTerminalInput(text)') &&
+    appShell.includes('writeSyncedTerminalInput: (data: string) => boolean'),
+  'Terminal input tracking must handle common line editing, avoid recording sensitive prompts, and keep mirrored terminal buffers synchronized.'
 )
 
 
@@ -1196,7 +1233,7 @@ assert(
     fileTransfer.includes('autoTerminalProbeAttempted') &&
     fileTransfer.includes('active: boolean') &&
     fileTransfer.includes('initializeRemoteBrowserIfActive') &&
-    fileTransfer.includes('() => props.active') &&
+    fileTransfer.includes('() => props.activationSequence') &&
     fileTransfer.includes('options.useForSftp && !props.active') &&
     workspacePanel.includes(':active="activeWorkspaceTab === \'sftp\'"') &&
     fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...') &&
@@ -1260,6 +1297,22 @@ assert(
 )
 
 assert(
+  workspacePanel.includes('const sftpTabActivationSequence = ref(0)') &&
+    workspacePanel.includes('sftpTabActivationSequence.value += 1') &&
+    workspacePanel.includes(':activation-sequence="sftpTabActivationSequence"') &&
+    fileTransfer.includes('activationSequence: number') &&
+    fileTransfer.includes('const isBastionConnection = computed') &&
+    fileTransfer.includes('() => props.activationSequence') &&
+    fileTransfer.includes('function activateSftpTab()') &&
+    fileTransfer.includes("@click=\"selectTransferMode('sftp')\"") &&
+    !fileTransfer.includes('watch(transferMode') &&
+    !fileTransfer.includes('onMounted(() => {\n  initializeRemoteBrowserIfActive()') &&
+    fileTransfer.includes('host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host') &&
+    fileTransfer.includes('已停止 SFTP 探测。'),
+  'Bastion SFTP detection must be initiated by an SFTP tab activation and use the terminal-derived server IP and username.'
+)
+
+assert(
   workspaceTypes.includes('interface TerminalOutputDeltaEvent extends TerminalOutputEvent') &&
     appShell.includes('terminalOutputEvents') &&
     appShell.includes('terminalOutputSequence') &&
@@ -1268,7 +1321,7 @@ assert(
     terminalPane.includes('function focusTerminal()') &&
     terminalPane.includes('focusTerminal,') &&
     workspacePanel.includes('sftpPanelVisited') &&
-    workspacePanel.includes("if (tab === 'sftp') sftpPanelVisited.value = true") &&
+    workspacePanel.includes("if (tab === 'sftp') {") &&
     workspacePanel.includes('v-if="sftpPanelVisited"') &&
     workspacePanel.includes(`v-show="activeWorkspaceTab === 'sftp'"`) &&
     workspacePanel.includes(':terminal-id="terminalId"') &&
@@ -2300,6 +2353,7 @@ assert(
     terminalPane.includes('quickCommandCanSave') &&
     terminalPane.includes('shouldShowQuickCommandMessage') &&
     terminalPane.includes('scriptRiskStatusForContent') &&
+    terminalPane.includes("scriptRiskStatusForContent(value).level === 'high'") &&
     terminalPane.includes('recommendQuickCommandsWithAi') &&
     terminalPane.includes('chatWithAiProvider') &&
     terminalPane.includes('class="modal quick-command-modal"') &&
@@ -2311,12 +2365,21 @@ assert(
     terminalPane.includes('确认恢复') &&
     terminalPane.includes('aiConfig?: AiProviderConfig') &&
     terminalPane.includes('apiKey?: string') &&
+    terminalPane.includes('terminalLineReadyForAppInput()') &&
+    terminalPane.includes('sendInteractiveTerminalInput(value)') &&
+    !terminalPane.includes('function runQuickCommand(command: string) {\n  executeCommand(command)') &&
+    terminalPane.includes('title="填入终端"') &&
+    terminalPane.includes('QUICK_COMMAND_STORAGE_KEY_PREFIX') &&
+    terminalPane.includes("props.profile?.id || 'local'") &&
+    terminalPane.includes('QUICK_COMMANDS_CHANGED_EVENT') &&
     (appShell.match(/:ai-config="aiConfig"/g) ?? []).length >= 2 &&
     (appShell.match(/:api-key="activeAiRuntimeApiKey"/g) ?? []).length >= 2 &&
     styles.includes('.quick-command-modal') &&
     styles.includes('.quick-command-list') &&
     styles.includes('.quick-command-row') &&
     styles.includes('.quick-command-row .command-risk-status') &&
+    styles.includes('.quick-command-bar .quick-command-bar-notice') &&
+    styles.includes('.theme-light .quick-command-bar .quick-command-bar-notice') &&
     styles.includes('.theme-light .quick-command-row') &&
     styles.includes('.quick-command-recommendations') &&
     styles.includes('.quick-command-reset-confirm') &&
