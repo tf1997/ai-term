@@ -10644,6 +10644,352 @@ body.workspace-resizing * {
   max-height: 112px;
 }
 
+/* Script workbench final density and readiness pass. */
+.script-panel {
+  container-type: inline-size;
+}
+
+.workspace-section-head.script-head {
+  min-height: 40px;
+  padding: 5px 8px;
+}
+
+.script-head .panel-actions {
+  width: 100%;
+  gap: 3px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.script-head .record-action {
+  margin-left: auto;
+  border-color: #2b3b4f;
+  background: #111a27;
+  color: #dbe6f3;
+}
+
+.script-recorder {
+  min-height: 32px;
+  margin: 0 8px 6px;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 7px;
+  border: 0;
+  border-left: 2px solid #2e8b68;
+  border-radius: 2px;
+  background: #0b131d;
+  padding: 6px 9px;
+}
+
+.script-recorder > div {
+  min-width: 0;
+  gap: 6px;
+}
+
+.script-recorder strong,
+.script-recorder small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-recorder strong {
+  color: #cbd8e7;
+}
+
+.script-recorder small {
+  color: #77869a;
+}
+
+.script-generate .script-workbench {
+  padding: 0 8px 8px;
+}
+
+.script-generate .script-draft-card,
+.script-library-editor {
+  border-color: #202c3d;
+  border-radius: 6px;
+  background: #070c13;
+  box-shadow: none;
+}
+
+.script-generate .script-draft-card,
+.script-library-editor {
+  grid-template-rows: auto minmax(0, 1fr) 28px;
+}
+
+.script-library-editor .script-editor-toolbar,
+.script-generate .script-draft-card .script-editor-toolbar {
+  border-radius: 6px 6px 0 0;
+}
+
+.script-editor-toolbar {
+  min-height: 40px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 4px;
+  overflow: visible;
+  border-color: #202c3d;
+  background: #0c131d;
+  padding: 0 4px 0 7px;
+}
+
+.script-file-tab {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  height: 30px;
+  gap: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #dfe8f3;
+}
+
+.script-file-tab strong {
+  flex: 1 1 64px;
+  min-width: 32px;
+  font-size: var(--font-sm);
+  font-weight: 650;
+}
+
+.script-file-icon {
+  flex-basis: 17px;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  background: #15251f;
+  color: #83d9b2;
+}
+
+.script-dirty-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+.script-readiness-status,
+.script-file-tab .script-editor-risk {
+  flex: 0 0 auto;
+  min-width: max-content;
+  max-width: none;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  overflow: visible;
+  border: 1px solid #2a3545;
+  border-radius: 4px;
+  background: #111923;
+  color: #91a0b3;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.script-readiness-status.readiness-ready {
+  border-color: #286147;
+  background: #10231b;
+  color: #9ad9bc;
+}
+
+.script-readiness-status.readiness-pending {
+  border-color: #76551d;
+  background: #281d0d;
+  color: #f2c675;
+}
+
+.script-readiness-status.readiness-muted,
+.script-file-tab .script-editor-risk.risk-muted,
+.script-file-tab .script-editor-risk.risk-safe {
+  border-color: #2a3545;
+  background: #111923;
+  color: #91a0b3;
+}
+
+.script-file-tab .script-editor-risk.risk-medium {
+  border-color: #76551d;
+  background: #281d0d;
+  color: #f2c675;
+}
+
+.script-file-tab .script-editor-risk.risk-high {
+  border-color: #9e3d4d;
+  background: #321219;
+  color: #fecdd3;
+}
+
+.script-editor-tools {
+  position: relative;
+  min-width: max-content;
+  gap: 2px;
+  padding: 0;
+}
+
+.script-editor-tools .icon-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+}
+
+.script-editor-tools .script-run-button {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: #2e7e5b;
+  border-radius: 5px;
+  background: #153426;
+  color: #c9f2df;
+  padding: 0 8px;
+  font-size: var(--font-xs);
+}
+
+.script-editor-tools .script-run-button:hover:not(:disabled) {
+  border-color: #45a77c;
+  background: #1a432f;
+  color: #ecfdf5;
+}
+
+.script-editor-tools .script-run-button.medium-risk-run {
+  border-color: #8b6521;
+  background: #2a1e0c;
+  color: #f5ce83;
+}
+
+.script-editor-tools .script-run-button.high-risk-run {
+  border-color: #a84454;
+  background: #35131a;
+  color: #fecdd3;
+}
+
+.script-editor-tools .script-run-button.high-risk-run:hover:not(:disabled) {
+  border-color: #d15b6d;
+  background: #481923;
+  color: #fff1f2;
+}
+
+.script-editor-shell {
+  grid-template-columns: 34px minmax(0, 1fr);
+  border-color: #202c3d;
+  background: #050a10;
+}
+
+.script-line-rail {
+  padding: 10px 6px;
+  border-right-color: #182231;
+  background: #080e16;
+  color: #65758a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.script-code-overlay,
+.script-editor-shell textarea {
+  padding: 10px;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+.script-editor-shell textarea {
+  scrollbar-width: thin;
+  scrollbar-color: #37465a transparent;
+}
+
+.script-editor-shell textarea::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.script-editor-shell textarea::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #37465a;
+  background-clip: padding-box;
+}
+
+.script-editor-shell textarea::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.shell-token.comment {
+  color: #8190a4;
+  font-style: normal;
+}
+
+.script-editor-statusbar {
+  min-height: 28px;
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border-color: #202c3d;
+  background: #0a111a;
+  color: #77869a;
+  padding: 0 8px;
+  font-size: 10.5px;
+}
+
+.script-editor-statusbar span {
+  flex: 0 0 auto;
+  display: inline;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-editor-statusbar span:nth-child(2),
+.script-editor-statusbar span:nth-child(3) {
+  display: inline;
+}
+
+.script-editor-statusbar span:first-child {
+  margin-right: auto;
+}
+
+.script-editor-statusbar span:last-child {
+  justify-self: auto;
+}
+
+.script-editor-statusbar .dirty {
+  color: #f2c675;
+}
+
+@container (max-width: 430px) {
+  .script-file-tab .script-editor-risk {
+    display: none;
+  }
+
+  .script-file-tab.has-risk .script-editor-risk {
+    display: inline-flex;
+  }
+
+  .script-file-tab.has-risk .script-readiness-status.readiness-ready {
+    display: none;
+  }
+
+  .script-file-tab.has-risk.has-readiness-issues strong {
+    display: none;
+  }
+
+  .script-editor-statusbar span:first-child {
+    display: none;
+  }
+
+  .script-editor-statusbar span:nth-child(2) {
+    margin-right: auto;
+  }
+}
+
 /* Light theme color-only surface contract. */
 .app-shell.theme-light .assistant-panel {
   background: #fff;
@@ -10718,6 +11064,143 @@ body.workspace-resizing * {
 .app-shell.theme-light .script-risk-actions {
   border-top-color: #e5ebf2;
   background: #fbfcfd;
+}
+
+.app-shell.theme-light .script-head .record-action {
+  border-color: #d7e1e7;
+  background: #f7f9fa;
+  color: #334155;
+}
+
+.app-shell.theme-light .script-recorder {
+  border-left-color: #27956b;
+  background: #f7faf9;
+}
+
+.app-shell.theme-light .script-recorder strong {
+  color: #334155;
+}
+
+.app-shell.theme-light .script-recorder small {
+  color: #718096;
+}
+
+.app-shell.theme-light .script-generate .script-draft-card,
+.app-shell.theme-light .script-library-editor,
+.app-shell.theme-light .script-editor-toolbar,
+.app-shell.theme-light .script-editor-shell,
+.app-shell.theme-light .script-editor-statusbar {
+  border-color: #dbe3e8;
+}
+
+.app-shell.theme-light .script-editor-toolbar,
+.app-shell.theme-light .script-editor-statusbar {
+  background: #f8fafb;
+}
+
+.app-shell.theme-light .script-file-tab {
+  border-color: transparent;
+  background: transparent;
+  color: #263445;
+}
+
+.app-shell.theme-light .script-file-icon {
+  background: #e7f5ee;
+  color: #177654;
+}
+
+.app-shell.theme-light .script-dirty-dot {
+  background: #d97706;
+}
+
+.app-shell.theme-light .script-readiness-status,
+.app-shell.theme-light .script-file-tab .script-editor-risk,
+.app-shell.theme-light .script-readiness-status.readiness-muted,
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-muted,
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-safe {
+  border-color: #d7e0e6;
+  background: #f5f7f9;
+  color: #617083;
+}
+
+.app-shell.theme-light .script-readiness-status.readiness-ready {
+  border-color: #b7dfcd;
+  background: #edf8f3;
+  color: #176b4d;
+}
+
+.app-shell.theme-light .script-readiness-status.readiness-pending {
+  border-color: #e8c984;
+  background: #fff8e8;
+  color: #925f0c;
+}
+
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-medium {
+  border-color: #e8c984;
+  background: #fff8e8;
+  color: #925f0c;
+}
+
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-high {
+  border-color: #e7a0ad;
+  background: #fff0f2;
+  color: #b4233d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button {
+  border-color: #9bd7bd;
+  background: #e7f6ef;
+  color: #176b4d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button:hover:not(:disabled) {
+  border-color: #73c6a2;
+  background: #dff2e9;
+  color: #105b40;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.medium-risk-run {
+  border-color: #dfbd72;
+  background: #fff7e5;
+  color: #8a5908;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.high-risk-run {
+  border-color: #e8a3af;
+  background: #fff0f2;
+  color: #b4233d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.high-risk-run:hover:not(:disabled) {
+  border-color: #db7f8f;
+  background: #ffe4e8;
+  color: #981b33;
+}
+
+.app-shell.theme-light .script-editor-shell {
+  background: #fbfcfd;
+}
+
+.app-shell.theme-light .script-line-rail {
+  border-right-color: #dfe6eb;
+  background: #f2f5f6;
+  color: #8290a0;
+}
+
+.app-shell.theme-light .shell-token.comment {
+  color: #5f6d7c;
+}
+
+.app-shell.theme-light .script-editor-statusbar {
+  color: #68778a;
+}
+
+.app-shell.theme-light .script-editor-statusbar .dirty {
+  color: #a86208;
+}
+
+.app-shell.theme-light .script-editor-shell textarea::-webkit-scrollbar-thumb {
+  background: #c5d0d8;
 }
 
 .app-shell.theme-dark .script-risk-modal {

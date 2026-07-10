@@ -23,6 +23,7 @@ const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
 const scriptPanel = read('src/components/ScriptPanel.vue')
 const scriptRisk = read('src/lib/scriptRisk.ts')
+const scriptReadiness = read('src/lib/scriptReadiness.ts')
 const sidebar = read('src/components/ConnectionSidebar.vue')
 const settingsSidebar = read('src/components/SettingsSidebar.vue')
 const tauri = read('src/lib/tauri.ts')
@@ -1471,190 +1472,58 @@ assert(
 
 assert(
   scriptPanel.includes("type ScriptPanelMode = 'library' | 'generate'") &&
-    scriptPanel.includes('scriptPanelMode') &&
-    scriptPanel.includes("scriptPanelMode = ref<ScriptPanelMode>('generate')") &&
     scriptPanel.includes("type ScriptLibraryView = 'list' | 'detail'") &&
-    scriptPanel.includes("scriptLibraryView = ref<ScriptLibraryView>('list')") &&
-    scriptPanel.includes('showScriptComposer') &&
-    scriptPanel.includes("scriptPanelMode.value === 'generate'") &&
-    scriptPanel.includes('openGenerateMode') &&
-    scriptPanel.includes('openLibraryMode') &&
-    scriptPanel.includes('focusLibrarySearch') &&
-    scriptPanel.includes('librarySearchInput') &&
-    scriptPanel.includes('selectedScriptContent') &&
-    scriptPanel.includes('@click="openLibraryMode"') &&
-    scriptPanel.includes('@click="createScriptConversation"') &&
     scriptPanel.includes('class="script-library"') &&
-    scriptPanel.includes('class="script-library-body"') &&
-    scriptPanel.includes('class="script-library-empty"') &&
-    scriptPanel.includes('scriptLibraryView === \'list\'') &&
-    scriptPanel.includes('scriptLibraryView === \'detail\'') &&
-    scriptPanel.includes('scriptLibraryView.value = \'list\'') &&
-    scriptPanel.includes('scriptLibraryView.value = \'detail\'') &&
-    scriptPanel.includes('class="script-preview"') &&
-    scriptPanel.includes('返回列表') &&
-    scriptPanel.includes('selectedScriptLineNumbers') &&
-    scriptPanel.includes('selectedScriptLineRail') &&
-    scriptPanel.includes('syncSelectedScriptLineRail') &&
-    scriptPanel.includes('copySelectedScript') &&
-    scriptPanel.includes('openScriptPreview') &&
-    scriptPanel.includes('closeScriptPreview') &&
-    scriptPanel.includes('copyExpandedScript') &&
-    scriptPanel.includes('executeExpandedScript') &&
-    scriptPanel.includes('scriptPreviewOpen') &&
-    scriptPanel.includes('expandedScriptContent') &&
-    scriptPanel.includes('expandedScriptLineNumbers') &&
-    scriptPanel.includes('regenerateSelectedScript') &&
-    scriptPanel.includes('@click="regenerateSelectedScript"') &&
-    scriptPanel.includes('当前脚本为空，无法重新生成。') &&
     scriptPanel.includes('class="script-library-editor"') &&
-    scriptPanel.includes('title="返回列表"') &&
-    scriptPanel.includes('title="保存脚本"') &&
-    scriptPanel.includes('title="执行脚本"') &&
-    scriptPanel.includes('title="复制脚本"') &&
-    scriptPanel.includes('@click.stop="removeScript(script)"') &&
-    !scriptPanel.includes('@click="removeScript(selectedScript)"') &&
-    !scriptPanel.includes('<select aria-label="脚本语言" disabled>') &&
-    !scriptPanel.includes('<option>Bash</option>') &&
-    !scriptPanel.includes('<span>Bash</span>') &&
-    !scriptPanel.includes("message.savedScriptId ? 'bash saved' : 'bash draft'") &&
-    !scriptPanel.includes('@click="toggleSelectedScriptEditor"') &&
-    !scriptPanel.includes('v-if="selectedScriptEditing"') &&
-    !scriptPanel.includes('class="script-preview-code"><code>{{ selectedScriptContent }}</code></pre>') &&
-    !scriptPanel.includes('class="script-title-head"') &&
-    !scriptPanel.includes('<strong>脚本助手</strong>') &&
-    !scriptPanel.includes('编写、优化和执行脚本') &&
-    scriptPanel.includes('class="script-editor-toolbar"') &&
-    scriptPanel.includes('class="script-file-tab"') &&
-    scriptPanel.includes('function scriptEditorRiskStatus') &&
-    scriptPanel.includes("level: 'muted'") &&
-    scriptPanel.includes('hasSelectedScriptContent') &&
-    scriptPanel.includes('v-if="props.recording.isRecording || recordingHasData" class="script-recorder"') &&
-    scriptPanel.includes(':disabled="!hasDraftScript"') &&
-    scriptPanel.includes(':disabled="!hasSelectedScriptContent"') &&
-    scriptPanel.includes('class="script-editor-tools"') &&
-    scriptPanel.includes('title="保存脚本草稿"') &&
-    scriptPanel.includes('title="重新生成脚本"') &&
-    scriptPanel.includes('title="执行脚本"') &&
-    scriptPanel.includes('title="复制脚本"') &&
-    scriptPanel.includes('title="放大预览"') &&
-    !scriptPanel.includes('<strong>script.sh</strong>') &&
-    scriptPanel.includes('script-preview-modal') &&
-    scriptPanel.includes('class="script-expanded-editor"') &&
-    scriptPanel.includes('script-code-overlay') &&
-    scriptPanel.includes('highlightShellScript') &&
-    scriptPanel.includes('draftScriptHighlightedHtml') &&
-    scriptPanel.includes('selectedScriptHighlightedHtml') &&
-    scriptPanel.includes('expandedScriptHighlightedHtml') &&
-    scriptPanel.includes('syncScriptEditorScroll') &&
-    !scriptPanel.includes('class="icon-button primary-action"') &&
-    !scriptPanel.includes('&#128190;') &&
-    !scriptPanel.includes('<strong>脚本草稿</strong>') &&
-    !scriptPanel.includes('{{ draftStatusText }}') &&
-    !scriptPanel.includes('可直接粘贴或生成脚本') &&
-    !scriptPanel.includes('可直接粘贴或编写脚本') &&
-    !scriptPanel.includes('>继续修改</button>') &&
-    !scriptPanel.includes('class="script-draft-actions"') &&
-    !scriptPanel.includes('class="script-assistant-section"') &&
-    !scriptPanel.includes('class="script-assistant-title"') &&
-    scriptPanel.includes('scriptRepliesExpanded') &&
-    scriptPanel.includes('hasScriptReplies') &&
-    scriptPanel.includes('class="script-replies-panel"') &&
-    scriptPanel.includes('class="script-replies-list"') &&
-    scriptPanel.includes("当前脚本草稿为空，无法复制。") &&
-    scriptPanel.includes("当前脚本草稿为空，无法执行。") &&
-    scriptPanel.includes(':disabled="!hasDraftScript" @click="saveDraftScript"') &&
-    scriptPanel.includes(':disabled="!hasDraftScript" @click="executeDraftScript"') &&
-    scriptPanel.includes(':disabled="!hasDraftScript" @click="copyDraftScript"') &&
-    !scriptPanel.includes(':disabled="!hasDraftScript || isGenerating || !hasUsableConfig"') &&
-    !scriptPanel.includes(':disabled="isGenerating || !hasUsableConfig"') &&
-    !scriptPanel.includes(':disabled="!isGenerating && !hasUsableConfig"') &&
     scriptPanel.includes('class="script-draft-card"') &&
-    scriptPanel.includes('draftScriptContent') &&
-    scriptPanel.includes('`\u6a21\u5f0f\uff1a${modeText}`') &&
-    scriptPanel.includes('`\u7528\u6237\u8981\u6c42\uff1a${userRequest}`') &&
-    scriptPanel.includes("['\u670d\u52a1\u66f4\u65b0\u811a\u672c', '\u66f4\u65b0\u811a\u672c', '\u811a\u672c', 'untitled', 'untitled script']") &&
-    !scriptPanel.includes('\u6a21\u5f0f?') &&
-    !scriptPanel.includes('\u6a21\u5f0f?') &&
-    scriptPanel.includes('saveDraftScript') &&
-    scriptPanel.includes('optimizeSelectedScript') &&
-    scriptPanel.includes('applyDraftScript') &&
-    !scriptPanel.includes("sendScriptRequest('revise')") &&
-    scriptPanel.includes("sendScriptRequest('regenerate')") &&
-    scriptPanel.includes('collapsedMessages') &&
-    scriptPanel.includes('shouldCollapseMessage') &&
-    scriptPanel.includes('isMessageCollapsed') &&
-    scriptPanel.includes('toggleMessage') &&
-    !scriptPanel.includes('class="message-list script-chat-list"') &&
-    !scriptPanel.includes(`:class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"`) &&
-    !scriptPanel.includes('class="message-actions"') &&
+    scriptPanel.includes('class="script-replies-panel"') &&
     scriptPanel.includes('v-if="showScriptComposer"') &&
-    scriptPanel.includes('v-if="scriptPanelMode === \'library\'"') &&
-    !scriptPanel.includes('class="script-mode-tabs"') &&
-    !styles.includes('.script-mode-tabs') &&
-    styles.includes('.script-library') &&
-    styles.includes('.script-library-body') &&
-    styles.includes('grid-template-rows: minmax(0, 1fr)') &&
-    styles.includes('max-height: none') &&
-    styles.includes('.script-library-empty') &&
-    styles.includes('.script-preview') &&
-    styles.includes('.script-preview-code') &&
-    styles.includes('.script-library-editor') &&
-    styles.includes('.script-library-editor .script-editor-toolbar') &&
-    styles.includes('/* Expanded script preview modal. */') &&
-    styles.includes('.script-preview-modal') &&
-    styles.includes('.script-expanded-editor') &&
-    styles.includes('.script-code-overlay') &&
-    styles.includes('.shell-token.command') &&
-    styles.includes('caret-color') &&
-    styles.includes('.script-editor-toolbar') &&
-    styles.includes('.script-file-tab') &&
-    styles.includes('grid-template-columns: minmax(112px, 1fr) auto') &&
-    styles.includes('.script-file-tab .record-dot') &&
-    styles.includes('display: none;') &&
-    styles.includes('.script-file-tab .script-editor-risk') &&
-    styles.includes('min-width: max-content') &&
-    styles.includes('max-width: none') &&
-    styles.includes('/* Draft editor inline action rail. */') &&
-    styles.includes('/* Uniform draft editor icon buttons. */') &&
-    styles.includes('.script-editor-tools .icon-button:hover:not(:disabled)') &&
-    !styles.includes('.script-editor-tools .primary-action') &&
-    styles.includes('.script-generate .script-workbench') &&
-    styles.includes('grid-template-rows: minmax(420px, 1fr)') &&
-    styles.includes('min-height: 420px') &&
-    styles.includes('.script-replies-panel') &&
-    styles.includes('.script-replies-panel.expanded') &&
-    styles.includes('.script-panel button:disabled') &&
-    styles.includes('grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) 32px') &&
-    styles.includes('/* Action-only script toolbar. */') &&
-    styles.includes('min-height: 40px') &&
-    styles.includes('.script-draft-card') &&
-    styles.includes('.script-draft-card textarea'),
-  'Script assistant must keep the script editor as the primary workspace, remove the redundant title block, expose AI replies through a compact collapsible panel instead of an always-visible assistant block, keep top script actions, and hide the user prompt while browsing saved scripts.'
+    scriptPanel.includes('highlightShellScript') &&
+    scriptPanel.includes('syncScriptEditorScroll') &&
+    scriptPanel.includes('placeholder="在这里粘贴、生成或编写 Shell 脚本..."') &&
+    scriptPanel.includes('recordingActionLabel') &&
+    scriptPanel.includes("'重新录制' : '开始录制'") &&
+    scriptPanel.includes('<UiIcon name="stop" />停止录制') &&
+    scriptPanel.includes(':disabled="!recordingHasData && !props.recording.isRecording"') &&
+    scriptPanel.includes('ContextMenu') &&
+    scriptPanel.includes('openScriptEditorMenu') &&
+    scriptPanel.includes('title="更多操作"') &&
+    scriptPanel.includes('class="text-button script-run-button"') &&
+    scriptPanel.includes(':disabled="!canExecuteDraft"') &&
+    scriptPanel.includes(':disabled="!canExecuteSelectedScript"') &&
+    scriptPanel.includes(':disabled="!canExecuteExpandedScript"'),
+  'Script workspace must retain library and AI generation flows while using explicit recording states, compact editor actions, and guarded run buttons.'
 )
 
 assert(
-  scriptPanel.includes('<UiIcon name="plus" />') &&
-    scriptPanel.includes('<UiIcon name="stop" />') &&
-    scriptPanel.includes(':disabled="!recordingHasData && !props.recording.isRecording"') &&
-    scriptPanel.includes('<span class="script-file-icon"><UiIcon name="script" size="13" /></span>') &&
-    !scriptPanel.includes('<span class="script-file-icon">sh</span>') &&
-    scriptPanel.includes('placeholder="在这里编辑保存的脚本..."') &&
-    scriptPanel.includes('placeholder="在这里粘贴或编写 shell、bat、PowerShell 脚本..."') &&
-    styles.includes('/* Script panel black/white theme polish. */') &&
-    styles.includes('.script-head .panel-actions') &&
-    styles.includes('.script-recorder > div') &&
-    styles.includes('.script-file-icon .ui-icon') &&
-    styles.includes('.script-editor-shell textarea::placeholder') &&
-    styles.includes('.script-editor-shell textarea::selection') &&
-    styles.includes('background: rgba(16, 185, 129, .28);') &&
-    styles.includes('.app-shell.theme-light .script-editor-shell textarea') &&
-    styles.includes('background: transparent !important;') &&
-    styles.includes('.app-shell.theme-light .script-editor-shell textarea::placeholder') &&
-    styles.includes('.app-shell.theme-light .script-file-icon') &&
-    styles.includes('height: calc(100% - 16px);') &&
-    styles.includes('.app-shell.theme-light .script-library-empty'),
-  'Script panel must use icon-based script tabs, compact recording controls, visible editor placeholders, green editor selection, full-width workbench layout, stronger script-library empty states, and matching black/light theme surfaces.'
+  scriptReadiness.includes('analyzeScriptReadiness') &&
+    scriptReadiness.includes("'empty-value' | 'todo' | 'placeholder'") &&
+    scriptReadiness.includes('EMPTY_ASSIGNMENT_PATTERN') &&
+    scriptReadiness.includes('TODO_PATTERN') &&
+    scriptReadiness.includes('PLACEHOLDER_PATTERN') &&
+    scriptPanel.includes("import { analyzeScriptReadiness, scriptReadinessStatusForContent }") &&
+    scriptPanel.includes('draftScriptReadiness') &&
+    scriptPanel.includes('selectedScriptReadiness') &&
+    scriptPanel.includes('scriptRiskDisplayLabel') &&
+    scriptPanel.includes("return '未发现高风险'") &&
+    scriptReadiness.includes("label: '填写完整'") &&
+    scriptPanel.includes('脚本尚未填写完整') &&
+    scriptPanel.includes("'has-risk': draftScriptRiskStatus.level === 'medium' || draftScriptRiskStatus.level === 'high'") &&
+    scriptPanel.includes("'high-risk-run': draftScriptRiskStatus.level === 'high'") &&
+    scriptPanel.includes('draftEditorCursor') &&
+    scriptPanel.includes('selectedEditorCursor') &&
+    scriptPanel.includes('Shell &middot; UTF-8 &middot; LF') &&
+    scriptPanel.includes('script-dirty-dot') &&
+    styles.includes('/* Script workbench final density and readiness pass. */') &&
+    styles.includes('.script-readiness-status.readiness-pending') &&
+    styles.includes('.script-editor-tools .script-run-button') &&
+    styles.includes('.script-file-tab.has-risk .script-editor-risk') &&
+    styles.includes('.script-file-tab .script-editor-risk.risk-high') &&
+    styles.includes('.script-editor-tools .script-run-button.high-risk-run') &&
+    styles.includes('grid-template-columns: 34px minmax(0, 1fr)') &&
+    styles.includes('.app-shell.theme-light .script-readiness-status.readiness-pending') &&
+    styles.includes('.app-shell.theme-light .shell-token.comment'),
+  'Script editor must separate readiness from risk, block incomplete scripts across execution paths, show real cursor/save state, and preserve dark/light readability.'
 )
 assert(
   sidebar.includes('v-model="selectedProfile.target.host"') &&
@@ -2640,7 +2509,8 @@ assert(
     aiPanel.includes('name="arrow-right"') &&
     scriptPanel.includes('import UiIcon') &&
     scriptPanel.includes('name="save"') &&
-    scriptPanel.includes('name="maximize"') &&
+    scriptPanel.includes('name="copy"') &&
+    scriptPanel.includes('name="more"') &&
     fileTransfer.includes('import UiIcon') &&
     fileTransfer.includes('name="upload"') &&
     fileTransfer.includes('name="download"') &&

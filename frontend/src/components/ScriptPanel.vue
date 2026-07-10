@@ -10,6 +10,7 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import type { ScriptRiskMatch } from '../lib/scriptRisk'
+import { analyzeScriptReadiness, scriptReadinessStatusForContent } from '../lib/scriptReadiness'
 import {
   cancelTask,
   chatWithAiProviderStream,
@@ -21,6 +22,7 @@ import {
 } from '../lib/tauri'
 import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
 import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
+import ContextMenu from './ContextMenu.vue'
 import UiIcon from './UiIcon.vue'
 
 interface ScriptChatMessage {
@@ -58,6 +60,11 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 type ScriptPanelMode = 'library' | 'generate'
 type ScriptLibraryView = 'list' | 'detail'
 type ScriptPreviewSource = 'draft' | 'selected' | ''
+type ScriptEditorSource = 'draft' | 'selected'
+interface EditorCursor {
+  line: number
+  column: number
+}
 const MAX_SCRIPT_SOURCE_COMMANDS = 80
 const MAX_RECORDED_OUTPUT_CHARS = 80_000
 const LONG_MESSAGE_CHARS = 900
@@ -105,6 +112,9 @@ const scriptRiskExplanation = ref('')
 const scriptRiskExplanationError = ref('')
 const scriptRiskExplanationLoading = ref(false)
 const scriptRiskExplanationRequestId = ref('')
+const scriptEditorMenu = ref<{ source: ScriptEditorSource; x: number; y: number } | null>(null)
+const draftEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
+const selectedEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
 let answerTimer: number | undefined
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
@@ -131,6 +141,41 @@ const expandedScriptLineNumbers = computed(() => lineNumbersForScript(expandedSc
 const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value))
 const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value))
 const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value))
+const draftSavedScript = computed(() => scripts.value.find((script) => script.id === draftScriptId.value))
+const draftScriptTitle = computed(() => draftSavedScript.value?.name || '未命名脚本')
+const draftScriptDirty = computed(() => {
+  if (!hasDraftScript.value) return false
+  return !draftSavedScript.value || draftScriptContent.value.trimEnd() !== draftSavedScript.value.content.trimEnd()
+})
+const selectedScriptDirty = computed(() => {
+  if (!selectedScript.value || !hasSelectedScriptContent.value) return false
+  return selectedScriptContent.value.trimEnd() !== selectedScript.value.content.trimEnd()
+})
+const draftScriptReadiness = computed(() => scriptReadinessStatusForContent(draftScriptContent.value))
+const selectedScriptReadiness = computed(() => scriptReadinessStatusForContent(selectedScriptContent.value))
+const expandedScriptReadiness = computed(() => scriptReadinessStatusForContent(expandedScriptContent.value))
+const canExecuteDraft = computed(() => hasDraftScript.value && draftScriptReadiness.value.issues.length === 0)
+const canExecuteSelectedScript = computed(() => hasSelectedScriptContent.value && selectedScriptReadiness.value.issues.length === 0)
+const canExecuteExpandedScript = computed(() => expandedScriptContent.value.trim().length > 0 && expandedScriptReadiness.value.issues.length === 0)
+const recordingActionLabel = computed(() => recordingHasData.value || hasDraftScript.value ? '重新录制' : '开始录制')
+const draftSaveStatus = computed(() => editorSaveStatus(hasDraftScript.value, draftScriptDirty.value))
+const selectedSaveStatus = computed(() => editorSaveStatus(hasSelectedScriptContent.value, selectedScriptDirty.value))
+const scriptEditorMenuItems = computed(() => {
+  const source = scriptEditorMenu.value?.source
+  if (source === 'selected') {
+    return [
+      { id: 'regenerate', label: '重新生成', disabled: isGenerating.value || !hasSelectedScriptContent.value, action: () => void regenerateSelectedScript() },
+      { id: 'copy', label: '复制脚本', disabled: !hasSelectedScriptContent.value, action: () => void copySelectedScript() },
+      { id: 'preview', label: '放大预览', disabled: !hasSelectedScriptContent.value, action: () => openScriptPreview('selected') }
+    ]
+  }
+  return [
+    { id: 'regenerate', label: '重新生成', disabled: isGenerating.value, action: () => void sendScriptRequest('regenerate') },
+    { id: 'copy', label: '复制脚本', disabled: !hasDraftScript.value, action: () => void copyDraftScript() },
+    { id: 'preview', label: '放大预览', disabled: !hasDraftScript.value, action: () => openScriptPreview('draft') },
+    { id: 'clear', label: '清空编辑器', danger: true, disabled: !hasDraftScript.value, action: clearDraftScript }
+  ]
+})
 function scriptEditorRiskStatus(content: string) {
   if (!content.trim()) {
     return {
@@ -141,6 +186,19 @@ function scriptEditorRiskStatus(content: string) {
     }
   }
   return scriptRiskStatusForContent(content)
+}
+
+function scriptRiskDisplayLabel(status: ReturnType<typeof scriptEditorRiskStatus>) {
+  if (status.level === 'safe') return '未发现高风险'
+  if (status.level === 'medium') return '发现中风险'
+  if (status.level === 'high') return '发现高风险'
+  return status.label
+}
+
+function editorSaveStatus(hasContent: boolean, dirty: boolean) {
+  if (!hasContent) return '空白'
+  if (saveState.value === 'saving') return '保存中'
+  return dirty ? '未保存' : '已保存'
 }
 
 const draftScriptRiskStatus = computed(() => scriptEditorRiskStatus(draftScriptContent.value))
@@ -270,6 +328,51 @@ function clearConversation() {
   scriptRepliesExpanded.value = false
   panelError.value = ''
   saveState.value = 'idle'
+}
+
+function openScriptEditorMenu(event: MouseEvent, source: ScriptEditorSource) {
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const menuWidth = 220
+  const menuHeight = source === 'draft' ? 174 : 138
+  scriptEditorMenu.value = {
+    source,
+    x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+    y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8))
+  }
+}
+
+function closeScriptEditorMenu() {
+  scriptEditorMenu.value = null
+}
+
+function cursorPositionForTextarea(target: HTMLTextAreaElement): EditorCursor {
+  const beforeCursor = target.value.slice(0, target.selectionStart ?? 0)
+  const lines = beforeCursor.split('\n')
+  return {
+    line: lines.length,
+    column: (lines[lines.length - 1]?.length ?? 0) + 1
+  }
+}
+
+function updateDraftEditorCursor(event: Event) {
+  draftEditorCursor.value = cursorPositionForTextarea(event.target as HTMLTextAreaElement)
+}
+
+function updateSelectedEditorCursor(event: Event) {
+  selectedEditorCursor.value = cursorPositionForTextarea(event.target as HTMLTextAreaElement)
+}
+
+function handleDraftEditorInput(event: Event) {
+  const target = event.target as HTMLTextAreaElement
+  updateDraftScriptContent(target.value)
+  draftEditorCursor.value = cursorPositionForTextarea(target)
+}
+
+function handleSelectedEditorInput(event: Event) {
+  const target = event.target as HTMLTextAreaElement
+  updateSelectedScriptDraft(target.value)
+  selectedEditorCursor.value = cursorPositionForTextarea(target)
 }
 
 function lineNumbersForScript(content: string) {
@@ -644,6 +747,14 @@ function clearScriptRiskExplanation() {
   scriptRiskExplanationRequestId.value = ''
 }
 function executeScriptContent(content: string) {
+  const readinessIssues = analyzeScriptReadiness(content)
+  if (readinessIssues.length > 0) {
+    const issueLines = readinessIssues.slice(0, 3).map((issue) => `第 ${issue.line} 行 ${issue.label}`).join('、')
+    const remaining = readinessIssues.length > 3 ? `等 ${readinessIssues.length} 项` : ''
+    panelError.value = `脚本尚未填写完整：${issueLines}${remaining}。完成后再运行。`
+    scriptExecutionNotice.value = ''
+    return
+  }
   const risks = analyzeScriptRisks(content)
   if (risks.length > 0) {
     pendingScriptExecution.value = content
@@ -679,6 +790,8 @@ function toggleSelectedScriptEditor() {
 
 function updateSelectedScriptDraft(value: string) {
   selectedScriptDraft.value = value
+  saveState.value = 'idle'
+  scriptExecutionNotice.value = ''
 }
 
 async function saveSelectedScript() {
@@ -792,6 +905,17 @@ function applyDraftScript(content: string, messageId = '') {
 function updateDraftScriptContent(value: string) {
   draftScriptContent.value = value
   saveState.value = 'idle'
+  scriptExecutionNotice.value = ''
+}
+
+function clearDraftScript() {
+  if (hasDraftScript.value && !window.confirm('清空当前脚本草稿？未保存的内容将丢失。')) return
+  draftScriptContent.value = ''
+  draftScriptId.value = ''
+  draftEditorCursor.value = { line: 1, column: 1 }
+  saveState.value = 'idle'
+  panelError.value = ''
+  scriptExecutionNotice.value = ''
 }
 
 function syncDraftLineRail(event: Event) {
@@ -1226,15 +1350,25 @@ function nowText() {
 <template>
   <section class="script-panel">
     <div class="workspace-section-head script-head">
-
       <div class="panel-actions">
         <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
         <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation"><UiIcon name="plus" />新建脚本</button>
-        <button v-if="!props.recording.isRecording" class="text-button primary-action" type="button" @click="startRecording"><UiIcon name="play" />开始录制</button>
-        <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />结束录制</button>
+        <button v-if="!props.recording.isRecording" class="text-button record-action" type="button" @click="startRecording">
+          <UiIcon :name="recordingHasData || hasDraftScript ? 'refresh' : 'play'" />{{ recordingActionLabel }}
+        </button>
+        <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />停止录制</button>
         <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" :disabled="!recordingHasData && !props.recording.isRecording" @click="clearRecording"><UiIcon name="trash" /></button>
       </div>
     </div>
+
+    <ContextMenu
+      v-if="scriptEditorMenu"
+      :x="scriptEditorMenu.x"
+      :y="scriptEditorMenu.y"
+      :title="scriptEditorMenu.source === 'draft' ? '草稿操作' : '脚本操作'"
+      :items="scriptEditorMenuItems"
+      @close="closeScriptEditorMenu"
+    />
 
     <div v-if="renamingScript" class="modal-backdrop" role="presentation" @click.self="closeRenameScriptDialog">
       <form class="modal rename-modal" role="dialog" aria-modal="true" aria-label="编辑脚本名称" @submit.prevent="renameScript">
@@ -1265,7 +1399,7 @@ function nowText() {
           </div>
           <div class="script-editor-tools">
             <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyExpandedScript"><UiIcon name="copy" /></button>
-            <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" @click="executeExpandedScript"><UiIcon name="play" /></button>
+            <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!canExecuteExpandedScript" @click="executeExpandedScript"><UiIcon name="play" /></button>
             <button class="icon-button" type="button" title="关闭预览" aria-label="关闭预览" @click="closeScriptPreview"><UiIcon name="close" /></button>
           </div>
         </div>
@@ -1282,10 +1416,10 @@ function nowText() {
             />
           </div>
           <div class="script-editor-statusbar">
-            <span>预览模式</span>
-            <span>UTF-8</span>
-            <span>LF</span>
-            <span>总字符数: {{ expandedScriptContent.length }}</span>
+            <span>Shell &middot; UTF-8 &middot; LF</span>
+            <span>{{ expandedScriptLineNumbers.split('\n').length }} 行</span>
+            <span>{{ expandedScriptContent.length }} 字符</span>
+            <span>只读</span>
           </div>
         </div>
       </section>
@@ -1405,20 +1539,42 @@ function nowText() {
       <section v-else-if="scriptLibraryView === 'detail' && selectedScript" class="script-preview">
         <div class="script-library-editor">
           <div class="script-editor-toolbar">
-            <div class="script-file-tab">
+            <div
+              class="script-file-tab"
+              :class="{
+                'has-risk': selectedScriptRiskStatus.level === 'medium' || selectedScriptRiskStatus.level === 'high',
+                'has-readiness-issues': selectedScriptReadiness.issues.length > 0
+              }"
+            >
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
               <strong>{{ selectedScript.name }}</strong>
-              <span class="record-dot active" aria-hidden="true" />
-              <span class="script-editor-risk" :class="`risk-${selectedScriptRiskStatus.level}`">{{ selectedScriptRiskStatus.label }}</span>
+              <span v-if="selectedScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
+              <span
+                class="script-readiness-status"
+                :class="`readiness-${selectedScriptReadiness.level}`"
+                :title="selectedScriptReadiness.message"
+              >{{ selectedScriptReadiness.label }}</span>
+              <span
+                class="script-editor-risk"
+                :class="`risk-${selectedScriptRiskStatus.level}`"
+                :title="selectedScriptRiskStatus.message"
+              >{{ scriptRiskDisplayLabel(selectedScriptRiskStatus) }}</span>
             </div>
             <div class="script-editor-tools">
-
               <button class="icon-button" type="button" title="返回列表" aria-label="返回列表" @click="returnToScriptList"><UiIcon name="arrow-left" /></button>
               <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!hasSelectedScriptContent" @click="saveSelectedScript"><UiIcon name="save" /></button>
-              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating || !hasSelectedScriptContent" @click="regenerateSelectedScript"><UiIcon name="refresh" /></button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!hasSelectedScriptContent" @click="executeSelectedScript"><UiIcon name="play" /></button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" :disabled="!hasSelectedScriptContent" @click="copySelectedScript"><UiIcon name="copy" /></button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" :disabled="!hasSelectedScriptContent" @click="openScriptPreview('selected')"><UiIcon name="maximize" /></button>
+              <button
+                class="text-button script-run-button"
+                :class="{
+                  'medium-risk-run': selectedScriptRiskStatus.level === 'medium',
+                  'high-risk-run': selectedScriptRiskStatus.level === 'high'
+                }"
+                type="button"
+                :title="selectedScriptRiskStatus.level === 'high' ? '检测到高风险命令，运行前必须确认' : '运行脚本'"
+                :disabled="!canExecuteSelectedScript"
+                @click="executeSelectedScript"
+              ><UiIcon name="play" />运行</button>
+              <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click="openScriptEditorMenu($event, 'selected')"><UiIcon name="more" /></button>
             </div>
           </div>
           <div class="script-editor-shell">
@@ -1429,15 +1585,18 @@ function nowText() {
               spellcheck="false"
               aria-label="编辑脚本"
               placeholder="在这里编辑保存的脚本..."
-              @input="updateSelectedScriptDraft(($event.target as HTMLTextAreaElement).value)"
+              @input="handleSelectedEditorInput"
+              @click="updateSelectedEditorCursor"
+              @keyup="updateSelectedEditorCursor"
+              @select="updateSelectedEditorCursor"
               @scroll="syncSelectedScriptLineRail"
             />
           </div>
           <div class="script-editor-statusbar">
-            <span>{{ hasSelectedScriptContent ? '\u884c 1, \u5217 1' : '\u7b49\u5f85\u8f93\u5165\u811a\u672c' }}</span>
-            <span>UTF-8</span>
-            <span>LF</span>
-            <span>总字符数: {{ selectedScriptContent.length }}</span>
+            <span>Shell &middot; UTF-8 &middot; LF</span>
+            <span>行 {{ selectedEditorCursor.line }}，列 {{ selectedEditorCursor.column }}</span>
+            <span>{{ selectedScriptContent.length }} 字符</span>
+            <span :class="{ dirty: selectedScriptDirty }">{{ selectedSaveStatus }}</span>
           </div>
         </div>
       </section>
@@ -1449,7 +1608,7 @@ function nowText() {
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
           <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
-          <small>{{ recordedCommands.length }} 条命令 &middot; {{ recordedOutput.length }} 字符输出</small>
+          <small>{{ recordedCommands.length }} 条命令 &middot; {{ recordedOutput.length }} 字符输出{{ props.recording.isRecording ? ' · 录制中' : '' }}</small>
         </div>
       </div>
 
@@ -1457,18 +1616,41 @@ function nowText() {
         <section class="script-draft-card">
 
           <div class="script-editor-toolbar">
-            <div class="script-file-tab">
+            <div
+              class="script-file-tab"
+              :class="{
+                'has-risk': draftScriptRiskStatus.level === 'medium' || draftScriptRiskStatus.level === 'high',
+                'has-readiness-issues': draftScriptReadiness.issues.length > 0
+              }"
+            >
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
-              <span class="record-dot active" aria-hidden="true" />
-              <span class="script-editor-risk" :class="`risk-${draftScriptRiskStatus.level}`">{{ draftScriptRiskStatus.label }}</span>
+              <strong>{{ draftScriptTitle }}</strong>
+              <span v-if="draftScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
+              <span
+                class="script-readiness-status"
+                :class="`readiness-${draftScriptReadiness.level}`"
+                :title="draftScriptReadiness.message"
+              >{{ draftScriptReadiness.label }}</span>
+              <span
+                class="script-editor-risk"
+                :class="`risk-${draftScriptRiskStatus.level}`"
+                :title="draftScriptRiskStatus.message"
+              >{{ scriptRiskDisplayLabel(draftScriptRiskStatus) }}</span>
             </div>
             <div class="script-editor-tools">
-
               <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" :disabled="!hasDraftScript" @click="saveDraftScript"><UiIcon name="save" /></button>
-              <button class="icon-button" type="button" title="重新生成脚本" aria-label="重新生成脚本" :disabled="isGenerating" @click="sendScriptRequest('regenerate')"><UiIcon name="refresh" /></button>
-              <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!hasDraftScript" @click="executeDraftScript"><UiIcon name="play" /></button>
-              <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" :disabled="!hasDraftScript" @click="copyDraftScript"><UiIcon name="copy" /></button>
-              <button class="icon-button" type="button" title="放大预览" aria-label="放大预览" :disabled="!hasDraftScript" @click="openScriptPreview('draft')"><UiIcon name="maximize" /></button>
+              <button
+                class="text-button script-run-button"
+                :class="{
+                  'medium-risk-run': draftScriptRiskStatus.level === 'medium',
+                  'high-risk-run': draftScriptRiskStatus.level === 'high'
+                }"
+                type="button"
+                :title="draftScriptRiskStatus.level === 'high' ? '检测到高风险命令，运行前必须确认' : '运行脚本'"
+                :disabled="!canExecuteDraft"
+                @click="executeDraftScript"
+              ><UiIcon name="play" />运行</button>
+              <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click="openScriptEditorMenu($event, 'draft')"><UiIcon name="more" /></button>
             </div>
           </div>
           <div class="script-editor-shell">
@@ -1478,16 +1660,19 @@ function nowText() {
               :value="draftScriptContent"
               spellcheck="false"
               aria-label="脚本草稿"
-              placeholder="在这里粘贴或编写 shell、bat、PowerShell 脚本..."
-              @input="updateDraftScriptContent(($event.target as HTMLTextAreaElement).value)"
+              placeholder="在这里粘贴、生成或编写 Shell 脚本..."
+              @input="handleDraftEditorInput"
+              @click="updateDraftEditorCursor"
+              @keyup="updateDraftEditorCursor"
+              @select="updateDraftEditorCursor"
               @scroll="syncDraftLineRail"
             />
           </div>
           <div class="script-editor-statusbar">
-            <span>{{ hasDraftScript ? '\u884c 1, \u5217 1' : '\u7b49\u5f85\u8f93\u5165\u811a\u672c' }}</span>
-            <span>UTF-8</span>
-            <span>LF</span>
-            <span>总字符数: {{ draftScriptContent.length }}</span>
+            <span>Shell &middot; UTF-8 &middot; LF</span>
+            <span>行 {{ draftEditorCursor.line }}，列 {{ draftEditorCursor.column }}</span>
+            <span>{{ draftScriptContent.length }} 字符</span>
+            <span :class="{ dirty: draftScriptDirty }">{{ draftSaveStatus }}</span>
           </div>
         </section>
       </div>
