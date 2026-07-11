@@ -1,6 +1,8 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-sans);
   --font-xs: 11px;
   --font-sm: 12px;
   --font-md: 13px;
@@ -20,6 +22,118 @@ body {
   min-height: 100vh;
   overflow: hidden;
   font-size: var(--font-md);
+}
+
+:root[data-platform="windows"] {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Noto Sans SC", ui-sans-serif, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  text-rendering: optimizeLegibility;
+}
+
+:root[data-platform="windows"] button,
+:root[data-platform="windows"] input,
+:root[data-platform="windows"] select,
+:root[data-platform="windows"] textarea {
+  font: inherit;
+}
+
+:root[data-platform="windows"] body {
+  letter-spacing: -.005em;
+}
+
+:root[data-platform="windows"] button,
+:root[data-platform="windows"] input,
+:root[data-platform="windows"] select,
+:root[data-platform="windows"] textarea {
+  border-radius: 8px;
+}
+
+:root[data-platform="windows"] button {
+  box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 1px 2px rgba(0, 0, 0, .12);
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+}
+
+:root[data-platform="windows"] button:hover:not(:disabled) {
+  border-color: #364154;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .05), 0 2px 5px rgba(0, 0, 0, .16);
+}
+
+:root[data-platform="windows"] button:active:not(:disabled) {
+  transform: translateY(.5px);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18);
+}
+
+:root[data-platform="windows"] input,
+:root[data-platform="windows"] select,
+:root[data-platform="windows"] textarea {
+  border-color: rgba(116, 129, 153, .3);
+  background-color: rgba(13, 17, 25, .92);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18), 0 1px rgba(255, 255, 255, .025);
+}
+
+:root[data-platform="windows"] input:focus,
+:root[data-platform="windows"] select:focus,
+:root[data-platform="windows"] textarea:focus {
+  border-color: rgba(64, 196, 150, .68);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, .12), inset 0 1px 2px rgba(0, 0, 0, .12);
+}
+
+:root[data-platform="windows"] .app-shell {
+  background:
+    radial-gradient(circle at 18% 0, rgba(80, 90, 255, .09), transparent 300px),
+    radial-gradient(circle at 78% 8%, rgba(43, 189, 126, .06), transparent 340px),
+    #080b11;
+}
+
+:root[data-platform="windows"] .ui-icon {
+  stroke-width: 1.75;
+  shape-rendering: geometricPrecision;
+}
+
+:root[data-platform="windows"] * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(137, 151, 174, .34) transparent;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(137, 151, 174, .34);
+  background-clip: padding-box;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(164, 177, 198, .52);
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-platform="windows"][data-theme="light"] input,
+:root[data-platform="windows"][data-theme="light"] select,
+:root[data-platform="windows"][data-theme="light"] textarea {
+  border-color: rgba(85, 99, 120, .22);
+  background-color: rgba(255, 255, 255, .94);
+  box-shadow: inset 0 1px 2px rgba(20, 31, 48, .05), 0 1px 2px rgba(20, 31, 48, .04);
+}
+
+:root[data-platform="windows"][data-theme="light"] * {
+  scrollbar-color: rgba(90, 105, 126, .32) transparent;
+}
+
+:root[data-platform="windows"][data-theme="light"] *::-webkit-scrollbar-thumb {
+  background-color: rgba(90, 105, 126, .32);
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -388,7 +502,7 @@ code,
   display: grid;
   gap: 3px;
   color: #9aa5b1;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.35;
 }
@@ -592,7 +706,7 @@ code,
   background: rgba(7, 22, 20, .76);
   color: #96f6c0;
   padding: 0 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -626,7 +740,7 @@ code,
   background: rgba(12, 18, 29, .82);
   color: #d7e3f3;
   padding: 0 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .about-source {
@@ -634,7 +748,7 @@ code,
   display: grid;
   gap: 7px;
   color: #93a4ba;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .about-source > span,
@@ -733,7 +847,7 @@ code,
   left: 14px;
   display: grid;
   gap: 5px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   color: #b9ffd8;
 }
@@ -774,7 +888,7 @@ code,
   min-width: 0;
   overflow: hidden;
   color: #f1f7ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-lg);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -873,7 +987,7 @@ code,
   min-width: 0;
   overflow: hidden;
   color: #eaf3ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-lg);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1341,7 +1455,7 @@ code,
 .profile-editor input, .profile-editor select {
   width: 100%;
   height: 30px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .password-input-wrap {
@@ -1421,7 +1535,7 @@ code,
   background: #0d121a;
   padding: 0 8px 0 11px;
   color: #cdd6df;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .terminal-tools, .panel-actions {
@@ -1466,7 +1580,7 @@ code,
   overflow: auto;
   padding: 14px 16px;
   color: #d5dde5;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-md);
   line-height: 1.55;
 }
@@ -1670,7 +1784,7 @@ code,
   border-radius: 7px;
   background: #070c14;
   color: #eef4ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-md);
   outline: 0;
   padding: 0 10px;
@@ -2022,12 +2136,12 @@ code,
 .config-grid input {
   width: 100%;
   height: 30px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .config-grid select, .config-grid textarea {
   width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .config-grid .wide {
@@ -2209,7 +2323,7 @@ code,
   overflow: hidden;
   text-overflow: ellipsis;
   color: #8fd5ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   white-space: nowrap;
 }
@@ -2257,7 +2371,7 @@ code,
 .history-toolbar input {
   width: 100%;
   height: 30px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .history-list {
@@ -2285,7 +2399,7 @@ code,
 .history-row code {
   overflow: hidden;
   color: #e5edf7;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2390,7 +2504,7 @@ code,
   color: #d9e6f2;
   resize: vertical;
   padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.5;
   white-space: pre;
@@ -2546,7 +2660,7 @@ code,
   color: #d9e6f2;
   resize: none;
   padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.5;
   white-space: pre;
@@ -2586,7 +2700,7 @@ code,
   background: #070b12;
   color: #d9e6f2;
   resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.5;
   white-space: pre;
@@ -2607,7 +2721,7 @@ code,
 }
 code {
   color: #ccf0f7;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
 }
 .assistant-compose {
@@ -2765,7 +2879,7 @@ code {
   color: #eef2f8;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   font-weight: 650;
 }
@@ -2911,7 +3025,7 @@ code {
   gap: 8px;
   background: rgba(14, 20, 30, .9);
   color: #8f9bb0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   overflow: hidden;
   padding: 8px 10px;
@@ -2950,7 +3064,7 @@ code {
 }
 .transfer-task-head span {
   color: #8fb4ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
 }
 .transfer-progress {
@@ -2997,7 +3111,7 @@ code {
   border-radius: 6px;
   background: rgba(10, 16, 25, .58);
   color: #aeb8c9;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   padding: 0 8px;
   text-overflow: ellipsis;
@@ -3021,7 +3135,7 @@ code {
   min-width: 0;
   overflow: hidden;
   color: #8c99ad;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3140,7 +3254,7 @@ code {
   justify-self: end;
   overflow: hidden;
   color: #8c99ad;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3791,7 +3905,7 @@ code {
 }
 .script-glyph {
   color: #b6d2ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-md);
 }
 .ai-session-head strong, .script-title-head strong {
@@ -4127,7 +4241,7 @@ code {
   background: #080d15;
   color: #57677d;
   padding: 10px 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.58;
   text-align: right;
@@ -4144,7 +4258,7 @@ code {
   color: #dff5ff;
   resize: none;
   padding: 10px 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.58;
   tab-size: 2;
@@ -4388,7 +4502,7 @@ code {
   border-radius: 6px;
   background: rgba(87, 216, 146, .12);
   color: #78e9a2;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-xs);
 }
 .script-file-tab .record-dot {
@@ -5008,7 +5122,7 @@ code {
   color: #dff5ff;
   resize: none;
   padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.58;
   tab-size: 2;
@@ -5068,7 +5182,7 @@ code {
   color: #dff5ff;
   resize: none;
   padding: 12px 14px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-md);
   line-height: 1.58;
   tab-size: 2;
@@ -5210,7 +5324,7 @@ code {
   overflow: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   line-height: 1.55;
 }
 .script-risk-line {
@@ -5392,7 +5506,7 @@ code {
   pointer-events: none;
   background: transparent;
   color: #dff5ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.58;
   tab-size: 2;
@@ -5562,7 +5676,7 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #d8dee3;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
 .terminal-completion mark {
@@ -7497,7 +7611,7 @@ code {
 }
 .history-preview-body code {
   color: #e5edf7;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -8122,7 +8236,7 @@ code {
   display: block;
   min-width: max-content;
   color: #dff5ff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.62;
   white-space: pre;
@@ -8280,7 +8394,7 @@ code {
   background: transparent;
   color: #e5f8ee;
   padding: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-md);
   font-weight: 720;
   text-overflow: ellipsis;
@@ -9402,6 +9516,46 @@ code {
   border-top-color: #293246;
   background: #090e16;
 }
+
+/* Keep script toolbar actions compact instead of stretching labels equally. */
+.script-head .panel-actions {
+  grid-template-columns: 32px max-content minmax(106px, 1fr) 32px;
+}
+
+.script-head .panel-actions > .text-button:nth-child(2) {
+  width: auto;
+  justify-self: start;
+  padding-inline: 10px;
+}
+
+.script-head .record-action,
+.script-head .panel-actions > .danger {
+  justify-self: end;
+}
+
+/* Keep script recording controls and the AI composer dimensionally stable. */
+.script-head .record-action,
+.script-head .panel-actions > .danger {
+  width: 106px;
+  margin-left: auto;
+  justify-content: center;
+}
+
+.script-recorder.idle .record-dot {
+  border-color: #526176;
+  background: #526176;
+  box-shadow: none;
+}
+
+.script-recorder.idle strong {
+  color: #9aa8ba;
+}
+
+.assistant-compose.script-compose textarea {
+  min-height: 50px;
+  max-height: 112px;
+  resize: none;
+}
 .app-shell.theme-dark .script-risk-actions .text-button.danger {
   border-color: #be3b50;
   background: #351520;
@@ -10266,7 +10420,8 @@ body.workspace-resizing * {
   background: linear-gradient(180deg, rgba(14, 17, 21, 0), var(--workbench-panel));
 }
 
-.assistant-panel > .assistant-compose {
+.assistant-panel > .assistant-compose,
+.assistant-compose.script-compose {
   --composer-pad-x: 8px;
   --composer-pad-bottom: 8px;
   border-top-color: var(--workbench-line);
@@ -10274,8 +10429,10 @@ body.workspace-resizing * {
   padding: 8px;
 }
 
-.assistant-panel > .assistant-compose textarea {
+.assistant-panel > .assistant-compose textarea,
+.assistant-compose.script-compose textarea {
   min-height: 52px;
+  height: auto;
   max-height: 118px;
   border-color: var(--workbench-line);
   border-radius: 7px;
@@ -10286,12 +10443,14 @@ body.workspace-resizing * {
   box-shadow: none;
 }
 
-.assistant-panel > .assistant-compose:focus-within textarea {
+.assistant-panel > .assistant-compose:focus-within textarea,
+.assistant-compose.script-compose:focus-within textarea {
   border-color: var(--workbench-accent);
   box-shadow: 0 0 0 2px var(--workbench-accent-soft);
 }
 
-.assistant-panel > .assistant-compose .icon-button {
+.assistant-panel > .assistant-compose .icon-button,
+.assistant-compose.script-compose .icon-button {
   right: 14px;
   bottom: 14px;
   width: 29px;
@@ -10303,7 +10462,8 @@ body.workspace-resizing * {
   box-shadow: none;
 }
 
-.assistant-panel > .assistant-compose .icon-button:hover:not(:disabled) {
+.assistant-panel > .assistant-compose .icon-button:hover:not(:disabled),
+.assistant-compose.script-compose .icon-button:hover:not(:disabled) {
   border-color: var(--workbench-accent-strong);
   background: var(--workbench-accent-strong);
   color: #ffffff;
@@ -10639,7 +10799,8 @@ body.workspace-resizing * {
   font-size: 10.5px;
 }
 
-.assistant-panel > .assistant-compose textarea {
+.assistant-panel > .assistant-compose textarea,
+.assistant-compose.script-compose textarea {
   min-height: 50px;
   max-height: 112px;
 }
@@ -10656,6 +10817,9 @@ body.workspace-resizing * {
 
 .script-head .panel-actions {
   width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 3px;
   border: 0;
   border-radius: 0;
@@ -10663,11 +10827,44 @@ body.workspace-resizing * {
   padding: 0;
 }
 
+.script-head .script-primary-actions {
+  min-width: 0;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.script-head .script-primary-actions > .icon-button {
+  flex: 0 0 32px;
+}
+
+.script-head .script-primary-actions > .text-button:not(.record-action):not(.danger) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  padding-inline: 10px;
+}
+
 .script-head .record-action {
-  margin-left: auto;
+  flex: 0 0 106px;
+  width: 106px;
+  margin-left: 0;
   border-color: #2b3b4f;
   background: #111a27;
   color: #dbe6f3;
+}
+
+.script-head .script-primary-actions > .danger {
+  flex: 0 0 106px;
+  width: 106px;
+  margin-left: 0;
+  justify-content: center;
+}
+
+.script-head .panel-actions > .icon-button:last-child {
+  flex: 0 0 auto;
+  margin-left: 6px;
 }
 
 .script-recorder {

@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
+import { isWindowsPlatform } from '../utils/platform'
 import AiConfigPanel from './AiConfigPanel.vue'
 import UiIcon from './UiIcon.vue'
 
 type SettingsSection = 'ai' | 'terminal'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
+const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
+const windowsPlatform = isWindowsPlatform()
+const DEFAULT_TERMINAL_FONT_FAMILY = windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
 
 interface AppUserSettings {
   terminalFontFamily: string
@@ -111,14 +116,14 @@ function saveSettings() {
   emit('updateSettings', {
     ...draft,
     terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || 13)),
-    terminalFontFamily: draft.terminalFontFamily.trim() || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    terminalFontFamily: draft.terminalFontFamily.trim() || DEFAULT_TERMINAL_FONT_FAMILY,
     terminalTheme: 'midnight',
     defaultShell: draft.defaultShell.trim() || 'system'
   })
 }
 
 function resetTerminalAppearance() {
-  draft.terminalFontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+  draft.terminalFontFamily = DEFAULT_TERMINAL_FONT_FAMILY
   draft.terminalFontSize = 13
   saveSettings()
 }
@@ -164,6 +169,7 @@ function resetTerminalAppearance() {
           <label class="settings-field">
             <span>字体</span>
             <select v-model="draft.terminalFontFamily" aria-label="选择终端字体">
+              <option v-if="windowsPlatform" value="&quot;Cascadia Mono&quot;, &quot;Cascadia Code&quot;, &quot;JetBrains Mono&quot;, Consolas, monospace">Windows 优化 Cascadia Mono（推荐）</option>
               <option value="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">系统等宽</option>
               <option value="Cascadia Mono, Cascadia Code, Consolas, monospace">Cascadia Mono</option>
               <option value="Consolas, Lucida Console, monospace">Consolas</option>

@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
+import { isWindowsPlatform } from '../utils/platform'
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 import type {
@@ -51,8 +52,12 @@ const COMMAND_HISTORY_CACHE_LIMIT = 300
 const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
 const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
 const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
+const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
+const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, monospace'
+const DEFAULT_TERMINAL_FONT_FAMILY = isWindowsPlatform() ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
 const defaultUserSettings: AppUserSettings = {
-  terminalFontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  terminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   terminalFontSize: 13,
   terminalTheme: 'midnight',
   defaultShell: 'system'
@@ -905,9 +910,16 @@ function loadUserSettings(): AppUserSettings {
     const raw = localStorage.getItem(USER_SETTINGS_STORAGE_KEY)
     if (!raw) return { ...defaultUserSettings }
     const parsed = JSON.parse(raw) as Partial<AppUserSettings>
+    const storedTerminalFontFamily = parsed.terminalFontFamily
+    const usesManagedDefault = !storedTerminalFontFamily
+      || storedTerminalFontFamily === SYSTEM_TERMINAL_FONT_FAMILY
+      || storedTerminalFontFamily === WINDOWS_TERMINAL_FONT_FAMILY
+      || storedTerminalFontFamily === LEGACY_WINDOWS_TERMINAL_FONT_FAMILY
+    const terminalFontFamily = usesManagedDefault ? DEFAULT_TERMINAL_FONT_FAMILY : storedTerminalFontFamily
     return {
       ...defaultUserSettings,
       ...parsed,
+      terminalFontFamily,
       terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
       terminalTheme: 'midnight'
     }

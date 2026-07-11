@@ -1351,12 +1351,14 @@ function nowText() {
   <section class="script-panel">
     <div class="workspace-section-head script-head">
       <div class="panel-actions">
+        <div class="script-primary-actions">
         <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
         <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation"><UiIcon name="plus" />新建脚本</button>
         <button v-if="!props.recording.isRecording" class="text-button record-action" type="button" @click="startRecording">
           <UiIcon :name="recordingHasData || hasDraftScript ? 'refresh' : 'play'" />{{ recordingActionLabel }}
         </button>
         <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />停止录制</button>
+        </div>
         <button class="icon-button" type="button" title="清空录制" aria-label="清空录制" :disabled="!recordingHasData && !props.recording.isRecording" @click="clearRecording"><UiIcon name="trash" /></button>
       </div>
     </div>
@@ -1604,7 +1606,7 @@ function nowText() {
     </div>
 
     <div v-else class="script-generate">
-      <div v-if="props.recording.isRecording || recordingHasData" class="script-recorder">
+      <div class="script-recorder" :class="{ idle: !props.recording.isRecording && !recordingHasData }">
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
           <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
@@ -1765,7 +1767,7 @@ function nowText() {
       <div v-if="showScriptComposer" class="assistant-compose script-compose">
         <textarea
           v-model="askText"
-          rows="3"
+          rows="2"
           placeholder="描述你想修改或优化的脚本功能..."
           aria-label="Ask AI to generate script"
           @keydown="handleComposerKeydown"
