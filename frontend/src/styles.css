@@ -5045,6 +5045,19 @@ code {
   min-height: 0;
   height: 100%;
 }
+
+.script-library > .script-preview {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.script-library > .script-preview .script-library-editor {
+  min-height: 0;
+}
+
+.script-detail-compose {
+  border-top-color: #202c3d;
+}
 .script-library > .script-preview .script-card-actions {
   grid-template-columns: repeat(4, minmax(0, 1fr)) 30px;
 }
@@ -5551,6 +5564,101 @@ code {
 .shell-token.command {
   color: #c7d2ff;
   font-weight: 650;
+}
+/* Script workspace clarity: actionable readiness, compact replies, labeled AI input. */
+.script-readiness-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(245, 158, 11, .22);
+  background: rgba(245, 158, 11, .07);
+  scrollbar-width: thin;
+}
+.script-readiness-list > strong {
+  flex: 0 0 auto;
+  color: #f5c46b;
+  font-size: var(--font-xs);
+}
+.script-readiness-list button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(245, 158, 11, .3);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, .62);
+  color: #f8d99a;
+  font-size: var(--font-xs);
+}
+.script-readiness-list button:hover {
+  border-color: rgba(245, 158, 11, .65);
+  background: rgba(245, 158, 11, .12);
+}
+.script-replies-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+}
+.script-replies-list {
+  max-height: min(230px, 32vh);
+}
+.script-replies-footer {
+  position: sticky;
+  bottom: -8px;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 6px;
+  background: linear-gradient(transparent, #0b1320 35%);
+}
+.assistant-compose.script-compose {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(54px, auto) auto;
+  gap: 5px 8px;
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px solid #223048;
+  border-radius: 8px;
+  background: #0b1320;
+}
+.assistant-compose.script-compose textarea {
+  grid-column: 1 / -1;
+  min-height: 54px;
+  max-height: 96px;
+  padding: 9px 10px;
+  border-radius: 6px;
+}
+.assistant-compose.script-compose label {
+  color: #cbd7e8;
+  font-size: var(--font-xs);
+  font-weight: 650;
+}
+.assistant-compose.script-compose > small {
+  align-self: center;
+  color: #718096;
+  font-size: 11px;
+}
+.assistant-compose.script-compose .icon-button {
+  grid-column: 2;
+  grid-row: 3;
+  width: 30px;
+  height: 30px;
+}
+.theme-light .script-readiness-list {
+  border-bottom-color: rgba(180, 83, 9, .2);
+  background: rgba(245, 158, 11, .08);
+}
+.theme-light .script-readiness-list > strong,
+.theme-light .script-readiness-list button {
+  color: #92400e;
+}
+.theme-light .script-readiness-list button {
+  background: rgba(255, 255, 255, .7);
 }
 /* Native terminal code surface and completion menu. */
 .terminal-native-code {
@@ -11336,19 +11444,27 @@ body.workspace-resizing * {
 
 .script-code-overlay,
 .script-editor-shell textarea {
-  padding: 10px;
+  padding: 10px 24px 24px 10px;
   font-size: var(--font-sm);
   line-height: 1.5;
 }
 
+.script-code-overlay code {
+  padding-right: 8px;
+}
+
 .script-editor-shell textarea {
   scrollbar-width: thin;
-  scrollbar-color: #37465a transparent;
+  scrollbar-color: #52647a #0a111a;
 }
 
 .script-editor-shell textarea::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
+}
+
+.script-editor-shell textarea::-webkit-scrollbar-track {
+  background: #0a111a;
 }
 
 .script-editor-shell textarea::-webkit-scrollbar-thumb {
@@ -11359,7 +11475,7 @@ body.workspace-resizing * {
 }
 
 .script-editor-shell textarea::-webkit-scrollbar-corner {
-  background: transparent;
+  background: #0a111a;
 }
 
 .shell-token.comment {
@@ -11429,6 +11545,21 @@ body.workspace-resizing * {
 
   .script-editor-statusbar span:nth-child(2) {
     margin-right: auto;
+  }
+
+  .script-editor-statusbar {
+    min-height: 30px;
+    gap: 6px;
+    padding-inline: 9px;
+  }
+
+  .script-editor-statusbar span:nth-child(3) {
+    color: #9aa8ba;
+  }
+
+  .script-editor-statusbar span:last-child {
+    padding-left: 6px;
+    border-left: 1px solid #263447;
   }
 }
 
@@ -11685,4 +11816,243 @@ body.workspace-resizing * {
   align-items: center;
   justify-content: space-between;
   grid-template-columns: none;
+}
+
+/* Stable draft layout with actionable readiness details. */
+.script-generate .script-draft-card.has-readiness-list {
+  grid-template-rows: auto auto minmax(280px, 1fr) 28px;
+}
+
+.script-generate .script-workbench {
+  min-height: 360px;
+}
+
+.script-readiness-list .readiness-line {
+  color: #f7c96f;
+  font-weight: 650;
+}
+
+.script-readiness-list .readiness-field {
+  color: #fff2cf;
+  font-family: var(--font-mono);
+  font-weight: 650;
+}
+
+.script-readiness-list .readiness-requirement {
+  max-width: 220px;
+  overflow: hidden;
+  color: #d7b879;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-replies-panel.expanded .script-replies-list {
+  max-height: min(210px, 28vh);
+}
+
+.script-reply-message.error {
+  border-color: rgba(220, 90, 106, .3);
+  background: rgba(74, 20, 31, .28);
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-line {
+  color: #a85b00;
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-field {
+  color: #78350f;
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-requirement {
+  color: #8a5a18;
+}
+
+.app-shell.theme-light .script-reply-message.error {
+  border-color: #efc2ca;
+  background: #fff5f6;
+}
+
+/* Script AI input follows the same composer contract as the AI tab. */
+.assistant-compose.script-compose {
+  --composer-pad-x: 16px;
+  --composer-pad-bottom: 14px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-top: 1px solid #1b2130;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px var(--composer-pad-x) var(--composer-pad-bottom);
+}
+
+.assistant-compose.script-compose textarea {
+  grid-column: auto;
+  min-height: 88px;
+  max-height: 170px;
+  padding: 10px;
+  padding-right: calc(var(--icon-size) + 20px);
+  padding-bottom: calc(var(--icon-size) + 12px);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.assistant-compose.script-compose .icon-button {
+  position: absolute;
+  right: calc(var(--composer-pad-x) + 8px);
+  bottom: calc(var(--composer-pad-bottom) + 8px);
+  grid-column: auto;
+  grid-row: auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.script-readiness-markers {
+  position: absolute;
+  inset: 0 12px 0 44px;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.script-readiness-line-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  border-left: 2px solid #e9a83a;
+  background: linear-gradient(90deg, rgba(233, 168, 58, .2), rgba(233, 168, 58, .08));
+  box-shadow: inset 0 1px rgba(233, 168, 58, .08), inset 0 -1px rgba(233, 168, 58, .08);
+}
+
+.script-readiness-markers button {
+  position: absolute;
+  right: 2px;
+  max-width: min(250px, 72%);
+  height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(240, 184, 93, .55);
+  border-radius: 4px;
+  background: rgba(58, 39, 11, .94);
+  color: #f3cc83;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .24);
+}
+
+.script-readiness-markers button::before {
+  content: '';
+  position: absolute;
+  left: -999px;
+  right: 100%;
+  height: 1px;
+  background: rgba(240, 184, 93, .35);
+}
+
+.script-readiness-markers button > * {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.script-readiness-markers button > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.script-readiness-markers strong {
+  color: #fff1c9;
+  font-family: var(--font-mono);
+}
+
+.app-shell.theme-light .script-readiness-markers button {
+  border-color: rgba(180, 83, 9, .4);
+  background: rgba(255, 247, 229, .96);
+  color: #9a5b08;
+  box-shadow: 0 2px 8px rgba(89, 57, 17, .12);
+}
+
+.app-shell.theme-light .script-readiness-line-bg {
+  border-left-color: #d48613;
+  background: linear-gradient(90deg, rgba(245, 158, 11, .18), rgba(245, 158, 11, .07));
+  box-shadow: inset 0 1px rgba(180, 83, 9, .08), inset 0 -1px rgba(180, 83, 9, .08);
+}
+
+.app-shell.theme-light .script-readiness-markers strong {
+  color: #78350f;
+}
+
+.script-generate .script-draft-card {
+  grid-template-rows: auto minmax(280px, 1fr) 28px;
+}
+
+/* Keep the transparent textarea and visible syntax layer pixel-aligned. */
+.script-editor-shell .script-code-overlay,
+.script-editor-shell textarea {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  font-style: normal;
+  font-weight: 400;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: 1.5;
+  tab-size: 2;
+  text-indent: 0;
+  text-rendering: geometricPrecision;
+  white-space: pre;
+}
+
+.script-editor-shell textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.script-editor-shell .script-code-overlay code {
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+/* Editing uses one native text layer so glyphs and caret cannot diverge. */
+.script-editor-shell .script-code-overlay {
+  display: none;
+}
+
+.script-editor-shell textarea {
+  color: #d9ecf3 !important;
+  -webkit-text-fill-color: #d9ecf3;
+  caret-color: #8be8bb;
+}
+
+.script-editor-shell textarea::selection {
+  color: #f8fafc;
+  -webkit-text-fill-color: #f8fafc;
+  background: rgba(16, 185, 129, .3);
+}
+
+.app-shell.theme-light .script-editor-shell textarea {
+  color: #172033 !important;
+  -webkit-text-fill-color: #172033;
+  caret-color: #087f5b;
+}
+
+.app-shell.theme-light .script-editor-shell textarea::selection {
+  color: #0f172a;
+  -webkit-text-fill-color: #0f172a;
+  background: rgba(16, 185, 129, .2);
 }
