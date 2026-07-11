@@ -1483,8 +1483,8 @@ assert(
     scriptPanel.includes('placeholder="在这里粘贴、生成或编写 Shell 脚本..."') &&
     scriptPanel.includes('recordingActionLabel') &&
     scriptPanel.includes("'重新录制' : '开始录制'") &&
+    scriptPanel.includes('v-if="!props.recording.isRecording"') &&
     scriptPanel.includes('<UiIcon name="stop" />停止录制') &&
-    scriptPanel.includes(':disabled="!recordingHasData && !props.recording.isRecording"') &&
     scriptPanel.includes('ContextMenu') &&
     scriptPanel.includes('openScriptEditorMenu') &&
     scriptPanel.includes('title="更多操作"') &&

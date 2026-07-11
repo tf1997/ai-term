@@ -10,7 +10,7 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import type { ScriptRiskMatch } from '../lib/scriptRisk'
-import { analyzeScriptReadiness, scriptReadinessStatusForContent } from '../lib/scriptReadiness'
+import { analyzeScriptReadiness, scriptReadinessStatusForContent, type ScriptReadinessIssue } from '../lib/scriptReadiness'
 import {
   cancelTask,
   chatWithAiProviderStream,
@@ -85,11 +85,13 @@ const messages = ref<ScriptChatMessage[]>([])
 const collapsedMessages = ref<Record<string, boolean>>({})
 const scriptRepliesExpanded = ref(false)
 const messageList = ref<HTMLElement | null>(null)
+const scriptComposerInput = ref<HTMLTextAreaElement | null>(null)
 const draftEditorLineRail = ref<HTMLElement | null>(null)
 const draftEditorTextarea = ref<HTMLTextAreaElement | null>(null)
-const draftEditorScrollTop = ref(0)
 const selectedScriptLineRail = ref<HTMLElement | null>(null)
+const selectedScriptTextarea = ref<HTMLTextAreaElement | null>(null)
 const expandedScriptLineRail = ref<HTMLElement | null>(null)
+const expandedScriptTextarea = ref<HTMLTextAreaElement | null>(null)
 const draftScriptHighlight = ref<HTMLElement | null>(null)
 const selectedScriptHighlight = ref<HTMLElement | null>(null)
 const expandedScriptHighlight = ref<HTMLElement | null>(null)
@@ -117,6 +119,10 @@ const scriptRiskExplanationRequestId = ref('')
 const scriptEditorMenu = ref<{ source: ScriptEditorSource; x: number; y: number } | null>(null)
 const draftEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
 const selectedEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
+const expandedEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
+const draftReadinessIndex = ref(0)
+const selectedReadinessIndex = ref(0)
+const expandedReadinessIndex = ref(0)
 let answerTimer: number | undefined
 
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
@@ -159,6 +165,7 @@ const expandedScriptReadiness = computed(() => scriptReadinessStatusForContent(e
 const canExecuteDraft = computed(() => hasDraftScript.value && draftScriptReadiness.value.issues.length === 0)
 const canExecuteSelectedScript = computed(() => hasSelectedScriptContent.value && selectedScriptReadiness.value.issues.length === 0)
 const canExecuteExpandedScript = computed(() => expandedScriptContent.value.trim().length > 0 && expandedScriptReadiness.value.issues.length === 0)
+const recordingActionLabel = computed(() => recordingHasData.value ? '重新录制' : '开始录制')
 const draftSaveStatus = computed(() => editorSaveStatus(hasDraftScript.value, draftScriptDirty.value))
 const selectedSaveStatus = computed(() => editorSaveStatus(hasSelectedScriptContent.value, selectedScriptDirty.value))
 const scriptEditorMenuItems = computed(() => {
@@ -370,12 +377,23 @@ function focusDraftReadinessIssue(line: number) {
   draftEditorCursor.value = { line: targetLine, column: 1 }
   const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22
   editor.scrollTop = Math.max(0, (targetLine - 3) * lineHeight)
-  draftEditorScrollTop.value = editor.scrollTop
   syncScriptEditorScroll({ target: editor } as unknown as Event, draftEditorLineRail.value, draftScriptHighlight.value)
 }
 
 function updateSelectedEditorCursor(event: Event) {
   selectedEditorCursor.value = cursorPositionForTextarea(event.target as HTMLTextAreaElement)
+}
+
+function updateExpandedEditorCursor(event: Event) {
+  expandedEditorCursor.value = cursorPositionForTextarea(event.target as HTMLTextAreaElement)
+}
+
+function updateExpandedScriptContent(value: string) {
+  if (scriptPreviewSource.value === 'selected') {
+    updateSelectedScriptDraft(value)
+  } else {
+    updateDraftScriptContent(value)
+  }
 }
 
 function handleDraftEditorInput(event: Event) {
@@ -399,15 +417,62 @@ function highlightShellScript(content: string) {
   return content.split('\n').map((line) => highlightShellLine(line) || ' ').join('\n')
 }
 
-function readinessMarkerStyle(line: number) {
-  const editor = draftEditorTextarea.value
-  if (!editor) return { top: `${10 + (line - 1) * 21 - draftEditorScrollTop.value}px` }
-  const styles = window.getComputedStyle(editor)
-  const lineHeight = Number.parseFloat(styles.lineHeight) || 21
-  const paddingTop = Number.parseFloat(styles.paddingTop) || 10
-  const markerHeight = 20
-  const top = paddingTop + (line - 1) * lineHeight + (lineHeight - markerHeight) / 2 - draftEditorScrollTop.value
-  return { top: `${top}px` }
+function focusExpandedReadinessIssue(line: number) {
+  const editor = expandedScriptTextarea.value
+  if (!editor) return
+  const lines = editor.value.split('\n')
+  const targetLine = Math.max(1, Math.min(line, lines.length))
+  const selectionStart = lines.slice(0, targetLine - 1).reduce((length, value) => length + value.length + 1, 0)
+  const selectionEnd = selectionStart + (lines[targetLine - 1]?.length ?? 0)
+  editor.focus()
+  editor.setSelectionRange(selectionStart, selectionEnd)
+  expandedEditorCursor.value = { line: targetLine, column: 1 }
+  const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 24
+  editor.scrollTop = Math.max(0, (targetLine - 3) * lineHeight)
+  syncScriptEditorScroll({ target: editor } as unknown as Event, expandedScriptLineRail.value, expandedScriptHighlight.value)
+}
+
+function readinessLinesText(issues: ScriptReadinessIssue[]) {
+  return issues.map((issue) => issue.line).join('、')
+}
+
+function focusNextDraftReadinessIssue() {
+  const issues = draftScriptReadiness.value.issues
+  if (!issues.length) return
+  const index = draftReadinessIndex.value % issues.length
+  focusDraftReadinessIssue(issues[index].line)
+  draftReadinessIndex.value = (index + 1) % issues.length
+}
+
+function focusNextSelectedReadinessIssue() {
+  const issues = selectedScriptReadiness.value.issues
+  if (!issues.length) return
+  const index = selectedReadinessIndex.value % issues.length
+  focusSelectedReadinessIssue(issues[index].line)
+  selectedReadinessIndex.value = (index + 1) % issues.length
+}
+
+function focusNextExpandedReadinessIssue() {
+  const issues = expandedScriptReadiness.value.issues
+  if (!issues.length) return
+  const index = expandedReadinessIndex.value % issues.length
+  focusExpandedReadinessIssue(issues[index].line)
+  expandedReadinessIndex.value = (index + 1) % issues.length
+}
+
+function focusSelectedReadinessIssue(line: number) {
+  const editor = selectedScriptTextarea.value
+  if (!editor) return
+  const lines = editor.value.split('\n')
+  const targetLine = Math.max(1, Math.min(line, lines.length))
+  const selectionStart = lines.slice(0, targetLine - 1).reduce((length, value) => length + value.length + 1, 0)
+  const selectionEnd = selectionStart + (lines[targetLine - 1]?.length ?? 0)
+  editor.focus()
+  editor.setSelectionRange(selectionStart, selectionEnd)
+  selectedEditorCursor.value = { line: targetLine, column: 1 }
+  const lineHeight = Number.parseFloat(window.getComputedStyle(editor).lineHeight) || 22
+  editor.scrollTop = Math.max(0, (targetLine - 3) * lineHeight)
+  syncScriptEditorScroll({ target: editor } as unknown as Event, selectedScriptLineRail.value, selectedScriptHighlight.value)
 }
 
 function highlightShellLine(line: string) {
@@ -962,7 +1027,6 @@ function clearDraftScript() {
 }
 
 function syncDraftLineRail(event: Event) {
-  draftEditorScrollTop.value = (event.target as HTMLTextAreaElement).scrollTop
   syncScriptEditorScroll(event, draftEditorLineRail.value, draftScriptHighlight.value)
 }
 
@@ -972,6 +1036,14 @@ function syncSelectedScriptLineRail(event: Event) {
 
 function syncExpandedScriptLineRail(event: Event) {
   syncScriptEditorScroll(event, expandedScriptLineRail.value, expandedScriptHighlight.value)
+}
+
+function saveExpandedScript() {
+  if (scriptPreviewSource.value === 'selected') {
+    void saveSelectedScript()
+  } else {
+    void saveDraftScript()
+  }
 }
 
 function syncScriptEditorScroll(event: Event, lineRail: HTMLElement | null, highlightLayer: HTMLElement | null) {
@@ -1389,6 +1461,13 @@ function handleSelectedComposerKeydown(event: KeyboardEvent) {
   }
 }
 
+function focusScriptComposer() {
+  if (!hasUsableConfig.value) return
+  void nextTick(() => {
+    scriptComposerInput.value?.focus()
+  })
+}
+
 function isTauriUnavailableError(error: unknown) {
   const message = formatError(error)
   return message.includes('__TAURI_IPC__') || message.includes('window.__TAURI_IPC__') || message.includes('invoke')
@@ -1406,8 +1485,8 @@ function nowText() {
         <div class="script-primary-actions">
         <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
         <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation"><UiIcon name="plus" />新建脚本</button>
-        <button v-if="!props.recording.isRecording && !recordingHasData && !hasDraftScript" class="text-button record-action" type="button" @click="startRecording">
-          <UiIcon name="play" />开始录制
+        <button v-if="!props.recording.isRecording" class="text-button record-action" type="button" @click="startRecording">
+          <UiIcon :name="recordingHasData ? 'refresh' : 'play'" />{{ recordingActionLabel }}
         </button>
         <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />停止录制</button>
         </div>
@@ -1446,11 +1525,20 @@ function nowText() {
     <div v-if="scriptPreviewOpen" class="modal-backdrop script-preview-backdrop" role="presentation" @click.self="closeScriptPreview">
       <section class="modal script-preview-modal" role="dialog" aria-modal="true" aria-label="脚本放大预览">
         <div class="modal-head">
-          <div>
+          <div class="script-preview-title">
+            <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
             <strong>{{ expandedScriptTitle }}</strong>
-            <span>脚本预览</span>
+            <button
+              v-if="expandedScriptReadiness.issues.length"
+              class="script-readiness-status readiness-pending"
+              type="button"
+              :title="expandedScriptReadiness.message"
+              @click="focusNextExpandedReadinessIssue"
+            >{{ expandedScriptReadiness.label }} · 第 {{ readinessLinesText(expandedScriptReadiness.issues) }} 行</button>
+            <span v-else class="script-preview-mode">编辑模式</span>
           </div>
           <div class="script-editor-tools">
+            <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!expandedScriptContent.trim()" @click="saveExpandedScript"><UiIcon name="save" /></button>
             <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyExpandedScript"><UiIcon name="copy" /></button>
             <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!canExecuteExpandedScript" @click="executeExpandedScript"><UiIcon name="play" /></button>
             <button class="icon-button" type="button" title="关闭预览" aria-label="关闭预览" @click="closeScriptPreview"><UiIcon name="close" /></button>
@@ -1461,18 +1549,22 @@ function nowText() {
             <pre ref="expandedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ expandedScriptLineNumbers }}</pre>
             <pre ref="expandedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="expandedScriptHighlightedHtml" /></pre>
             <textarea
+              ref="expandedScriptTextarea"
               :value="expandedScriptContent"
-              readonly
               spellcheck="false"
-              aria-label="脚本放大预览"
+              aria-label="编辑放大脚本"
+              @input="updateExpandedScriptContent(($event.target as HTMLTextAreaElement).value)"
+              @click="updateExpandedEditorCursor"
+              @keyup="updateExpandedEditorCursor"
+              @select="updateExpandedEditorCursor"
               @scroll="syncExpandedScriptLineRail"
             />
           </div>
           <div class="script-editor-statusbar">
             <span>Shell &middot; UTF-8 &middot; LF</span>
-            <span>{{ expandedScriptLineNumbers.split('\n').length }} 行</span>
+            <span>行 {{ expandedEditorCursor.line }}，列 {{ expandedEditorCursor.column }}</span>
             <span>{{ expandedScriptContent.length }} 字符</span>
-            <span>只读</span>
+            <span>{{ scriptPreviewSource === 'selected' ? selectedSaveStatus : draftSaveStatus }}</span>
           </div>
         </div>
       </section>
@@ -1602,12 +1694,14 @@ function nowText() {
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
               <strong>{{ selectedScript.name }}</strong>
               <span v-if="selectedScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
-              <span
+              <button
                 v-if="hasSelectedScriptContent"
                 class="script-readiness-status"
                 :class="`readiness-${selectedScriptReadiness.level}`"
                 :title="selectedScriptReadiness.message"
-              >{{ selectedScriptReadiness.label }}</span>
+                type="button"
+                @click="focusNextSelectedReadinessIssue"
+              ><template v-if="selectedScriptReadiness.issues.length">待填 {{ selectedScriptReadiness.issues.length }} · {{ readinessLinesText(selectedScriptReadiness.issues) }}行</template><template v-else>{{ selectedScriptReadiness.label }}</template></button>
               <span
                 v-if="hasSelectedScriptContent"
                 class="script-editor-risk"
@@ -1635,6 +1729,7 @@ function nowText() {
             <pre ref="selectedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ selectedScriptLineNumbers }}</pre>
             <pre ref="selectedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="selectedScriptHighlightedHtml" /></pre>
             <textarea
+              ref="selectedScriptTextarea"
               :value="selectedScriptContent"
               spellcheck="false"
               aria-label="编辑脚本"
@@ -1653,11 +1748,14 @@ function nowText() {
             <span v-if="selectedSaveStatus" :class="{ dirty: selectedScriptDirty }">{{ selectedSaveStatus }}</span>
           </div>
         </div>
-        <div class="assistant-compose script-compose script-detail-compose">
+        <div class="assistant-compose unified-ai-compose" @pointerdown="focusScriptComposer">
           <textarea
+            ref="scriptComposerInput"
             v-model="askText"
+            :disabled="!hasUsableConfig"
             rows="2"
             placeholder="描述你想如何修改或优化当前脚本..."
+            title="描述你想如何修改或优化当前脚本..."
             aria-label="询问 AI 修改当前脚本"
             @keydown="handleSelectedComposerKeydown"
           />
@@ -1666,6 +1764,7 @@ function nowText() {
             type="button"
             :title="isGenerating ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
             :aria-label="isGenerating ? '停止回答' : '发送'"
+            :disabled="!isGenerating && !hasUsableConfig"
             @click="isGenerating ? stopScriptGeneration() : sendSelectedScriptRequest()"
           >
             <UiIcon v-if="isGenerating" name="stop" />
@@ -1699,12 +1798,14 @@ function nowText() {
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
               <strong>{{ draftScriptTitle }}</strong>
               <span v-if="draftScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
-              <span
+              <button
                 v-if="hasDraftScript"
                 class="script-readiness-status"
                 :class="`readiness-${draftScriptReadiness.level}`"
                 :title="draftScriptReadiness.message"
-              >{{ draftScriptReadiness.label }}</span>
+                type="button"
+                @click="focusNextDraftReadinessIssue"
+              ><template v-if="draftScriptReadiness.issues.length">待填 {{ draftScriptReadiness.issues.length }} · {{ readinessLinesText(draftScriptReadiness.issues) }}行</template><template v-else>{{ draftScriptReadiness.label }}</template></button>
               <span
                 v-if="hasDraftScript"
                 class="script-editor-risk"
@@ -1743,26 +1844,6 @@ function nowText() {
               @select="updateDraftEditorCursor"
               @scroll="syncDraftLineRail"
             />
-            <div class="script-readiness-markers" aria-label="待填写项">
-              <span
-                v-for="issue in draftScriptReadiness.issues"
-                :key="`line-${issue.line}-${issue.kind}`"
-                class="script-readiness-line-bg"
-                :style="readinessMarkerStyle(issue.line)"
-              />
-              <button
-                v-for="issue in draftScriptReadiness.issues"
-                :key="issue.line + '-' + issue.kind"
-                type="button"
-                :style="readinessMarkerStyle(issue.line)"
-                :title="`第 ${issue.line} 行：${issue.message}`"
-                @click="focusDraftReadinessIssue(issue.line)"
-              >
-                <span>第 {{ issue.line }} 行</span>
-                <strong>{{ issue.field }}</strong>
-                <span>{{ issue.message }}</span>
-              </button>
-            </div>
             <div v-if="!hasDraftScript && !props.recording.isRecording" class="script-empty-guide">
               <small>可直接粘贴、编写脚本，或在下方描述让 AI 生成</small>
             </div>
@@ -1863,12 +1944,15 @@ function nowText() {
           </div>
         </div>
       </section>
-      <div v-if="showScriptComposer" class="assistant-compose script-compose">
+      <div v-if="showScriptComposer" class="assistant-compose unified-ai-compose" @pointerdown="focusScriptComposer">
         <textarea
+          ref="scriptComposerInput"
           id="script-ai-prompt"
           v-model="askText"
+          :disabled="!hasUsableConfig"
           rows="2"
           :placeholder="hasDraftScript ? '描述你想修改或优化的脚本功能...' : '描述你想生成的脚本，例如：备份 /var/log 并压缩...'"
+          :title="hasDraftScript ? '描述你想修改或优化的脚本功能...' : '描述你想生成的脚本，例如：备份 /var/log 并压缩...'"
           aria-label="询问 AI 修改脚本"
           @keydown="handleComposerKeydown"
         />
@@ -1877,6 +1961,7 @@ function nowText() {
           type="button"
           :title="isGenerating ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
           :aria-label="isGenerating ? '停止回答' : '发送'"
+          :disabled="!isGenerating && !hasUsableConfig"
           @click="isGenerating ? stopScriptGeneration() : sendScriptRequest()"
         >
           <UiIcon v-if="isGenerating" name="stop" />

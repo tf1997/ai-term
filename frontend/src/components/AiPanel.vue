@@ -914,7 +914,7 @@ watch(
         </div>
       </article>
     </div>
-    <div class="assistant-compose" @pointerdown="focusComposer">
+    <div class="assistant-compose unified-ai-compose" @pointerdown="focusComposer">
       <div v-if="selectedTerminalContext" class="selected-terminal-note">
         <strong>选中终端内容</strong>
         <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ formatCharacterCount(selectedTerminalContext.text.length) }}</span>

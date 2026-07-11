@@ -1276,7 +1276,7 @@ function trackUserInput(data: string): TerminalInputTrackResult {
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
-      if (terminalInputContext === 'shell' && inputCommandReliable) recordCommand(inputCommandBuffer)
+      if (terminalInputContext !== 'sensitive') recordCommand(inputCommandBuffer)
       resetTrackedTerminalInput('unknown')
       result = 'submitted'
     } else if (code === 127 || code === 8) {
