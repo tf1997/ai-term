@@ -52,6 +52,7 @@ const emit = defineEmits<{
   startScriptRecording: []
   stopScriptRecording: []
   clearScriptRecording: []
+  aiError: [detail: string]
 }>()
 
 const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
@@ -148,6 +149,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @update-message="emit('updateAiMessage', $event)"
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"
       @execute-command="emit('executeCommand', $event)"
+      @ai-error="emit('aiError', $event)"
     />
     <ScriptPanel
       v-if="scriptPanelVisited"

@@ -52,6 +52,7 @@ const emit = defineEmits<{
   renameSession: [sessionId: string, name: string]
   deleteSession: [sessionId: string]
   updateSessionTitle: [connectionId: string, sessionId: string, title: string]
+  aiError: [detail: string]
 }>()
 
 const askText = ref('')
@@ -181,7 +182,14 @@ async function sendMessage() {
   isAsking.value = true
   stopRequested.value = false
   let streamedAnswer = ''
+  let errorNotified = false
   let unlisten: (() => void) | undefined
+
+  function notifyAiError(detail: string) {
+    if (errorNotified) return
+    errorNotified = true
+    emit('aiError', detail)
+  }
   const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${requestTerminalId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
@@ -200,6 +208,7 @@ async function sendMessage() {
       }
       if (event.kind === 'error' && event.error) {
         if (stopRequested.value) return
+        notifyAiError(event.error)
         emit('updateMessage', {
           ...assistantMessage,
           text: `模型流式调用失败。\n\n错误详情：${event.error}`,
@@ -233,6 +242,7 @@ async function sendMessage() {
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
     const detail = formatAiError(error)
+    notifyAiError(detail)
     const command = inferCommand(text, terminalSnapshot, commandHistory)
     emit('updateMessage', {
       ...assistantMessage,
@@ -879,6 +889,7 @@ watch(
               <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
             </strong>
           </span>
+          <span v-if="message.error" class="message-error-badge">请求失败</span>
         </div>
         <div class="message-body">
           <div v-if="message.streaming && !message.text" class="thinking-row">

@@ -2090,6 +2090,7 @@ onBeforeUnmount(() => {
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"
       @execute-command="executeCommandOnTargetTerminals"
+      @ai-error="showToast('error', 'AI 请求失败', $event)"
       @write-terminal-input="writeInputToTargetTerminals"
       @focus-terminal="focusActiveTerminalFromWorkspace"
       @start-script-recording="startScriptRecording"
@@ -2105,7 +2106,7 @@ onBeforeUnmount(() => {
       aria-label="打开工作区"
       @click="rightCollapsed = false"
     >
-      工作区
+      <UiIcon name="arrow-left" size="15" />
     </button>
     <div v-if="aboutOpen" class="modal-backdrop about-backdrop" role="presentation" @click.self="closeAboutPage">
       <section class="modal about-modal" role="dialog" aria-modal="true" aria-labelledby="about-title" aria-describedby="about-summary">
