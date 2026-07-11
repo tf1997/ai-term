@@ -40,6 +40,8 @@ const languageAliases: Record<string, string> = {
   'cmd-script': 'cmd'
 }
 
+export type ShellScriptLanguage = 'bash' | 'powershell' | 'cmd' | 'shell'
+
 const lowSignalCommands = new Set(['and', 'but', 'for', 'if', 'then', 'this', 'that', 'the', 'with'])
 
 const commandPrefixes = new Set([
@@ -159,6 +161,43 @@ export function normalizeCodeLanguage(language: string) {
 export function isShellLanguage(language: string) {
   const normalized = normalizeCodeLanguage(language)
   return explicitShellLanguages.has(normalized) || shellSessionLanguages.has(normalized)
+}
+
+export function detectShellScriptLanguage(content: string, fileName = ''): ShellScriptLanguage {
+  const normalizedName = fileName.trim().toLowerCase()
+  if (/\.ps1$/.test(normalizedName)) return 'powershell'
+  if (/\.(?:cmd|bat)$/.test(normalizedName)) return 'cmd'
+  if (/\.(?:bash|bashrc)$/.test(normalizedName)) return 'bash'
+
+  const source = content.replace(/\r\n/g, '\n')
+  const firstLine = source.split('\n', 1)[0]?.trim() ?? ''
+  if (/^#!.*\b(?:powershell|pwsh)(?:\s|$)/i.test(firstLine)) return 'powershell'
+  if (/^#!.*\b(?:bash)(?:\s|$)/i.test(firstLine)) return 'bash'
+  if (/^#!.*\b(?:sh|zsh|fish|ksh)(?:\s|$)/i.test(firstLine)) return 'shell'
+
+  if (
+    /^\s*@echo\s+off\b/im.test(source) ||
+    /^\s*(?:setlocal|endlocal|goto|call|rem)\b/im.test(source) ||
+    /%(?:[A-Za-z_][\w]*|[0-9*])%/.test(source)
+  ) return 'cmd'
+
+  if (
+    /^\s*#requires\b/im.test(source) ||
+    /\$(?:env|global|script|local|private):[A-Za-z_][\w]*/i.test(source) ||
+    /\[(?:CmdletBinding|Parameter|ValidateSet|switch|string|int|bool|array|hashtable)\b/i.test(source) ||
+    /\b(?:Add|Clear|Connect|ConvertFrom|ConvertTo|Copy|Disable|Disconnect|Enable|Enter|Exit|Export|Find|Format|ForEach|Get|Import|Install|Invoke|Join|Measure|Move|New|Out|Read|Receive|Register|Remove|Rename|Restart|Select|Send|Set|Sort|Split|Start|Stop|Test|Uninstall|Unregister|Update|Wait|Where|Write)-[A-Z][A-Za-z0-9-]*\b/i.test(source) ||
+    /\b(?:param|process|begin|end)\s*\(/i.test(source)
+  ) return 'powershell'
+
+  if (
+    /^\s*(?:export|source|declare|local|readonly)\s+/m.test(source) ||
+    /\[\[|\]\]/.test(source) ||
+    /\b(?:if|for|while|until|case)\b[^\n]*(?:;\s*)?\b(?:then|do|in)\b/.test(source) ||
+    /^\s*(?:fi|done|esac)\s*$/m.test(source) ||
+    /\bfunction\s+[A-Za-z_][\w]*\s*(?:\(\))?\s*\{/.test(source)
+  ) return 'bash'
+
+  return 'shell'
 }
 
 export function codeBlockLabel(language: string, content = '') {

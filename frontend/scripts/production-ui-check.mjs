@@ -1496,6 +1496,20 @@ assert(
 )
 
 assert(
+  shellCommand.includes('export function detectShellScriptLanguage') &&
+    shellCommand.includes(`ShellScriptLanguage = 'bash' | 'powershell' | 'cmd' | 'shell'`) &&
+    scriptPanel.includes('bashTokenPattern') &&
+    scriptPanel.includes('powershellTokenPattern') &&
+    scriptPanel.includes('cmdTokenPattern') &&
+    scriptPanel.includes('highlightShellLine(line, language)') &&
+    !scriptPanel.includes('script-language-badge') &&
+    styles.includes('.script-editor-shell .script-code-overlay') &&
+    styles.includes('display: block') &&
+    styles.includes('-webkit-text-fill-color: transparent'),
+  'Script editors must use auto-detected Bash, PowerShell, and CMD syntax highlighting without adding language badges to the toolbar.'
+)
+
+assert(
   scriptReadiness.includes('analyzeScriptReadiness') &&
     scriptReadiness.includes("'empty-value' | 'todo' | 'placeholder'") &&
     scriptReadiness.includes('EMPTY_ASSIGNMENT_PATTERN') &&

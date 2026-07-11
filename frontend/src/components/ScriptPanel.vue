@@ -21,7 +21,12 @@ import {
   saveUpdateScript
 } from '../lib/tauri'
 import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
-import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
+import {
+  codeBlockLabel,
+  detectShellScriptLanguage,
+  shellCommandFromCodeBlock,
+  type ShellScriptLanguage
+} from '../lib/shellCommand'
 import ContextMenu from './ContextMenu.vue'
 import UiIcon from './UiIcon.vue'
 
@@ -146,10 +151,10 @@ const scriptPreviewOpen = computed(() => scriptPreviewSource.value !== '')
 const expandedScriptTitle = computed(() => scriptPreviewSource.value === 'selected' ? selectedScript.value?.name || '脚本预览' : '脚本预览')
 const expandedScriptContent = computed(() => scriptPreviewSource.value === 'selected' ? selectedScriptContent.value : draftScriptContent.value)
 const expandedScriptLineNumbers = computed(() => lineNumbersForScript(expandedScriptContent.value))
-const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value))
-const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value))
-const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value))
 const draftSavedScript = computed(() => scripts.value.find((script) => script.id === draftScriptId.value))
+const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value, draftSavedScript.value?.name))
+const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value, selectedScript.value?.name))
+const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value, expandedScriptTitle.value))
 const draftScriptTitle = computed(() => draftSavedScript.value?.name || '未命名脚本')
 const draftScriptDirty = computed(() => {
   if (!hasDraftScript.value) return false
@@ -413,8 +418,9 @@ function lineNumbersForScript(content: string) {
   return Array.from({ length: lineCount }, (_, index) => String(index + 1)).join('\n')
 }
 
-function highlightShellScript(content: string) {
-  return content.split('\n').map((line) => highlightShellLine(line) || ' ').join('\n')
+function highlightShellScript(content: string, fileName = '') {
+  const language = detectShellScriptLanguage(content, fileName)
+  return content.split('\n').map((line) => highlightShellLine(line, language) || ' ').join('\n')
 }
 
 function focusExpandedReadinessIssue(line: number) {
@@ -475,8 +481,17 @@ function focusSelectedReadinessIssue(line: number) {
   syncScriptEditorScroll({ target: editor } as unknown as Event, selectedScriptLineRail.value, selectedScriptHighlight.value)
 }
 
-function highlightShellLine(line: string) {
-  const tokenPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|#[^\n]*|\$\{?[A-Za-z_][\w]*\}?|\b(?:sudo|apt|apt-get|yum|dnf|pacman|brew|systemctl|service|docker|kubectl|rm|cp|mv|sed|awk|grep|find|chmod|chown|curl|wget|echo|cat|mkdir|touch|tar|ssh|scp|rsync|if|then|else|fi|for|do|done|while|case|esac|function|export|exit|return)\b|&&|\|\||[|;&<>])/g
+const bashTokenPattern = /(\x22(?:\\.|[^\x22\\])*\x22|'(?:\\.|[^'\\])*'|#[^\n]*|\$(?:\{[^}\n]+\}|[A-Za-z_][\w]*|[0-9@*#?$!-])|\b[A-Za-z_][\w]*(?=\s*\(\s*\)\s*\{)|\b(?:sudo|apt|apt-get|yum|dnf|pacman|brew|systemctl|service|docker|podman|kubectl|helm|rm|cp|mv|sed|awk|grep|find|chmod|chown|curl|wget|echo|printf|read|set|test|cat|mkdir|touch|tar|ssh|scp|rsync|if|then|elif|else|fi|for|in|do|done|while|until|case|esac|select|function|export|source|local|readonly|declare|unset|shift|trap|exit|return|break|continue)\b|&&|\|\||<<|>>|[|;&<>])/g
+const powershellTokenPattern = /(\x22(?:\\.|[^\x22\\])*\x22|'(?:''|[^'])*'|#[^\n]*|\$(?:\{[^}\n]+\}|(?:env|global|script|local|private):[A-Za-z_][\w]*|[A-Za-z_?][\w?]*|[_^$])|\b(?:Add|Clear|Connect|ConvertFrom|ConvertTo|Copy|Disable|Disconnect|Enable|Enter|Exit|Export|Find|Format|ForEach|Get|Import|Install|Invoke|Join|Measure|Move|New|Out|Read|Receive|Register|Remove|Rename|Restart|Select|Send|Set|Sort|Split|Start|Stop|Test|Uninstall|Unregister|Update|Wait|Where|Write)-[A-Z][A-Za-z0-9-]*\b|\b(?:function|filter|param|begin|process|end|if|elseif|else|foreach|for|while|do|switch|try|catch|finally|throw|return|break|continue|class|enum|using)\b|-(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split|join|is|isnot|as|and|or|xor|not)\b|&&|\|\||[|;&<>])/gi
+const cmdTokenPattern = /(\x22(?:[^\x22]|\x22\x22)*\x22|(?:^|\s)(?:rem\b.*|::.*)$|%(?:[A-Za-z_][\w]*|[0-9*])%|![A-Za-z_][\w]*!|\b(?:echo|set|setlocal|endlocal|if|else|for|in|do|call|goto|shift|exit|start|title|color|copy|move|del|erase|type|dir|mkdir|md|rmdir|rd|pushd|popd|tasklist|taskkill|where|find|findstr)\b|&&|\|\||>>|[|&<>])/gi
+
+function highlightShellLine(line: string, language: ShellScriptLanguage) {
+  const tokenPattern = language === 'powershell'
+    ? powershellTokenPattern
+    : language === 'cmd'
+      ? cmdTokenPattern
+      : bashTokenPattern
+  tokenPattern.lastIndex = 0
   let cursor = 0
   let html = ''
   let match: RegExpExecArray | null
@@ -491,6 +506,9 @@ function highlightShellLine(line: string) {
 
 function wrapShellToken(token: string) {
   const escaped = escapeHtml(token)
+  if (/^\s*(?:rem\b|::)/i.test(token)) return "<span class='shell-token comment'>" + escaped + '</span>'
+  if (/^%[^%]+%$/.test(token) || /^![^!]+!$/.test(token)) return "<span class='shell-token variable'>" + escaped + '</span>'
+  if (/^-(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split|join|is|isnot|as|and|or|xor|not)$/i.test(token)) return "<span class='shell-token operator'>" + escaped + '</span>'
   if (token.startsWith('#')) return `<span class="shell-token comment">${escaped}</span>`
   if (token.startsWith('"') || token.startsWith("'")) return `<span class="shell-token string">${escaped}</span>`
   if (token.startsWith('$')) return `<span class="shell-token variable">${escaped}</span>`

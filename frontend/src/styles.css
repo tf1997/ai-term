@@ -12000,7 +12000,7 @@ button.script-readiness-status:hover {
 
 /* Keep the transparent textarea and visible syntax layer pixel-aligned. */
 .script-editor-shell .script-code-overlay,
-.script-editor-shell textarea {
+:root .script-editor-shell textarea {
   box-sizing: border-box;
   margin: 0;
   border: 0;
@@ -12030,32 +12030,34 @@ button.script-readiness-status:hover {
   line-height: inherit;
 }
 
-/* Editing uses one native text layer so glyphs and caret cannot diverge. */
+/* The textarea owns input while the synchronized layer renders syntax colors. */
 .script-editor-shell .script-code-overlay {
-  display: none;
+  z-index: 0;
+  display: block;
 }
 
 .script-editor-shell textarea {
-  color: #d9ecf3 !important;
-  -webkit-text-fill-color: #d9ecf3;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
   caret-color: #8be8bb;
 }
 
 .script-editor-shell textarea::selection {
-  color: #f8fafc;
-  -webkit-text-fill-color: #f8fafc;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
   background: rgba(16, 185, 129, .3);
 }
 
 .app-shell.theme-light .script-editor-shell textarea {
-  color: #172033 !important;
-  -webkit-text-fill-color: #172033;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
   caret-color: #087f5b;
 }
 
 .app-shell.theme-light .script-editor-shell textarea::selection {
-  color: #0f172a;
-  -webkit-text-fill-color: #0f172a;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
   background: rgba(16, 185, 129, .2);
 }
 
@@ -12124,7 +12126,8 @@ button.script-readiness-status:hover {
 }
 
 .script-expanded-editor .script-line-rail,
-.script-expanded-editor textarea {
+.script-expanded-editor .script-code-overlay,
+:root .script-expanded-editor textarea {
   padding-top: 10px;
   padding-bottom: 24px;
   font-size: 12px;
@@ -12135,7 +12138,8 @@ button.script-readiness-status:hover {
   padding-inline: 8px;
 }
 
-.script-expanded-editor textarea {
+.script-expanded-editor .script-code-overlay,
+:root .script-expanded-editor textarea {
   padding-left: 10px;
   padding-right: 24px;
 }
