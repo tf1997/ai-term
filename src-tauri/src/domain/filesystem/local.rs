@@ -30,6 +30,21 @@ pub fn home_directory() -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("failed to resolve user home directory"))
 }
 
+pub fn root_directories() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        return ('A'..='Z')
+            .map(|letter| format!("{letter}:\\"))
+            .filter(|path| Path::new(path).is_dir())
+            .collect();
+    }
+
+    #[cfg(not(windows))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
 pub fn open_path(path: &str) -> Result<()> {
     let home =
         home_path().ok_or_else(|| anyhow::anyhow!("failed to resolve user home directory"))?;

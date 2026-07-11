@@ -247,6 +247,10 @@ export function localHomeDirectory() {
   return invoke<string>('local_home_directory')
 }
 
+export function localListRoots() {
+  return invoke<string[]>('local_list_roots')
+}
+
 export function localListDirectory(path: string) {
   return invoke<LocalDirectoryResponse>('local_list_directory', { path })
 }

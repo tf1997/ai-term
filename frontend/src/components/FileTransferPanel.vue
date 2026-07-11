@@ -1,8 +1,9 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   cancelTask,
   localHomeDirectory,
+  localListRoots,
   localListDirectory,
   localOpenPath,
   onSftpTransferProgress,
@@ -93,6 +94,7 @@ interface RemoteDirectoryCacheEntry {
 
 interface LoadDirectoryOptions {
   force?: boolean
+  recordHistory?: boolean
 }
 
 type TransferDirection = 'download' | 'upload'
@@ -144,6 +146,11 @@ const pathDraft = ref('.')
 const localPath = ref('')
 const localPathDraft = ref('')
 const localHome = ref('')
+const localRoots = ref<string[]>([])
+const remotePathHistory = ref<string[]>([])
+const remotePathHistoryIndex = ref(-1)
+const localPathHistory = ref<string[]>([])
+const localPathHistoryIndex = ref(-1)
 const transferMode = ref<'sftp' | 'terminal'>('sftp')
 const terminalRemotePath = ref('')
 const entries = ref<SftpFileEntry[]>([])
@@ -207,8 +214,7 @@ const sftpHeaderSummary = computed(() => {
   const target = selectedTarget.value
     ? `${selectedTarget.value.username || 'user'}@${selectedTarget.value.host}`
     : props.profile?.name || props.connectionId
-  const count = loading.value ? '读取中' : `${sortedEntries.value.length} 项`
-  return `${target} · 远端 ${count}`
+  return target
 })
 const localPaneSummary = computed(() => {
   if (localLoading.value) return '加载中'
@@ -222,12 +228,75 @@ const remotePaneSummary = computed(() => {
   return `${sortedEntries.value.length} 项${selected}`
 })
 
+const localBreadcrumbs = computed(() => buildLocalBreadcrumbs(localPath.value || localHome.value))
+const remoteBreadcrumbs = computed(() => buildRemoteBreadcrumbs(currentPath.value))
+const localCrumbNav = ref<HTMLElement | null>(null)
+const remoteCrumbNav = ref<HTMLElement | null>(null)
+
+watch(localBreadcrumbs, () => scrollCrumbsToEnd(localCrumbNav))
+watch(remoteBreadcrumbs, () => scrollCrumbsToEnd(remoteCrumbNav))
+
+function scrollCrumbsToEnd(nav: { value: HTMLElement | null }) {
+  void nextTick(() => {
+    if (nav.value) nav.value.scrollLeft = nav.value.scrollWidth
+  })
+}
+
+function buildRemoteBreadcrumbs(path: string) {
+  if (!path || path === '.') return [{ label: '~', path: '.' }]
+  const parts = path.split('/').filter(Boolean)
+  const breadcrumbs = [{ label: '/', path: '/' }]
+  parts.forEach((part, index) => {
+    breadcrumbs.push({ label: part, path: `/${parts.slice(0, index + 1).join('/')}` })
+  })
+  return breadcrumbs
+}
+
+function buildLocalBreadcrumbs(path: string) {
+  if (!path) return []
+  const normalized = path.replace(/\\/g, '/')
+  const driveMatch = normalized.match(/^([A-Za-z]:)(?:\/|$)/)
+  const root = driveMatch ? `${driveMatch[1]}\\` : '/'
+  const remainder = driveMatch ? normalized.slice(driveMatch[0].length) : normalized.replace(/^\/+/, '')
+  const parts = remainder.split('/').filter(Boolean)
+  const breadcrumbs = [{ label: root, path: root }]
+  parts.forEach((part, index) => {
+    const joined = parts.slice(0, index + 1).join(driveMatch ? '\\' : '/')
+    breadcrumbs.push({ label: part, path: driveMatch ? `${root}${joined}` : `/${joined}` })
+  })
+  return breadcrumbs
+}
+
 function transferStateKey(terminalId = props.terminalId, connectionId = props.connectionId) {
   return `${terminalId || 'terminal'}:${connectionId || 'local'}`
 }
 
 function normalizeRemoteDirectoryPath(path: string) {
   return path.trim() || '.'
+}
+
+function resolveRemoteDirectoryPath(path: string) {
+  const requested = path.trim()
+  if (!requested || requested === '.' || requested === '~') return requested || currentPath.value || '.'
+  if (requested.startsWith('~/')) return `./${requested.slice(2)}`
+  if (requested.startsWith('/') || requested.startsWith('./')) return requested
+  const base = currentPath.value && currentPath.value !== '.' ? currentPath.value.replace(/\/+$/, '') : '.'
+  return `${base}/${requested}`
+}
+
+function resolveLocalDirectoryPath(path: string) {
+  const requested = path.trim()
+  if (!requested) return localPath.value || localHome.value
+  if (requested === '~') return localHome.value
+  if (requested.startsWith('~/') || requested.startsWith('~\\')) {
+    const suffix = requested.slice(2)
+    const separator = localHome.value.includes('\\') ? '\\' : '/'
+    return `${localHome.value.replace(/[\\/]+$/, '')}${separator}${suffix}`
+  }
+  if (/^[A-Za-z]:[\\/]/.test(requested) || requested.startsWith('\\') || requested.startsWith('/')) return requested
+  const base = (localPath.value || localHome.value).replace(/[\\/]+$/, '')
+  const separator = base.includes('\\') ? '\\' : '/'
+  return `${base}${separator}${requested}`
 }
 
 function remoteTargetCacheKey() {
@@ -244,12 +313,25 @@ function cachedRemoteDirectory(path: string, targetKey = remoteTargetCacheKey())
   return remoteDirectoryCache.value[remoteDirectoryCacheKey(path, targetKey)]
 }
 
-function applyRemoteDirectoryCache(cached: RemoteDirectoryCacheEntry) {
+function applyRemoteDirectoryCache(cached: RemoteDirectoryCacheEntry, recordHistory = true) {
   currentPath.value = cached.path
   pathDraft.value = cached.path
   entries.value = [...cached.entries]
   selectedRemoteEntry.value = null
-  status.value = `${cached.entries.length} 项`
+  if (recordHistory) rememberRemotePath(cached.path)
+  status.value = ''
+}
+
+function rememberRemotePath(path: string) {
+  if (remotePathHistory.value[remotePathHistoryIndex.value] === path) return
+  remotePathHistory.value = [...remotePathHistory.value.slice(0, remotePathHistoryIndex.value + 1), path].slice(-50)
+  remotePathHistoryIndex.value = remotePathHistory.value.length - 1
+}
+
+function rememberLocalPath(path: string) {
+  if (localPathHistory.value[localPathHistoryIndex.value] === path) return
+  localPathHistory.value = [...localPathHistory.value.slice(0, localPathHistoryIndex.value + 1), path].slice(-50)
+  localPathHistoryIndex.value = localPathHistory.value.length - 1
 }
 
 function rememberRemoteDirectory(
@@ -312,6 +394,8 @@ function restoreTransferState(key = transferStateKey()) {
   loading.value = false
   autoTerminalProbeAttempted.value = false
   status.value = cached.status
+  remotePathHistory.value = [cached.currentPath]
+  remotePathHistoryIndex.value = 0
   error.value = ''
   return true
 }
@@ -331,6 +415,8 @@ function resetRemoteBrowserState() {
   loading.value = false
   autoTerminalProbeAttempted.value = false
   status.value = ''
+  remotePathHistory.value = []
+  remotePathHistoryIndex.value = -1
   error.value = ''
 }
 
@@ -345,6 +431,7 @@ watch(
 
 onMounted(() => {
   void loadLocalHome()
+  void loadLocalRoots()
   void attachNativeFileDropEvents()
 })
 
@@ -385,14 +472,14 @@ watch(
 
 async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
   if (!remoteReady.value) return
-  const requestedPath = normalizeRemoteDirectoryPath(path)
+  const requestedPath = normalizeRemoteDirectoryPath(resolveRemoteDirectoryPath(path))
   const targetKey = remoteTargetCacheKey()
   const cacheKey = remoteDirectoryCacheKey(requestedPath, targetKey)
   const cached = cachedRemoteDirectory(requestedPath, targetKey)
   const cacheFresh = cached && Date.now() - cached.cachedAt < REMOTE_DIRECTORY_CACHE_TTL_MS
 
   if (cached && !options.force) {
-    applyRemoteDirectoryCache(cached)
+    applyRemoteDirectoryCache(cached, options.recordHistory !== false)
     if (cacheFresh) return
     status.value = `${cached.entries.length} 项 · 正在刷新`
   }
@@ -418,7 +505,8 @@ async function loadDirectory(path = currentPath.value, options: LoadDirectoryOpt
     pathDraft.value = response.path
     entries.value = response.entries
     selectedRemoteEntry.value = null
-    status.value = `${response.entries.length} 项`
+    if (options.recordHistory !== false) rememberRemotePath(response.path)
+    status.value = ''
     rememberRemoteDirectory(requestedPath, response.path, response.entries, targetKey)
   })()
   remoteDirectoryRequests.set(cacheKey, request)
@@ -521,16 +609,17 @@ function maybeAutoProbeCurrentTerminalSftp(err: unknown) {
   return true
 }
 
-async function loadLocalDirectory(path = localPath.value || localHome.value) {
+async function loadLocalDirectory(path = localPath.value || localHome.value, recordHistory = true) {
   localLoading.value = true
   error.value = ''
   try {
-    const response = await localListDirectory(path)
+    const response = await localListDirectory(resolveLocalDirectoryPath(path))
     localHome.value = response.home
     localPath.value = response.path
     localPathDraft.value = response.path
     localEntries.value = response.entries
     selectedLocalEntry.value = null
+    if (recordHistory) rememberLocalPath(response.path)
   } catch (err) {
     error.value = formatError(err)
   } finally {
@@ -769,6 +858,58 @@ function goParent() {
 function goLocalParent() {
   if (!localPath.value || localPath.value === '/') return
   void loadLocalDirectory(localParentPath(localPath.value) || '/')
+}
+
+async function loadLocalRoots() {
+  try {
+    localRoots.value = await localListRoots()
+  } catch {
+    localRoots.value = []
+  }
+}
+
+function selectLocalRoot(event: Event) {
+  const path = (event.target as HTMLSelectElement).value
+  if (path) void loadLocalDirectory(path)
+}
+
+function rootLabel(root: string) {
+  return root.replace(/[\\/]+$/, '') || '/'
+}
+
+function isHiddenEntry(name: string) {
+  const lowered = name.toLowerCase()
+  return name.startsWith('.') || name.startsWith('$') || lowered === 'system volume information'
+}
+
+const currentLocalRoot = computed(() => {
+  const drive = localPath.value.match(/^[A-Za-z]:[\\/]/)?.[0]?.slice(0, 2)
+  if (drive) return `${drive}\\`
+  return localRoots.value.includes('/') ? '/' : ''
+})
+
+function goRemoteBack() {
+  if (remotePathHistoryIndex.value <= 0) return
+  remotePathHistoryIndex.value -= 1
+  void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
+}
+
+function goRemoteForward() {
+  if (remotePathHistoryIndex.value >= remotePathHistory.value.length - 1) return
+  remotePathHistoryIndex.value += 1
+  void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
+}
+
+function goLocalBack() {
+  if (localPathHistoryIndex.value <= 0) return
+  localPathHistoryIndex.value -= 1
+  void loadLocalDirectory(localPathHistory.value[localPathHistoryIndex.value], false)
+}
+
+function goLocalForward() {
+  if (localPathHistoryIndex.value >= localPathHistory.value.length - 1) return
+  localPathHistoryIndex.value += 1
+  void loadLocalDirectory(localPathHistory.value[localPathHistoryIndex.value], false)
 }
 
 function localParentPath(path: string) {
@@ -1395,7 +1536,13 @@ function formatLocalModified(value: string) {
   if (!value) return '-'
   const seconds = Number(value)
   if (!Number.isFinite(seconds) || seconds <= 0) return value
-  return new Date(seconds * 1000).toLocaleString()
+  return new Date(seconds * 1000).toLocaleString([], {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 function formatRemoteModified(value: string) {
@@ -1678,7 +1825,14 @@ function shellQuote(value: string) {
       </div>
     </div>
 
-    <div v-if="status || error || activeTask || lastTransfer" class="sftp-feedback" :class="{ error: Boolean(error) }">
+    <div
+      v-if="status || error || activeTask || lastTransfer"
+      class="sftp-feedback"
+      :class="{
+        error: Boolean(error),
+        complete: !error && !activeTransferTask && Boolean(lastTransfer)
+      }"
+    >
       <p v-if="error">{{ error }}</p>
       <template v-else-if="activeTransferTask">
         <div class="transfer-task-head">
@@ -1782,10 +1936,18 @@ function shellQuote(value: string) {
               <strong>本地</strong>
               <span>{{ localPaneSummary }}</span>
             </div>
-            <span class="transfer-pane-path" :title="localPath || localHome">{{ localPath || localHome }}</span>
+            <nav ref="localCrumbNav" class="transfer-pane-path" :title="localPath || localHome" aria-label="本地路径导航">
+              <button v-for="crumb in localBreadcrumbs" :key="crumb.path" type="button" :title="crumb.path" @click="loadLocalDirectory(crumb.path)">{{ crumb.label }}</button>
+            </nav>
           </div>
           <div class="local-pathbar">
+            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="localLoading || localPathHistoryIndex <= 0" @click="goLocalBack"><UiIcon name="arrow-left" /></button>
+            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="localLoading || localPathHistoryIndex >= localPathHistory.length - 1" @click="goLocalForward"><UiIcon name="arrow-right" /></button>
             <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="localLoading" @click="goLocalParent"><UiIcon name="arrow-up" /></button>
+            <select class="root-directory-select" :value="currentLocalRoot" :disabled="localLoading || localRoots.length === 0" aria-label="切换根目录" title="切换根目录" @change="selectLocalRoot">
+              <option value="" disabled>根目录</option>
+              <option v-for="root in localRoots" :key="root" :value="root">{{ rootLabel(root) }}</option>
+            </select>
             <input v-model="localPathDraft" :disabled="localLoading" placeholder="用户目录" @keydown.enter="loadLocalDirectory(localPathDraft)" />
             <button type="button" :disabled="localLoading" @click="loadLocalDirectory(localPathDraft)">打开</button>
             <button type="button" :disabled="localLoading || !localHome" @click="loadLocalDirectory(localHome)">用户目录</button>
@@ -1797,7 +1959,7 @@ function shellQuote(value: string) {
               v-for="entry in sortedLocalEntries"
               :key="entry.path"
               class="file-row"
-              :class="{ directory: entry.isDir, active: selectedLocalEntry?.path === entry.path }"
+              :class="{ directory: entry.isDir, active: selectedLocalEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
               @click="selectLocalEntry(entry)"
               @dblclick="openLocalEntry(entry)"
               @contextmenu.prevent.stop="openLocalContextMenu($event, entry)"
@@ -1807,7 +1969,7 @@ function shellQuote(value: string) {
                 <div class="file-copy">
                   <strong :title="entry.name">{{ entry.name }}</strong>
                   <span class="file-meta">
-                    <span>{{ entry.isDir ? '目录' : formatSize(entry.size) }}</span>
+                    <span v-if="!entry.isDir">{{ formatSize(entry.size) }}</span>
                     <span>{{ formatLocalModified(entry.modified) }}</span>
                   </span>
                 </div>
@@ -1834,12 +1996,17 @@ function shellQuote(value: string) {
               <strong>远端</strong>
               <span>{{ remotePaneSummary }}</span>
             </div>
-            <span class="transfer-pane-path" :title="currentPath">{{ currentPath }}</span>
+            <nav ref="remoteCrumbNav" class="transfer-pane-path" :title="currentPath" aria-label="远端路径导航">
+              <button v-for="crumb in remoteBreadcrumbs" :key="crumb.path" type="button" :title="crumb.path" @click="loadDirectory(crumb.path)">{{ crumb.label }}</button>
+            </nav>
           </div>
           <div class="sftp-pathbar">
+            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="!remoteReady || loading || remotePathHistoryIndex <= 0" @click="goRemoteBack"><UiIcon name="arrow-left" /></button>
+            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="!remoteReady || loading || remotePathHistoryIndex >= remotePathHistory.length - 1" @click="goRemoteForward"><UiIcon name="arrow-right" /></button>
             <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || loading" @click="goParent"><UiIcon name="arrow-up" /></button>
             <input v-model="pathDraft" :disabled="!remoteReady || loading" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
             <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory(pathDraft)">打开</button>
+            <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory('.')">主目录</button>
           </div>
           <div class="file-list">
             <div v-if="remoteDropActive" class="remote-drop-overlay" aria-live="polite">
@@ -1854,7 +2021,7 @@ function shellQuote(value: string) {
               v-for="entry in sortedEntries"
               :key="entry.path"
               class="file-row"
-              :class="{ directory: entry.isDir, active: selectedRemoteEntry?.path === entry.path }"
+              :class="{ directory: entry.isDir, active: selectedRemoteEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
               @click="selectRemoteEntry(entry)"
               @dblclick="openEntry(entry)"
               @contextmenu.prevent.stop="openRemoteContextMenu($event, entry)"
@@ -1865,7 +2032,7 @@ function shellQuote(value: string) {
                   <strong :title="entry.name">{{ entry.name }}</strong>
                   <span class="file-meta">
                     <span>{{ entry.permissions || '权限未知' }}</span>
-                    <span>{{ entry.isDir ? '目录' : formatSize(entry.size) }}</span>
+                    <span v-if="!entry.isDir">{{ formatSize(entry.size) }}</span>
                     <span>{{ formatRemoteModified(entry.modified) }}</span>
                   </span>
                 </div>

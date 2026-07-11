@@ -196,7 +196,7 @@ function scriptRiskDisplayLabel(status: ReturnType<typeof scriptEditorRiskStatus
 }
 
 function editorSaveStatus(hasContent: boolean, dirty: boolean) {
-  if (!hasContent) return '空白'
+  if (!hasContent) return ''
   if (saveState.value === 'saving') return '保存中'
   return dirty ? '未保存' : '已保存'
 }
@@ -1552,11 +1552,13 @@ function nowText() {
               <strong>{{ selectedScript.name }}</strong>
               <span v-if="selectedScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
               <span
+                v-if="hasSelectedScriptContent"
                 class="script-readiness-status"
                 :class="`readiness-${selectedScriptReadiness.level}`"
                 :title="selectedScriptReadiness.message"
               >{{ selectedScriptReadiness.label }}</span>
               <span
+                v-if="hasSelectedScriptContent"
                 class="script-editor-risk"
                 :class="`risk-${selectedScriptRiskStatus.level}`"
                 :title="selectedScriptRiskStatus.message"
@@ -1598,7 +1600,7 @@ function nowText() {
             <span>Shell &middot; UTF-8 &middot; LF</span>
             <span>行 {{ selectedEditorCursor.line }}，列 {{ selectedEditorCursor.column }}</span>
             <span>{{ selectedScriptContent.length }} 字符</span>
-            <span :class="{ dirty: selectedScriptDirty }">{{ selectedSaveStatus }}</span>
+            <span v-if="selectedSaveStatus" :class="{ dirty: selectedScriptDirty }">{{ selectedSaveStatus }}</span>
           </div>
         </div>
       </section>
@@ -1610,7 +1612,7 @@ function nowText() {
         <span class="record-dot" :class="{ active: props.recording.isRecording }" />
         <div>
           <strong>{{ props.recording.isRecording ? '正在录制操作上下文' : recordingHasData ? '录制上下文已就绪' : '可录制操作，也可直接粘贴脚本' }}</strong>
-          <small>{{ recordedCommands.length }} 条命令 &middot; {{ recordedOutput.length }} 字符输出{{ props.recording.isRecording ? ' · 录制中' : '' }}</small>
+          <small v-if="props.recording.isRecording || recordingHasData">{{ recordedCommands.length }} 条命令 &middot; {{ recordedOutput.length }} 字符输出{{ props.recording.isRecording ? ' · 录制中' : '' }}</small>
         </div>
       </div>
 
@@ -1629,11 +1631,13 @@ function nowText() {
               <strong>{{ draftScriptTitle }}</strong>
               <span v-if="draftScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
               <span
+                v-if="hasDraftScript"
                 class="script-readiness-status"
                 :class="`readiness-${draftScriptReadiness.level}`"
                 :title="draftScriptReadiness.message"
               >{{ draftScriptReadiness.label }}</span>
               <span
+                v-if="hasDraftScript"
                 class="script-editor-risk"
                 :class="`risk-${draftScriptRiskStatus.level}`"
                 :title="draftScriptRiskStatus.message"
@@ -1669,12 +1673,15 @@ function nowText() {
               @select="updateDraftEditorCursor"
               @scroll="syncDraftLineRail"
             />
+            <div v-if="!hasDraftScript && !props.recording.isRecording" class="script-empty-guide">
+              <small>可直接粘贴、编写脚本，或在下方描述让 AI 生成</small>
+            </div>
           </div>
           <div class="script-editor-statusbar">
             <span>Shell &middot; UTF-8 &middot; LF</span>
             <span>行 {{ draftEditorCursor.line }}，列 {{ draftEditorCursor.column }}</span>
             <span>{{ draftScriptContent.length }} 字符</span>
-            <span :class="{ dirty: draftScriptDirty }">{{ draftSaveStatus }}</span>
+            <span v-if="draftSaveStatus" :class="{ dirty: draftScriptDirty }">{{ draftSaveStatus }}</span>
           </div>
         </section>
       </div>
@@ -1768,7 +1775,7 @@ function nowText() {
         <textarea
           v-model="askText"
           rows="2"
-          placeholder="描述你想修改或优化的脚本功能..."
+          :placeholder="hasDraftScript ? '描述你想修改或优化的脚本功能...' : '描述你想生成的脚本，例如：备份 /var/log 并压缩...'"
           aria-label="Ask AI to generate script"
           @keydown="handleComposerKeydown"
         />

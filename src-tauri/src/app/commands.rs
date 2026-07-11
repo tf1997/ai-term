@@ -27,7 +27,7 @@ use crate::domain::connection::sftp::{
 };
 use crate::domain::filesystem::local::{
     home_directory, list_directory as list_local_directory_impl, open_path as open_local_path_impl,
-    LocalDirectoryResponse,
+    root_directories, LocalDirectoryResponse,
 };
 use crate::domain::terminal::local::spawn_local_terminal;
 use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
@@ -504,6 +504,11 @@ pub async fn delete_update_script(id: String, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn local_home_directory() -> Result<String, String> {
     home_directory().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn local_list_roots() -> Vec<String> {
+    root_directories()
 }
 
 #[tauri::command]

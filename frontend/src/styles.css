@@ -9517,20 +9517,166 @@ code {
   background: #090e16;
 }
 
-/* Keep script toolbar actions compact instead of stretching labels equally. */
-.script-head .panel-actions {
-  grid-template-columns: 32px max-content minmax(106px, 1fr) 32px;
+/* Compact SFTP workbench: prioritize file scanning and active transfers. */
+.sftp-panel-head {
+  gap: 8px;
 }
 
-.script-head .panel-actions > .text-button:nth-child(2) {
+.sftp-panel-head .panel-actions {
+  gap: 4px;
+}
+
+.sftp-panel-head .panel-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.transfer-target-strip .transfer-route-item {
+  padding: 6px 8px;
+}
+
+.transfer-pane {
+  grid-template-rows: 36px auto minmax(0, 1fr);
+}
+
+.transfer-pane-head {
+  padding: 0 8px;
+}
+
+.transfer-pane-path {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.transfer-pane-path::-webkit-scrollbar {
+  display: none;
+}
+
+.transfer-pane-path button {
+  flex: 0 0 auto;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #74849a;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  box-shadow: none;
+}
+
+.transfer-pane-path button + button::before {
+  content: '›';
+  margin-right: 5px;
+  color: #4f6076;
+}
+
+.transfer-pane-path button:hover:not(:disabled) {
+  border: 0;
+  background: rgba(86, 230, 163, .09);
+  color: #1b8f61;
+  box-shadow: none;
+  transform: none;
+}
+
+.local-pathbar {
+  grid-template-columns: repeat(3, 30px) minmax(72px, auto) minmax(0, 1fr) auto auto;
+  padding: 5px 8px;
+}
+
+.sftp-pathbar {
+  grid-template-columns: repeat(3, 30px) minmax(0, 1fr) auto auto;
+  padding: 5px 8px;
+}
+
+.root-directory-select {
   width: auto;
-  justify-self: start;
-  padding-inline: 10px;
+  min-width: 72px;
+  max-width: 112px;
+  height: 28px;
+  padding-block: 0;
+  padding-inline: 7px 24px;
+  line-height: 26px;
 }
 
-.script-head .record-action,
-.script-head .panel-actions > .danger {
-  justify-self: end;
+.file-row {
+  min-height: 46px;
+  padding: 6px 9px;
+}
+
+.file-main {
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.file-copy {
+  gap: 2px;
+}
+
+.file-type-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.file-type-icon .ui-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.file-actions {
+  opacity: .45;
+}
+
+.file-row.hidden-entry .file-type-icon,
+.file-row.hidden-entry .file-copy strong {
+  opacity: .5;
+}
+
+.file-row.hidden-entry.active .file-type-icon,
+.file-row.hidden-entry.active .file-copy strong {
+  opacity: 1;
+}
+
+.file-actions .icon-button {
+  width: 26px;
+  height: 26px;
+}
+
+.sftp-feedback.complete {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 10px;
+  padding: 6px 10px;
+}
+
+.sftp-feedback.complete .transfer-task-head {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.sftp-feedback.complete .transfer-progress {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 3px;
+  margin-top: 0;
+}
+
+.sftp-feedback.complete .transfer-task-stats,
+.sftp-feedback.complete .transfer-task-paths {
+  display: none;
+}
+
+.sftp-feedback.complete .transfer-task-actions {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: 0;
 }
 
 /* Keep script recording controls and the AI composer dimensionally stable. */
@@ -9555,6 +9701,43 @@ code {
   min-height: 50px;
   max-height: 112px;
   resize: none;
+}
+
+.script-recorder.idle {
+  opacity: .78;
+}
+
+.script-empty-guide {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 16px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.script-empty-guide small {
+  color: #5f6f84;
+  font-size: var(--font-xs);
+}
+
+.script-editor-tools .script-run-button:disabled {
+  border-color: #26303f;
+  background: transparent;
+  color: #5f6f84;
+  opacity: .8;
+}
+
+.theme-light .script-empty-guide small {
+  color: #8b98ab;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button:disabled {
+  border-color: #d4dde8;
+  background: transparent;
+  color: #9aa8ba;
 }
 .app-shell.theme-dark .script-risk-actions .text-button.danger {
   border-color: #be3b50;
@@ -11426,4 +11609,13 @@ body.workspace-resizing * {
 .app-shell.theme-dark .script-risk-actions {
   border-top-color: #293246;
   background: #090e16;
+}
+
+/* Script toolbar now nests primary buttons in .script-primary-actions; force flex so
+   legacy 4-column grid rules can never squeeze the group under the clear button. */
+.script-head .panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  grid-template-columns: none;
 }
