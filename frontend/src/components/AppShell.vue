@@ -130,8 +130,7 @@ const LOCAL_DEFAULT_SESSION_ID = 'local:default'
 const APP_VERSION = '0.1.0'
 const APP_CHANNEL = 'Stable'
 const APP_LICENSE = 'Apache-2.0'
-const APP_AUTHOR = 'tf1997'
-const APP_REPOSITORY = 'https://github.com/tf1997/ai-term'
+const APP_AUTHOR = 'tf1997 & gpt-5.5 & gpt-5.6-sol'
 const aboutSignals: AboutSignal[] = [
   { icon: 'terminal', label: 'Terminal Core', value: 'PTY / SSH' },
   { icon: 'ai', label: 'AI Runtime', value: 'Command / Script' },
@@ -1036,7 +1035,6 @@ async function copyAboutInfo() {
   const info = [
     `AI Term v${APP_VERSION}`,
     `Author: ${APP_AUTHOR}`,
-    `GitHub: ${APP_REPOSITORY}`,
     `Channel: ${APP_CHANNEL}`,
     `License: ${APP_LICENSE}`,
     `Theme: ${appTheme.value}`,
@@ -2128,12 +2126,8 @@ onBeforeUnmount(() => {
                 <span>{{ APP_CHANNEL }}</span>
                 <span>{{ APP_LICENSE }}</span>
               </div>
-              <div class="about-source" aria-label="作者与仓库">
-                <span>作者 {{ APP_AUTHOR }}</span>
-                <a :href="APP_REPOSITORY" target="_blank" rel="noreferrer">
-                  <UiIcon name="external-link" size="14" />
-                  <span>{{ APP_REPOSITORY }}</span>
-                </a>
+              <div class="about-source" aria-label="作者">
+                <span>Author {{ APP_AUTHOR }}</span>
               </div>
             </div>
             <div class="about-visual" aria-hidden="true">
