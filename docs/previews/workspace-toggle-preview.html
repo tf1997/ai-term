@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Term ???????</title>
+  <style>
+    :root {
+      --ink: #132238;
+      --muted: #718096;
+      --line: #d9e1e8;
+      --line-soft: #e9eef3;
+      --surface: #ffffff;
+      --canvas: #f4f7fa;
+      --terminal: #f8fafc;
+      --accent: #0d8f68;
+      --accent-soft: #e5f6ef;
+      --workspace-width: 390px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 980px;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+    }
+
+    button { font: inherit; }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 48px 224px minmax(0, 1fr);
+      background: var(--surface);
+    }
+
+    .rail {
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 0;
+      background: #fbfcfd;
+    }
+
+    .brand-mark,
+    .rail-button {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: white;
+      color: var(--muted);
+    }
+
+    .brand-mark {
+      border-color: #172238;
+      background: #172238;
+      color: #83e2bd;
+      font-family: Consolas, monospace;
+      font-weight: 700;
+    }
+
+    .rail-spacer { flex: 1; }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 16px 10px;
+      background: var(--surface);
+    }
+
+    .sidebar-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .new-button {
+      border: 0;
+      border-radius: 7px;
+      padding: 8px 13px;
+      color: white;
+      background: var(--accent);
+    }
+
+    .search {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 11px;
+      color: #9aa8b7;
+      font-size: 12px;
+      box-shadow: inset 0 1px 2px rgba(19, 34, 56, .03);
+    }
+
+    .connection {
+      margin-top: 18px;
+      padding: 8px 5px;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .connection strong { display: block; }
+    .connection span { color: #52677c; font-family: Consolas, monospace; }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 52px minmax(0, 1fr);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 0 10px;
+      background: white;
+    }
+
+    .session-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 34px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 0 14px;
+      color: var(--accent);
+      background: #f4fcf8;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .session-pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #9db2c6;
+    }
+
+    .workbench {
+      position: relative;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--workspace-width);
+      transition: grid-template-columns 220ms cubic-bezier(.2, .8, .2, 1);
+      background: var(--terminal);
+    }
+
+    .workbench.collapsed {
+      grid-template-columns: minmax(0, 1fr) 0px;
+    }
+
+    .terminal {
+      min-width: 0;
+      margin: 8px 0 8px 8px;
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr) 38px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px 0 0 8px;
+      background: var(--terminal);
+    }
+
+    .terminal-head,
+    .terminal-foot {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 0 12px;
+      background: white;
+      font-size: 12px;
+    }
+
+    .terminal-head { justify-content: space-between; }
+    .terminal-title { color: var(--accent); font-weight: 700; }
+    .terminal-title small { margin-left: 8px; color: var(--muted); font-family: Consolas, monospace; }
+
+    .terminal-actions { display: flex; gap: 5px; }
+    .terminal-actions span {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      color: var(--muted);
+      background: #fbfcfd;
+    }
+
+    .terminal-body {
+      padding: 18px;
+      color: #102240;
+      font: 13px/1.45 Consolas, "Courier New", monospace;
+    }
+
+    .terminal-body .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 15px;
+      margin-top: 14px;
+      border: 1px solid #075cff;
+      vertical-align: top;
+    }
+
+    .terminal-foot {
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      color: var(--muted);
+    }
+
+    .terminal-foot kbd {
+      border: 1px solid var(--line-soft);
+      border-radius: 5px;
+      padding: 3px 8px;
+      color: #4b6075;
+      background: white;
+      font-family: Consolas, monospace;
+    }
+
+    .toggle-rail {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      bottom: 8px;
+      z-index: 4;
+      width: 18px;
+      pointer-events: none;
+    }
+
+    .workspace-toggle {
+      position: absolute;
+      top: 50%;
+      right: 0;
+      width: 18px;
+      height: 82px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #aebdca;
+      border-radius: 7px;
+      color: #51677b;
+      background: white;
+      box-shadow: 0 4px 12px rgba(25, 44, 65, .12);
+      transform: translateY(-50%);
+      cursor: pointer;
+      transition: color 160ms ease, background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .workspace-toggle:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+      box-shadow: 0 6px 16px rgba(13, 143, 104, .16);
+    }
+
+    .workspace-toggle:focus-visible {
+      outline: 3px solid rgba(13, 143, 104, .22);
+      outline-offset: 2px;
+    }
+
+    .workspace-toggle svg {
+      width: 14px;
+      height: 14px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .workspace-toggle {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-50%) scale(.92);
+    }
+
+    .workbench.collapsed .toggle-rail {
+      pointer-events: auto;
+    }
+
+    .workbench.collapsed .workspace-toggle {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(-50%) scale(1);
+    }
+
+    .workbench.collapsed .workspace-toggle svg { transform: rotate(180deg); }
+
+    .workspace {
+      grid-column: 2;
+      min-width: 0;
+      margin: 8px 8px 8px 0;
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-left: 0;
+      border-radius: 0 8px 8px 0;
+      background: white;
+      opacity: 1;
+      transition: opacity 130ms ease;
+    }
+
+    .collapsed .terminal {
+      margin-right: 8px;
+      border-radius: 8px;
+    }
+
+    .collapsed .workspace {
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    .workspace-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 34px;
+      border-bottom: 1px solid var(--line);
+      background: white;
+    }
+
+    .workspace-tabs {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+    }
+
+    .workspace-tabs button {
+      border: 0;
+      border-right: 1px solid var(--line-soft);
+      color: #677a8d;
+      background: transparent;
+      font-size: 11px;
+    }
+
+    .workspace-tabs button.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+      box-shadow: inset 0 -2px var(--accent);
+      font-weight: 700;
+    }
+
+    .workspace-close {
+      width: 28px;
+      height: 28px;
+      align-self: center;
+      justify-self: center;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      color: #718096;
+      background: #fbfcfd;
+      cursor: pointer;
+    }
+
+    .workspace-close:hover {
+      border-color: #c4ced8;
+      color: #263b50;
+      background: #f1f4f7;
+    }
+
+    .workspace-body {
+      padding: 18px;
+      background: #f9fbfc;
+    }
+
+    .workspace-card {
+      max-width: 300px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      background: white;
+      box-shadow: 0 8px 24px rgba(27, 44, 66, .06);
+    }
+
+    .workspace-card strong { display: block; margin-bottom: 7px; font-size: 13px; }
+    .workspace-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+    .note {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      z-index: 10;
+      padding: 9px 14px;
+      border: 1px solid rgba(19, 34, 56, .1);
+      border-radius: 999px;
+      color: #40566a;
+      background: rgba(255, 255, 255, .94);
+      box-shadow: 0 8px 24px rgba(20, 36, 55, .12);
+      transform: translateX(-50%);
+      font-size: 12px;
+      backdrop-filter: blur(10px);
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="rail">
+      <div class="brand-mark">?_</div>
+      <button class="rail-button" aria-label="??">?</button>
+      <button class="rail-button" aria-label="??">?</button>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" aria-label="??">?</button>
+      <button class="rail-button" aria-label="??">i</button>
+    </aside>
+
+    <aside class="sidebar">
+      <div class="sidebar-head"><span>??</span><button class="new-button">? ??</button></div>
+      <div class="search">??????????</div>
+      <div class="connection"><strong>connection-1</strong><span>root@23.238.39.4</span></div>
+    </aside>
+
+    <section class="main">
+      <header class="topbar"><div class="session-pill">????</div></header>
+
+      <section id="workbench" class="workbench">
+        <article class="terminal">
+          <header class="terminal-head">
+            <div class="terminal-title">???? <small>localhost</small></div>
+            <div class="terminal-actions"><span>?</span><span>?</span><span>?</span><span>?</span></div>
+          </header>
+          <div class="terminal-body">
+            <div>No active shell.</div>
+            <div>Use New Local Shell to start a local terminal.</div>
+            <span class="cursor"></span>
+          </div>
+          <footer class="terminal-foot"><span>????</span><kbd>pwd</kbd><kbd>ls -la</kbd><kbd>df -h</kbd><kbd>free -m</kbd><kbd>git status</kbd></footer>
+        </article>
+
+        <div class="toggle-rail">
+          <button id="workspaceToggle" class="workspace-toggle" type="button" aria-expanded="true" aria-controls="workspace" title="?????">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
+        </div>
+
+        <aside id="workspace" class="workspace">
+          <div class="workspace-bar">
+            <nav class="workspace-tabs" aria-label="?????">
+              <button>??</button><button class="active">AI</button><button>??</button><button>SFTP</button>
+            </nav>
+            <button id="workspaceClose" class="workspace-close" type="button" title="?????" aria-label="?????">?</button>
+          </div>
+          <div class="workspace-body">
+            <div class="workspace-card">
+              <strong>??????</strong>
+              <p>??????????????????????????????????????????</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </section>
+  </main>
+
+  <div class="note">??????????????????????????</div>
+
+  <script>
+    const workbench = document.querySelector('#workbench');
+    const toggle = document.querySelector('#workspaceToggle');
+    const close = document.querySelector('#workspaceClose');
+
+    function setWorkspaceCollapsed(collapsed) {
+      workbench.classList.toggle('collapsed', collapsed);
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.title = collapsed ? '?????' : '??????';
+    }
+
+    toggle.addEventListener('click', () => setWorkspaceCollapsed(false));
+
+    close.addEventListener('click', () => setWorkspaceCollapsed(true));
+  </script>
+</body>
+</html>
