@@ -88,7 +88,6 @@ const scriptLibraryView = ref<ScriptLibraryView>('list')
 const askText = ref('')
 const messages = ref<ScriptChatMessage[]>([])
 const collapsedMessages = ref<Record<string, boolean>>({})
-const scriptRepliesExpanded = ref(false)
 const messageList = ref<HTMLElement | null>(null)
 const scriptComposerInput = ref<HTMLTextAreaElement | null>(null)
 const draftEditorLineRail = ref<HTMLElement | null>(null)
@@ -142,7 +141,13 @@ const recordedOutput = computed(() => {
 const recordingHasData = computed(() => recordedCommands.value.length > 0 || recordedOutput.value.trim().length > 0)
 const hasDraftScript = computed(() => draftScriptContent.value.trim().length > 0)
 const hasSelectedScriptContent = computed(() => selectedScriptContent.value.trim().length > 0)
-const showScriptComposer = computed(() => scriptPanelMode.value === 'generate')
+const editingSelectedScript = computed(() => scriptPanelMode.value === 'library' && scriptLibraryView.value === 'detail' && Boolean(selectedScript.value))
+const showScriptComposer = computed(() => scriptPanelMode.value === 'generate' || editingSelectedScript.value)
+const activeScriptHasContent = computed(() => editingSelectedScript.value ? hasSelectedScriptContent.value : hasDraftScript.value)
+const scriptComposerPlaceholder = computed(() => {
+  if (activeScriptHasContent.value) return '描述你想修改或优化的脚本功能...'
+  return '描述你想生成的脚本，例如：备份 /var/log 并压缩...'
+})
 const hasScriptReplies = computed(() => messages.value.length > 0)
 const scriptReplyCountText = computed(() => `${messages.value.length} 条消息`)
 const draftLineNumbers = computed(() => lineNumbersForScript(draftScriptContent.value))
@@ -336,7 +341,6 @@ function clearConversation() {
   scriptDrafts.value = {}
   editingMessageId.value = ''
   collapsedMessages.value = {}
-  scriptRepliesExpanded.value = false
   panelError.value = ''
   saveState.value = 'idle'
 }
@@ -546,7 +550,6 @@ async function sendScriptRequest(
   const userMessage = createMessage('user', text)
   const assistantMessage = createMessage('assistant', '', '', true)
   messages.value = [...messages.value, userMessage, assistantMessage]
-  scriptRepliesExpanded.value = true
   askText.value = ''
   panelError.value = ''
   isGenerating.value = true
@@ -1250,9 +1253,16 @@ function createScriptConversation() {
   draftScriptId.value = ''
   draftScriptContent.value = ''
   collapsedMessages.value = {}
-  scriptRepliesExpanded.value = false
   saveState.value = 'idle'
   panelError.value = ''
+}
+
+async function sendActiveScriptRequest() {
+  if (editingSelectedScript.value) {
+    await sendSelectedScriptRequest()
+    return
+  }
+  await sendScriptRequest()
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -1260,7 +1270,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
   if (event.isComposing) return
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault()
-    void sendScriptRequest()
+    void sendActiveScriptRequest()
   }
 }
 
@@ -1471,14 +1481,6 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function handleSelectedComposerKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.isComposing) return
-  if (event.ctrlKey || event.metaKey) {
-    event.preventDefault()
-    void sendSelectedScriptRequest()
-  }
-}
-
 function focusScriptComposer() {
   if (!hasUsableConfig.value) return
   void nextTick(() => {
@@ -1664,7 +1666,7 @@ function nowText() {
     <p v-else-if="scriptExecutionNotice" class="script-feedback">{{ scriptExecutionNotice }}</p>
     <p v-else-if="saveState === 'saved'" class="script-feedback">脚本已保存到 {{ scriptStoreMode === 'sqlite' ? 'SQLite' : 'localStorage' }}.</p>
 
-    <div v-if="scriptPanelMode === 'library'" class="script-library">
+    <div v-if="scriptPanelMode === 'library'" class="script-library" :class="{ 'detail-view': scriptLibraryView === 'detail' }">
       <template v-if="scriptLibraryView === 'list'">
         <div class="session-search script-library-search">
           <span><UiIcon name="search" size="14" /></span>
@@ -1766,29 +1768,6 @@ function nowText() {
             <span v-if="selectedSaveStatus" :class="{ dirty: selectedScriptDirty }">{{ selectedSaveStatus }}</span>
           </div>
         </div>
-        <div class="assistant-compose unified-ai-compose" @pointerdown="focusScriptComposer">
-          <textarea
-            ref="scriptComposerInput"
-            v-model="askText"
-            :disabled="!hasUsableConfig"
-            rows="2"
-            placeholder="描述你想如何修改或优化当前脚本..."
-            title="描述你想如何修改或优化当前脚本..."
-            aria-label="询问 AI 修改当前脚本"
-            @keydown="handleSelectedComposerKeydown"
-          />
-          <button
-            class="icon-button"
-            type="button"
-            :title="isGenerating ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
-            :aria-label="isGenerating ? '停止回答' : '发送'"
-            :disabled="!isGenerating && !hasUsableConfig"
-            @click="isGenerating ? stopScriptGeneration() : sendSelectedScriptRequest()"
-          >
-            <UiIcon v-if="isGenerating" name="stop" />
-            <UiIcon v-else name="arrow-right" />
-          </button>
-        </div>
       </section>
       <p v-else class="empty-state script-preview-empty">选择脚本查看内容</p>
     </div>
@@ -1874,14 +1853,18 @@ function nowText() {
           </div>
         </section>
       </div>
+    </div>
 
-      <section v-if="hasScriptReplies" class="script-replies-panel" :class="{ expanded: scriptRepliesExpanded }">
-        <button class="script-replies-toggle" type="button" :aria-expanded="scriptRepliesExpanded" @click="scriptRepliesExpanded = !scriptRepliesExpanded">
-          <span class="script-replies-title"><UiIcon name="ai" size="13" />AI 回复</span>
-          <small>{{ isGenerating ? '正在生成…' : scriptReplyCountText }}</small>
-          <span>{{ scriptRepliesExpanded ? '收起 ↑' : '查看 ↓' }}</span>
-        </button>
-        <div v-if="scriptRepliesExpanded" ref="messageList" class="script-replies-list">
+    <section v-if="hasScriptReplies && showScriptComposer" class="script-replies-panel script-conversation" aria-label="脚本 AI 对话">
+        <div class="script-conversation-head">
+          <span class="script-replies-title">
+            <UiIcon name="ai" size="13" />
+            <strong>AI 对话</strong>
+            <small>{{ isGenerating ? '正在生成…' : scriptReplyCountText }}</small>
+          </span>
+          <button class="icon-button danger" type="button" title="清空对话" aria-label="清空对话" @click="clearConversation"><UiIcon name="trash" size="13" /></button>
+        </div>
+        <div ref="messageList" class="script-replies-list" role="log" aria-live="polite" aria-relevant="additions text">
           <article
             v-for="message in messages"
             :key="message.id"
@@ -1957,20 +1940,17 @@ function nowText() {
               </div>
             </div>
           </article>
-          <div class="script-replies-footer">
-            <button class="text-button danger" type="button" @click="clearConversation">清空对话</button>
-          </div>
         </div>
-      </section>
-      <div v-if="showScriptComposer" class="assistant-compose unified-ai-compose" @pointerdown="focusScriptComposer">
+    </section>
+    <div v-if="showScriptComposer" class="assistant-compose unified-ai-compose script-ai-compose" @pointerdown="focusScriptComposer">
         <textarea
           ref="scriptComposerInput"
           id="script-ai-prompt"
           v-model="askText"
           :disabled="!hasUsableConfig"
           rows="2"
-          :placeholder="hasDraftScript ? '描述你想修改或优化的脚本功能...' : '描述你想生成的脚本，例如：备份 /var/log 并压缩...'"
-          :title="hasDraftScript ? '描述你想修改或优化的脚本功能...' : '描述你想生成的脚本，例如：备份 /var/log 并压缩...'"
+          :placeholder="scriptComposerPlaceholder"
+          :title="scriptComposerPlaceholder"
           aria-label="询问 AI 修改脚本"
           @keydown="handleComposerKeydown"
         />
@@ -1980,12 +1960,11 @@ function nowText() {
           :title="isGenerating ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
           :aria-label="isGenerating ? '停止回答' : '发送'"
           :disabled="!isGenerating && !hasUsableConfig"
-          @click="isGenerating ? stopScriptGeneration() : sendScriptRequest()"
+          @click="isGenerating ? stopScriptGeneration() : sendActiveScriptRequest()"
         >
           <UiIcon v-if="isGenerating" name="stop" />
           <UiIcon v-else name="arrow-right" />
         </button>
       </div>
-    </div>
   </section>
 </template>

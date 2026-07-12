@@ -1476,8 +1476,10 @@ assert(
     scriptPanel.includes('class="script-library"') &&
     scriptPanel.includes('class="script-library-editor"') &&
     scriptPanel.includes('class="script-draft-card"') &&
-    scriptPanel.includes('class="script-replies-panel"') &&
+    scriptPanel.includes('class="script-replies-panel script-conversation"') &&
+    scriptPanel.includes('hasScriptReplies && showScriptComposer') &&
     scriptPanel.includes('v-if="showScriptComposer"') &&
+    scriptPanel.includes('sendActiveScriptRequest') &&
     scriptPanel.includes('highlightShellScript') &&
     scriptPanel.includes('syncScriptEditorScroll') &&
     scriptPanel.includes('placeholder="在这里粘贴、生成或编写 Shell 脚本..."') &&
@@ -1489,6 +1491,8 @@ assert(
     scriptPanel.includes('openScriptEditorMenu') &&
     scriptPanel.includes('title="更多操作"') &&
     scriptPanel.includes('class="text-button script-run-button"') &&
+    styles.includes('.script-conversation .script-reply-message') &&
+    styles.includes('.script-panel > .script-ai-compose') &&
     scriptPanel.includes(':disabled="!canExecuteDraft"') &&
     scriptPanel.includes(':disabled="!canExecuteSelectedScript"') &&
     scriptPanel.includes(':disabled="!canExecuteExpandedScript"'),
