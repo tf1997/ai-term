@@ -448,7 +448,11 @@ const surfaceContractAllowedProperties = new Set([
   'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
   'background', 'background-color', 'color', 'caret-color', 'outline-color',
 ])
-const surfaceContractDisallowed = disallowedDeclarationsInRange('/* Light theme color-only surface contract. */', null, surfaceContractAllowedProperties)
+const surfaceContractDisallowed = disallowedDeclarationsInRange(
+  '/* Light theme color-only surface contract. */',
+  '/* End light theme color-only surface contract. */',
+  surfaceContractAllowedProperties,
+)
 assert(
   surfaceContractDisallowed.length === 0,
   'Light theme color-only surface contract must not change layout or geometry: ' + surfaceContractDisallowed.join(', ')

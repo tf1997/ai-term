@@ -10,7 +10,8 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import type { ScriptRiskMatch } from '../lib/scriptRisk'
-import { analyzeScriptReadiness, scriptReadinessStatusForContent, type ScriptReadinessIssue } from '../lib/scriptReadiness'
+import { analyzeScriptReadiness, scriptReadinessStatusForContent } from '../lib/scriptReadiness'
+import type { ScriptReadinessIssue } from '../lib/scriptReadiness'
 import {
   cancelTask,
   chatWithAiProviderStream,
@@ -21,12 +22,8 @@ import {
   saveUpdateScript
 } from '../lib/tauri'
 import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
-import {
-  codeBlockLabel,
-  detectShellScriptLanguage,
-  shellCommandFromCodeBlock,
-  type ShellScriptLanguage
-} from '../lib/shellCommand'
+import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
+import { detectShellScriptLanguage, type ShellScriptLanguage } from '../lib/shellCommand'
 import ContextMenu from './ContextMenu.vue'
 import UiIcon from './UiIcon.vue'
 
