@@ -1684,12 +1684,12 @@ function findIdentityMarker(text: string, marker: string, kind: 'BEGIN' | 'END',
   const candidates = markerCandidates(marker)
   let best: { index: number; marker: string } | null = null
   for (const candidate of candidates) {
-    const index = text.indexOf(candidate, start)
-    if (index !== -1 && (!best || index < best.index)) best = { index, marker: candidate }
+    const match = findStandaloneIdentityMarker(text, candidate, start)
+    if (match && (!best || match.index < best.index)) best = match
   }
   const markerId = identityMarkerId(marker)
   if (markerId) {
-    const pattern = new RegExp(`_*AI_TERM_IDENT_${kind}_${escapeRegExp(markerId)}_*`, 'g')
+    const pattern = new RegExp(`^_*AI_TERM_IDENT_${kind}_${escapeRegExp(markerId)}_*[\\t ]*$`, 'gm')
     pattern.lastIndex = start
     const match = pattern.exec(text)
     if (match && (!best || match.index < best.index)) {
@@ -1697,6 +1697,13 @@ function findIdentityMarker(text: string, marker: string, kind: 'BEGIN' | 'END',
     }
   }
   return best
+}
+
+function findStandaloneIdentityMarker(text: string, marker: string, start: number) {
+  const pattern = new RegExp(`^${escapeRegExp(marker)}[\\t ]*$`, 'gm')
+  pattern.lastIndex = start
+  const match = pattern.exec(text)
+  return match ? { index: match.index, marker: match[0] } : null
 }
 
 function markerCandidates(marker: string) {

@@ -1321,6 +1321,9 @@ assert(
   fileTransfer.includes("const begin = `AI_TERM_IDENT_BEGIN_${id}`") &&
     fileTransfer.includes("const end = `AI_TERM_IDENT_END_${id}`") &&
     fileTransfer.includes('findIdentityMarker') &&
+    fileTransfer.includes('findStandaloneIdentityMarker') &&
+    fileTransfer.includes('^${escapeRegExp(marker)}') &&
+    fileTransfer.includes('[\\\\t ]*$') &&
     fileTransfer.includes('markerCandidates') &&
     fileTransfer.includes('identityMarkerId') &&
     fileTransfer.includes('raw.matchAll(/(user|hostname|ips|pwd)=/g)') &&
