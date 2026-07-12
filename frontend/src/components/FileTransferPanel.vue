@@ -544,9 +544,7 @@ function activateSftpTab() {
     !props.active ||
     transferMode.value !== 'sftp' ||
     !remoteReady.value ||
-    loading.value ||
-    identifying.value ||
-    pendingIdentify.value
+    taskInProgress.value
   ) {
     return
   }
@@ -554,6 +552,7 @@ function activateSftpTab() {
     openCurrentTerminalSftp()
     return
   }
+  if (loading.value || identifying.value || pendingIdentify.value) return
   initializeRemoteBrowserIfActive()
 }
 
@@ -568,13 +567,22 @@ function initializeRemoteBrowser() {
 }
 
 function openCurrentTerminalSftp() {
-  if (!remoteReady.value) return
+  if (!remoteReady.value || taskInProgress.value) return
+  resetTerminalIdentityProbeForRetry()
   currentTerminalTarget.value = null
   selectedTarget.value = null
   entries.value = []
   selectedRemoteEntry.value = null
   autoTerminalProbeAttempted.value = false
   identifyCurrentTerminalTarget({ useForSftp: true })
+}
+
+function resetTerminalIdentityProbeForRetry() {
+  pendingIdentify.value = null
+  identifying.value = false
+  loading.value = false
+  error.value = ''
+  status.value = ''
 }
 
 function useConfiguredTargetForSftp(message?: string) {
@@ -1820,7 +1828,7 @@ function shellQuote(value: string) {
           <UiIcon name="terminal" size="14" />
           <span>切换到终端</span>
         </button>
-        <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || identifying || loading" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
+        <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || taskInProgress" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory"><UiIcon name="folder" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>

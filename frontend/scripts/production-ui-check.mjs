@@ -1348,6 +1348,8 @@ assert(
     !fileTransfer.includes('watch(transferMode') &&
     !fileTransfer.includes('onMounted(() => {\n  initializeRemoteBrowserIfActive()') &&
     fileTransfer.includes('host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host') &&
+    fileTransfer.includes('resetTerminalIdentityProbeForRetry') &&
+    fileTransfer.includes(':disabled="!remoteReady || taskInProgress"') &&
     fileTransfer.includes('已停止 SFTP 探测。'),
   'Bastion SFTP detection must be initiated by an SFTP tab activation and use the terminal-derived server IP and username.'
 )
