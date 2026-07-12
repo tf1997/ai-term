@@ -2033,6 +2033,7 @@ onBeforeUnmount(() => {
         :key="tab.id"
         :ref="(instance) => setTerminalRef(tab.id, instance as TerminalPaneInstance | null)"
         :terminal-id="tab.id"
+        :active="tab.id === activeTerminalId"
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         :command-history="commandHistoryForTab(tab)"

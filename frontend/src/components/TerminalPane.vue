@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 import type { IDisposable } from '@xterm/xterm'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
 import '@xterm/xterm/css/xterm.css'
@@ -54,6 +55,7 @@ interface QuickCommandsChangedDetail {
 
 const props = defineProps<{
   terminalId: string
+  active: boolean
   profile?: ConnectionProfile
   connectRequest: number
   commandHistory: CommandHistoryEntry[]
@@ -77,11 +79,14 @@ const terminalBodyWrap = ref<HTMLDivElement | null>(null)
 const terminalCompletion = ref<HTMLDivElement | null>(null)
 const quickCommandSettingsButton = ref<HTMLButtonElement | null>(null)
 let terminal: Terminal | undefined
+let fitAddon: FitAddon | undefined
 let sessionId = ''
 let connectionAttempt = 0
 let unlisten: (() => void) | undefined
 let unlistenClosed: (() => void) | undefined
 let resizeObserver: ResizeObserver | undefined
+let terminalFitFrame = 0
+let forcePtyResizeOnNextFit = false
 let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalSelectionPolishFrame = 0
@@ -818,49 +823,25 @@ function isSftpProfile(profile?: ConnectionProfile) {
   return profile?.fileTransferMode === 'sftp-direct' || profile?.fileTransferMode === 'sftp-gateway'
 }
 
-function cssPixel(value: string) {
-  const parsed = Number.parseFloat(value)
-  return Number.isFinite(parsed) ? parsed : 0
+function terminalHostIsMeasurable(element: HTMLElement) {
+  return props.active && element.clientWidth > 0 && element.clientHeight > 0
 }
 
-function terminalContentBox(element: HTMLElement) {
-  const style = window.getComputedStyle(element)
-  const horizontalPadding = cssPixel(style.paddingLeft) + cssPixel(style.paddingRight)
-  const verticalPadding = cssPixel(style.paddingTop) + cssPixel(style.paddingBottom)
-  const scrollbarGutter = cssPixel(style.getPropertyValue('--terminal-scrollbar-gutter'))
-  return {
-    width: Math.max(0, element.clientWidth - horizontalPadding - scrollbarGutter),
-    height: Math.max(0, element.clientHeight - verticalPadding)
-  }
-}
-
-function measureTerminalCell(element: HTMLElement) {
+function renderedTerminalCellSize() {
   const settings = resolvedTerminalSettings()
-  const probe = document.createElement('span')
-  probe.textContent = 'mmmmmmmmmm'
-  probe.style.position = 'absolute'
-  probe.style.visibility = 'hidden'
-  probe.style.pointerEvents = 'none'
-  probe.style.whiteSpace = 'pre'
-  probe.style.fontFamily = settings.terminalFontFamily
-  probe.style.fontSize = `${settings.terminalFontSize}px`
-  probe.style.lineHeight = 'normal'
-  element.appendChild(probe)
-  const rect = probe.getBoundingClientRect()
-  probe.remove()
+  const screen = terminalHost.value?.querySelector<HTMLElement>('.xterm-screen')
+  const rect = screen?.getBoundingClientRect()
+  const cols = terminal?.cols ?? 0
+  const rows = terminal?.rows ?? 0
   return {
-    width: Math.max(6, rect.width / 10 || settings.terminalFontSize * 0.62),
-    height: Math.max(12, rect.height || settings.terminalFontSize * 1.18)
+    width: rect && rect.width > 0 && cols > 0 ? rect.width / cols : settings.terminalFontSize * 0.62,
+    height: rect && rect.height > 0 && rows > 0 ? rect.height / rows : settings.terminalFontSize * 1.18
   }
 }
 
-function estimateTerminalSize(element: HTMLElement) {
-  const box = terminalContentBox(element)
-  const cell = measureTerminalCell(element)
-  return {
-    cols: Math.max(40, Math.floor(box.width / cell.width)),
-    rows: Math.max(12, Math.floor(box.height / cell.height))
-  }
+function currentTerminalSize() {
+  syncTerminalSize()
+  return terminal ? { cols: terminal.cols, rows: terminal.rows } : terminalSize.value
 }
 
 function scrollTerminalToBottom() {
@@ -882,17 +863,34 @@ function writeTerminalView(data: string, forceScroll = false) {
   })
 }
 
-function syncTerminalSize() {
-  if (!terminal || !terminalHost.value) return
-  const size = estimateTerminalSize(terminalHost.value)
-  const changed = size.cols !== terminal.cols || size.rows !== terminal.rows
+function syncTerminalSize(forcePtyResize = false) {
+  if (!terminal || !fitAddon || !terminalHost.value || !terminalHostIsMeasurable(terminalHost.value)) return
+  const previous = { cols: terminal.cols, rows: terminal.rows }
+  fitAddon.fit()
+  const size = { cols: terminal.cols, rows: terminal.rows }
+  const changed = size.cols !== previous.cols || size.rows !== previous.rows
   terminalSize.value = size
-  if (changed) terminal.resize(size.cols, size.rows)
-  if (sessionId && changed) {
+  if (sessionId && (changed || forcePtyResize)) {
     void terminalResize(sessionId, size.cols, size.rows)
   }
+  if (forcePtyResize) terminal.refresh(0, terminal.rows - 1)
   scrollTerminalToBottom()
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
+}
+
+function scheduleTerminalSizeSync(forcePtyResize = false) {
+  forcePtyResizeOnNextFit ||= forcePtyResize
+  if (terminalFitFrame) return
+  terminalFitFrame = window.requestAnimationFrame(() => {
+    terminalFitFrame = 0
+    const force = forcePtyResizeOnNextFit
+    forcePtyResizeOnNextFit = false
+    syncTerminalSize(force)
+  })
+}
+
+function scheduleTerminalSizeSyncAfterFonts() {
+  void document.fonts.ready.then(() => scheduleTerminalSizeSync(true))
 }
 
 function appendTerminalOutput(data: string) {
@@ -961,7 +959,7 @@ function terminalRowContentRight(row: HTMLElement) {
   }
 
   if (right > rowRect.left) return right
-  return rowRect.left + contentLength * measureTerminalCell(row).width
+  return rowRect.left + contentLength * renderedTerminalCellSize().width
 }
 
 function terminalSelectionOverlay() {
@@ -996,7 +994,7 @@ function terminalPointerViewportCell(event: PointerEvent): TerminalSelectionView
   const firstRow = host?.querySelector<HTMLElement>('.xterm-rows > div')
   if (!host || !firstRow) return undefined
 
-  const cell = measureTerminalCell(host)
+  const cell = renderedTerminalCellSize()
   const firstRowRect = firstRow.getBoundingClientRect()
   const rowHeight = Math.max(1, firstRowRect.height || cell.height)
   const rowCount = Math.max(1, terminal?.rows ?? host.querySelectorAll('.xterm-rows > div').length)
@@ -1040,7 +1038,7 @@ function polishTerminalSelection() {
   )
   const isReverseMultiLineSelection = (isReverseSelection || isPointerReverseSelection) && start.y !== end.y
 
-  const cellWidth = measureTerminalCell(host).width
+  const cellWidth = renderedTerminalCellSize().width
   const screenRect = screen.getBoundingClientRect()
   const startY = Math.max(0, Math.min(rows.length - 1, start.y))
   const endY = Math.max(0, Math.min(rows.length - 1, end.y))
@@ -1403,7 +1401,8 @@ function applyTerminalAppearance() {
   terminal.options.fontSize = settings.terminalFontSize
   terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
   terminal.refresh(0, terminal.rows - 1)
-  syncTerminalSize()
+  scheduleTerminalSizeSync()
+  scheduleTerminalSizeSyncAfterFonts()
 }
 
 onMounted(async () => {
@@ -1416,6 +1415,8 @@ onMounted(async () => {
     fontSize: resolvedTerminalSettings().terminalFontSize,
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
+  fitAddon = new FitAddon()
+  terminal.loadAddon(fitAddon)
   terminal.open(terminalHost.value)
   syncTerminalSize()
   terminal.focus()
@@ -1440,10 +1441,9 @@ onMounted(async () => {
   window.addEventListener(QUICK_COMMANDS_CHANGED_EVENT, handleQuickCommandsChanged)
   quickCommandSettingsButton.value?.addEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
 
-  resizeObserver = new ResizeObserver(() => {
-    syncTerminalSize()
-  })
+  resizeObserver = new ResizeObserver(() => scheduleTerminalSizeSync())
   resizeObserver.observe(terminalHost.value)
+  scheduleTerminalSizeSyncAfterFonts()
 
   if (isSftpProfile(props.profile)) {
     enterSftpProfileMode()
@@ -1465,6 +1465,15 @@ watch(
 watch(
   () => props.appTheme,
   () => applyTerminalAppearance()
+)
+
+watch(
+  () => props.active,
+  async (active) => {
+    if (!active) return
+    await nextTick()
+    scheduleTerminalSizeSync(true)
+  }
 )
 
 watch(
@@ -1543,7 +1552,7 @@ async function connectRemote() {
     activeSessionProfile.value = props.profile
     status.value = 'connecting'
     terminal.clear()
-    const size = estimateTerminalSize(terminalHost.value)
+    const size = currentTerminalSize()
     terminal.writeln(`Connecting SSH profile: ${activeSessionProfile.value.name}`)
     scrollTerminalToBottom()
     terminalOutputBuffer = `Connecting SSH profile: ${activeSessionProfile.value.name}\n`
@@ -1556,7 +1565,7 @@ async function connectRemote() {
     if (await verifyTerminalSessionStillActive(sessionId)) {
       status.value = 'remote'
     }
-    syncTerminalSize()
+    syncTerminalSize(true)
     await nextTick()
     terminal.focus()
   } catch (error) {
@@ -1590,7 +1599,7 @@ async function connectLocal() {
       terminalId: props.terminalId,
       snapshot: terminalOutputBuffer
     })
-    const size = estimateTerminalSize(terminalHost.value)
+    const size = currentTerminalSize()
     sessionId = requestedSessionId
     await attachTerminalEvents()
     const connectedSessionId = await connectLocalTerminal(size.cols, size.rows, requestedSessionId)
@@ -1605,7 +1614,7 @@ async function connectLocal() {
     if (await verifyTerminalSessionStillActive(sessionId)) {
       status.value = 'local'
     }
-    syncTerminalSize()
+    syncTerminalSize(true)
     await nextTick()
     terminal.focus()
   } catch (error) {
@@ -1853,6 +1862,7 @@ onBeforeUnmount(() => {
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
   stopTerminalSelectionDrag()
   if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
+  if (terminalFitFrame) window.cancelAnimationFrame(terminalFitFrame)
   disconnect(false)
   resizeObserver?.disconnect()
   unlisten?.()
@@ -1860,6 +1870,7 @@ onBeforeUnmount(() => {
   dataDisposable?.dispose()
   selectionDisposable?.dispose()
   terminal?.dispose()
+  fitAddon = undefined
 })
 
 defineExpose({

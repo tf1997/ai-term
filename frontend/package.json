@@ -9,6 +9,7 @@
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/noto-sans-sc": "^5.2.9",
     "@tauri-apps/api": "^1.6.0",
+    "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "^5.5.0",
     "vue": "^3.5.0"
   },

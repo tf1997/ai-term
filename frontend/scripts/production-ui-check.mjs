@@ -1098,16 +1098,21 @@ assert(
     styles.includes('.terminal-native-code') &&
     styles.includes('.xterm-host .xterm-rows') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
-    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 6px 16px 18px;') &&
-    terminalPane.includes('terminalContentBox(element)') &&
-    terminalPane.includes('measureTerminalCell(element)') &&
-    terminalPane.includes('element.clientHeight - verticalPadding') &&
+    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
+    styles.includes('.xterm-host .xterm {\n  width: 100%;\n  min-width: 0;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 16px 6px 16px 18px;') &&
+    terminalPane.includes("import { FitAddon } from '@xterm/addon-fit'") &&
+    terminalPane.includes('terminal.loadAddon(fitAddon)') &&
+    terminalPane.includes('fitAddon.fit()') &&
+    terminalPane.includes('terminalHostIsMeasurable') &&
+    terminalPane.includes('scheduleTerminalSizeSync(true)') &&
+    appShell.includes(':active="tab.id === activeTerminalId"') &&
+    !terminalPane.includes('measureTerminalCell') &&
     terminalPane.includes('scrollTerminalToBottom') &&
     terminalPane.includes('terminal.buffer.active') &&
     terminalPane.includes('writeTerminalView(event.data)') &&
-    terminalPane.includes('if (changed) terminal.resize(size.cols, size.rows)') &&
     !terminalPane.includes('Math.floor(element.clientHeight / 18)'),
-  'TerminalPane must provide native-feeling terminal code styling, command completion, accurate measured sizing, and bottom-pinned output.'
+  'TerminalPane must provide native-feeling terminal code styling, command completion, official fitted sizing, active-tab resize guards, and bottom-pinned output.'
 )
 
 assert(
@@ -2346,7 +2351,8 @@ assert(
     styles.includes('@media (max-width: 1080px)') &&
     styles.includes('--workspace-width: clamp(300px, 34vw, 360px);') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
-    styles.includes('overflow: hidden;\n  box-sizing: border-box;\n  padding: 16px 6px 16px 18px;') &&
+    styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 16px 6px 16px 18px;') &&
     !styles.includes('width: min(380px, calc(100vw - 56px));') &&
     !styles.includes('.app-shell:not(.right-collapsed) .right-panel {\n    display: none;'),
   'Frontend layout must keep the right workspace as a proportional grid column at the 1280 default and 980 minimum window widths without terminal overlap or workspace shrinkage.'
