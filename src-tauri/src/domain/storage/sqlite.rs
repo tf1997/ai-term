@@ -741,8 +741,9 @@ impl SqliteConfigStore {
         endpoint: &mut AuthEndpoint,
     ) -> Result<()> {
         if let Some(secret) = normalize_secret(endpoint.password.as_deref()) {
-            let key = normalized_optional(endpoint.credential_ref.take())
-                .unwrap_or_else(|| connection_secret_ref(profile_id, role));
+            // A credential belongs to one profile endpoint. A copied profile may
+            // carry its source reference, so always derive the key from its own ID.
+            let key = connection_secret_ref(profile_id, role);
             self.credential_store
                 .set_secret(&key, &secret)
                 .with_context(|| {
@@ -790,8 +791,7 @@ impl SqliteConfigStore {
         endpoint: &mut AuthEndpoint,
     ) -> Result<()> {
         if let Some(secret) = normalize_secret(endpoint.password.as_deref()) {
-            let key = normalized_optional(endpoint.credential_ref.take())
-                .unwrap_or_else(|| connection_secret_ref(profile_id, role));
+            let key = connection_secret_ref(profile_id, role);
             self.credential_store
                 .set_secret(&key, &secret)
                 .with_context(|| {

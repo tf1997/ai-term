@@ -778,6 +778,8 @@ function copySelectedProfile(profileId: string) {
   const draft = cloneConnectionProfile(profile)
   draft.id = nextConnectionProfileId(`${profile.id}-copy`)
   draft.name = nextConnectionProfileName(`${profile.name || profile.id} \u526f\u672c`)
+  draft.gateway.credentialRef = undefined
+  draft.target.credentialRef = undefined
   connectionDraft.value = draft
   selectedProfileId.value = ''
   connectionSaveState.value = 'idle'

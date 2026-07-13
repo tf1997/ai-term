@@ -170,6 +170,37 @@ fn sqlite_store_moves_ssh_passwords_to_credential_store() {
 }
 
 #[test]
+fn copied_profile_cannot_overwrite_source_profile_password() {
+    let credentials = Arc::new(MemoryCredentialStore::default());
+    let store = SqliteConfigStore::with_credential_store(
+        temp_db_path("profiles-copied-password"),
+        credentials,
+    );
+
+    let mut source = profile("source", "source");
+    source.target.auth_mode = AuthMode::Password;
+    source.target.password = Some("source-secret".into());
+    store.save_connection_profile(&source).unwrap();
+
+    let mut copied = source.clone();
+    copied.id = "copied".into();
+    copied.name = "copied".into();
+    copied.target.credential_ref = Some("ssh-profile:source:target:password".into());
+    copied.target.password = Some("copied-secret".into());
+    store.save_connection_profile(&copied).unwrap();
+
+    let profiles = store.list_connection_profiles().unwrap();
+    let saved_source = profiles.iter().find(|item| item.id == "source").unwrap();
+    let saved_copy = profiles.iter().find(|item| item.id == "copied").unwrap();
+    assert_eq!(saved_source.target.password.as_deref(), Some("source-secret"));
+    assert_eq!(saved_copy.target.password.as_deref(), Some("copied-secret"));
+    assert_eq!(
+        saved_copy.target.credential_ref.as_deref(),
+        Some("ssh-profile:copied:target:password")
+    );
+}
+
+#[test]
 fn sqlite_store_adds_legacy_secret_columns_to_existing_profiles_table() {
     let database_path = temp_db_path("profiles-password-migration");
     let connection = Connection::open(&database_path).unwrap();
