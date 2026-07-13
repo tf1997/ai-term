@@ -29,6 +29,7 @@ const emit = defineEmits<{
 
 const query = ref('')
 const showTargetPassword = ref(false)
+const targetPasswordInput = ref<HTMLInputElement>()
 
 watch(
   () => [props.editorOpen, props.selectedProfile?.id] as const,
@@ -43,6 +44,20 @@ function passwordFieldType(visible: boolean) {
 
 function passwordToggleLabel(visible: boolean) {
   return visible ? '隐藏密码' : '显示密码'
+}
+
+function toggleTargetPassword() {
+  const input = targetPasswordInput.value
+  const selectionStart = input?.selectionStart ?? null
+  const selectionEnd = input?.selectionEnd ?? null
+  showTargetPassword.value = !showTargetPassword.value
+
+  requestAnimationFrame(() => {
+    input?.focus({ preventScroll: true })
+    if (selectionStart !== null && selectionEnd !== null) {
+      input?.setSelectionRange(selectionStart, selectionEnd)
+    }
+  })
 }
 
 const filteredProfiles = computed(() => {
@@ -161,12 +176,6 @@ function profileReadyToConnect(profile: ConnectionProfile) {
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="emit('closeEditor')"><UiIcon name="close" /></button>
           </div>
-          <div class="modal-actions">
-            <button type="button" @click="emit('closeEditor')">取消</button>
-            <button type="button" :disabled="!selectedProfileReadyToSave || saveState === 'saving'" @click="emit('save')">
-              {{ saveState === 'saving' ? '保存中' : '保存配置' }}
-            </button>
-          </div>
           <div class="profile-editor" @submit.prevent>
             <p v-if="saveState === 'saved'" class="save-feedback ok">配置已保存</p>
             <p v-else-if="saveState === 'error'" class="save-feedback error">{{ saveError }}</p>
@@ -205,19 +214,26 @@ function profileReadyToConnect(profile: ConnectionProfile) {
             <label v-if="shouldShowTargetPassword(selectedProfile)">
               <span>{{ targetPasswordLabel(selectedProfile) }}</span>
               <div class="password-input-wrap">
-                <input v-model="selectedProfile.target.password" :type="passwordFieldType(showTargetPassword)" autocomplete="off" :placeholder="targetPasswordPlaceholder()" />
+                <input ref="targetPasswordInput" v-model="selectedProfile.target.password" :type="passwordFieldType(showTargetPassword)" autocomplete="off" :placeholder="targetPasswordPlaceholder()" />
                 <button
                   class="icon-button password-visibility-button"
                   type="button"
                   :title="passwordToggleLabel(showTargetPassword)"
                   :aria-label="passwordToggleLabel(showTargetPassword)"
                   :aria-pressed="showTargetPassword"
-                  @click="showTargetPassword = !showTargetPassword"
+                  @mousedown.prevent
+                  @click="toggleTargetPassword"
                 >
                   <UiIcon :name="showTargetPassword ? 'eye-off' : 'eye'" />
                 </button>
               </div>
             </label>
+          </div>
+          <div class="modal-actions profile-editor-actions">
+            <button type="button" @click="emit('closeEditor')">取消</button>
+            <button class="profile-save-button" type="button" :disabled="!selectedProfileReadyToSave || saveState === 'saving'" @click="emit('save')">
+              {{ saveState === 'saving' ? '保存中' : '保存配置' }}
+            </button>
           </div>
         </form>
       </div>

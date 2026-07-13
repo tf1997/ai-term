@@ -1379,6 +1379,36 @@ code,
   background: rgba(18, 23, 34, .88);
   padding: 12px 14px 14px;
 }
+.profile-editor-modal {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  border-radius: 12px;
+}
+.profile-editor-modal .modal-head {
+  min-height: 64px;
+  padding: 0 18px;
+}
+.profile-editor-modal .profile-editor {
+  gap: 12px;
+  border-top: 0;
+  padding: 16px 18px 18px;
+}
+.profile-editor-actions {
+  min-height: 62px;
+  align-items: center;
+  border-top: 1px solid #1b2130;
+  background: rgba(13, 17, 25, .96);
+  padding: 0 18px;
+}
+.profile-save-button {
+  border-color: rgba(45, 212, 191, .56);
+  background: linear-gradient(135deg, #087f5b, #16a66a);
+  color: #fff;
+}
+.profile-save-button:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, .78);
+  background: linear-gradient(135deg, #079669, #18b978);
+}
 .editor-title {
   grid-column: 1 / -1;
   display: grid;
@@ -1466,17 +1496,33 @@ code,
 .password-input-wrap input {
   padding-right: 34px;
 }
+.password-input-wrap input::-ms-reveal,
+.password-input-wrap input::-ms-clear {
+  display: none;
+}
+.password-input-wrap input::-webkit-credentials-auto-fill-button,
+.password-input-wrap input::-webkit-contacts-auto-fill-button {
+  position: absolute;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
 .password-visibility-button {
   position: absolute;
   top: 50%;
   right: 4px;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   transform: translateY(-50%);
   border-color: transparent;
   background: transparent;
   color: #7f8b9c;
   box-shadow: none;
+}
+.password-visibility-button svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.8;
 }
 .password-visibility-button:hover:not(:disabled), .password-visibility-button:focus-visible {
   border-color: rgba(91, 111, 255, .28);
@@ -7362,6 +7408,10 @@ code {
   border-color: #ccebdd;
   background: var(--light-accent-soft);
   color: var(--light-accent-strong);
+}
+.theme-light .profile-editor-actions, .app-shell.theme-light .profile-editor-actions {
+  border-top-color: var(--light-border);
+  background: #fbfcfd;
 }
 .theme-light .save-feedback {
   border-color: var(--light-border);
