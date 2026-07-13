@@ -85,6 +85,9 @@ let connectionAttempt = 0
 let unlisten: (() => void) | undefined
 let unlistenClosed: (() => void) | undefined
 let resizeObserver: ResizeObserver | undefined
+// Leave one cell unused so fractional font metrics and a stable scrollbar gutter
+// cannot clip the glyph rendered in the last PTY column.
+const TERMINAL_SAFE_COLUMN_MARGIN = 1
 let terminalFitFrame = 0
 let forcePtyResizeOnNextFit = false
 let dataDisposable: IDisposable | undefined
@@ -866,7 +869,15 @@ function writeTerminalView(data: string, forceScroll = false) {
 function syncTerminalSize(forcePtyResize = false) {
   if (!terminal || !fitAddon || !terminalHost.value || !terminalHostIsMeasurable(terminalHost.value)) return
   const previous = { cols: terminal.cols, rows: terminal.rows }
-  fitAddon.fit()
+  const proposed = fitAddon.proposeDimensions()
+  if (proposed) {
+    terminal.resize(
+      Math.max(2, proposed.cols - TERMINAL_SAFE_COLUMN_MARGIN),
+      Math.max(1, proposed.rows)
+    )
+  } else {
+    fitAddon.fit()
+  }
   const size = { cols: terminal.cols, rows: terminal.rows }
   const changed = size.cols !== previous.cols || size.rows !== previous.rows
   terminalSize.value = size
