@@ -21,6 +21,8 @@ defineProps<{
   terminalId: string
   connectionId: string
   connectionProfile?: ConnectionProfile
+  terminalStatus: 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
+  terminalConnectionGeneration: number
   workspaceSessionId: string
   workspaceSessions: WorkspaceSession[]
   connectionLabels: Record<string, string>
@@ -186,7 +188,9 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :terminal-id="terminalId"
       :connection-id="connectionId"
       :profile="connectionProfile"
-      :active="activeWorkspaceTab === 'sftp'"
+      :terminal-status="terminalStatus"
+      :terminal-connection-generation="terminalConnectionGeneration"
+      :active="!collapsed && activeWorkspaceTab === 'sftp'"
       :activation-sequence="sftpTabActivationSequence"
       :terminal-snapshot="terminalSnapshot"
       :terminal-output-event="terminalOutputEvent"

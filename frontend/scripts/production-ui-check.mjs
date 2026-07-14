@@ -968,9 +968,19 @@ assert(
     sftpBackend.includes('native_sftp_cache_key') &&
     sftpBackend.includes('take_cached_native_sftp_connection') &&
     sftpBackend.includes('store_cached_native_sftp_connection') &&
+    sftpBackend.includes('clear_cached_native_sftp_routes') &&
+    sftpBackend.includes('pool.remove(&cache_key)') &&
     sftpBackend.includes('run_cached_native_sftp_routes(') &&
     sftpBackend.includes('|connection, _route| list_directory_native(connection, remote_path)'),
-  'SFTP directory listing should reuse native SFTP sessions so remote directory switching does not reconnect for every folder.'
+  'SFTP probing must discard the target route from the native pool, while normal directory listing should reuse the newly verified target-specific session.'
+)
+assert(
+  sftpBackend.includes('fn try_native_sftp_probe') &&
+    sftpBackend.includes('should_retry_native_probe_at_root') &&
+    sftpBackend.includes('try_native_list_directory(profile, "."') &&
+    sftpBackend.includes('try_native_list_directory(profile, "/"') &&
+    sftpBackend.includes('!should_fallback_native_sftp_error(&error)'),
+  'Bastion SFTP probing must try the native route first, recover an invalid default cwd at the absolute root, and keep security failures terminal.'
 )
 assert(
   sftpBackend.includes('fn sftp_line_ending()') &&
@@ -1288,15 +1298,11 @@ assert(
     fileTransfer.includes('useTerminalTargetForSftp') &&
     fileTransfer.includes('openCurrentTerminalSftp') &&
     fileTransfer.includes('useConfiguredTargetForSftp') &&
-    fileTransfer.includes('maybeAutoProbeCurrentTerminalSftp') &&
-    fileTransfer.includes('autoTerminalProbeAttempted') &&
     fileTransfer.includes('active: boolean') &&
     fileTransfer.includes('initializeRemoteBrowserIfActive') &&
     fileTransfer.includes('() => props.activationSequence') &&
     fileTransfer.includes('options.useForSftp && !props.active') &&
-    workspacePanel.includes(':active="activeWorkspaceTab === \'sftp\'"') &&
-    fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...') &&
-    fileTransfer.includes('未识别到当前终端目标，已使用连接配置目标打开 SFTP。') &&
+    workspacePanel.includes(':active="!collapsed && activeWorkspaceTab === \'sftp\'"') &&
     !fileTransfer.includes('hasRemoteShellSnapshot') &&
     fileTransfer.includes('useForSftp') &&
     fileTransfer.includes('writeTerminalInput') &&
@@ -1366,14 +1372,53 @@ assert(
     fileTransfer.includes('const isBastionConnection = computed') &&
     fileTransfer.includes('() => props.activationSequence') &&
     fileTransfer.includes('function activateSftpTab()') &&
+    fileTransfer.includes('selectedBastionTargetIsCurrent.value') &&
     fileTransfer.includes("@click=\"selectTransferMode('sftp')\"") &&
     !fileTransfer.includes('watch(transferMode') &&
     !fileTransfer.includes('onMounted(() => {\n  initializeRemoteBrowserIfActive()') &&
     fileTransfer.includes('host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host') &&
+    fileTransfer.includes(': probe.path || terminalTarget.pwd ||') &&
     fileTransfer.includes('resetTerminalIdentityProbeForRetry') &&
-    fileTransfer.includes(':disabled="!remoteReady || remoteBusy || taskInProgress"') &&
     fileTransfer.includes('已停止 SFTP 探测。'),
-  'Bastion SFTP detection must be initiated by an SFTP tab activation and use the terminal-derived server IP and username.'
+  'Bastion SFTP must retain a successful target across tab activations, prefer the SFTP-reported path, and only detect the terminal target when needed.'
+)
+
+assert(
+  appShell.includes('connectionGeneration: number') &&
+    appShell.includes('connectionGeneration: !wasConnected && isConnected') &&
+    appShell.includes('? tab.connectionGeneration + 1') &&
+    appShell.includes(':terminal-status="activeTerminal?.status ?? \'idle\'"') &&
+    appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
+    workspacePanel.includes('terminalStatus:') &&
+    workspacePanel.includes('terminalConnectionGeneration: number') &&
+    workspacePanel.includes(':terminal-status="terminalStatus"') &&
+    workspacePanel.includes(':terminal-connection-generation="terminalConnectionGeneration"') &&
+    fileTransfer.includes('terminalStatus: TerminalRuntimeStatus') &&
+    fileTransfer.includes('terminalConnectionGeneration: number') &&
+    fileTransfer.includes('requiresExplicitBastionProbe') &&
+    fileTransfer.includes('bastionAutoProbeAttempted') &&
+    fileTransfer.includes('targetConnectionGeneration') &&
+    fileTransfer.includes('remoteRequestEpoch') &&
+    fileTransfer.includes('connectionRole = props.profile?.connectionRole') &&
+    fileTransfer.includes('cancelActiveRemoteTaskForStateChange()') &&
+    fileTransfer.includes('normalizeInterruptedBastionProbeForStateSave()') &&
+    fileTransfer.includes('() => props.active') &&
+    fileTransfer.includes('invalidateBastionTarget') &&
+    fileTransfer.includes('if (!bastionAutoProbeAttempted.value)') &&
+    fileTransfer.includes('openCurrentTerminalSftp({ automatic: true })') &&
+    fileTransfer.includes('if (!isBastionConnection.value || !terminalDetectionReady.value') &&
+    fileTransfer.includes("invalidateBastionTarget('终端连接已断开；上次 SFTP 目标已失效") &&
+    fileTransfer.includes('isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)') &&
+    fileTransfer.includes('if (detectionEpoch !== remoteRequestEpoch) return') &&
+    fileTransfer.includes('activeTask.value?.id !== taskId') &&
+    fileTransfer.indexOf('activeTask.value?.id !== taskId') < fileTransfer.indexOf('const response = await action(taskId)') &&
+    fileTransfer.includes('if (!isBastionConnection.value)') &&
+    fileTransfer.includes('if (isBastionConnection.value)') &&
+    fileTransfer.includes('openCurrentTerminalSftp') &&
+    fileTransfer.includes('v-if="isBastionConnection"') &&
+    !fileTransfer.includes('maybeAutoProbeCurrentTerminalSftp') &&
+    !fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...'),
+  'Direct connections must use configured SFTP only; bastion targets may be probed explicitly and must be invalidated across terminal disconnects or connection generations.'
 )
 
 assert(
@@ -1419,7 +1464,7 @@ assert(
     fileTransfer.includes('cachedRemoteDirectory') &&
     fileTransfer.includes('invalidateRemoteDirectoryCache') &&
     fileTransfer.includes('const directoryLoading = ref(false)') &&
-    fileTransfer.includes('const remoteBusy = computed(() => loading.value || directoryLoading.value)') &&
+    fileTransfer.includes('const remoteBusy = computed(() => loading.value || directoryLoading.value || identifying.value)') &&
     fileTransfer.includes(':aria-busy="directoryLoading"') &&
     fileTransfer.includes('class="transfer-pane-summary"') &&
     fileTransfer.includes('directoryLoading && entries.length === 0') &&

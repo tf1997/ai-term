@@ -223,6 +223,25 @@ pub fn probe_sftp_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> SftpProbeResponse {
+    match try_native_sftp_probe(profile, target_override, cancel_token) {
+        Some(Ok(response)) => {
+            let path = response.path;
+            return SftpProbeResponse {
+                available: true,
+                path: Some(path.clone()),
+                message: format!("SFTP 可用，远程目录 {path}"),
+            };
+        }
+        Some(Err(error)) if !should_fallback_native_sftp_error(&error) => {
+            return SftpProbeResponse {
+                available: false,
+                path: None,
+                message: summarize_sftp_error(&error.to_string()),
+            };
+        }
+        Some(Err(_)) | None => {}
+    }
+
     match run_sftp_profile_commands_with_progress(
         profile,
         target_override,
@@ -266,6 +285,35 @@ pub fn probe_sftp_with_cancel(
             message: summarize_sftp_error(&error.to_string()),
         },
     }
+}
+
+fn try_native_sftp_probe(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Option<Result<SftpListResponse>> {
+    // Detection is a lifecycle boundary: discard a pooled channel for the same
+    // route, then let a successful probe repopulate the pool for directory use.
+    clear_cached_native_sftp_routes(profile, target_override);
+    let result = try_native_list_directory(profile, ".", target_override, cancel_token)?;
+    match result {
+        Ok(response) => Some(Ok(response)),
+        Err(error) if should_retry_native_probe_at_root(&error) => {
+            try_native_list_directory(profile, "/", target_override, cancel_token)
+                .or(Some(Err(error)))
+        }
+        Err(error) => Some(Err(error)),
+    }
+}
+
+fn should_retry_native_probe_at_root(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    (message.contains("failed to read native sftp directory")
+        || message.contains("need cwd")
+        || message.contains("couldn't canonicalize"))
+        && !contains_host_key_verification_failure(&message)
+        && !message.contains("authentication")
+        && !message.contains("sftp task cancelled")
 }
 
 pub fn create_directory(
@@ -953,8 +1001,7 @@ fn native_result_or_fallback<T>(result: Option<Result<T>>) -> Result<Option<T>> 
 
 fn should_fallback_native_sftp_error(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
-    !message.contains("host key")
-        && !message.contains("known_hosts")
+    !contains_host_key_verification_failure(&message)
         && !message.contains("authentication")
         && !message.contains("permission denied")
         && !message.contains("no such file")
@@ -964,8 +1011,7 @@ fn should_fallback_native_sftp_error(error: &anyhow::Error) -> bool {
 
 fn should_try_next_native_sftp_route(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
-    !message.contains("host key")
-        && !message.contains("known_hosts")
+    !contains_host_key_verification_failure(&message)
         && !message.contains("permission denied")
         && !message.contains("no such file")
         && !message.contains("not a directory")
@@ -986,6 +1032,23 @@ static NATIVE_SFTP_POOL: OnceLock<Mutex<HashMap<String, NativeSftpPoolEntry>>> =
 
 fn native_sftp_pool() -> &'static Mutex<HashMap<String, NativeSftpPoolEntry>> {
     NATIVE_SFTP_POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clear_cached_native_sftp_routes(
+    profile: &ConnectionProfile,
+    target_override: &SftpTargetOverride,
+) {
+    let cache_keys = native_sftp_routes(profile, target_override)
+        .into_iter()
+        .map(|route| native_sftp_cache_key(profile, &route))
+        .collect::<Vec<_>>();
+    let Ok(mut pool) = native_sftp_pool().lock() else {
+        return;
+    };
+    prune_native_sftp_pool(&mut pool);
+    for cache_key in cache_keys {
+        pool.remove(&cache_key);
+    }
 }
 
 fn run_cached_native_sftp_routes<T>(
@@ -1726,17 +1789,24 @@ fn ensure_not_cancelled(cancel_token: Option<&SftpCancelToken>) -> Result<()> {
     Ok(())
 }
 fn should_retry_sftp_root_listing(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
+    let message = format!("{error:#}").to_ascii_lowercase();
     message.contains("need cwd") || message.contains("couldn't canonicalize")
 }
 
+fn contains_host_key_verification_failure(message: &str) -> bool {
+    message.contains("host key")
+        || message.contains("known_hosts")
+        || message.contains("主机密钥")
+        || message.contains("中间人攻击")
+}
+
 fn should_try_composite_username_fallback(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
+    let message = format!("{error:#}").to_ascii_lowercase();
     !message.contains("sftp task cancelled")
+        && !should_retry_sftp_root_listing(error)
+        && !contains_host_key_verification_failure(&message)
         && !message.contains("remote host identification has changed")
         && !message.contains("possible dns spoofing detected")
-        && !message.contains("host key verification failed")
-        && !(message.contains("offending") && message.contains("known_hosts"))
 }
 
 fn run_sftp_commands(
@@ -3067,10 +3137,46 @@ mod tests {
         let error =
             anyhow::anyhow!("SFTP command failed\nCouldn't canonicalize: Failure\nNeed cwd");
         assert!(should_retry_sftp_root_listing(&error));
+        assert!(!should_try_composite_username_fallback(&error));
 
         let commands = list_directory_without_cwd_commands("/").unwrap();
         assert_eq!(commands, vec!["ls -l \"/\"", "bye"]);
         assert!(!commands.iter().any(|command| command.starts_with("cd ")));
+    }
+
+    #[test]
+    fn never_switches_routes_after_host_key_verification_failure() {
+        let localized = anyhow::anyhow!(
+            "[AlTerm] SSH 主机密钥校验失败。host key 与本机 known_hosts 记录不一致，可能存在中间人攻击。"
+        );
+        assert!(!should_try_composite_username_fallback(&localized));
+
+        let openssh = anyhow::anyhow!(
+            "REMOTE HOST IDENTIFICATION HAS CHANGED! Offending key in C:/Users/test/.ssh/known_hosts"
+        );
+        assert!(!should_try_composite_username_fallback(&openssh));
+    }
+
+    #[test]
+    fn connection_failures_can_still_try_the_alternate_bastion_route() {
+        let error = anyhow::anyhow!("ssh: connect to host bastion.example.com port 22: timed out");
+        assert!(should_try_composite_username_fallback(&error));
+    }
+
+    #[test]
+    fn native_probe_only_retries_root_for_non_security_failures() {
+        assert!(should_retry_native_probe_at_root(&anyhow::anyhow!(
+            "failed to read native SFTP directory .: No such file or directory"
+        )));
+        assert!(!should_retry_native_probe_at_root(&anyhow::anyhow!(
+            "SSH 主机密钥校验失败，known_hosts 不一致"
+        )));
+        assert!(!should_retry_native_probe_at_root(&anyhow::anyhow!(
+            "authentication failed"
+        )));
+        assert!(!should_retry_native_probe_at_root(&anyhow::anyhow!(
+            "failed to connect native SFTP route: connection timed out"
+        )));
     }
 
     #[test]

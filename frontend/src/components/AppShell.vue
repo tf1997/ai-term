@@ -45,6 +45,7 @@ interface TerminalTab {
   profile?: ConnectionProfile
   connectRequest: number
   status: TerminalRuntimeStatus
+  connectionGeneration: number
 }
 
 const COMMAND_HISTORY_CACHE_LIMIT = 300
@@ -170,7 +171,8 @@ const terminalTabs = ref<TerminalTab[]>([
     connectionId: LOCAL_CONNECTION_ID,
     profile: undefined,
     connectRequest: 0,
-    status: 'idle'
+    status: 'idle',
+    connectionGeneration: 0
   }
 ])
 const activeTerminalId = ref('local-1')
@@ -1402,7 +1404,8 @@ function createTerminalTab(profile?: ConnectionProfile) {
     connectionId,
     profile: profile ? cloneConnectionProfile(profile) : undefined,
     connectRequest: 1,
-    status: 'idle'
+    status: 'idle',
+    connectionGeneration: 0
   })
   activeTerminalId.value = id
   setTerminalTargets([id], id)
@@ -1439,7 +1442,18 @@ function terminalStatusClass(status: TerminalRuntimeStatus) {
 }
 
 function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
-  terminalTabs.value = terminalTabs.value.map((tab) => (tab.id === terminalId ? { ...tab, status } : tab))
+  terminalTabs.value = terminalTabs.value.map((tab) => {
+    if (tab.id !== terminalId) return tab
+    const wasConnected = tab.status === 'remote' || tab.status === 'sftp'
+    const isConnected = status === 'remote' || status === 'sftp'
+    return {
+      ...tab,
+      status,
+      connectionGeneration: !wasConnected && isConnected
+        ? tab.connectionGeneration + 1
+        : tab.connectionGeneration
+    }
+  })
 }
 
 function updateTerminalOutput(event: TerminalOutputEvent) {
@@ -2076,6 +2090,8 @@ onBeforeUnmount(() => {
       :terminal-id="activeTerminalId"
       :connection-id="activeConnectionId"
       :connection-profile="activeTerminal?.profile"
+      :terminal-status="activeTerminal?.status ?? 'idle'"
+      :terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"
       :workspace-session-id="activeWorkspaceSessionId"
       :workspace-sessions="activeWorkspaceSessions"
       :connection-labels="connectionLabels"
