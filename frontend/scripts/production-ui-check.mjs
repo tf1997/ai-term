@@ -1370,7 +1370,7 @@ assert(
     !fileTransfer.includes('onMounted(() => {\n  initializeRemoteBrowserIfActive()') &&
     fileTransfer.includes('host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host') &&
     fileTransfer.includes('resetTerminalIdentityProbeForRetry') &&
-    fileTransfer.includes(':disabled="!remoteReady || taskInProgress"') &&
+    fileTransfer.includes(':disabled="!remoteReady || remoteBusy || taskInProgress"') &&
     fileTransfer.includes('已停止 SFTP 探测。'),
   'Bastion SFTP detection must be initiated by an SFTP tab activation and use the terminal-derived server IP and username.'
 )
@@ -1417,6 +1417,14 @@ assert(
     fileTransfer.includes('remoteDirectoryRequests') &&
     fileTransfer.includes('cachedRemoteDirectory') &&
     fileTransfer.includes('invalidateRemoteDirectoryCache') &&
+    fileTransfer.includes('const directoryLoading = ref(false)') &&
+    fileTransfer.includes('const remoteBusy = computed(() => loading.value || directoryLoading.value)') &&
+    fileTransfer.includes(':aria-busy="directoryLoading"') &&
+    fileTransfer.includes('class="transfer-pane-summary"') &&
+    fileTransfer.includes('directoryLoading && entries.length === 0') &&
+    fileTransfer.includes('await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value)') &&
+    !fileTransfer.includes("const taskId = startRemoteTask(cached ? '刷新远端目录' : '读取远端目录')") &&
+    !fileTransfer.includes("status.value = '正在读取目录...'") &&
     fileTransfer.includes('options: LoadDirectoryOptions') &&
     fileTransfer.includes('await loadDirectory(currentPath.value, { force: true })') &&
     fileTransfer.includes('@click="loadDirectory(currentPath, { force: true })"') &&
@@ -1453,6 +1461,8 @@ assert(
     styles.includes('.sftp-title-copy') &&
     styles.includes('.transfer-target-strip .transfer-route-item') &&
     styles.includes('.transfer-pane-title') &&
+    styles.includes('.transfer-pane-summary') &&
+    styles.includes('.remote-pane.directory-loading .file-row') &&
     styles.includes('.transfer-pane-path') &&
     styles.includes('.file-meta') &&
     styles.includes('.file-type-icon .ui-icon') &&

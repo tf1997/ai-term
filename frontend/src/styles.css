@@ -3237,6 +3237,29 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.transfer-pane-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.transfer-pane-summary .spinner-dot {
+  display: inline-block;
+  flex: 0 0 6px;
+  color: #56e6a3;
+}
+.remote-pane.directory-loading .file-list {
+  cursor: progress;
+}
+.remote-pane.directory-loading .file-row {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .transfer-pane-summary .spinner-dot {
+    animation: none;
+    opacity: .72;
+    transform: none;
+  }
+}
 .transfer-pane-path {
   min-width: 0;
   justify-self: end;

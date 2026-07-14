@@ -159,6 +159,8 @@ const selectedRemoteEntry = ref<SftpFileEntry | null>(null)
 const selectedLocalEntry = ref<LocalFileEntry | null>(null)
 const remoteDropActive = ref(false)
 const loading = ref(false)
+const directoryLoading = ref(false)
+const directoryLoadingPath = ref('')
 const localLoading = ref(false)
 const identifying = ref(false)
 const activeTask = ref<ActiveTask | null>(null)
@@ -187,6 +189,7 @@ let lastDroppedAt = 0
 
 const remoteReady = computed(() => props.connectionId && props.connectionId !== 'local')
 const taskInProgress = computed(() => Boolean(activeTask.value))
+const remoteBusy = computed(() => loading.value || directoryLoading.value)
 const activeTransferTask = computed(() => (activeTask.value?.direction ? activeTask.value : null))
 const isBastionConnection = computed(() => props.profile?.connectionRole === 'bastion')
 const targetOverride = computed(() => {
@@ -223,9 +226,13 @@ const localPaneSummary = computed(() => {
 })
 const remotePaneSummary = computed(() => {
   if (!remoteReady.value) return '未连接'
-  if (loading.value) return '加载中'
+  if (directoryLoading.value) return sortedEntries.value.length > 0 ? `${sortedEntries.value.length} 项 · 正在打开` : '正在读取'
   const selected = selectedRemoteEntry.value ? ' · 已选 1' : ''
   return `${sortedEntries.value.length} 项${selected}`
+})
+const remoteDirectoryLoadingLabel = computed(() => {
+  const path = directoryLoadingPath.value || currentPath.value || '.'
+  return sortedEntries.value.length > 0 ? `正在打开 ${path}` : `正在读取 ${path}`
 })
 
 const localBreadcrumbs = computed(() => buildLocalBreadcrumbs(localPath.value || localHome.value))
@@ -392,6 +399,8 @@ function restoreTransferState(key = transferStateKey()) {
   pendingDownload.value = null
   identifying.value = false
   loading.value = false
+  directoryLoading.value = false
+  directoryLoadingPath.value = ''
   autoTerminalProbeAttempted.value = false
   status.value = cached.status
   remotePathHistory.value = [cached.currentPath]
@@ -413,6 +422,8 @@ function resetRemoteBrowserState() {
   pendingDownload.value = null
   identifying.value = false
   loading.value = false
+  directoryLoading.value = false
+  directoryLoadingPath.value = ''
   autoTerminalProbeAttempted.value = false
   status.value = ''
   remotePathHistory.value = []
@@ -471,7 +482,7 @@ watch(
 )
 
 async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
-  if (!remoteReady.value) return
+  if (!remoteReady.value || loading.value || directoryLoading.value) return
   const requestedPath = normalizeRemoteDirectoryPath(resolveRemoteDirectoryPath(path))
   const targetKey = remoteTargetCacheKey()
   const cacheKey = remoteDirectoryCacheKey(requestedPath, targetKey)
@@ -481,7 +492,6 @@ async function loadDirectory(path = currentPath.value, options: LoadDirectoryOpt
   if (cached && !options.force) {
     applyRemoteDirectoryCache(cached, options.recordHistory !== false)
     if (cacheFresh) return
-    status.value = `${cached.entries.length} 项 · 正在刷新`
   }
 
   const existingRequest = remoteDirectoryRequests.get(cacheKey)
@@ -494,13 +504,11 @@ async function loadDirectory(path = currentPath.value, options: LoadDirectoryOpt
     return
   }
 
-  const taskId = startRemoteTask(cached ? '刷新远端目录' : '读取远端目录')
-  if (!taskId) return
-  loading.value = true
+  directoryLoading.value = true
+  directoryLoadingPath.value = requestedPath
   error.value = ''
-  if (!cached) status.value = '正在读取目录...'
   const request = (async () => {
-    const response = await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value, { taskId })
+    const response = await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value)
     currentPath.value = response.path
     pathDraft.value = response.path
     entries.value = response.entries
@@ -516,8 +524,8 @@ async function loadDirectory(path = currentPath.value, options: LoadDirectoryOpt
     if (!maybeAutoProbeCurrentTerminalSftp(err)) handleTaskError(err)
   } finally {
     remoteDirectoryRequests.delete(cacheKey)
-    loading.value = false
-    finishRemoteTask(taskId)
+    directoryLoading.value = false
+    directoryLoadingPath.value = ''
   }
 }
 
@@ -531,7 +539,7 @@ async function loadLocalHome() {
 }
 
 function initializeRemoteBrowserIfActive() {
-  if (!props.active || transferMode.value !== 'sftp' || !remoteReady.value || loading.value || pendingIdentify.value) return
+  if (!props.active || transferMode.value !== 'sftp' || !remoteReady.value || remoteBusy.value || pendingIdentify.value) return
   if (selectedTarget.value) {
     if (entries.value.length === 0) void loadDirectory(currentPath.value || '.')
     return
@@ -552,7 +560,7 @@ function activateSftpTab() {
     openCurrentTerminalSftp()
     return
   }
-  if (loading.value || identifying.value || pendingIdentify.value) return
+  if (remoteBusy.value || identifying.value || pendingIdentify.value) return
   initializeRemoteBrowserIfActive()
 }
 
@@ -567,7 +575,7 @@ function initializeRemoteBrowser() {
 }
 
 function openCurrentTerminalSftp() {
-  if (!remoteReady.value || taskInProgress.value) return
+  if (!remoteReady.value || remoteBusy.value || taskInProgress.value) return
   resetTerminalIdentityProbeForRetry()
   currentTerminalTarget.value = null
   selectedTarget.value = null
@@ -581,6 +589,8 @@ function resetTerminalIdentityProbeForRetry() {
   pendingIdentify.value = null
   identifying.value = false
   loading.value = false
+  directoryLoading.value = false
+  directoryLoadingPath.value = ''
   error.value = ''
   status.value = ''
 }
@@ -636,7 +646,7 @@ async function loadLocalDirectory(path = localPath.value || localHome.value, rec
 }
 
 async function useTerminalTargetForSftp() {
-  if (!props.active || !currentTerminalTarget.value) return
+  if (!props.active || !currentTerminalTarget.value || remoteBusy.value) return
   const terminalTarget = currentTerminalTarget.value
   if (isBastionConnection.value && (!terminalTarget.ip.trim() || !terminalTarget.username.trim())) {
     const missing = [!terminalTarget.ip.trim() ? '服务器 IP' : '', !terminalTarget.username.trim() ? '服务器用户名' : '']
@@ -711,6 +721,7 @@ async function probeSelectedTarget(candidate: SftpTarget) {
 }
 
 function clearSelectedTarget() {
+  if (remoteBusy.value) return
   selectedTarget.value = null
   autoTerminalProbeAttempted.value = false
   currentPath.value = '.'
@@ -754,7 +765,7 @@ function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
 }
 
 function openEntry(entry: SftpFileEntry) {
-  if (!entry.isDir) return
+  if (!entry.isDir || remoteBusy.value) return
   void loadDirectory(entry.path)
 }
 
@@ -768,12 +779,13 @@ function openRemoteContextMenu(event: MouseEvent, entry: SftpFileEntry) {
     {
       id: 'open',
       label: '打开目录',
-      disabled: !entry.isDir,
+      disabled: !entry.isDir || remoteBusy.value,
       action: () => openEntry(entry)
     },
     {
       id: 'download',
       label: '下载到本地目录',
+      disabled: remoteBusy.value,
       action: () => void downloadRemoteEntry(entry)
     },
     {
@@ -785,6 +797,7 @@ function openRemoteContextMenu(event: MouseEvent, entry: SftpFileEntry) {
       id: 'delete',
       label: '删除',
       danger: true,
+      disabled: remoteBusy.value,
       action: () => void deleteEntry(entry)
     }
   ])
@@ -813,7 +826,7 @@ function openLocalContextMenu(event: MouseEvent, entry: LocalFileEntry) {
     {
       id: 'upload',
       label: '上传到远端目录',
-      disabled: !remoteReady.value || loading.value,
+      disabled: !remoteReady.value || remoteBusy.value,
       action: () => {
         selectedLocalEntry.value = entry
         void uploadSelectedLocalEntry()
@@ -857,7 +870,7 @@ async function openLocalFileLocation(entry: LocalFileEntry) {
 }
 
 function goParent() {
-  if (currentPath.value === '/' || currentPath.value === '.') return
+  if (remoteBusy.value || currentPath.value === '/' || currentPath.value === '.') return
   const parts = currentPath.value.split('/').filter(Boolean)
   parts.pop()
   void loadDirectory(parts.length ? `/${parts.join('/')}` : '/')
@@ -897,13 +910,13 @@ const currentLocalRoot = computed(() => {
 })
 
 function goRemoteBack() {
-  if (remotePathHistoryIndex.value <= 0) return
+  if (remoteBusy.value || remotePathHistoryIndex.value <= 0) return
   remotePathHistoryIndex.value -= 1
   void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
 }
 
 function goRemoteForward() {
-  if (remotePathHistoryIndex.value >= remotePathHistory.value.length - 1) return
+  if (remoteBusy.value || remotePathHistoryIndex.value >= remotePathHistory.value.length - 1) return
   remotePathHistoryIndex.value += 1
   void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
 }
@@ -932,7 +945,7 @@ function localParentPath(path: string) {
 }
 
 function canAcceptRemoteDrop() {
-  return transferMode.value === 'sftp' && remoteReady.value && !loading.value && isRemoteDropZoneVisible()
+  return transferMode.value === 'sftp' && remoteReady.value && !remoteBusy.value && isRemoteDropZoneVisible()
 }
 
 function isRemoteDropZoneVisible() {
@@ -1089,7 +1102,7 @@ async function uploadDroppedLocalPaths(rawPaths: string[]) {
   if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
 }
 function triggerUpload() {
-  if (!remoteReady.value || loading.value) return
+  if (!remoteReady.value || remoteBusy.value) return
   if (transferMode.value === 'terminal') {
     fileInput.value?.click()
     return
@@ -1828,11 +1841,11 @@ function shellQuote(value: string) {
           <UiIcon name="terminal" size="14" />
           <span>切换到终端</span>
         </button>
-        <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || taskInProgress" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || loading" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || loading" @click="createDirectory"><UiIcon name="folder" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || loading || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
-        <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!remoteReady || loading || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload"><UiIcon name="upload" /></button>
+        <button class="icon-button" type="button" title="识别并打开当前服务器 SFTP" aria-label="识别并打开当前服务器 SFTP" :disabled="!remoteReady || remoteBusy || taskInProgress" @click="openCurrentTerminalSftp"><UiIcon name="terminal" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || remoteBusy" @click="createDirectory"><UiIcon name="folder" /></button>
+        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || remoteBusy || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
+        <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!remoteReady || remoteBusy || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload"><UiIcon name="upload" /></button>
         <button v-if="activeTask" class="icon-button danger" type="button" title="取消当前任务" aria-label="取消当前任务" :disabled="activeTask.cancelling" @click="cancelActiveTask">
           <span v-if="activeTask.cancelling" class="spinner-dot" aria-hidden="true" /><UiIcon v-else name="close" />
         </button>
@@ -1900,14 +1913,14 @@ function shellQuote(value: string) {
         <strong>{{ currentTerminalTarget.username }}@{{ currentTerminalTarget.host }}</strong>
         <small>{{ currentTerminalTarget.hostname }} · {{ currentTerminalTarget.pwd }}</small>
       </div>
-      <button type="button" @click="useTerminalTargetForSftp">打开 SFTP</button>
+      <button type="button" :disabled="remoteBusy" @click="useTerminalTargetForSftp">打开 SFTP</button>
     </div>
 
     <div v-if="transferMode === 'sftp' && selectedTarget" class="bastion-targets">
       <div class="selected-target">
         <span>当前 SFTP 目标</span>
         <strong>{{ selectedTarget.username || 'user' }}@{{ selectedTarget.host }}</strong>
-        <button type="button" @click="clearSelectedTarget">使用配置目标</button>
+        <button type="button" :disabled="remoteBusy" @click="clearSelectedTarget">使用配置目标</button>
       </div>
       <button v-if="probeStateFor(selectedTarget) && !probeStateFor(selectedTarget)?.available" class="terminal-fallback-button" type="button" @click="switchToTerminalMode">
         切到终端通道
@@ -1991,7 +2004,7 @@ function shellQuote(value: string) {
               </div>
               <div class="file-actions">
                 <button class="icon-button" type="button" title="打开文件位置" aria-label="打开文件位置" @click.stop="openLocalFileLocation(entry)"><UiIcon name="external-link" /></button>
-                <button class="icon-button" type="button" title="上传到远端目录" aria-label="上传到远端目录" :disabled="!remoteReady || loading" @click.stop="selectedLocalEntry = entry; uploadSelectedLocalEntry()"><UiIcon name="upload" /></button>
+                <button class="icon-button" type="button" title="上传到远端目录" aria-label="上传到远端目录" :disabled="!remoteReady || remoteBusy" @click.stop="selectedLocalEntry = entry; uploadSelectedLocalEntry()"><UiIcon name="upload" /></button>
               </div>
             </article>
           </div>
@@ -2000,7 +2013,8 @@ function shellQuote(value: string) {
         <section
           ref="remoteDropZone"
           class="transfer-pane remote-pane"
-          :class="{ 'drop-active': remoteDropActive }"
+          :class="{ 'drop-active': remoteDropActive, 'directory-loading': directoryLoading }"
+          :aria-busy="directoryLoading"
           @dragenter="handleRemoteDragEnter"
           @dragover="handleRemoteDragOver"
           @dragleave="handleRemoteDragLeave"
@@ -2009,19 +2023,22 @@ function shellQuote(value: string) {
           <div class="transfer-pane-head">
             <div class="transfer-pane-title">
               <strong>远端</strong>
-              <span>{{ remotePaneSummary }}</span>
+              <span class="transfer-pane-summary" role="status" aria-live="polite" :title="directoryLoading ? remoteDirectoryLoadingLabel : remotePaneSummary">
+                <i v-if="directoryLoading" class="spinner-dot" aria-hidden="true" />
+                {{ remotePaneSummary }}
+              </span>
             </div>
             <nav ref="remoteCrumbNav" class="transfer-pane-path" :title="currentPath" aria-label="远端路径导航">
               <button v-for="crumb in remoteBreadcrumbs" :key="crumb.path" type="button" :title="crumb.path" @click="loadDirectory(crumb.path)">{{ crumb.label }}</button>
             </nav>
           </div>
           <div class="sftp-pathbar">
-            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="!remoteReady || loading || remotePathHistoryIndex <= 0" @click="goRemoteBack"><UiIcon name="arrow-left" /></button>
-            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="!remoteReady || loading || remotePathHistoryIndex >= remotePathHistory.length - 1" @click="goRemoteForward"><UiIcon name="arrow-right" /></button>
-            <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || loading" @click="goParent"><UiIcon name="arrow-up" /></button>
-            <input v-model="pathDraft" :disabled="!remoteReady || loading" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
-            <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory(pathDraft)">打开</button>
-            <button type="button" :disabled="!remoteReady || loading" @click="loadDirectory('.')">主目录</button>
+            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex <= 0" @click="goRemoteBack"><UiIcon name="arrow-left" /></button>
+            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex >= remotePathHistory.length - 1" @click="goRemoteForward"><UiIcon name="arrow-right" /></button>
+            <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || remoteBusy" @click="goParent"><UiIcon name="arrow-up" /></button>
+            <input v-model="pathDraft" :disabled="!remoteReady || remoteBusy" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
+            <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(pathDraft)">打开</button>
+            <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory('.')">主目录</button>
           </div>
           <div class="file-list">
             <div v-if="remoteDropActive" class="remote-drop-overlay" aria-live="polite">
@@ -2030,7 +2047,7 @@ function shellQuote(value: string) {
               <span>{{ currentPath }}</span>
             </div>
             <p v-if="!remoteReady" class="empty-state">SFTP 需要打开一个远程连接。</p>
-            <p v-else-if="loading && entries.length === 0" class="empty-state">正在加载 SFTP 目录...</p>
+            <p v-else-if="directoryLoading && entries.length === 0" class="empty-state" role="status" aria-live="polite">正在加载 SFTP 目录...</p>
             <p v-else-if="sortedEntries.length === 0" class="empty-state">当前目录为空</p>
             <article
               v-for="entry in sortedEntries"
@@ -2053,9 +2070,9 @@ function shellQuote(value: string) {
                 </div>
               </div>
               <div class="file-actions">
-                <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" @click.stop="openEntry(entry)"><UiIcon name="folder-open" /></button>
-                <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" @click.stop="downloadEntry(entry)"><UiIcon name="download" /></button>
-                <button class="icon-button danger" type="button" title="删除" aria-label="删除" @click.stop="deleteEntry(entry)"><UiIcon name="trash" /></button>
+                <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" :disabled="remoteBusy" @click.stop="openEntry(entry)"><UiIcon name="folder-open" /></button>
+                <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" :disabled="remoteBusy" @click.stop="downloadEntry(entry)"><UiIcon name="download" /></button>
+                <button class="icon-button danger" type="button" title="删除" aria-label="删除" :disabled="remoteBusy" @click.stop="deleteEntry(entry)"><UiIcon name="trash" /></button>
               </div>
             </article>
           </div>
