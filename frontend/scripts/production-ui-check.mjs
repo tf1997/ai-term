@@ -23,6 +23,7 @@ const shellCommand = read('src/lib/shellCommand.ts')
 const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
 const scriptPanel = read('src/components/ScriptPanel.vue')
+const scriptExecution = read('src/lib/scriptExecution.ts')
 const scriptRisk = read('src/lib/scriptRisk.ts')
 const scriptReadiness = read('src/lib/scriptReadiness.ts')
 const sidebar = read('src/components/ConnectionSidebar.vue')
@@ -1555,6 +1556,46 @@ assert(
     styles.includes('-webkit-text-fill-color: transparent'),
   'Script editors must use auto-detected Bash, PowerShell, and CMD syntax highlighting without adding language badges to the toolbar.'
 )
+
+assert(
+    shellCommand.includes('normalizeShellScript(content)') &&
+    scriptExecution.includes('export function prepareScriptForExecution') &&
+    scriptExecution.includes("language === 'powershell' || language === 'cmd') return source") &&
+    scriptExecution.includes("!state.quote && state.arithmeticDepth === 0 && /^\\s*#/.test(line)") &&
+    scriptExecution.includes('state.heredocs.push(...result.heredocs)') &&
+    scriptPanel.includes("import { prepareScriptForExecution } from '../lib/scriptExecution'") &&
+    scriptPanel.includes('prepareScriptForExecution(content, language)') &&
+    scriptPanel.includes('${prepared}') &&
+    (scriptPanel.match(/wrap="off"/g) ?? []).length >= 3 &&
+    scriptPanel.includes('@scroll="syncDraftLineRail"') &&
+    scriptPanel.includes('@scroll="syncSelectedScriptLineRail"') &&
+    scriptPanel.includes('@scroll="syncExpandedScriptLineRail"'),
+  'Script source comments must remain editable, be filtered only at execution, and keep all editor layers synchronized without soft wrapping.'
+)
+
+assertLastCssDeclarations(
+  '.script-editor-shell',
+  { '--script-editor-line-height': '18px' },
+  'Script editor must define one explicit line-height metric for every visual layer.'
+)
+
+for (const selector of [
+  '.script-editor-shell .script-line-rail',
+  '.script-editor-shell .script-code-overlay',
+  ':root .script-editor-shell textarea'
+]) {
+  assertLastCssDeclarations(
+    selector,
+    {
+      'font-family': 'var(--font-mono)',
+      'font-size': 'var(--font-sm)',
+      'line-height': 'var(--script-editor-line-height)',
+      'padding-top': '10px',
+      'padding-bottom': '24px'
+    },
+    'Script line numbers, syntax highlighting, and input text must share identical vertical geometry.'
+  )
+}
 
 assert(
   scriptReadiness.includes('analyzeScriptReadiness') &&

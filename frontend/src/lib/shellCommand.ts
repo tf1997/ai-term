@@ -208,12 +208,19 @@ export function codeBlockLabel(language: string, content = '') {
 
 export function shellCommandFromCodeBlock(language: string, content: string) {
   if (!isShellLikeCodeBlock(language, content)) return ''
-  return normalizeShellCommand(content)
+  const normalized = normalizeCodeLanguage(language)
+  const hasTranscriptPrompt = !normalized && content
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .some(hasUnambiguousShellPrompt)
+  return shellSessionLanguages.has(normalized) || hasTranscriptPrompt
+    ? normalizeShellCommand(content)
+    : normalizeShellScript(content)
 }
 
 export function isShellLikeCodeBlock(language: string, content: string) {
   const normalized = normalizeCodeLanguage(language)
-  if (explicitShellLanguages.has(normalized)) return normalizeShellCommand(content).length > 0
+  if (explicitShellLanguages.has(normalized)) return normalizeShellScript(content).trim().length > 0
   if (shellSessionLanguages.has(normalized)) return hasShellSignal(content)
   if (normalized && !['text', 'plain', 'plaintext', 'txt'].includes(normalized)) return false
   return hasShellSignal(content)
@@ -240,6 +247,11 @@ export function normalizeShellCommand(command: string) {
   return lines.join('\n').trim()
 }
 
+/** Preserve script source for editing and defer comment filtering until execution. */
+export function normalizeShellScript(script: string) {
+  return script.replace(/\r\n?/g, '\n')
+}
+
 function hasShellSignal(content: string) {
   const normalized = stripLanguagePreamble(content).replace(/\r\n/g, '\n')
   if (/^#!\//m.test(normalized)) return true
@@ -259,8 +271,13 @@ function stripLanguagePreamble(content: string) {
 
 function hasShellPrompt(line: string) {
   const trimmed = line.trim()
+  return hasUnambiguousShellPrompt(line) ||
+    /^#\s+\S/.test(trimmed)
+}
+
+function hasUnambiguousShellPrompt(line: string) {
+  const trimmed = line.trim()
   return /^\$ /.test(trimmed) ||
-    /^#\s+\S/.test(trimmed) ||
     /^PS\s+[A-Z]:\\[^>]*>\s*/i.test(trimmed) ||
     /^[A-Z]:\\[^>]*>\s*/i.test(trimmed) ||
     /^(?:\[[^\]]+\]\s*)?[\w.-]+@[\w.-]+(?::[^#$>]*)?[#$]\s+/.test(trimmed)

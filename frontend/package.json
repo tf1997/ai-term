@@ -2,6 +2,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
+    "test:scripts": "node --test scripts/script-execution.test.mjs",
     "test:ui": "node scripts/production-ui-check.mjs",
     "tauri": "tauri"
   },

@@ -12251,22 +12251,40 @@ button.script-readiness-status:hover {
 }
 
 /* Keep the transparent textarea and visible syntax layer pixel-aligned. */
+.script-editor-shell {
+  --script-editor-line-height: 18px;
+}
+
+.script-editor-shell .script-line-rail,
 .script-editor-shell .script-code-overlay,
 :root .script-editor-shell textarea {
   box-sizing: border-box;
   margin: 0;
-  border: 0;
   font-family: var(--font-mono);
   font-size: var(--font-sm);
   font-style: normal;
   font-weight: 400;
   font-variant-ligatures: none;
   letter-spacing: 0;
-  line-height: 1.5;
+  line-height: var(--script-editor-line-height);
+  padding-top: 10px;
+  padding-bottom: 24px;
   tab-size: 2;
   text-indent: 0;
   text-rendering: geometricPrecision;
   white-space: pre;
+}
+
+.script-editor-shell .script-line-rail {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.script-editor-shell .script-code-overlay,
+:root .script-editor-shell textarea {
+  border: 0;
+  padding-left: 10px;
+  padding-right: 24px;
 }
 
 .script-editor-shell textarea {

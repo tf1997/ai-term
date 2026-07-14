@@ -24,6 +24,7 @@ import {
 import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
 import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import { detectShellScriptLanguage, type ShellScriptLanguage } from '../lib/shellCommand'
+import { prepareScriptForExecution } from '../lib/scriptExecution'
 import ContextMenu from './ContextMenu.vue'
 import UiIcon from './UiIcon.vue'
 
@@ -44,6 +45,7 @@ interface ScriptChatMessage {
 
 interface ScriptExecutionSource {
   connectionId: string
+  name?: string
 }
 
 const props = defineProps<{
@@ -211,7 +213,7 @@ const scriptEditorMenuItems = computed(() => {
     { id: 'clear', label: '清空编辑器', danger: true, disabled: !hasDraftScript.value, action: clearDraftScript }
   ]
 })
-function scriptEditorRiskStatus(content: string) {
+function scriptEditorRiskStatus(content: string, fileName = '') {
   if (!content.trim()) {
     return {
       level: 'muted',
@@ -220,7 +222,15 @@ function scriptEditorRiskStatus(content: string) {
       risks: []
     }
   }
-  return scriptRiskStatusForContent(content)
+  return scriptRiskStatusForScript(content, fileName)
+}
+
+function preparedScriptContent(content: string, fileName = '') {
+  return prepareScriptForExecution(content, detectShellScriptLanguage(content, fileName))
+}
+
+function scriptRiskStatusForScript(content: string, fileName = '') {
+  return scriptRiskStatusForContent(preparedScriptContent(content, fileName))
 }
 
 function scriptRiskDisplayLabel(status: ReturnType<typeof scriptEditorRiskStatus>) {
@@ -236,10 +246,10 @@ function editorSaveStatus(hasContent: boolean, dirty: boolean) {
   return dirty ? '未保存' : '已保存'
 }
 
-const draftScriptRiskStatus = computed(() => scriptEditorRiskStatus(draftScriptContent.value))
-const selectedScriptRiskStatus = computed(() => scriptEditorRiskStatus(selectedScriptContent.value))
-const expandedScriptRiskStatus = computed(() => scriptEditorRiskStatus(expandedScriptContent.value))
-const pendingScriptRisks = computed(() => analyzeScriptRisks(pendingScriptExecution.value))
+const draftScriptRiskStatus = computed(() => scriptEditorRiskStatus(draftScriptContent.value, draftSavedScript.value?.name))
+const selectedScriptRiskStatus = computed(() => scriptEditorRiskStatus(selectedScriptContent.value, selectedScript.value?.name))
+const expandedScriptRiskStatus = computed(() => scriptEditorRiskStatus(expandedScriptContent.value, expandedScriptTitle.value))
+const pendingScriptRisks = computed(() => analyzeScriptRisks(preparedScriptContent(pendingScriptExecution.value, pendingScriptSource.value?.name)))
 const scriptRiskConfirmOpen = computed(() => pendingScriptExecution.value.trim().length > 0)
 const pendingScriptRiskSummary = computed(() => summarizeScriptRisks(pendingScriptRisks.value))
 const pendingScriptRiskLines = computed(() => buildScriptRiskPreviewLines(pendingScriptExecution.value, pendingScriptRisks.value))
@@ -922,7 +932,8 @@ function clearScriptRiskExplanation() {
   scriptRiskExplanationRequestId.value = ''
 }
 function executeScriptContent(content: string, sourceScript?: ScriptExecutionSource) {
-  const readinessIssues = analyzeScriptReadiness(content)
+  const executableContent = preparedScriptContent(content, sourceScript?.name)
+  const readinessIssues = analyzeScriptReadiness(executableContent)
   if (readinessIssues.length > 0) {
     const issueLines = readinessIssues.slice(0, 3).map((issue) => `第 ${issue.line} 行 ${issue.label}`).join('、')
     const remaining = readinessIssues.length > 3 ? `等 ${readinessIssues.length} 项` : ''
@@ -930,7 +941,7 @@ function executeScriptContent(content: string, sourceScript?: ScriptExecutionSou
     scriptExecutionNotice.value = ''
     return
   }
-  const risks = analyzeScriptRisks(content)
+  const risks = analyzeScriptRisks(executableContent)
   const sourceConnectionId = sourceScript?.connectionId?.trim()
   const connectionMismatch = executionTargetsDifferFromSource(sourceConnectionId)
   if (risks.length > 0 || connectionMismatch) {
@@ -941,12 +952,25 @@ function executeScriptContent(content: string, sourceScript?: ScriptExecutionSou
     scriptExecutionNotice.value = ''
     return
   }
-  writeScriptToTerminal(content)
+  if (!writeScriptToTerminal(content, sourceScript)) return
   panelError.value = ''
   scriptExecutionNotice.value = '未检测到风险命令，已发送到目标终端。'
 }
-function writeScriptToTerminal(content: string) {
-  emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${content}\nAI_TERM_SCRIPT\n`)
+function writeScriptToTerminal(content: string, sourceScript?: ScriptExecutionSource | null) {
+  const language = detectShellScriptLanguage(content, sourceScript?.name)
+  const prepared = prepareScriptForExecution(content, language)
+  const hasExecutableCommand = prepared.split('\n').some((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return false
+    return !((language === 'bash' || language === 'shell') && trimmed.startsWith('#!'))
+  })
+  if (!hasExecutableCommand) {
+    panelError.value = '脚本过滤注释后没有可执行命令。'
+    scriptExecutionNotice.value = ''
+    return false
+  }
+  emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${prepared}\nAI_TERM_SCRIPT\n`)
+  return true
 }
 
 function confirmPendingScriptExecution() {
@@ -954,7 +978,10 @@ function confirmPendingScriptExecution() {
   if (!content) return
   const hadRisks = pendingScriptRisks.value.length > 0
   const hadConnectionMismatch = pendingScriptConnectionMismatch.value
-  writeScriptToTerminal(content)
+  if (!writeScriptToTerminal(content, pendingScriptSource.value)) {
+    closeScriptRiskConfirm()
+    return
+  }
   if (hadRisks && hadConnectionMismatch) {
     scriptExecutionNotice.value = '已确认跨连接目标和风险命令，脚本已发送到当前终端。'
   } else if (hadConnectionMismatch) {
@@ -1533,7 +1560,7 @@ async function generateScriptTitle(content: string, fallback: string, userReques
 }
 
 function isDangerousScript(content: string) {
-  return analyzeScriptRisks(content).length > 0
+  return analyzeScriptRisks(preparedScriptContent(content)).length > 0
 }
 
 function parsePreviewScripts(raw: string | null) {
@@ -1724,6 +1751,7 @@ function nowText() {
             <textarea
               ref="expandedScriptTextarea"
               :value="expandedScriptContent"
+              wrap="off"
               spellcheck="false"
               aria-label="编辑放大脚本"
               @input="updateExpandedScriptContent(($event.target as HTMLTextAreaElement).value)"
@@ -1908,6 +1936,7 @@ function nowText() {
             <textarea
               ref="selectedScriptTextarea"
               :value="selectedScriptContent"
+              wrap="off"
               spellcheck="false"
               aria-label="编辑脚本"
               placeholder="在这里编辑保存的脚本..."
@@ -1989,6 +2018,7 @@ function nowText() {
             <textarea
               ref="draftEditorTextarea"
               :value="draftScriptContent"
+              wrap="off"
               spellcheck="false"
               aria-label="脚本草稿"
               placeholder="在这里粘贴、生成或编写 Shell 脚本..."
@@ -2061,10 +2091,10 @@ function nowText() {
                     <span
                       v-if="shellCommandForPart(part)"
                       class="command-risk-status"
-                      :class="`risk-${scriptRiskStatusForContent(shellCommandForPart(part)).level}`"
-                      :title="scriptRiskStatusForContent(shellCommandForPart(part)).message"
+                      :class="`risk-${scriptRiskStatusForScript(shellCommandForPart(part)).level}`"
+                      :title="scriptRiskStatusForScript(shellCommandForPart(part)).message"
                     >
-                      {{ scriptRiskStatusForContent(shellCommandForPart(part)).label }}
+                      {{ scriptRiskStatusForScript(shellCommandForPart(part)).label }}
                     </span>
                     <div v-if="shellCommandForPart(part)" class="script-reply-code-actions">
                       <button class="text-button" type="button" @click="applyDraftScript(shellCommandForPart(part), message.id)">设为草稿</button>
@@ -2077,7 +2107,7 @@ function nowText() {
               <div v-if="message.scriptContent" class="code-block script-code-card">
                 <div class="code-head">
                   <span>{{ message.savedScriptId ? '已保存' : '草稿' }}</span>
-                  <span class="command-risk-status" :class="`risk-${scriptRiskStatusForContent(scriptContentForMessage(message)).level}`">{{ scriptRiskStatusForContent(scriptContentForMessage(message)).label }}</span>
+                  <span class="command-risk-status" :class="`risk-${scriptRiskStatusForScript(scriptContentForMessage(message)).level}`">{{ scriptRiskStatusForScript(scriptContentForMessage(message)).label }}</span>
                   <div class="script-reply-code-actions">
                     <button class="text-button" type="button" @click="toggleScriptEditor(message)">
                       {{ editingMessageId === message.id ? '完成' : '编辑' }}
