@@ -25,6 +25,7 @@ const LONG_MESSAGE_CHARS = 1400
 const LONG_MESSAGE_LINES = 18
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
 const MAX_AI_COMMAND_HISTORY = 80
+const MAX_AI_CONVERSATION_MESSAGES = 16
 const STREAM_TIMER_INTERVAL_MS = 1000
 
 const props = defineProps<{
@@ -32,6 +33,10 @@ const props = defineProps<{
   connectionId: string
   workspaceSessionId: string
   workspaceSessions: WorkspaceSession[]
+  connectionLabels: Record<string, string>
+  executionTargetLabel: string
+  executionTargetTitle: string
+  executionTargetConnectionIds: string[]
   selectedConfigId: string
   config: AiProviderConfig
   apiKey: string
@@ -73,6 +78,7 @@ const contextOpen = ref(false)
 const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
+const pendingAiCommandSourceConnectionId = ref('')
 const aiRiskExplanation = ref('')
 const aiRiskExplanationError = ref('')
 const aiRiskExplanationLoading = ref(false)
@@ -86,12 +92,26 @@ const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommand
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
 const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
 const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
+const pendingAiCommandCrossConnection = computed(() => {
+  return executionTargetsDifferFromSource(pendingAiCommandSourceConnectionId.value)
+})
+const pendingAiCommandDialogTitle = computed(() => {
+  if (pendingAiCommandCrossConnection.value && pendingAiCommandRisks.value.length) return '确认跨连接风险命令'
+  if (pendingAiCommandCrossConnection.value) return '确认跨连接执行'
+  return '检测到风险命令'
+})
+const pendingAiCommandDialogDescription = computed(() => {
+  if (pendingAiCommandCrossConnection.value) return '命令生成时的连接与当前执行目标不同，请核对来源和目标。'
+  return '执行前请确认命中的命令行'
+})
 
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
 })
+const canSendMessage = computed(() => hasUsableConfig.value && Boolean(props.workspaceSessionId))
 
 const composerPlaceholder = computed(() => {
+  if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
   if (hasUsableConfig.value) return '输入问题，Ctrl+Enter / ⌘+Enter 发送'
   return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
 })
@@ -102,6 +122,7 @@ const activeSession = computed(() => {
 })
 
 const activeSessionTitle = computed(() => formatSessionDisplayTitle(activeSession.value?.name))
+const currentConnectionLabel = computed(() => connectionLabel(props.connectionId))
 
 const selectedTerminalContext = computed(() => {
   const selection = props.terminalSelection
@@ -114,7 +135,7 @@ const aiContextHistoryCount = computed(() => Math.min(props.commandHistory.lengt
 const assistantContextSummary = computed(() => `模型 ${aiModelLabel.value}`)
 const contextSummaryLabel = computed(() => {
   const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
-  return `上下文 ${formatCharacterCount(props.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
+  return `${currentConnectionLabel.value} · 上下文 ${formatCharacterCount(props.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
 })
 const contextStatusLabel = computed(() => {
   if (!props.contextStatus) return '未压缩'
@@ -138,9 +159,29 @@ const filteredSessions = computed(() => {
       ]
   if (!keyword) return sessions
   return sessions.filter((session) => {
-    return `${session.name} ${session.summary}`.toLowerCase().includes(keyword)
+    return `${session.name} ${session.summary} ${sessionSourceLabel(session)}`.toLowerCase().includes(keyword)
   })
 })
+
+function connectionLabel(connectionId: string) {
+  return props.connectionLabels[connectionId] || connectionId || '未知连接'
+}
+
+function messageSourceLabel(message: AiMessage) {
+  return connectionLabel(message.connectionId)
+}
+
+function sessionSourceLabel(session: WorkspaceSession) {
+  return connectionLabel(session.connectionId)
+}
+
+function executionTargetsDifferFromSource(sourceConnectionId: string) {
+  if (!sourceConnectionId) return false
+  const targetConnectionIds = props.executionTargetConnectionIds.length
+    ? props.executionTargetConnectionIds
+    : [props.connectionId]
+  return targetConnectionIds.some((connectionId) => connectionId !== sourceConnectionId)
+}
 
 function formatCharacterCount(count: number) {
   return `${Math.max(0, count).toLocaleString('zh-CN')} 字符`
@@ -165,12 +206,16 @@ function inferCommand(question: string, terminalSnapshot = props.terminalSnapsho
 
 async function sendMessage() {
   const text = askText.value.trim()
-  if (!text) return
+  if (!text || !canSendMessage.value) return
   const requestTerminalId = props.terminalId
   const requestConnectionId = props.connectionId
   const requestWorkspaceSessionId = props.workspaceSessionId
   const terminalSnapshot = props.terminalSnapshot
   const commandHistory = props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
+  const conversationMessages = props.messages
+    .filter((message) => !message.streaming && !message.error && message.text.trim())
+    .slice(-MAX_AI_CONVERSATION_MESSAGES)
+    .map((message) => ({ role: message.role, content: message.text }))
   const selectedContext = selectedTerminalContext.value
   const userMessageText = selectedContext
     ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
@@ -222,7 +267,8 @@ async function sendMessage() {
       requestId,
       buildQuestionWithSelectedTerminalText(text, selectedContext),
       terminalSnapshot,
-      commandHistory
+      commandHistory,
+      conversationMessages
     )
     if (stopRequested.value || currentRequestId.value !== requestId) return
     const answer = streamedAnswer || response.answer
@@ -323,7 +369,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
 function focusComposer() {
   historyOpen.value = false
-  if (!hasUsableConfig.value) return
+  if (!canSendMessage.value) return
   void nextTick(() => {
     composerInput.value?.focus()
   })
@@ -402,7 +448,13 @@ function createMessage(
   }
 }
 
-async function callConfiguredModelStream(requestId: string, question: string, terminalSnapshot: string, commandHistory: string[]) {
+async function callConfiguredModelStream(
+  requestId: string,
+  question: string,
+  terminalSnapshot: string,
+  commandHistory: string[],
+  conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>
+) {
   if (!props.config.baseUrl.trim() || !props.config.model.trim()) {
     throw new Error('请先配置 AI Base URL 和 Model')
   }
@@ -416,7 +468,8 @@ async function callConfiguredModelStream(requestId: string, question: string, te
     apiKey,
     question,
     terminalSnapshot,
-    commandHistory
+    commandHistory,
+    conversationMessages
   })
 }
 
@@ -502,7 +555,8 @@ async function explainPendingAiCommandRisk() {
       apiKey,
       question: buildAiRiskExplanationPrompt(command),
       terminalSnapshot: props.terminalSnapshot,
-      commandHistory: props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
+      commandHistory: props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY),
+      conversationMessages: []
     })
     if (aiRiskExplanationRequestId.value !== requestId) return
     aiRiskExplanation.value = (streamedAnswer || response.answer).trim() || 'AI 未返回风险说明。'
@@ -543,24 +597,26 @@ function toggleMessage(messageId: string) {
   }
 }
 
-function executeGeneratedCommand(command: string) {
+function executeGeneratedCommand(command: string, message?: AiMessage) {
   const value = command.trim()
   if (!value) return
   const risks = analyzeScriptRisks(value)
-  if (risks.length > 0) {
+  const sourceConnectionId = message?.connectionId || props.connectionId
+  if (risks.length > 0 || executionTargetsDifferFromSource(sourceConnectionId)) {
     pendingAiCommandExecution.value = value
+    pendingAiCommandSourceConnectionId.value = sourceConnectionId
     clearAiRiskExplanation()
     clearAiCommandNotice()
     return
   }
   emit('executeCommand', value)
-  showAiCommandNotice('已安全发送', '未检测到风险命令，已发送到目标终端。')
+  showAiCommandNotice('已安全发送', `未检测到风险命令，已发送到${props.executionTargetLabel}。`)
 }
 function confirmPendingAiCommandExecution() {
   const command = pendingAiCommandExecution.value.trim()
   if (!command) return
   emit('executeCommand', command)
-  showAiCommandNotice('已确认发送', '已确认风险命令，命令已发送到目标终端。')
+  showAiCommandNotice('已确认发送', `已确认来源、风险与目标，命令已发送到${props.executionTargetLabel}。`)
   closeAiCommandRiskConfirm()
 }
 
@@ -584,6 +640,7 @@ function clearAiCommandNotice() {
 
 function closeAiCommandRiskConfirm() {
   pendingAiCommandExecution.value = ''
+  pendingAiCommandSourceConnectionId.value = ''
   clearAiRiskExplanation()
 }
 function toggleHistory() {
@@ -600,13 +657,20 @@ function handleDocumentPointerDown(event: PointerEvent) {
 }
 
 function selectSession(sessionId: string) {
+  if (sessionId !== props.workspaceSessionId && isAsking.value) stopCurrentAnswer()
   emit('selectSession', sessionId)
   historyOpen.value = false
 }
 
 function createSession() {
+  if (isAsking.value) stopCurrentAnswer()
   emit('createSession')
   historyOpen.value = false
+}
+
+function deleteSession(sessionId: string) {
+  if (sessionId === props.workspaceSessionId && isAsking.value) stopCurrentAnswer()
+  emit('deleteSession', sessionId)
 }
 
 function openRenameSessionDialog(session: WorkspaceSession) {
@@ -709,7 +773,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => hasUsableConfig.value,
+  () => canSendMessage.value,
   (usable, wasUsable) => {
     if (usable && !wasUsable) focusComposer()
   },
@@ -750,12 +814,12 @@ watch(
           >
             <span class="session-history-main">
               <strong>{{ formatSessionDisplayTitle(session.name) }}</strong>
-              <small v-if="session.summary">{{ session.summary }}</small>
+              <small>{{ session.summary ? `${session.summary} · 来源 ${sessionSourceLabel(session)}` : `来源 · ${sessionSourceLabel(session)}` }}</small>
             </span>
             <span class="session-history-time">{{ sessionTimeLabel(session) }}</span>
             <span class="session-history-actions">
               <button class="icon-button" type="button" title="编辑会话" aria-label="编辑会话" @click.stop="openRenameSessionDialog(session)"><UiIcon name="edit" /></button>
-              <button class="icon-button danger" type="button" title="删除会话" aria-label="删除会话" @click.stop="emit('deleteSession', session.id)"><UiIcon name="trash" /></button>
+              <button class="icon-button danger" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteSession(session.id)"><UiIcon name="trash" /></button>
             </span>
           </article>
           <p v-if="filteredSessions.length === 0" class="empty-state">暂无会话</p>
@@ -782,16 +846,22 @@ watch(
       </form>
     </div>
     <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
-      <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险命令执行确认">
+      <section class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingAiCommandDialogTitle">
         <div class="modal-head">
           <div>
-            <strong>检测到风险命令</strong>
-            <span>执行前请确认命中的命令行</span>
+            <strong>{{ pendingAiCommandDialogTitle }}</strong>
+            <span>{{ pendingAiCommandDialogDescription }}</span>
           </div>
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
-          <div class="script-risk-summary" aria-label="风险类型">
+          <div v-if="pendingAiCommandCrossConnection" class="script-risk-ai" role="note" aria-label="命令来源与当前目标">
+            <div>
+              <strong>命令来源：{{ connectionLabel(pendingAiCommandSourceConnectionId) }}</strong>
+              <span :title="executionTargetTitle">当前目标：{{ executionTargetLabel }}</span>
+            </div>
+          </div>
+          <div v-if="pendingAiCommandRiskSummary.length" class="script-risk-summary" aria-label="风险类型">
             <span
               v-for="risk in pendingAiCommandRiskSummary"
               :key="risk.kind"
@@ -802,7 +872,7 @@ watch(
               <small>{{ risk.message }}</small>
             </span>
           </div>
-          <div class="script-risk-ai">
+          <div v-if="pendingAiCommandRisks.length" class="script-risk-ai">
             <div>
               <strong>不确定原因？</strong>
               <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
@@ -828,7 +898,7 @@ watch(
             <div class="script-risk-preview-head">
               <div>
                 <strong>命令预览</strong>
-                <span>高风险行已标红，执行前请逐行核对。</span>
+                <span>{{ pendingAiCommandRisks.length ? '风险行已标记，执行前请逐行核对。' : '请核对命令内容与当前执行目标。' }}</span>
               </div>
               <span class="script-risk-preview-count">{{ pendingAiCommandRiskLines.length }} 行</span>
             </div>
@@ -847,7 +917,7 @@ watch(
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint">确认后将发送到当前终端执行。</span>
+          <span class="script-risk-action-hint" :title="executionTargetTitle">确认后发送到：{{ executionTargetLabel }}</span>
           <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
           <button class="text-button danger" type="button" @click="confirmPendingAiCommandExecution">确认执行</button>
         </div>
@@ -873,7 +943,7 @@ watch(
     </div>
     <div ref="messageList" class="message-list">
       <p v-if="!hasUsableConfig" class="empty-state">暂无可用 AI 配置，请在左侧配置菜单中新建或完善配置。</p>
-      <p v-else-if="messages.length === 0" class="empty-state">当前终端暂无对话</p>
+      <p v-else-if="messages.length === 0" class="empty-state">当前 AI 会话暂无对话</p>
       <article
         v-for="message in messages"
         :key="message.id"
@@ -889,6 +959,7 @@ watch(
               <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
             </strong>
           </span>
+          <span class="chip message-source" :title="`生成上下文：${messageSourceLabel(message)}`">来源 · {{ messageSourceLabel(message) }}</span>
           <span v-if="message.error" class="message-error-badge">请求失败</span>
         </div>
         <div class="message-body">
@@ -902,7 +973,7 @@ watch(
             v-if="message.text"
             :content="message.text"
             :interactive-commands="message.role === 'assistant' && !message.error"
-            @execute-command="executeGeneratedCommand"
+            @execute-command="executeGeneratedCommand($event, message)"
           />
         </div>
         <div v-if="shouldCollapseMessage(message)" class="message-collapse-footer">
@@ -922,7 +993,7 @@ watch(
       <textarea
         ref="composerInput"
         v-model="askText"
-        :disabled="!hasUsableConfig"
+        :disabled="!canSendMessage"
         rows="2"
         :placeholder="composerPlaceholder"
         :title="composerPlaceholder"
@@ -934,7 +1005,7 @@ watch(
         class="icon-button"
         :title="isAsking ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
         :aria-label="isAsking ? '停止回答' : '发送'"
-        :disabled="!isAsking && !hasUsableConfig"
+        :disabled="!isAsking && !canSendMessage"
         @click="isAsking ? stopCurrentAnswer() : sendMessage()"
       >
         <UiIcon v-if="isAsking" name="stop" /><UiIcon v-else name="arrow-right" />

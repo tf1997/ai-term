@@ -42,7 +42,6 @@ interface TerminalTab {
   id: string
   title: string
   connectionId: string
-  workspaceSessionId: string
   profile?: ConnectionProfile
   connectRequest: number
   status: TerminalRuntimeStatus
@@ -126,7 +125,8 @@ const defaultAiConfig: AiProviderConfig = {
   riskPolicy: 'confirm-dangerous'
 }
 const LOCAL_CONNECTION_ID = 'local'
-const LOCAL_DEFAULT_SESSION_ID = 'local:default'
+const DEFAULT_AI_SESSION_ID = 'ai:default'
+const COMMAND_HISTORY_SESSION_ID = 'connection-history'
 const APP_VERSION = '0.1.0'
 const APP_CHANNEL = 'Stable'
 const APP_LICENSE = 'Apache-2.0'
@@ -168,7 +168,6 @@ const terminalTabs = ref<TerminalTab[]>([
     id: 'local-1',
     title: '本地终端',
     connectionId: LOCAL_CONNECTION_ID,
-    workspaceSessionId: LOCAL_DEFAULT_SESSION_ID,
     profile: undefined,
     connectRequest: 0,
     status: 'idle'
@@ -180,14 +179,16 @@ const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalOutputEvents = ref<Record<string, TerminalOutputDeltaEvent>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
-const workspaceSessionsByConnection = ref<Record<string, WorkspaceSession[]>>({})
+const workspaceSessions = ref<WorkspaceSession[]>([])
+const activeAiSessionId = ref('')
 const draftWorkspaceSessionIds = ref<Record<string, boolean>>({})
-const commandHistoryBySession = ref<Record<string, CommandHistoryEntry[]>>({})
+const commandHistoryByConnection = ref<Record<string, CommandHistoryEntry[]>>({})
 const aiMessagesBySession = ref<Record<string, AiMessage[]>>({})
 const aiContextBySession = ref<Record<string, AiContextStatus>>({})
 const scriptRecordingsByTerminal = ref<Record<string, ScriptRecording>>({})
-const loadedWorkspaceSessions = ref<Record<string, boolean>>({})
-const loadedSessionLists = ref<Record<string, boolean>>({})
+const loadedCommandHistoryConnections = ref<Record<string, boolean>>({})
+const loadedAiSessions = ref<Record<string, boolean>>({})
+const workspaceSessionListLoaded = ref(false)
 const contextMenu = ref<ContextMenuState | null>(null)
 const appSettings = ref<AppUserSettings>(loadUserSettings())
 const appTheme = ref<AppTheme>(loadAppTheme())
@@ -204,6 +205,7 @@ let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
 let sessionTabResizeObserver: ResizeObserver | null = null
+let workspaceSessionListLoadPromise: Promise<void> | null = null
 const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
@@ -227,6 +229,7 @@ const targetTerminalTabs = computed(() => {
 })
 
 const targetTerminalIds = computed(() => targetTerminalTabs.value.map((tab) => tab.id))
+const targetConnectionIds = computed(() => [...new Set(targetTerminalTabs.value.map((tab) => tab.connectionId))])
 const multiTerminalInputEnabled = computed(() => targetTerminalIds.value.length > 1)
 const activeTerminalTitle = computed(() => activeTerminal.value?.title ?? '当前终端')
 const terminalTargetLabel = computed(() => {
@@ -238,6 +241,18 @@ const terminalTargetTitle = computed(() => {
   return multiTerminalInputEnabled.value
     ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}`
     : `当前 tab：${activeTerminalTitle.value}；仅发送到当前终端`
+})
+const connectionLabels = computed<Record<string, string>>(() => {
+  const labels: Record<string, string> = {
+    [LOCAL_CONNECTION_ID]: '本地终端'
+  }
+  profiles.value.forEach((profile) => {
+    const endpoint = profile.target.host
+      ? `${profile.target.username || 'user'}@${profile.target.host}`
+      : profile.name
+    labels[profile.id] = profile.name && profile.name !== profile.id ? `${profile.name} · ${endpoint}` : endpoint
+  })
+  return labels
 })
 const sessionTabOverflow = computed(() => sessionTabScrollWidth.value - sessionTabClientWidth.value > 2)
 const sessionTabThumbStyle = computed(() => {
@@ -265,23 +280,21 @@ const activeTerminalSelection = computed(() => {
 })
 
 const activeConnectionId = computed(() => activeTerminal.value?.connectionId ?? LOCAL_CONNECTION_ID)
-const activeWorkspaceSessionId = computed(() => activeTerminal.value?.workspaceSessionId ?? LOCAL_DEFAULT_SESSION_ID)
-const activeWorkspaceKey = computed(() => workspaceKey(activeConnectionId.value, activeWorkspaceSessionId.value))
+const activeWorkspaceSessionId = computed(() => activeAiSessionId.value)
 
 const activeCommandHistory = computed(() => {
-  return commandHistoryBySession.value[activeWorkspaceKey.value] ?? []
+  return commandHistoryByConnection.value[activeConnectionId.value] ?? []
 })
 
 function commandHistoryForTab(tab: TerminalTab) {
-  const currentKey = workspaceKey(tab.connectionId, tab.workspaceSessionId)
-  return commandHistoryBySession.value[currentKey] ?? []
+  return commandHistoryByConnection.value[tab.connectionId] ?? []
 }
 const activeAiMessages = computed(() => {
-  return aiMessagesBySession.value[activeWorkspaceKey.value] ?? []
+  return aiMessagesBySession.value[activeAiSessionId.value] ?? []
 })
 
 const activeAiContextStatus = computed(() => {
-  return aiContextBySession.value[activeWorkspaceKey.value]
+  return aiContextBySession.value[activeAiSessionId.value]
 })
 
 const activeScriptRecording = computed(() => {
@@ -289,7 +302,7 @@ const activeScriptRecording = computed(() => {
 })
 
 const activeWorkspaceSessions = computed(() => {
-  return workspaceSessionsByConnection.value[activeConnectionId.value] ?? []
+  return workspaceSessions.value
 })
 
 const aboutRuntimeStats = computed(() => [
@@ -378,8 +391,8 @@ async function connectProfileFromSidebar(profileId: string) {
     const profile = normalizeConnectionProfileForSave(draft)
     await saveConnectionProfile(profile)
     profileStoreStatus.value = 'ready'
-    const session = await preferredWorkspaceSessionForConnection(profile.id)
-    createTerminalTab(profile, session)
+    await ensureActiveAiSession(profile.id)
+    createTerminalTab(profile)
     if (isSftpProfile(profile)) {
       workspacePanelTab.value = 'sftp'
       rightCollapsed.value = false
@@ -399,8 +412,8 @@ function isSftpProfile(profile: ConnectionProfile) {
 }
 
 async function createLocalTerminalTab() {
-  const session = await preferredWorkspaceSessionForConnection(LOCAL_CONNECTION_ID)
-  createTerminalTab(undefined, session)
+  await ensureActiveAiSession(LOCAL_CONNECTION_ID)
+  createTerminalTab()
 }
 
 function openLocalTerminal() {
@@ -1208,14 +1221,6 @@ async function deleteSelectedProfile(profileId: string) {
   }
 }
 
-function workspaceKey(connectionId: string, sessionId: string) {
-  return `${connectionId}::${sessionId}`
-}
-
-function defaultWorkspaceSessionId(connectionId: string) {
-  return `${connectionId}:default`
-}
-
 function nowText() {
   return new Date().toISOString()
 }
@@ -1249,56 +1254,49 @@ function isDraftWorkspaceSession(sessionId: string) {
   return Boolean(draftWorkspaceSessionIds.value[sessionId])
 }
 
-function workspaceSessionsForConnection(connectionId: string) {
-  return workspaceSessionsByConnection.value[connectionId] ?? []
+function workspaceSessionById(sessionId: string) {
+  return workspaceSessions.value.find((session) => session.id === sessionId)
 }
 
 function upsertWorkspaceSession(session: WorkspaceSession) {
-  const sessions = workspaceSessionsForConnection(session.connectionId)
-  workspaceSessionsByConnection.value = {
-    ...workspaceSessionsByConnection.value,
-    [session.connectionId]: [session, ...sessions.filter((item) => item.id !== session.id)]
-  }
+  workspaceSessions.value = [session, ...workspaceSessions.value.filter((item) => item.id !== session.id)]
 }
 
 function replaceWorkspaceSession(session: WorkspaceSession) {
-  const sessions = workspaceSessionsForConnection(session.connectionId)
-  workspaceSessionsByConnection.value = {
-    ...workspaceSessionsByConnection.value,
-    [session.connectionId]: sessions.map((item) => (item.id === session.id ? session : item))
-  }
+  workspaceSessions.value = workspaceSessions.value.map((item) => (item.id === session.id ? session : item))
 }
 
 function createDraftWorkspaceSession(connectionId: string, sessionId?: string, name = 'Untitled') {
-  const existing = sessionId ? workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId) : undefined
-  if (existing) {
-    markDraftWorkspaceSession(existing.id)
-    return existing
-  }
+  const existing = sessionId ? workspaceSessionById(sessionId) : undefined
+  if (existing) return existing
   const session = newWorkspaceSession(connectionId, name, sessionId)
   markDraftWorkspaceSession(session.id)
   upsertWorkspaceSession(session)
   return session
 }
 
-async function ensureWorkspaceSession(connectionId: string, sessionId = defaultWorkspaceSessionId(connectionId), name = 'Untitled') {
-  await loadWorkspaceSessionList(connectionId)
-  return workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId) ?? createDraftWorkspaceSession(connectionId, sessionId, name)
-}
-
-async function preferredWorkspaceSessionForConnection(connectionId: string, name = 'Untitled') {
-  await loadWorkspaceSessionList(connectionId)
-  return workspaceSessionsForConnection(connectionId).find((session) => !isDraftWorkspaceSession(session.id)) ?? createDraftWorkspaceSession(connectionId, defaultWorkspaceSessionId(connectionId), name)
+async function ensureActiveAiSession(sourceConnectionId = activeConnectionId.value, name = 'Untitled') {
+  await loadWorkspaceSessionList()
+  const current = workspaceSessionById(activeAiSessionId.value)
+  if (current) {
+    await loadAiSessionState(current.id)
+    return current
+  }
+  const session = workspaceSessions.value.find((item) => !isDraftWorkspaceSession(item.id))
+    ?? createDraftWorkspaceSession(sourceConnectionId, DEFAULT_AI_SESSION_ID, name)
+  activeAiSessionId.value = session.id
+  await loadAiSessionState(session.id)
+  return session
 }
 
 async function createWorkspaceSession(connectionId = activeConnectionId.value, name?: string) {
-  await loadWorkspaceSessionList(connectionId)
+  await loadWorkspaceSessionList()
   return createDraftWorkspaceSession(connectionId, undefined, name)
 }
 
-async function ensurePersistedWorkspaceSession(connectionId: string, sessionId = defaultWorkspaceSessionId(connectionId), title?: string) {
-  await loadWorkspaceSessionList(connectionId)
-  let session = workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId)
+async function ensurePersistedWorkspaceSession(connectionId: string, sessionId = activeAiSessionId.value || DEFAULT_AI_SESSION_ID, title?: string) {
+  await loadWorkspaceSessionList()
+  let session = workspaceSessionById(sessionId)
   if (!session) {
     session = createDraftWorkspaceSession(connectionId, sessionId, title || 'Untitled')
   }
@@ -1328,8 +1326,7 @@ async function createWorkspaceSessionForActiveConnection() {
 }
 
 async function renameWorkspaceSession(sessionId: string, name: string) {
-  const sessions = workspaceSessionsForConnection(activeConnectionId.value)
-  const session = sessions.find((item) => item.id === sessionId)
+  const session = workspaceSessionById(sessionId)
   if (!session) return
   const nextName = name.trim()
   if (!nextName) return
@@ -1344,14 +1341,15 @@ async function renameWorkspaceSession(sessionId: string, name: string) {
 }
 
 async function updateWorkspaceSessionTitle(connectionId: string, sessionId: string, title: string) {
-  const session = workspaceSessionsForConnection(connectionId).find((item) => item.id === sessionId)
+  const session = workspaceSessionById(sessionId)
   if (!session || !isAutoWorkspaceSessionName(session.name)) return
   const nextTitle = title.trim()
   if (!nextTitle) return
   const updated = { ...session, name: nextTitle, updatedAt: nowText() }
   replaceWorkspaceSession(updated)
   try {
-    await ensurePersistedWorkspaceSession(connectionId, sessionId, nextTitle)
+    await saveWorkspaceSession({ ...updated, connectionId: session.connectionId || connectionId })
+    clearDraftWorkspaceSession(sessionId)
   } catch (error) {
     console.error('failed to update AI generated session title', error)
   }
@@ -1362,27 +1360,24 @@ function isAutoWorkspaceSessionName(name: string) {
 }
 
 async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
-  const sessions = workspaceSessionsForConnection(activeConnectionId.value)
+  const sessions = workspaceSessions.value
   if (sessions.length <= 1) {
     window.alert('至少保留一个会话')
     return
   }
   const session = sessions.find((item) => item.id === sessionId)
   if (!session) return
-  if (!window.confirm(`删除会话 ${session.name}？对应命令历史和 AI 对话也会删除。`)) return
+  if (!window.confirm(`删除 AI 会话 ${session.name}？该会话中的 AI 消息会被删除，命令历史不受影响。`)) return
   try {
     if (!isDraftWorkspaceSession(sessionId)) {
       await deleteWorkspaceSession(sessionId)
     }
     clearDraftWorkspaceSession(sessionId)
     const remaining = sessions.filter((item) => item.id !== sessionId)
-    workspaceSessionsByConnection.value = {
-      ...workspaceSessionsByConnection.value,
-      [activeConnectionId.value]: remaining
-    }
-    delete commandHistoryBySession.value[workspaceKey(activeConnectionId.value, sessionId)]
-    delete aiMessagesBySession.value[workspaceKey(activeConnectionId.value, sessionId)]
-    delete aiContextBySession.value[workspaceKey(activeConnectionId.value, sessionId)]
+    workspaceSessions.value = remaining
+    delete aiMessagesBySession.value[sessionId]
+    delete aiContextBySession.value[sessionId]
+    delete loadedAiSessions.value[sessionId]
     if (activeWorkspaceSessionId.value === sessionId) {
       selectWorkspaceSession(remaining[0].id)
     }
@@ -1392,29 +1387,26 @@ async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
 }
 
 function selectWorkspaceSession(sessionId: string) {
-  const activeId = activeTerminalId.value
-  terminalTabs.value = terminalTabs.value.map((tab) => (tab.id === activeId ? { ...tab, workspaceSessionId: sessionId } : tab))
-  void loadWorkspaceState(activeConnectionId.value, sessionId)
+  if (!workspaceSessionById(sessionId)) return
+  activeAiSessionId.value = sessionId
+  void loadAiSessionState(sessionId)
 }
 
-function createTerminalTab(profile?: ConnectionProfile, workspaceSession?: WorkspaceSession) {
+function createTerminalTab(profile?: ConnectionProfile) {
   const id = `terminal-${Date.now()}-${terminalTabs.value.length + 1}`
   const title = profile ? `${profile.target.username || 'user'}@${profile.target.host || profile.name}` : '本地终端'
   const connectionId = profile?.id ?? LOCAL_CONNECTION_ID
-  const session = workspaceSession ?? createDraftWorkspaceSession(connectionId, defaultWorkspaceSessionId(connectionId), 'Untitled')
   terminalTabs.value.push({
     id,
     title,
     connectionId,
-    workspaceSessionId: session.id,
     profile: profile ? cloneConnectionProfile(profile) : undefined,
     connectRequest: 1,
     status: 'idle'
   })
   activeTerminalId.value = id
   setTerminalTargets([id], id)
-  void loadWorkspaceSessionList(connectionId)
-  void loadWorkspaceState(connectionId, session.id)
+  void loadCommandHistoryForConnection(connectionId)
 }
 
 function closeTerminalTab(tabId: string) {
@@ -1425,6 +1417,7 @@ function closeTerminalTab(tabId: string) {
   delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
   delete terminalRefs.value[tabId]
+  delete scriptRecordingsByTerminal.value[tabId]
   if (activeTerminalId.value === tabId) {
     const nextTab = terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]
     activeTerminalId.value = nextTab.id
@@ -1475,20 +1468,18 @@ function updateTerminalSelection(event: TerminalSelectionEvent) {
 function recordCommand(event: CommandRecordedEvent) {
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   const connectionId = tab?.connectionId ?? LOCAL_CONNECTION_ID
-  const workspaceSessionId = tab?.workspaceSessionId ?? defaultWorkspaceSessionId(connectionId)
-  const key = workspaceKey(connectionId, workspaceSessionId)
-  const nextIndex = (commandHistoryBySession.value[key]?.length ?? 0) + 1
+  const nextIndex = (commandHistoryByConnection.value[connectionId]?.length ?? 0) + 1
   const entry: CommandHistoryEntry = {
-    id: `${workspaceSessionId}-${event.terminalId}-${Date.now()}-${nextIndex}`,
+    id: `${connectionId}-${event.terminalId}-${Date.now()}-${nextIndex}`,
     connectionId,
-    workspaceSessionId,
+    workspaceSessionId: COMMAND_HISTORY_SESSION_ID,
     terminalId: event.terminalId,
     command: event.command,
     createdAt: new Date().toLocaleString()
   }
-  commandHistoryBySession.value = {
-    ...commandHistoryBySession.value,
-    [key]: [...(commandHistoryBySession.value[key] ?? []), entry].slice(-COMMAND_HISTORY_CACHE_LIMIT)
+  commandHistoryByConnection.value = {
+    ...commandHistoryByConnection.value,
+    [connectionId]: [...(commandHistoryByConnection.value[connectionId] ?? []), entry].slice(-COMMAND_HISTORY_CACHE_LIMIT)
   }
   appendRecordingCommand(event.terminalId, event.command)
   void saveCommandHistoryForTerminal(entry).catch((error) => {
@@ -1497,7 +1488,6 @@ function recordCommand(event: CommandRecordedEvent) {
 }
 
 async function saveCommandHistoryForTerminal(entry: CommandHistoryEntry) {
-  await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId, workspaceSessionTitleFromCommand(entry.command))
   await saveCommandHistoryRecord(entry)
 }
 
@@ -1505,7 +1495,7 @@ function createIdleScriptRecording(terminalId: string): ScriptRecording {
   return {
     terminalId,
     connectionId: activeConnectionId.value,
-    workspaceSessionId: activeWorkspaceSessionId.value,
+    workspaceSessionId: activeAiSessionId.value || DEFAULT_AI_SESSION_ID,
     isRecording: false,
     startedAt: '',
     commands: [],
@@ -1520,7 +1510,7 @@ function startScriptRecording() {
     [terminalId]: {
       terminalId,
       connectionId: activeConnectionId.value,
-      workspaceSessionId: activeWorkspaceSessionId.value,
+      workspaceSessionId: activeAiSessionId.value || DEFAULT_AI_SESSION_ID,
       isRecording: true,
       startedAt: nowText(),
       commands: [],
@@ -1649,7 +1639,7 @@ async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
   }
 }
 function appendAiMessageToActiveTerminal(message: AiMessage) {
-  const key = workspaceKey(message.connectionId, message.workspaceSessionId)
+  const key = message.workspaceSessionId
   aiMessagesBySession.value = {
     ...aiMessagesBySession.value,
     [key]: [...(aiMessagesBySession.value[key] ?? []), message].slice(-300)
@@ -1663,7 +1653,7 @@ function appendAiMessageToActiveTerminal(message: AiMessage) {
 }
 
 function updateAiMessage(message: AiMessage) {
-  const key = workspaceKey(message.connectionId, message.workspaceSessionId)
+  const key = message.workspaceSessionId
   const messages = aiMessagesBySession.value[key] ?? []
   aiMessagesBySession.value = {
     ...aiMessagesBySession.value,
@@ -1677,8 +1667,8 @@ function updateAiMessage(message: AiMessage) {
     })
 }
 
-function setAiContextForTerminal(connectionId: string, workspaceSessionId: string, status: AiContextStatus) {
-  const key = workspaceKey(connectionId, workspaceSessionId)
+function setAiContextForTerminal(_connectionId: string, workspaceSessionId: string, status: AiContextStatus) {
+  const key = workspaceSessionId
   aiContextBySession.value = {
     ...aiContextBySession.value,
     [key]: status
@@ -1687,11 +1677,10 @@ function setAiContextForTerminal(connectionId: string, workspaceSessionId: strin
 
 async function persistWorkspaceSessionForMessage(message: AiMessage) {
   const title = message.role === 'user' ? workspaceSessionTitleFromText(message.text) : undefined
-  await ensurePersistedWorkspaceSession(message.connectionId, message.workspaceSessionId, title)
-}
-
-function workspaceSessionTitleFromCommand(command: string) {
-  return shortenWorkspaceSessionTitle(command, '命令历史')
+  const session = await ensurePersistedWorkspaceSession(message.connectionId, message.workspaceSessionId, title)
+  const updated = { ...session, updatedAt: message.createdAt || nowText() }
+  upsertWorkspaceSession(updated)
+  await saveWorkspaceSession(updated)
 }
 
 function workspaceSessionTitleFromText(text: string) {
@@ -1708,63 +1697,83 @@ function shortenWorkspaceSessionTitle(value: string, fallback: string) {
   return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized
 }
 
-async function loadWorkspaceSessionList(connectionId: string) {
-  if (loadedSessionLists.value[connectionId]) return
-  loadedSessionLists.value = {
-    ...loadedSessionLists.value,
-    [connectionId]: true
-  }
-  try {
-    const sessions = await listWorkspaceSessions(connectionId)
-    const drafts = workspaceSessionsForConnection(connectionId).filter((session) => isDraftWorkspaceSession(session.id))
-    workspaceSessionsByConnection.value = {
-      ...workspaceSessionsByConnection.value,
-      [connectionId]: [...drafts.filter((draft) => !sessions.some((session) => session.id === draft.id)), ...sessions]
+async function loadWorkspaceSessionList() {
+  if (workspaceSessionListLoaded.value) return
+  if (workspaceSessionListLoadPromise) return workspaceSessionListLoadPromise
+  workspaceSessionListLoadPromise = (async () => {
+    try {
+      const sessions = await listWorkspaceSessions()
+      const drafts = workspaceSessions.value.filter((session) => isDraftWorkspaceSession(session.id))
+      sessions.forEach((session) => {
+        if (!isDraftWorkspaceSession(session.id)) return
+        clearDraftWorkspaceSession(session.id)
+        delete loadedAiSessions.value[session.id]
+      })
+      workspaceSessions.value = [
+        ...drafts.filter((draft) => !sessions.some((session) => session.id === draft.id)),
+        ...sessions
+      ]
+      workspaceSessionListLoaded.value = true
+      if (activeAiSessionId.value) void loadAiSessionState(activeAiSessionId.value)
+    } catch (error) {
+      console.error('failed to load global AI sessions', error)
     }
-  } catch (error) {
-    const nextLoaded = { ...loadedSessionLists.value }
-    delete nextLoaded[connectionId]
-    loadedSessionLists.value = nextLoaded
-    console.error('failed to load workspace sessions', error)
+  })()
+  try {
+    await workspaceSessionListLoadPromise
+  } finally {
+    workspaceSessionListLoadPromise = null
   }
 }
 
-async function loadWorkspaceState(connectionId: string, workspaceSessionId: string) {
-  const key = workspaceKey(connectionId, workspaceSessionId)
-  if (loadedWorkspaceSessions.value[key]) return
-  loadedWorkspaceSessions.value = {
-    ...loadedWorkspaceSessions.value,
-    [key]: true
+async function loadCommandHistoryForConnection(connectionId: string) {
+  if (loadedCommandHistoryConnections.value[connectionId]) return
+  loadedCommandHistoryConnections.value = {
+    ...loadedCommandHistoryConnections.value,
+    [connectionId]: true
+  }
+  try {
+    const commands = await listCommandHistory(connectionId)
+    const localCommands = commandHistoryByConnection.value[connectionId] ?? []
+    const persistedIds = new Set(commands.map((entry) => entry.id))
+    commandHistoryByConnection.value = {
+      ...commandHistoryByConnection.value,
+      [connectionId]: [...commands, ...localCommands.filter((entry) => !persistedIds.has(entry.id))].slice(-COMMAND_HISTORY_CACHE_LIMIT)
+    }
+  } catch (error) {
+    const nextLoaded = { ...loadedCommandHistoryConnections.value }
+    delete nextLoaded[connectionId]
+    loadedCommandHistoryConnections.value = nextLoaded
+    console.error('failed to load connection command history', error)
+  }
+}
+
+async function loadAiSessionState(workspaceSessionId: string) {
+  if (!workspaceSessionId || loadedAiSessions.value[workspaceSessionId]) return
+  loadedAiSessions.value = {
+    ...loadedAiSessions.value,
+    [workspaceSessionId]: true
   }
   if (isDraftWorkspaceSession(workspaceSessionId)) {
-    commandHistoryBySession.value = {
-      ...commandHistoryBySession.value,
-      [key]: commandHistoryBySession.value[key] ?? []
-    }
     aiMessagesBySession.value = {
       ...aiMessagesBySession.value,
-      [key]: aiMessagesBySession.value[key] ?? []
+      [workspaceSessionId]: aiMessagesBySession.value[workspaceSessionId] ?? []
     }
     return
   }
   try {
-    const [commands, messages] = await Promise.all([
-      listCommandHistory(connectionId, workspaceSessionId),
-      listAiConversationMessages(connectionId, workspaceSessionId)
-    ])
-    commandHistoryBySession.value = {
-      ...commandHistoryBySession.value,
-      [key]: commands
-    }
+    const messages = await listAiConversationMessages(workspaceSessionId)
+    const localMessages = aiMessagesBySession.value[workspaceSessionId] ?? []
+    const persistedIds = new Set(messages.map((message) => message.id))
     aiMessagesBySession.value = {
       ...aiMessagesBySession.value,
-      [key]: messages
+      [workspaceSessionId]: [...messages, ...localMessages.filter((message) => !persistedIds.has(message.id))].slice(-300)
     }
   } catch (error) {
-    const nextLoaded = { ...loadedWorkspaceSessions.value }
-    delete nextLoaded[key]
-    loadedWorkspaceSessions.value = nextLoaded
-    console.error('failed to load workspace history', error)
+    const nextLoaded = { ...loadedAiSessions.value }
+    delete nextLoaded[workspaceSessionId]
+    loadedAiSessions.value = nextLoaded
+    console.error('failed to load AI conversation', error)
   }
 }
 
@@ -1840,10 +1849,8 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 onMounted(() => {
   void loadProfiles()
   void loadAiConfig()
-  void preferredWorkspaceSessionForConnection(LOCAL_CONNECTION_ID).then((session) => {
-    terminalTabs.value = terminalTabs.value.map((tab) => (tab.id === 'local-1' ? { ...tab, workspaceSessionId: session.id } : tab))
-    void loadWorkspaceState(LOCAL_CONNECTION_ID, session.id)
-  })
+  void ensureActiveAiSession(LOCAL_CONNECTION_ID)
+  void loadCommandHistoryForConnection(LOCAL_CONNECTION_ID)
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
   themeToggleButton.value?.addEventListener('pointerdown', handleThemeTogglePointerDown, true)
@@ -1862,11 +1869,11 @@ onMounted(() => {
 })
 
 watch(activeConnectionId, (connectionId) => {
-  void loadWorkspaceSessionList(connectionId)
+  void loadCommandHistoryForConnection(connectionId)
 })
 
-watch(activeWorkspaceKey, () => {
-  void loadWorkspaceState(activeConnectionId.value, activeWorkspaceSessionId.value)
+watch(activeAiSessionId, (sessionId) => {
+  void loadAiSessionState(sessionId)
 })
 
 watch(
@@ -2071,6 +2078,10 @@ onBeforeUnmount(() => {
       :connection-profile="activeTerminal?.profile"
       :workspace-session-id="activeWorkspaceSessionId"
       :workspace-sessions="activeWorkspaceSessions"
+      :connection-labels="connectionLabels"
+      :execution-target-label="terminalTargetLabel"
+      :execution-target-title="terminalTargetTitle"
+      :execution-target-connection-ids="targetConnectionIds"
       :selected-ai-config-id="selectedAiConfigId"
       :ai-config="aiConfig"
       :api-key="activeAiRuntimeApiKey"

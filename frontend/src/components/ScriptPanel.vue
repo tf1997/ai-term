@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
 import type { CommandHistoryEntry, ScriptRecording, UpdateScript } from '../types/workspace'
 import {
@@ -37,12 +37,23 @@ interface ScriptChatMessage {
   error?: boolean
   createdAt: string
   durationSeconds?: number
+  sourceConnectionId?: string
+  sourceWorkspaceSessionId?: string
+  sourceCommands?: string[]
+}
+
+interface ScriptExecutionSource {
+  connectionId: string
 }
 
 const props = defineProps<{
   terminalId: string
   connectionId: string
   workspaceSessionId: string
+  connectionLabels: Record<string, string>
+  executionTargetLabel: string
+  executionTargetTitle: string
+  executionTargetConnectionIds: string[]
   selectedConfigId: string
   config: AiProviderConfig
   apiKey: string
@@ -72,6 +83,8 @@ const MAX_RECORDED_OUTPUT_CHARS = 80_000
 const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
 const STREAM_TIMER_INTERVAL_MS = 1000
+const PREVIEW_SCRIPT_STORAGE_KEY = 'ai-term:update-scripts:v2:global'
+const LEGACY_PREVIEW_SCRIPT_STORAGE_PREFIX = 'ai-term:update-scripts:'
 
 const scripts = ref<UpdateScript[]>([])
 const selectedScriptId = ref('')
@@ -111,8 +124,12 @@ const selectedScriptDraft = ref('')
 const selectedScriptEditing = ref(false)
 const draftScriptId = ref('')
 const draftScriptContent = ref('')
+const draftSourceConnectionId = ref('')
+const draftSourceWorkspaceSessionId = ref('')
+const draftSourceCommands = ref<string[]>([])
 const scriptPreviewSource = ref<ScriptPreviewSource>('')
 const pendingScriptExecution = ref('')
+const pendingScriptSource = ref<ScriptExecutionSource | null>(null)
 const scriptRiskExplanation = ref('')
 const scriptRiskExplanationError = ref('')
 const scriptRiskExplanationLoading = ref(false)
@@ -136,6 +153,11 @@ const recordedOutput = computed(() => {
   return output.length > MAX_RECORDED_OUTPUT_CHARS ? output.slice(-MAX_RECORDED_OUTPUT_CHARS) : output
 })
 const recordingHasData = computed(() => recordedCommands.value.length > 0 || recordedOutput.value.trim().length > 0)
+const scriptSourceConnectionId = computed(() => recordingHasData.value ? props.recording.connectionId : props.connectionId)
+const scriptSourceWorkspaceSessionId = computed(() => {
+  const sourceSessionId = recordingHasData.value ? props.recording.workspaceSessionId : props.workspaceSessionId
+  return sourceSessionId || 'ai:default'
+})
 const hasDraftScript = computed(() => draftScriptContent.value.trim().length > 0)
 const hasSelectedScriptContent = computed(() => selectedScriptContent.value.trim().length > 0)
 const editingSelectedScript = computed(() => scriptPanelMode.value === 'library' && scriptLibraryView.value === 'detail' && Boolean(selectedScript.value))
@@ -221,6 +243,21 @@ const pendingScriptRisks = computed(() => analyzeScriptRisks(pendingScriptExecut
 const scriptRiskConfirmOpen = computed(() => pendingScriptExecution.value.trim().length > 0)
 const pendingScriptRiskSummary = computed(() => summarizeScriptRisks(pendingScriptRisks.value))
 const pendingScriptRiskLines = computed(() => buildScriptRiskPreviewLines(pendingScriptExecution.value, pendingScriptRisks.value))
+const pendingScriptConnectionMismatch = computed(() => {
+  const sourceConnectionId = pendingScriptSource.value?.connectionId?.trim()
+  return executionTargetsDifferFromSource(sourceConnectionId)
+})
+const pendingExecutionTitle = computed(() => {
+  if (pendingScriptConnectionMismatch.value && pendingScriptRisks.value.length > 0) return '确认跨连接风险脚本'
+  if (pendingScriptConnectionMismatch.value) return '确认跨连接执行'
+  return '检测到风险命令'
+})
+const pendingExecutionSubtitle = computed(() => {
+  if (pendingScriptConnectionMismatch.value) {
+    return `来源 ${connectionLabel(pendingScriptSource.value?.connectionId)}，当前目标 ${props.executionTargetLabel}`
+  }
+  return '执行前请确认命中的命令行'
+})
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
 })
@@ -228,20 +265,17 @@ const filteredScripts = computed(() => {
   const keyword = scriptSearch.value.trim().toLowerCase()
   if (!keyword) return scripts.value
   return scripts.value.filter((script) => {
-    return `${script.name} ${script.description}`.toLowerCase().includes(keyword)
+    return `${script.name} ${script.description} ${scriptSourceLabel(script)} ${script.connectionId} ${script.workspaceSessionId}`.toLowerCase().includes(keyword)
   })
 })
 const scriptLibraryEmptyHint = computed(() => {
   return scriptSearch.value.trim() ? '没有匹配的脚本，清空搜索后再试。' : '点击新增生成脚本，或直接粘贴并保存你的脚本。'
 })
 
-watch(
-  () => props.connectionId,
-  () => {
-    void loadScripts()
-  },
-  { immediate: true }
-)
+onMounted(() => {
+  migratePreviewScripts()
+  void loadScripts()
+})
 
 watch(
   () => selectedScript.value?.id ?? '',
@@ -265,7 +299,7 @@ onBeforeUnmount(() => {
 async function loadScripts() {
   try {
     panelError.value = ''
-    scripts.value = await listUpdateScripts(props.connectionId)
+    scripts.value = await listUpdateScripts()
     scriptStoreMode.value = 'sqlite'
     if (!scripts.value.some((script) => script.id === selectedScriptId.value)) {
       selectedScriptId.value = scripts.value[0]?.id ?? ''
@@ -275,7 +309,7 @@ async function loadScripts() {
       panelError.value = formatError(error)
     }
     scriptStoreMode.value = 'preview'
-    scripts.value = loadPreviewScripts(props.connectionId)
+    scripts.value = loadPreviewScripts()
     selectedScriptId.value = scripts.value[0]?.id ?? ''
   }
 }
@@ -557,7 +591,7 @@ async function sendScriptRequest(
   }
 
   const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
-  const requestId = `${props.connectionId}-${props.workspaceSessionId}-script-${Date.now()}`
+  const requestId = `${userMessage.sourceConnectionId}-${userMessage.sourceWorkspaceSessionId}-script-${Date.now()}`
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
   startAnswerTimer()
@@ -582,7 +616,7 @@ async function sendScriptRequest(
       apiKey,
       question: prompt,
       terminalSnapshot: recordedOutput.value || props.terminalSnapshot,
-      commandHistory: sourceCommands.value
+      commandHistory: userMessage.sourceCommands ?? []
     })
     if (stopRequested.value || currentRequestId.value !== requestId) return
     const finalAnswer = answer || response.answer
@@ -634,14 +668,25 @@ function stopScriptGeneration() {
   isGenerating.value = false
 }
 
-function createMessage(role: ScriptChatMessage['role'], text: string, scriptContent = '', streaming = false): ScriptChatMessage {
+function createMessage(
+  role: ScriptChatMessage['role'],
+  text: string,
+  scriptContent = '',
+  streaming = false,
+  sourceConnectionId = scriptSourceConnectionId.value,
+  sourceWorkspaceSessionId = scriptSourceWorkspaceSessionId.value,
+  sourceCommandSnapshot = [...sourceCommands.value]
+): ScriptChatMessage {
   return {
     id: `script-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role,
     text,
     scriptContent,
     streaming,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    sourceConnectionId,
+    sourceWorkspaceSessionId,
+    sourceCommands: sourceCommandSnapshot
   }
 }
 
@@ -670,16 +715,16 @@ async function saveMessageScript(message: ScriptChatMessage) {
   const fallbackName = inferScriptName(content, existing?.name || '服务更新脚本')
   const shouldGenerateName = !existing || isAutoScriptName(existing.name)
   const name = shouldGenerateName
-    ? await generateScriptTitle(content, fallbackName, userRequestForAssistantMessage(message.id))
+    ? await generateScriptTitle(content, fallbackName, userRequestForAssistantMessage(message.id), message.sourceCommands)
     : existing.name
   const script: UpdateScript = {
     id,
-    connectionId: props.connectionId,
-    workspaceSessionId: props.workspaceSessionId,
+    connectionId: existing?.connectionId ?? message.sourceConnectionId ?? scriptSourceConnectionId.value,
+    workspaceSessionId: existing?.workspaceSessionId ?? message.sourceWorkspaceSessionId ?? scriptSourceWorkspaceSessionId.value,
     name,
     description: inferDescription(message.text),
     content,
-    sourceCommands: sourceCommands.value,
+    sourceCommands: message.sourceCommands ?? sourceCommands.value,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -771,7 +816,7 @@ async function removeScript(script: UpdateScript) {
     if (scriptStoreMode.value === 'sqlite') {
       await deleteUpdateScript(script.id)
     } else {
-      deletePreviewScript(props.connectionId, script.id)
+      deletePreviewScript(script.id)
     }
     scripts.value = scripts.value.filter((item) => item.id !== script.id)
     selectedScriptId.value = scripts.value[0]?.id ?? ''
@@ -784,13 +829,17 @@ async function removeScript(script: UpdateScript) {
 function executeMessageScript(message: ScriptChatMessage) {
   const content = scriptContentForMessage(message).trim()
   if (!content) return
-  executeScriptContent(content)
+  const savedScript = message.savedScriptId
+    ? scripts.value.find((script) => script.id === message.savedScriptId)
+    : undefined
+  const source = savedScript ?? (message.sourceConnectionId ? { connectionId: message.sourceConnectionId } : undefined)
+  executeScriptContent(content, source)
 }
 
 function executeSelectedScript() {
   const content = selectedScriptContent.value.trim()
   if (!content) return
-  executeScriptContent(content)
+  executeScriptContent(content, selectedScript.value)
 }
 
 function buildScriptRiskExplanationPrompt(content: string) {
@@ -872,7 +921,7 @@ function clearScriptRiskExplanation() {
   scriptRiskExplanationLoading.value = false
   scriptRiskExplanationRequestId.value = ''
 }
-function executeScriptContent(content: string) {
+function executeScriptContent(content: string, sourceScript?: ScriptExecutionSource) {
   const readinessIssues = analyzeScriptReadiness(content)
   if (readinessIssues.length > 0) {
     const issueLines = readinessIssues.slice(0, 3).map((issue) => `第 ${issue.line} 行 ${issue.label}`).join('、')
@@ -882,8 +931,11 @@ function executeScriptContent(content: string) {
     return
   }
   const risks = analyzeScriptRisks(content)
-  if (risks.length > 0) {
+  const sourceConnectionId = sourceScript?.connectionId?.trim()
+  const connectionMismatch = executionTargetsDifferFromSource(sourceConnectionId)
+  if (risks.length > 0 || connectionMismatch) {
     pendingScriptExecution.value = content
+    pendingScriptSource.value = sourceScript ?? null
     clearScriptRiskExplanation()
     panelError.value = ''
     scriptExecutionNotice.value = ''
@@ -900,13 +952,22 @@ function writeScriptToTerminal(content: string) {
 function confirmPendingScriptExecution() {
   const content = pendingScriptExecution.value.trim()
   if (!content) return
+  const hadRisks = pendingScriptRisks.value.length > 0
+  const hadConnectionMismatch = pendingScriptConnectionMismatch.value
   writeScriptToTerminal(content)
-  scriptExecutionNotice.value = '已确认风险命令，脚本已发送到目标终端。'
+  if (hadRisks && hadConnectionMismatch) {
+    scriptExecutionNotice.value = '已确认跨连接目标和风险命令，脚本已发送到当前终端。'
+  } else if (hadConnectionMismatch) {
+    scriptExecutionNotice.value = '已确认跨连接目标，脚本已发送到当前终端。'
+  } else {
+    scriptExecutionNotice.value = '已确认风险命令，脚本已发送到目标终端。'
+  }
   closeScriptRiskConfirm()
 }
 
 function closeScriptRiskConfirm() {
   pendingScriptExecution.value = ''
+  pendingScriptSource.value = null
   clearScriptRiskExplanation()
 }
 function toggleSelectedScriptEditor() {
@@ -1021,6 +1082,10 @@ function toggleMessage(messageId: string) {
 function applyDraftScript(content: string, messageId = '') {
   draftScriptContent.value = content
   if (messageId) {
+    const sourceMessage = messages.value.find((message) => message.id === messageId)
+    draftSourceConnectionId.value = sourceMessage?.sourceConnectionId ?? ''
+    draftSourceWorkspaceSessionId.value = sourceMessage?.sourceWorkspaceSessionId ?? ''
+    draftSourceCommands.value = [...(sourceMessage?.sourceCommands ?? [])]
     scriptDrafts.value = {
       ...scriptDrafts.value,
       [messageId]: content
@@ -1038,6 +1103,9 @@ function clearDraftScript() {
   if (hasDraftScript.value && !window.confirm('清空当前脚本草稿？未保存的内容将丢失。')) return
   draftScriptContent.value = ''
   draftScriptId.value = ''
+  draftSourceConnectionId.value = ''
+  draftSourceWorkspaceSessionId.value = ''
+  draftSourceCommands.value = []
   draftEditorCursor.value = { line: 1, column: 1 }
   saveState.value = 'idle'
   panelError.value = ''
@@ -1084,16 +1152,21 @@ async function saveDraftScript() {
   const fallbackName = inferScriptName(content, existing?.name || '脚本')
   const shouldGenerateName = !existing || isAutoScriptName(existing.name)
   const name = shouldGenerateName
-    ? await generateScriptTitle(content, fallbackName, latestUserScriptRequest())
+    ? await generateScriptTitle(
+        content,
+        fallbackName,
+        latestUserScriptRequest(),
+        draftSourceCommands.value.length ? draftSourceCommands.value : undefined
+      )
     : existing.name
   const script: UpdateScript = {
     id: existing?.id || `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    connectionId: props.connectionId,
-    workspaceSessionId: props.workspaceSessionId,
+    connectionId: existing?.connectionId ?? (draftSourceConnectionId.value || scriptSourceConnectionId.value),
+    workspaceSessionId: existing?.workspaceSessionId ?? (draftSourceWorkspaceSessionId.value || scriptSourceWorkspaceSessionId.value),
     name,
     description: inferDescription(latestAssistantText()) || inferDescription(latestUserScriptRequest()) || '手动保存脚本',
     content,
-    sourceCommands: sourceCommands.value,
+    sourceCommands: draftSourceCommands.value.length ? draftSourceCommands.value : sourceCommands.value,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -1107,6 +1180,9 @@ async function saveDraftScript() {
     }
     scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
     draftScriptId.value = script.id
+    draftSourceConnectionId.value = script.connectionId
+    draftSourceWorkspaceSessionId.value = script.workspaceSessionId
+    draftSourceCommands.value = [...script.sourceCommands]
     selectedScriptId.value = script.id
     selectedScriptDraft.value = content
     saveState.value = 'saved'
@@ -1116,6 +1192,9 @@ async function saveDraftScript() {
       savePreviewScript(script)
       scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
       draftScriptId.value = script.id
+      draftSourceConnectionId.value = script.connectionId
+      draftSourceWorkspaceSessionId.value = script.workspaceSessionId
+      draftSourceCommands.value = [...script.sourceCommands]
       selectedScriptId.value = script.id
       selectedScriptDraft.value = content
       saveState.value = 'saved'
@@ -1146,7 +1225,8 @@ function executeDraftScript() {
     return
   }
   panelError.value = ''
-  executeScriptContent(content)
+  const source = draftSavedScript.value ?? (draftSourceConnectionId.value ? { connectionId: draftSourceConnectionId.value } : undefined)
+  executeScriptContent(content, source)
 }
 
 async function copyDraftScript() {
@@ -1207,7 +1287,10 @@ function executeExpandedScript() {
     return
   }
   panelError.value = ''
-  executeScriptContent(content)
+  const sourceScript = scriptPreviewSource.value === 'selected'
+    ? selectedScript.value
+    : draftSavedScript.value ?? (draftSourceConnectionId.value ? { connectionId: draftSourceConnectionId.value } : undefined)
+  executeScriptContent(content, sourceScript)
 }
 
 async function regenerateSelectedScript() {
@@ -1249,6 +1332,9 @@ function createScriptConversation() {
   selectedScriptId.value = ''
   draftScriptId.value = ''
   draftScriptContent.value = ''
+  draftSourceConnectionId.value = ''
+  draftSourceWorkspaceSessionId.value = ''
+  draftSourceCommands.value = []
   collapsedMessages.value = {}
   saveState.value = 'idle'
   panelError.value = ''
@@ -1428,7 +1514,7 @@ function userRequestForAssistantMessage(messageId: string) {
   return [...messages.value.slice(0, index)].reverse().find((message) => message.role === 'user')?.text ?? ''
 }
 
-async function generateScriptTitle(content: string, fallback: string, userRequest: string) {
+async function generateScriptTitle(content: string, fallback: string, userRequest: string, commandSnapshot?: string[]) {
   const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
   if (!props.config.baseUrl.trim() || !props.config.model.trim() || !apiKey) return fallback
   try {
@@ -1437,7 +1523,7 @@ async function generateScriptTitle(content: string, fallback: string, userReques
       apiKey,
       userRequest: userRequest || '生成可复用脚本',
       scriptContent: content,
-      sourceCommands: sourceCommands.value
+      sourceCommands: commandSnapshot ?? sourceCommands.value
     })
     return response.title.trim() || fallback
   } catch (error) {
@@ -1449,29 +1535,99 @@ async function generateScriptTitle(content: string, fallback: string, userReques
 function isDangerousScript(content: string) {
   return analyzeScriptRisks(content).length > 0
 }
-function previewStorageKey(connectionId: string) {
-  return `ai-term:update-scripts:${connectionId}`
-}
 
-function loadPreviewScripts(connectionId: string) {
+function parsePreviewScripts(raw: string | null) {
+  if (!raw) return { scripts: [] as UpdateScript[], valid: true }
   try {
-    const raw = window.localStorage.getItem(previewStorageKey(connectionId))
-    if (!raw) return []
     const value = JSON.parse(raw)
-    return Array.isArray(value) ? (value as UpdateScript[]) : []
+    return { scripts: Array.isArray(value) ? value as UpdateScript[] : [], valid: Array.isArray(value) }
   } catch {
-    return []
+    return { scripts: [] as UpdateScript[], valid: false }
   }
 }
 
-function savePreviewScript(script: UpdateScript) {
-  const nextScripts = [script, ...loadPreviewScripts(script.connectionId).filter((item) => item.id !== script.id)]
-  window.localStorage.setItem(previewStorageKey(script.connectionId), JSON.stringify(nextScripts))
+function mergePreviewScripts(scriptGroups: UpdateScript[][]) {
+  const scriptsById = new Map<string, UpdateScript>()
+  scriptGroups.flat().forEach((script) => {
+    if (!script || typeof script.id !== 'string' || !script.id) return
+    const current = scriptsById.get(script.id)
+    if (!current || previewScriptUpdatedAt(script) > previewScriptUpdatedAt(current)) {
+      scriptsById.set(script.id, script)
+    }
+  })
+  return [...scriptsById.values()].sort((left, right) => previewScriptUpdatedAt(right) - previewScriptUpdatedAt(left))
 }
 
-function deletePreviewScript(connectionId: string, scriptId: string) {
-  const nextScripts = loadPreviewScripts(connectionId).filter((item) => item.id !== scriptId)
-  window.localStorage.setItem(previewStorageKey(connectionId), JSON.stringify(nextScripts))
+function previewScriptUpdatedAt(script: UpdateScript) {
+  const updatedAt = Date.parse(script.updatedAt)
+  if (Number.isFinite(updatedAt)) return updatedAt
+  const createdAt = Date.parse(script.createdAt)
+  return Number.isFinite(createdAt) ? createdAt : 0
+}
+
+function migratePreviewScripts() {
+  try {
+    const globalStore = parsePreviewScripts(window.localStorage.getItem(PREVIEW_SCRIPT_STORAGE_KEY))
+    const legacyKeys: string[] = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key && key !== PREVIEW_SCRIPT_STORAGE_KEY && key.startsWith(LEGACY_PREVIEW_SCRIPT_STORAGE_PREFIX)) {
+        legacyKeys.push(key)
+      }
+    }
+
+    const migratedKeys: string[] = []
+    const legacyGroups = legacyKeys.flatMap((key) => {
+      const legacyStore = parsePreviewScripts(window.localStorage.getItem(key))
+      if (!legacyStore.valid) return []
+      migratedKeys.push(key)
+      const sourceConnectionId = key.slice(LEGACY_PREVIEW_SCRIPT_STORAGE_PREFIX.length)
+      return [legacyStore.scripts.map((script) => ({
+        ...script,
+        connectionId: script.connectionId || sourceConnectionId
+      }))]
+    })
+    const mergedScripts = mergePreviewScripts([globalStore.scripts, ...legacyGroups])
+
+    if (globalStore.valid && migratedKeys.length > 0) {
+      window.localStorage.setItem(PREVIEW_SCRIPT_STORAGE_KEY, JSON.stringify(mergedScripts))
+      migratedKeys.forEach((key) => window.localStorage.removeItem(key))
+    }
+    return mergedScripts
+  } catch {
+    return [] as UpdateScript[]
+  }
+}
+
+function loadPreviewScripts() {
+  return migratePreviewScripts()
+}
+
+function savePreviewScript(script: UpdateScript) {
+  const nextScripts = [script, ...loadPreviewScripts().filter((item) => item.id !== script.id)]
+  window.localStorage.setItem(PREVIEW_SCRIPT_STORAGE_KEY, JSON.stringify(nextScripts))
+}
+
+function deletePreviewScript(scriptId: string) {
+  const nextScripts = loadPreviewScripts().filter((item) => item.id !== scriptId)
+  window.localStorage.setItem(PREVIEW_SCRIPT_STORAGE_KEY, JSON.stringify(nextScripts))
+}
+
+function connectionLabel(connectionId?: string) {
+  if (!connectionId) return '未知连接'
+  return props.connectionLabels[connectionId] || connectionId
+}
+
+function executionTargetsDifferFromSource(sourceConnectionId?: string) {
+  if (!sourceConnectionId) return false
+  const targetConnectionIds = props.executionTargetConnectionIds.length
+    ? props.executionTargetConnectionIds
+    : [props.connectionId]
+  return targetConnectionIds.some((connectionId) => connectionId !== sourceConnectionId)
+}
+
+function scriptSourceLabel(script: UpdateScript) {
+  return connectionLabel(script.connectionId?.trim())
 }
 
 function formatError(error: unknown) {
@@ -1588,16 +1744,20 @@ function nowText() {
     </div>
 
     <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
-      <section class="modal script-risk-modal" role="dialog" aria-modal="true" aria-label="危险脚本执行确认">
+      <section class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingExecutionTitle">
         <div class="modal-head">
           <div>
-            <strong>检测到风险命令</strong>
-            <span>执行前请确认命中的命令行</span>
+            <strong>{{ pendingExecutionTitle }}</strong>
+            <span>{{ pendingExecutionSubtitle }}</span>
           </div>
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeScriptRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
           <div class="script-risk-summary" aria-label="风险类型">
+            <span v-if="pendingScriptConnectionMismatch" class="script-risk-chip medium">
+              <strong>跨连接执行</strong>
+              <small :title="executionTargetTitle">来源 {{ connectionLabel(pendingScriptSource?.connectionId) }} → {{ executionTargetLabel }}</small>
+            </span>
             <span
               v-for="risk in pendingScriptRiskSummary"
               :key="risk.kind"
@@ -1610,10 +1770,10 @@ function nowText() {
           </div>
           <div class="script-risk-ai">
             <div>
-              <strong>不确定原因？</strong>
-              <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
+              <strong>{{ pendingScriptRisks.length ? '不确定原因？' : '请核对执行目标' }}</strong>
+              <span :title="executionTargetTitle">{{ pendingScriptRisks.length ? '让 AI 根据命中的风险行解释影响和执行前检查项。' : `此脚本来自 ${connectionLabel(pendingScriptSource?.connectionId)}，将发送到${executionTargetLabel}。` }}</span>
             </div>
-            <button class="text-button" type="button" :disabled="scriptRiskExplanationLoading || !hasUsableConfig" @click="explainPendingScriptRisk">
+            <button v-if="pendingScriptRisks.length" class="text-button" type="button" :disabled="scriptRiskExplanationLoading || !hasUsableConfig" @click="explainPendingScriptRisk">
               {{ scriptRiskExplanationLoading ? '正在分析...' : '借助 AI 分析风险' }}
             </button>
             <div
@@ -1634,7 +1794,7 @@ function nowText() {
             <div class="script-risk-preview-head">
               <div>
                 <strong>脚本预览</strong>
-                <span>命中的风险行已标红，执行前请逐行核对。</span>
+                <span>{{ pendingScriptRisks.length ? '命中的风险行已标红，执行前请逐行核对。' : '未检测到风险命令；请确认脚本适用于当前连接。' }}</span>
               </div>
               <span class="script-risk-preview-count">{{ pendingScriptRiskLines.length }} 行</span>
             </div>
@@ -1653,7 +1813,7 @@ function nowText() {
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint">确认后将把脚本发送到当前终端执行。</span>
+          <span class="script-risk-action-hint" :title="executionTargetTitle">确认后发送到：{{ executionTargetLabel }}</span>
           <button class="text-button" type="button" @click="closeScriptRiskConfirm">取消</button>
           <button class="text-button danger" type="button" @click="confirmPendingScriptExecution">确认执行</button>
         </div>
@@ -1689,7 +1849,7 @@ function nowText() {
             >
               <span>
                 <strong>{{ script.name }}</strong>
-                <small>{{ script.description || script.updatedAt }}</small>
+                <small>{{ script.description || script.updatedAt }} · 来源 {{ scriptSourceLabel(script) }}</small>
               </span>
               <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)"><UiIcon name="edit" /></button>
               <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click.stop="removeScript(script)"><UiIcon name="trash" /></button>
@@ -1877,6 +2037,7 @@ function nowText() {
                   <span v-else-if="message.role === 'assistant' && messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
                 </strong>
               </span>
+              <span v-if="message.sourceConnectionId" class="chip script-message-source" :title="`生成上下文：${connectionLabel(message.sourceConnectionId)}`">来源 · {{ connectionLabel(message.sourceConnectionId) }}</span>
               <div class="script-reply-actions">
                 <button v-if="message.role === 'assistant' && message.streaming" class="text-button danger" type="button" @click="stopScriptGeneration">
                   停止
@@ -1907,7 +2068,7 @@ function nowText() {
                     </span>
                     <div v-if="shellCommandForPart(part)" class="script-reply-code-actions">
                       <button class="text-button" type="button" @click="applyDraftScript(shellCommandForPart(part), message.id)">设为草稿</button>
-                      <button class="text-button primary-action" type="button" @click="executeScriptContent(shellCommandForPart(part))">执行</button>
+                      <button class="text-button primary-action" type="button" @click="executeScriptContent(shellCommandForPart(part), message.sourceConnectionId ? { connectionId: message.sourceConnectionId } : undefined)">执行</button>
                     </div>
                   </div>
                   <pre><code>{{ part.content }}</code></pre>

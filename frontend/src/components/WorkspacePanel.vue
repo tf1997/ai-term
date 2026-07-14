@@ -23,6 +23,10 @@ defineProps<{
   connectionProfile?: ConnectionProfile
   workspaceSessionId: string
   workspaceSessions: WorkspaceSession[]
+  connectionLabels: Record<string, string>
+  executionTargetLabel: string
+  executionTargetTitle: string
+  executionTargetConnectionIds: string[]
   selectedAiConfigId: string
   aiConfig: AiProviderConfig
   apiKey: string
@@ -132,6 +136,10 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :connection-id="connectionId"
       :workspace-session-id="workspaceSessionId"
       :workspace-sessions="workspaceSessions"
+      :connection-labels="connectionLabels"
+      :execution-target-label="executionTargetLabel"
+      :execution-target-title="executionTargetTitle"
+      :execution-target-connection-ids="executionTargetConnectionIds"
       :selected-config-id="selectedAiConfigId"
       :config="aiConfig"
       :api-key="apiKey"
@@ -157,6 +165,10 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :terminal-id="terminalId"
       :connection-id="connectionId"
       :workspace-session-id="workspaceSessionId"
+      :connection-labels="connectionLabels"
+      :execution-target-label="executionTargetLabel"
+      :execution-target-title="executionTargetTitle"
+      :execution-target-connection-ids="executionTargetConnectionIds"
       :selected-config-id="selectedAiConfigId"
       :config="aiConfig"
       :api-key="apiKey"

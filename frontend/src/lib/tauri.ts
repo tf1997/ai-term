@@ -19,6 +19,12 @@ export interface AiChatRequest {
   question: string
   terminalSnapshot: string
   commandHistory: string[]
+  conversationMessages?: AiConversationTurn[]
+}
+
+export interface AiConversationTurn {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 export interface AiChatResponse {
@@ -199,8 +205,8 @@ export function generateAiScriptTitle(request: AiScriptTitleRequest) {
   return invoke<AiScriptTitleResponse>('generate_ai_script_title', { request })
 }
 
-export function listWorkspaceSessions(connectionId: string) {
-  return invoke<WorkspaceSession[]>('list_workspace_sessions', { connectionId })
+export function listWorkspaceSessions() {
+  return invoke<WorkspaceSession[]>('list_workspace_sessions')
 }
 
 export function saveWorkspaceSession(session: WorkspaceSession) {
@@ -211,24 +217,24 @@ export function deleteWorkspaceSession(id: string) {
   return invoke<boolean>('delete_workspace_session', { id })
 }
 
-export function listCommandHistory(connectionId: string, workspaceSessionId: string) {
-  return invoke<CommandHistoryEntry[]>('list_command_history', { connectionId, workspaceSessionId })
+export function listCommandHistory(connectionId: string) {
+  return invoke<CommandHistoryEntry[]>('list_command_history', { connectionId })
 }
 
 export function saveCommandHistoryRecord(record: CommandHistoryEntry) {
   return invoke<void>('save_command_history_record', { record })
 }
 
-export function listAiConversationMessages(connectionId: string, workspaceSessionId: string) {
-  return invoke<AiMessage[]>('list_ai_conversation_messages', { connectionId, workspaceSessionId })
+export function listAiConversationMessages(workspaceSessionId: string) {
+  return invoke<AiMessage[]>('list_ai_conversation_messages', { workspaceSessionId })
 }
 
 export function saveAiConversationMessage(message: AiMessage) {
   return invoke<void>('save_ai_conversation_message', { message })
 }
 
-export function listUpdateScripts(connectionId: string) {
-  return invoke<UpdateScript[]>('list_update_scripts', { connectionId })
+export function listUpdateScripts() {
+  return invoke<UpdateScript[]>('list_update_scripts')
 }
 
 export function getUpdateScript(id: string) {

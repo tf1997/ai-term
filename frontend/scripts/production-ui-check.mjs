@@ -1499,15 +1499,18 @@ assert(
 assert(
   appShell.includes('draftWorkspaceSessionIds') &&
     appShell.includes('createDraftWorkspaceSession') &&
+    appShell.includes('ensureActiveAiSession') &&
     appShell.includes('ensurePersistedWorkspaceSession') &&
-    appShell.includes('preferredWorkspaceSessionForConnection') &&
     appShell.includes('persistWorkspaceSessionForMessage') &&
     appShell.includes('saveCommandHistoryForTerminal') &&
     appShell.includes('const tab = terminalTabs.value.find((item) => item.id === event.terminalId)') &&
-    appShell.includes('await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId') &&
+    appShell.includes('workspaceSessionId: COMMAND_HISTORY_SESSION_ID') &&
+    appShell.includes('commandHistoryByConnection') &&
+    appShell.includes('loadCommandHistoryForConnection') &&
+    !appShell.includes('await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId') &&
     appShell.includes('connectProfileFromSidebar') &&
     !appShell.includes('const session = await createWorkspaceSession(profile.id)'),
-  'Workspace sessions must start as frontend drafts, persist only when data exists, and command history must be saved with the emitting terminal connection/session.'
+  'Global AI sessions must start as frontend drafts while command history stays scoped to the emitting connection, independently of AI conversation selection.'
 )
 
 assert(
@@ -1934,8 +1937,10 @@ assert(
     styles.includes('.terminal-target-toggle') &&
     styles.includes('.terminal-target-summary') &&
     styles.includes('max-width: min(260px, 28vw);') &&
-    aiPanel.includes('已发送到目标终端') &&
-    scriptPanel.includes('已发送到目标终端'),
+    aiPanel.includes('executionTargetLabel') &&
+    aiPanel.includes('executionTargetTitle') &&
+    scriptPanel.includes('executionTargetLabel') &&
+    scriptPanel.includes('executionTargetTitle'),
   'Terminal tabs must keep the active terminal anchored while selecting multiple targets for synchronized input, AI command execution, and script execution.'
 )
 
@@ -1955,10 +1960,16 @@ assert(
     aiPanel.includes('messages: AiMessage[]') &&
     aiPanel.includes('const requestConnectionId = props.connectionId') &&
     aiPanel.includes('const requestWorkspaceSessionId = props.workspaceSessionId') &&
+    aiPanel.includes('conversationMessages') &&
+    aiPanel.includes('MAX_AI_CONVERSATION_MESSAGES') &&
+    aiPanel.includes('pendingAiCommandCrossConnection') &&
+    aiPanel.includes('executionTargetConnectionIds') &&
     appShell.includes('aiMessagesBySession') &&
-    appShell.includes('commandHistoryBySession') &&
-    appShell.includes('workspaceSessionsByConnection') &&
-    appShell.includes('loadWorkspaceState') &&
+    appShell.includes('commandHistoryByConnection') &&
+    appShell.includes('const workspaceSessions = ref<WorkspaceSession[]>([])') &&
+    appShell.includes("const activeAiSessionId = ref('')") &&
+    appShell.includes('loadCommandHistoryForConnection') &&
+    appShell.includes('loadAiSessionState') &&
     appShell.includes('loadWorkspaceSessionList') &&
     appShell.includes('createWorkspaceSession') &&
     appShell.includes('renameWorkspaceSession') &&
@@ -1976,11 +1987,16 @@ assert(
     tauri.includes("invoke<void>('save_command_history_record'") &&
     tauri.includes("invoke<AiMessage[]>('list_ai_conversation_messages'") &&
     tauri.includes("invoke<void>('save_ai_conversation_message'") &&
+    tauri.includes('export function listWorkspaceSessions()') &&
+    tauri.includes('export function listCommandHistory(connectionId: string)') &&
+    tauri.includes('export function listAiConversationMessages(workspaceSessionId: string)') &&
+    tauri.includes('export function listUpdateScripts()') &&
     appShell.includes('activeAiMessages') &&
     appShell.includes('setAiContextForTerminal') &&
     aiChat.includes('parse_model_error') &&
     aiChat.includes('build_context_bundle') &&
     aiChat.includes('build_system_prompt') &&
+    aiChat.includes('conversation_messages_for_payload') &&
     aiChat.includes('accepts_plain_text_model_answer') &&
     aiPanel.includes('chatWithAiProviderStream') &&
     aiPanel.includes('cancelTask') &&
@@ -2114,7 +2130,7 @@ assert(
     scriptPanel.includes("import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'") &&
     scriptPanel.includes('shellCommandForPart(part)') &&
     scriptPanel.includes('codeBlockLabel(part.language, part.content)') &&
-    scriptPanel.includes('@click="executeScriptContent(shellCommandForPart(part))"') &&
+    scriptPanel.includes('executeScriptContent(shellCommandForPart(part), message.sourceConnectionId') &&
     scriptPanel.includes('extractBashScript') &&
     scriptPanel.includes('saveUpdateScript') &&
     scriptPanel.includes('deleteUpdateScript') &&
@@ -2186,6 +2202,29 @@ assert(
     styles.includes('.script-code-card textarea') &&
     !scriptPanel.includes('script-result-editor'),
   'Workspace must include recording-backed script generation with a chat interaction, inline script library, in-card editing, deletion, and guarded execution.'
+)
+
+assert(
+  scriptPanel.includes("const PREVIEW_SCRIPT_STORAGE_KEY = 'ai-term:update-scripts:v2:global'") &&
+    scriptPanel.includes('migratePreviewScripts') &&
+    scriptPanel.includes('await listUpdateScripts()') &&
+    scriptPanel.includes('pendingScriptConnectionMismatch') &&
+    scriptPanel.includes('executionTargetConnectionIds') &&
+    scriptPanel.includes('scriptSourceConnectionId') &&
+    scriptPanel.includes('draftSourceConnectionId') &&
+    scriptPanel.includes('sourceConnectionId?: string') &&
+    workspacePanel.includes(':execution-target-connection-ids="executionTargetConnectionIds"') &&
+    appShell.includes('const targetConnectionIds = computed') &&
+    sqlite.includes('pub fn list_workspace_sessions(&self)') &&
+    sqlite.includes('WHERE EXISTS') &&
+    sqlite.includes('ai_conversation_messages AS messages') &&
+    sqlite.includes('pub fn list_command_history(&self, connection_id: &str)') &&
+    sqlite.includes('pub fn list_update_scripts(&self)') &&
+    schema.includes('idx_workspace_sessions_updated') &&
+    schema.includes('idx_command_history_connection_all_created') &&
+    schema.includes('idx_ai_conversation_session_created') &&
+    schema.includes('idx_update_scripts_updated'),
+  'AI conversations and scripts must be globally visible, preserve source provenance, and confirm execution when selected targets cross source connections.'
 )
 
 assert(

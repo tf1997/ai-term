@@ -487,11 +487,10 @@ pub async fn save_workspace_session(
 
 #[tauri::command]
 pub async fn list_workspace_sessions(
-    connection_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<WorkspaceSession>, String> {
     state
-        .list_workspace_sessions(&connection_id)
+        .list_workspace_sessions()
         .await
         .map_err(|err| err.to_string())
 }
@@ -510,11 +509,10 @@ pub async fn delete_workspace_session(
 #[tauri::command]
 pub async fn list_command_history(
     connection_id: String,
-    workspace_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<CommandHistoryRecord>, String> {
     state
-        .list_command_history(&connection_id, &workspace_session_id)
+        .list_command_history(&connection_id)
         .await
         .map_err(|err| err.to_string())
 }
@@ -532,12 +530,11 @@ pub async fn save_ai_conversation_message(
 
 #[tauri::command]
 pub async fn list_ai_conversation_messages(
-    connection_id: String,
     workspace_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<AiConversationMessage>, String> {
     state
-        .list_ai_conversation_messages(&connection_id, &workspace_session_id)
+        .list_ai_conversation_messages(&workspace_session_id)
         .await
         .map_err(|err| err.to_string())
 }
@@ -554,12 +551,9 @@ pub async fn save_update_script(
 }
 
 #[tauri::command]
-pub async fn list_update_scripts(
-    connection_id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<UpdateScript>, String> {
+pub async fn list_update_scripts(state: State<'_, AppState>) -> Result<Vec<UpdateScript>, String> {
     state
-        .list_update_scripts(&connection_id)
+        .list_update_scripts()
         .await
         .map_err(|err| err.to_string())
 }

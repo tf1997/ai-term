@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS workspace_sessions (
 CREATE INDEX IF NOT EXISTS idx_workspace_sessions_connection_updated
   ON workspace_sessions(connection_id, updated_at);
 
+CREATE INDEX IF NOT EXISTS idx_workspace_sessions_updated
+  ON workspace_sessions(updated_at);
+
 CREATE TABLE IF NOT EXISTS command_history (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL,
@@ -74,6 +77,9 @@ CREATE TABLE IF NOT EXISTS command_history (
 
 CREATE INDEX IF NOT EXISTS idx_command_history_connection_created
   ON command_history(connection_id, workspace_session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_command_history_connection_all_created
+  ON command_history(connection_id, created_at);
 
 CREATE TABLE IF NOT EXISTS ai_conversation_messages (
   id TEXT PRIMARY KEY NOT NULL,
@@ -90,6 +96,9 @@ CREATE TABLE IF NOT EXISTS ai_conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_ai_conversation_connection_created
   ON ai_conversation_messages(connection_id, workspace_session_id, created_at);
 
+CREATE INDEX IF NOT EXISTS idx_ai_conversation_session_created
+  ON ai_conversation_messages(workspace_session_id, created_at);
+
 CREATE TABLE IF NOT EXISTS update_scripts (
   id TEXT PRIMARY KEY NOT NULL,
   connection_id TEXT NOT NULL,
@@ -104,3 +113,6 @@ CREATE TABLE IF NOT EXISTS update_scripts (
 
 CREATE INDEX IF NOT EXISTS idx_update_scripts_connection_updated
   ON update_scripts(connection_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_update_scripts_updated
+  ON update_scripts(updated_at);

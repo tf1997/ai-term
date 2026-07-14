@@ -362,19 +362,23 @@ impl SqliteConfigStore {
         Ok(())
     }
 
-    pub fn list_workspace_sessions(&self, connection_id: &str) -> Result<Vec<WorkspaceSession>> {
+    pub fn list_workspace_sessions(&self) -> Result<Vec<WorkspaceSession>> {
         self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
-            SELECT id, connection_id, name, summary, created_at, updated_at
-            FROM workspace_sessions
-            WHERE connection_id = ?1
-            ORDER BY updated_at DESC, created_at DESC, id DESC
+            SELECT sessions.id, sessions.connection_id, sessions.name, sessions.summary, sessions.created_at, sessions.updated_at
+            FROM workspace_sessions AS sessions
+            WHERE EXISTS (
+              SELECT 1
+              FROM ai_conversation_messages AS messages
+              WHERE messages.workspace_session_id = sessions.id
+            )
+            ORDER BY sessions.updated_at DESC, sessions.created_at DESC, sessions.id DESC
             "#,
         )?;
 
-        let rows = statement.query_map([connection_id], |row| {
+        let rows = statement.query_map([], |row| {
             Ok(WorkspaceSession {
                 id: row.get(0)?,
                 connection_id: row.get(1)?,
@@ -394,10 +398,6 @@ impl SqliteConfigStore {
         let connection = self.connection()?;
         let transaction = connection.unchecked_transaction()?;
         let deleted = transaction.execute("DELETE FROM workspace_sessions WHERE id = ?1", [id])?;
-        transaction.execute(
-            "DELETE FROM command_history WHERE workspace_session_id = ?1",
-            [id],
-        )?;
         transaction.execute(
             "DELETE FROM ai_conversation_messages WHERE workspace_session_id = ?1",
             [id],
@@ -436,47 +436,29 @@ impl SqliteConfigStore {
                 record.created_at,
             ],
         )?;
-        Self::prune_command_history(
-            &connection,
-            &record.connection_id,
-            &record.workspace_session_id,
-        )?;
+        Self::prune_command_history(&connection, &record.connection_id)?;
         Ok(())
     }
 
-    fn prune_command_history(
-        connection: &Connection,
-        connection_id: &str,
-        workspace_session_id: &str,
-    ) -> Result<()> {
+    fn prune_command_history(connection: &Connection, connection_id: &str) -> Result<()> {
         connection.execute(
             r#"
             DELETE FROM command_history
             WHERE connection_id = ?1
-              AND workspace_session_id = ?2
               AND id NOT IN (
                 SELECT id
                 FROM command_history
                 WHERE connection_id = ?1
-                  AND workspace_session_id = ?2
                 ORDER BY created_at DESC, id DESC
-                LIMIT ?3
+                LIMIT ?2
               )
             "#,
-            params![
-                connection_id,
-                workspace_session_id,
-                COMMAND_HISTORY_RETENTION_LIMIT
-            ],
+            params![connection_id, COMMAND_HISTORY_RETENTION_LIMIT],
         )?;
         Ok(())
     }
 
-    pub fn list_command_history(
-        &self,
-        connection_id: &str,
-        workspace_session_id: &str,
-    ) -> Result<Vec<CommandHistoryRecord>> {
+    pub fn list_command_history(&self, connection_id: &str) -> Result<Vec<CommandHistoryRecord>> {
         self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
@@ -486,7 +468,6 @@ impl SqliteConfigStore {
               SELECT id, connection_id, workspace_session_id, terminal_id, command, created_at
               FROM command_history
               WHERE connection_id = ?1
-                AND workspace_session_id = ?2
               ORDER BY created_at DESC, id DESC
               LIMIT 300
             )
@@ -494,7 +475,7 @@ impl SqliteConfigStore {
             "#,
         )?;
 
-        let rows = statement.query_map(params![connection_id, workspace_session_id], |row| {
+        let rows = statement.query_map([connection_id], |row| {
             Ok(CommandHistoryRecord {
                 id: row.get(0)?,
                 connection_id: row.get(1)?,
@@ -553,7 +534,6 @@ impl SqliteConfigStore {
 
     pub fn list_ai_conversation_messages(
         &self,
-        connection_id: &str,
         workspace_session_id: &str,
     ) -> Result<Vec<AiConversationMessage>> {
         self.initialize()?;
@@ -564,8 +544,7 @@ impl SqliteConfigStore {
             FROM (
               SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, created_at
               FROM ai_conversation_messages
-              WHERE connection_id = ?1
-                AND workspace_session_id = ?2
+              WHERE workspace_session_id = ?1
               ORDER BY created_at DESC, id DESC
               LIMIT 300
             )
@@ -573,7 +552,7 @@ impl SqliteConfigStore {
             "#,
         )?;
 
-        let rows = statement.query_map(params![connection_id, workspace_session_id], |row| {
+        let rows = statement.query_map([workspace_session_id], |row| {
             let role: String = row.get(4)?;
             let error: i64 = row.get(7)?;
             Ok(AiConversationMessage {
@@ -635,7 +614,7 @@ impl SqliteConfigStore {
         Ok(())
     }
 
-    pub fn list_update_scripts(&self, connection_id: &str) -> Result<Vec<UpdateScript>> {
+    pub fn list_update_scripts(&self) -> Result<Vec<UpdateScript>> {
         self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
@@ -651,12 +630,11 @@ impl SqliteConfigStore {
               created_at,
               updated_at
             FROM update_scripts
-            WHERE connection_id = ?1
             ORDER BY updated_at DESC, created_at DESC, id DESC
             "#,
         )?;
 
-        let rows = statement.query_map([connection_id], |row| {
+        let rows = statement.query_map([], |row| {
             let source_commands_json: String = row.get(6)?;
             let source_commands =
                 serde_json::from_str::<Vec<String>>(&source_commands_json).unwrap_or_default();

@@ -1,5 +1,6 @@
 export interface WorkspaceSession {
   id: string
+  /** Connection active when the global AI conversation was created. */
   connectionId: string
   name: string
   summary: string
@@ -9,7 +10,9 @@ export interface WorkspaceSession {
 
 export interface CommandHistoryEntry {
   id: string
+  /** Command history remains owned by its execution connection. */
   connectionId: string
+  /** Legacy capture-group provenance; AI conversation selection must not filter history. */
   workspaceSessionId: string
   terminalId: string
   command: string
@@ -51,6 +54,7 @@ export interface AiContextStatus {
 
 export interface AiMessage {
   id: string
+  /** Source connection for this turn; it does not control conversation visibility. */
   connectionId: string
   workspaceSessionId: string
   terminalId: string
@@ -64,6 +68,7 @@ export interface AiMessage {
 
 export interface UpdateScript {
   id: string
+  /** Source connection only; saved scripts are globally visible. */
   connectionId: string
   workspaceSessionId: string
   name: string

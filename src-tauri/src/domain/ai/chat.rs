@@ -16,6 +16,9 @@ const MAX_CONTEXT_CHARS: usize = 12_000;
 const TERMINAL_HEAD_CHARS: usize = 2_000;
 const TERMINAL_TAIL_CHARS: usize = 8_000;
 const MAX_HISTORY_COMMANDS: usize = 80;
+const MAX_CONVERSATION_MESSAGES: usize = 16;
+const MAX_CONVERSATION_CHARS: usize = 8_000;
+const MAX_CONVERSATION_MESSAGE_CHARS: usize = 3_000;
 const MAX_KEY_LINES: usize = 36;
 const AI_TERM_CLIENT_NAME: &str = "ai-term";
 const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,6 +34,22 @@ pub struct AiChatRequest {
     pub question: String,
     pub terminal_snapshot: String,
     pub command_history: Vec<String>,
+    #[serde(default)]
+    pub conversation_messages: Vec<AiConversationTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConversationTurn {
+    pub role: AiConversationRole,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiConversationRole {
+    User,
+    Assistant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,8 +106,9 @@ struct ContextBundle {
 pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse> {
     validate_chat_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
+    let conversation = conversation_messages_for_payload(&request.conversation_messages);
     let endpoint = chat_completions_endpoint(&request.config.base_url);
-    let payload = build_chat_payload(&request, &context, false);
+    let payload = build_chat_payload(&request, &context, &conversation, false);
 
     let response_text =
         send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
@@ -96,8 +116,9 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
 
     Ok(AiChatResponse {
         answer,
-        context_compressed: context.compressed,
-        context_chars: context.chars,
+        context_compressed: context.compressed
+            || conversation_context_was_compressed(&request.conversation_messages, &conversation),
+        context_chars: context.chars + conversation_context_chars(&conversation),
         history_count: context.history.len(),
     })
 }
@@ -112,8 +133,9 @@ where
 {
     validate_chat_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
+    let conversation = conversation_messages_for_payload(&request.conversation_messages);
     let endpoint = chat_completions_endpoint(&request.config.base_url);
-    let payload = build_chat_payload(&request, &context, true);
+    let payload = build_chat_payload(&request, &context, &conversation, true);
 
     let answer = send_openai_compatible_stream_request(
         &endpoint,
@@ -126,8 +148,9 @@ where
 
     Ok(AiChatResponse {
         answer,
-        context_compressed: context.compressed,
-        context_chars: context.chars,
+        context_compressed: context.compressed
+            || conversation_context_was_compressed(&request.conversation_messages, &conversation),
+        context_chars: context.chars + conversation_context_chars(&conversation),
         history_count: context.history.len(),
     })
 }
@@ -193,19 +216,33 @@ pub async fn generate_script_title(request: AiScriptTitleRequest) -> Result<AiSc
     Ok(AiScriptTitleResponse { title })
 }
 
-fn build_chat_payload(request: &AiChatRequest, context: &ContextBundle, stream: bool) -> Value {
+fn build_chat_payload(
+    request: &AiChatRequest,
+    context: &ContextBundle,
+    conversation: &[AiConversationTurn],
+    stream: bool,
+) -> Value {
+    let mut messages = vec![json!({
+        "role": "system",
+        "content": build_system_prompt(&request.config.system_prompt)
+    })];
+    messages.extend(conversation.iter().map(|message| {
+        json!({
+            "role": match &message.role {
+                AiConversationRole::User => "user",
+                AiConversationRole::Assistant => "assistant",
+            },
+            "content": &message.content,
+        })
+    }));
+    messages.push(json!({
+        "role": "user",
+        "content": build_user_context_prompt(&request.question, context)
+    }));
+
     json!({
         "model": request.config.model,
-        "messages": [
-            {
-                "role": "system",
-                "content": build_system_prompt(&request.config.system_prompt)
-            },
-            {
-                "role": "user",
-                "content": build_user_context_prompt(&request.question, &context)
-            }
-        ],
+        "messages": messages,
         "temperature": 0.2,
         "stream": stream
     })
@@ -302,6 +339,7 @@ fn build_context_bundle(terminal_snapshot: &str, command_history: &[String]) -> 
 fn build_system_prompt(custom_prompt: &str) -> String {
     [
         custom_prompt.trim(),
+        "历史会话可能来自其他连接。始终以最新用户消息中的当前终端内容和命令历史为准，不要假定早期命令仍然指向同一主机。",
         "你是 AI Term 的 SSH 终端助手，目标是帮助用户理解当前终端状态并生成可以直接执行的命令。",
         "必须优先依据【关键上下文摘要】、【当前终端内容】和【历史命令】回答；不要臆造不存在的服务器状态。",
         "当用户需要操作命令时，把可执行命令放在单独的 fenced code block 中，并使用 bash 或 shell 作为语言，例如 ```bash。",
@@ -348,6 +386,59 @@ fn compress_history(command_history: &[String]) -> Vec<String> {
         .rev()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn conversation_messages_for_payload(messages: &[AiConversationTurn]) -> Vec<AiConversationTurn> {
+    let mut remaining_chars = MAX_CONVERSATION_CHARS;
+    let mut selected = Vec::new();
+
+    for message in messages.iter().rev().take(MAX_CONVERSATION_MESSAGES) {
+        let content = message.content.trim();
+        if content.is_empty() || remaining_chars == 0 {
+            continue;
+        }
+        let content_chars = content.chars().count();
+        let kept_chars = content_chars
+            .min(MAX_CONVERSATION_MESSAGE_CHARS)
+            .min(remaining_chars);
+        selected.push(AiConversationTurn {
+            role: message.role.clone(),
+            content: content.chars().take(kept_chars).collect(),
+        });
+        remaining_chars = remaining_chars.saturating_sub(kept_chars);
+    }
+
+    selected.reverse();
+    while selected
+        .first()
+        .is_some_and(|message| matches!(message.role, AiConversationRole::Assistant))
+    {
+        selected.remove(0);
+    }
+    selected
+}
+
+fn conversation_context_chars(messages: &[AiConversationTurn]) -> usize {
+    messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum()
+}
+
+fn conversation_context_was_compressed(
+    source: &[AiConversationTurn],
+    selected: &[AiConversationTurn],
+) -> bool {
+    let source_messages = source
+        .iter()
+        .filter(|message| !message.content.trim().is_empty())
+        .collect::<Vec<_>>();
+    source_messages.len() != selected.len()
+        || source_messages
+            .iter()
+            .map(|message| message.content.trim().chars().count())
+            .sum::<usize>()
+            != conversation_context_chars(selected)
 }
 
 fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<String> {
@@ -880,6 +971,33 @@ mod tests {
         assert_eq!(context.history.len(), MAX_HISTORY_COMMANDS);
         assert_eq!(context.history.first().map(String::as_str), Some("cmd-20"));
         assert_eq!(context.history.last().map(String::as_str), Some("cmd-99"));
+    }
+
+    #[test]
+    fn bounds_conversation_history_for_model_context() {
+        let messages = (0..24)
+            .map(|index| AiConversationTurn {
+                role: if index % 2 == 0 {
+                    AiConversationRole::User
+                } else {
+                    AiConversationRole::Assistant
+                },
+                content: format!("turn-{index} {}", "x".repeat(700)),
+            })
+            .collect::<Vec<_>>();
+
+        let selected = conversation_messages_for_payload(&messages);
+        let total_chars = selected
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+
+        assert!(selected.len() <= MAX_CONVERSATION_MESSAGES);
+        assert!(total_chars <= MAX_CONVERSATION_CHARS);
+        assert!(conversation_context_was_compressed(&messages, &selected));
+        assert!(selected
+            .last()
+            .is_some_and(|message| message.content.starts_with("turn-23")));
     }
 
     #[test]

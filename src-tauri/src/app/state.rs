@@ -185,15 +185,12 @@ impl AppState {
         store.save_workspace_session(&session)
     }
 
-    pub async fn list_workspace_sessions(
-        &self,
-        connection_id: &str,
-    ) -> Result<Vec<WorkspaceSession>> {
+    pub async fn list_workspace_sessions(&self) -> Result<Vec<WorkspaceSession>> {
         let store = self.profile_store.lock().await;
         let Some(store) = store.as_ref() else {
             anyhow::bail!("workspace session store is not configured");
         };
-        store.list_workspace_sessions(connection_id)
+        store.list_workspace_sessions()
     }
 
     pub async fn delete_workspace_session(&self, id: &str) -> Result<bool> {
@@ -207,13 +204,12 @@ impl AppState {
     pub async fn list_command_history(
         &self,
         connection_id: &str,
-        workspace_session_id: &str,
     ) -> Result<Vec<CommandHistoryRecord>> {
         let store = self.profile_store.lock().await;
         let Some(store) = store.as_ref() else {
             anyhow::bail!("workspace history store is not configured");
         };
-        store.list_command_history(connection_id, workspace_session_id)
+        store.list_command_history(connection_id)
     }
 
     pub async fn save_ai_conversation_message(&self, message: AiConversationMessage) -> Result<()> {
@@ -226,14 +222,13 @@ impl AppState {
 
     pub async fn list_ai_conversation_messages(
         &self,
-        connection_id: &str,
         workspace_session_id: &str,
     ) -> Result<Vec<AiConversationMessage>> {
         let store = self.profile_store.lock().await;
         let Some(store) = store.as_ref() else {
             anyhow::bail!("workspace conversation store is not configured");
         };
-        store.list_ai_conversation_messages(connection_id, workspace_session_id)
+        store.list_ai_conversation_messages(workspace_session_id)
     }
 
     pub async fn save_update_script(&self, script: UpdateScript) -> Result<()> {
@@ -244,12 +239,12 @@ impl AppState {
         store.save_update_script(&script)
     }
 
-    pub async fn list_update_scripts(&self, connection_id: &str) -> Result<Vec<UpdateScript>> {
+    pub async fn list_update_scripts(&self) -> Result<Vec<UpdateScript>> {
         let store = self.profile_store.lock().await;
         let Some(store) = store.as_ref() else {
             anyhow::bail!("workspace script store is not configured");
         };
-        store.list_update_scripts(connection_id)
+        store.list_update_scripts()
     }
 
     pub async fn get_update_script(&self, id: &str) -> Result<Option<UpdateScript>> {

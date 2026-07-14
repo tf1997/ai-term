@@ -10767,6 +10767,26 @@ body.workspace-resizing * {
   font-size: 12px;
 }
 
+.assistant-panel .message-source {
+  min-width: 0;
+  max-width: 52%;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.script-message-source {
+  min-width: 0;
+  max-width: 34%;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
 .assistant-panel .message-body {
   margin-top: 7px;
   padding-left: 31px;
