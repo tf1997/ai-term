@@ -21,7 +21,12 @@ import {
 import type { AiProviderConfig, AuthEndpoint, ConnectionProfile } from '../types/profile'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
+import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
+
+const terminalTypographyOptions = isWindowsPlatform()
+  ? { lineHeight: 1.12, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
+  : { lineHeight: 1, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
@@ -1410,6 +1415,10 @@ function applyTerminalAppearance() {
   const settings = resolvedTerminalSettings()
   terminal.options.fontFamily = settings.terminalFontFamily
   terminal.options.fontSize = settings.terminalFontSize
+  terminal.options.lineHeight = terminalTypographyOptions.lineHeight
+  terminal.options.letterSpacing = terminalTypographyOptions.letterSpacing
+  terminal.options.fontWeight = terminalTypographyOptions.fontWeight
+  terminal.options.fontWeightBold = terminalTypographyOptions.fontWeightBold
   terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
   terminal.refresh(0, terminal.rows - 1)
   scheduleTerminalSizeSync()
@@ -1424,6 +1433,7 @@ onMounted(async () => {
     convertEol: false,
     fontFamily: resolvedTerminalSettings().terminalFontFamily,
     fontSize: resolvedTerminalSettings().terminalFontSize,
+    ...terminalTypographyOptions,
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
   fitAddon = new FitAddon()

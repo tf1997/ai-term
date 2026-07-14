@@ -1,8 +1,10 @@
 :root {
   color-scheme: dark;
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
   font-family: var(--font-sans);
+  font-synthesis: none;
+  font-kerning: normal;
   --font-xs: 11px;
   --font-sm: 12px;
   --font-md: 13px;
@@ -25,50 +27,9 @@ body {
 }
 
 :root[data-platform="windows"] {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Noto Sans SC", ui-sans-serif, sans-serif;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  text-rendering: optimizeLegibility;
-}
-
-:root[data-platform="windows"] button,
-:root[data-platform="windows"] input,
-:root[data-platform="windows"] select,
-:root[data-platform="windows"] textarea {
-  font: inherit;
-}
-
-:root[data-platform="windows"] body {
-  letter-spacing: -.005em;
-}
-
-:root[data-platform="windows"] button,
-:root[data-platform="windows"] input,
-:root[data-platform="windows"] select,
-:root[data-platform="windows"] textarea {
-  border-radius: 8px;
-}
-
-:root[data-platform="windows"] button {
-  box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 1px 2px rgba(0, 0, 0, .12);
-  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
-}
-
-:root[data-platform="windows"] button:hover:not(:disabled) {
-  border-color: #364154;
-  box-shadow: inset 0 1px rgba(255, 255, 255, .05), 0 2px 5px rgba(0, 0, 0, .16);
-}
-
-:root[data-platform="windows"] button:active:not(:disabled) {
-  transform: translateY(.5px);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18);
-}
-
-:root[data-platform="windows"] input,
-:root[data-platform="windows"] select,
-:root[data-platform="windows"] textarea {
-  border-color: rgba(116, 129, 153, .3);
-  background-color: rgba(13, 17, 25, .92);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18), 0 1px rgba(255, 255, 255, .025);
+  text-rendering: auto;
 }
 
 :root[data-platform="windows"] input:focus,
@@ -76,18 +37,6 @@ body {
 :root[data-platform="windows"] textarea:focus {
   border-color: rgba(64, 196, 150, .68);
   box-shadow: 0 0 0 3px rgba(45, 212, 191, .12), inset 0 1px 2px rgba(0, 0, 0, .12);
-}
-
-:root[data-platform="windows"] .app-shell {
-  background:
-    radial-gradient(circle at 18% 0, rgba(80, 90, 255, .09), transparent 300px),
-    radial-gradient(circle at 78% 8%, rgba(43, 189, 126, .06), transparent 340px),
-    #080b11;
-}
-
-:root[data-platform="windows"] .ui-icon {
-  stroke-width: 1.75;
-  shape-rendering: geometricPrecision;
 }
 
 :root[data-platform="windows"] * {
@@ -118,14 +67,6 @@ body {
 
 :root[data-platform="windows"] *::-webkit-scrollbar-corner {
   background: transparent;
-}
-
-:root[data-platform="windows"][data-theme="light"] input,
-:root[data-platform="windows"][data-theme="light"] select,
-:root[data-platform="windows"][data-theme="light"] textarea {
-  border-color: rgba(85, 99, 120, .22);
-  background-color: rgba(255, 255, 255, .94);
-  box-shadow: inset 0 1px 2px rgba(20, 31, 48, .05), 0 1px 2px rgba(20, 31, 48, .04);
 }
 
 :root[data-platform="windows"][data-theme="light"] * {
@@ -445,7 +386,7 @@ code,
 .section-title {
   color: #9aa5b1;
   font-size: var(--font-md);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -1322,7 +1263,7 @@ code,
   overflow: hidden;
   color: #8c99ad;
   font-size: var(--font-xs);
-  font-weight: 700;
+  font-weight: 600;
   padding: 5px 8px 6px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2928,7 +2869,7 @@ code {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--font-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 .file-row span {
   color: #9aa5b1;
@@ -3169,7 +3110,7 @@ code {
   color: #d6deeb;
   font-family: var(--font-sans);
   font-size: var(--font-xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 .transfer-task-paths {
   min-width: 0;
@@ -3540,7 +3481,7 @@ code {
   height: 100%;
   padding: 0 16px;
   border-right: 1px solid #1b2130;
-  font-weight: 700;
+  font-weight: 600;
   overflow: hidden;
 }
 .left-collapsed .brand {
@@ -3686,7 +3627,7 @@ code {
 }
 .tab-close {
   color: #687482;
-  font-weight: 700;
+  font-weight: 600;
 }
 .tab.active {
   border-color: #303640;
@@ -3946,7 +3887,7 @@ code {
   border-radius: 8px;
   background: rgba(111, 124, 255, .12);
   color: #bfc8ff;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
 }
@@ -3960,7 +3901,7 @@ code {
   overflow: hidden;
   color: #f1f6ff;
   font-size: var(--font-xl);
-  font-weight: 760;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4023,7 +3964,7 @@ code {
   background: rgba(111, 124, 255, .2);
   color: #e8ebff;
   font-size: var(--font-sm);
-  font-weight: 760;
+  font-weight: 600;
 }
 .message:not(.ai) .message-avatar {
   border-color: rgba(109, 168, 255, .36);
@@ -4048,7 +3989,7 @@ code {
   margin-left: 8px;
   color: #8c99ad;
   font-size: var(--font-xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 .markdown-content {
   min-width: 0;
@@ -4149,7 +4090,7 @@ code {
 .markdown-table th {
   background: #0c1422;
   color: #f0f5ff;
-  font-weight: 700;
+  font-weight: 600;
 }
 .markdown-table tbody tr:last-child td {
   border-bottom: 0;
@@ -4503,7 +4444,7 @@ code {
 }
 .script-preview-head strong, .script-assistant-head strong {
   font-size: 20px;
-  font-weight: 760;
+  font-weight: 600;
 }
 .script-preview-head span, .script-assistant-head span:not(.chip):not(.panel-glyph) {
   font-size: var(--font-md);
@@ -4539,7 +4480,7 @@ code {
   padding: 0 16px;
   border-right: 1px solid #1c2739;
   color: #f0f6ff;
-  font-weight: 760;
+  font-weight: 600;
 }
 .script-file-icon {
   width: 22px;
@@ -5610,7 +5551,7 @@ code {
 }
 .shell-token.command {
   color: #c7d2ff;
-  font-weight: 650;
+  font-weight: 600;
 }
 /* Script workspace clarity: actionable readiness, compact replies, labeled AI input. */
 .script-readiness-list {
@@ -5650,7 +5591,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .script-replies-list {
   max-height: min(230px, 32vh);
@@ -5683,7 +5624,7 @@ code {
 .assistant-compose.script-compose label {
   color: #cbd7e8;
   font-size: var(--font-xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 .assistant-compose.script-compose > small {
   align-self: center;
@@ -5834,12 +5775,12 @@ code {
   white-space: nowrap;
   color: #d8dee3;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .terminal-completion mark {
   background: transparent;
   color: #8de3ad;
-  font-weight: 650;
+  font-weight: 600;
 }
 .terminal-completion .completion-tail {
   color: #d8dee3;
@@ -6170,7 +6111,7 @@ code {
   margin-bottom: 6px;
   color: #a7f3d0;
   font-size: var(--font-xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 .script-risk-thinking span {
   width: 5px;
@@ -8249,7 +8190,7 @@ code {
   color: #a7f3d0;
   padding: 0 9px;
   font-size: var(--font-xs);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 .ai-context-strip {
@@ -8316,7 +8257,7 @@ code {
 .ai-context-detail strong {
   flex: 0 0 auto;
   color: #d8e4f2;
-  font-weight: 760;
+  font-weight: 600;
 }
 .message.ai {
   border-color: rgba(62, 91, 81, .62);
@@ -8552,7 +8493,7 @@ code {
 .ai-result-label {
   color: #8fd8b5;
   font-size: var(--font-xs);
-  font-weight: 760;
+  font-weight: 600;
   white-space: nowrap;
 }
 .ai-result-block code {
@@ -8564,7 +8505,7 @@ code {
   padding: 0;
   font-family: var(--font-mono);
   font-size: var(--font-md);
-  font-weight: 720;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: pre-wrap;
   word-break: break-word;
@@ -9305,7 +9246,7 @@ code {
 .terminal-settings-panel .settings-field > span {
   color: #e8eef8;
   font-size: var(--font-xs);
-  font-weight: 700;
+  font-weight: 600;
 }
 .terminal-settings-panel .settings-field.inline {
   grid-template-columns: minmax(0, 1fr) 84px;
@@ -10303,7 +10244,7 @@ code {
 .theme-light .server-meta {
   gap: 0;
   color: var(--workbench-muted);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .server-meta span:last-child {
@@ -10316,7 +10257,7 @@ code {
   background: transparent;
   color: var(--workbench-muted);
   padding-inline: 6px;
-  font-size: 9.5px;
+  font-size: 10px;
 }
 
 .server-main .badge.ok {
@@ -10389,7 +10330,7 @@ code {
 .theme-light .terminal-title {
   color: var(--workbench-accent-strong);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .terminal-subtitle,
@@ -10430,8 +10371,8 @@ code {
 .quick-command-bar span:first-child,
 .theme-light .quick-command-bar span:first-child {
   color: var(--workbench-quiet);
-  font-size: 9.5px;
-  font-weight: 750;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -10534,7 +10475,7 @@ body.workspace-resizing * {
   background: transparent;
   color: var(--workbench-muted);
   padding-inline: 7px;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .workspace-tabs button:hover:not(:disabled),
@@ -10800,7 +10741,7 @@ body.workspace-resizing * {
 
 .assistant-panel .message-title strong {
   color: var(--workbench-text-strong);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .assistant-panel .message-body {
@@ -10811,7 +10752,7 @@ body.workspace-resizing * {
 .assistant-panel .message-body p,
 .assistant-panel .markdown-content {
   color: var(--workbench-text);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.62;
 }
 
@@ -10906,7 +10847,7 @@ body.workspace-resizing * {
   }
 
   .workspace-tabs button span {
-    font-size: 10.5px;
+    font-size: 11px;
   }
 }
 
@@ -11038,7 +10979,7 @@ body.workspace-resizing * {
 .settings-option-copy strong {
   color: var(--workbench-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .settings-option.active .settings-option-copy strong {
@@ -11118,7 +11059,7 @@ body.workspace-resizing * {
   border-radius: 5px;
   background: transparent;
   padding-inline: 4px;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .assistant-panel .message-list {
@@ -11138,7 +11079,7 @@ body.workspace-resizing * {
   width: 22px;
   height: 22px;
   border-radius: 5px;
-  font-size: 9.5px;
+  font-size: 10px;
 }
 
 .assistant-panel .message-title {
@@ -11209,7 +11150,7 @@ body.workspace-resizing * {
   border-color: transparent;
   background: transparent;
   padding-inline: 5px;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .assistant-panel > .assistant-compose textarea,
@@ -11363,7 +11304,7 @@ body.workspace-resizing * {
   flex: 1 1 64px;
   min-width: 32px;
   font-size: var(--font-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .script-file-icon {
@@ -11573,7 +11514,7 @@ button.script-readiness-status:hover {
   background: #0a111a;
   color: #77869a;
   padding: 0 8px;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .script-editor-statusbar span {
@@ -11758,8 +11699,8 @@ button.script-readiness-status:hover {
 
 .script-conversation-head .script-replies-title strong {
   color: var(--workbench-text-strong);
-  font-size: 11.5px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .script-conversation-head .script-replies-title small {
@@ -11853,7 +11794,7 @@ button.script-readiness-status:hover {
   border-radius: 5px;
   background: var(--workbench-accent-soft);
   color: var(--workbench-accent-strong);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .script-conversation .message-title strong {
@@ -12179,13 +12120,13 @@ button.script-readiness-status:hover {
 
 .script-readiness-list .readiness-line {
   color: #f7c96f;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .script-readiness-list .readiness-field {
   color: #fff2cf;
   font-family: var(--font-mono);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .script-readiness-list .readiness-requirement {

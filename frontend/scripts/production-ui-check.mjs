@@ -14,6 +14,7 @@ function assert(condition, message) {
 }
 
 const appShell = read('src/components/AppShell.vue')
+const main = read('src/main.ts')
 const terminalPane = read('src/components/TerminalPane.vue')
 const aiPanel = read('src/components/AiPanel.vue')
 const aiMarkdownMessage = read('src/components/AiMarkdownMessage.vue')
@@ -43,6 +44,21 @@ const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
+
+assert(
+  styles.includes('--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC"') &&
+    styles.includes('--font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC"') &&
+    styles.includes('font-synthesis: none;') &&
+    styles.includes('font-kerning: normal;') &&
+    !styles.includes('letter-spacing: -.005em;') &&
+    !/font-weight:\s*(?:650|700|720|750|760|800);/.test(styles) &&
+    !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
+    main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
+    terminalPane.includes('lineHeight: 1.12') &&
+    terminalPane.includes("fontWeight: '400' as const") &&
+    terminalPane.includes("fontWeightBold: '600' as const"),
+  'macOS must keep native typography while Windows uses native UI fonts, real bundled terminal weights, and integer type metrics.'
+)
 
 assert(
   uiIcon.includes("| 'info'") &&
