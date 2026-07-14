@@ -1575,8 +1575,17 @@ assert(
 
 assertLastCssDeclarations(
   '.script-editor-shell',
-  { '--script-editor-line-height': '18px' },
+  {
+    '--script-editor-line-height': '18px',
+    '--script-editor-scrollbar-gutter': '0px'
+  },
   'Script editor must define one explicit line-height metric for every visual layer.'
+)
+
+assertLastCssDeclarations(
+  ':root[data-platform="windows"] .script-editor-shell',
+  { '--script-editor-scrollbar-gutter': '10px' },
+  'Windows script editors must compensate mirror layers for native scrollbar geometry.'
 )
 
 for (const selector of [
@@ -1590,12 +1599,47 @@ for (const selector of [
       'font-family': 'var(--font-mono)',
       'font-size': 'var(--font-sm)',
       'line-height': 'var(--script-editor-line-height)',
-      'padding-top': '10px',
-      'padding-bottom': '24px'
+      'padding-top': '10px'
     },
     'Script line numbers, syntax highlighting, and input text must share identical vertical geometry.'
   )
 }
+
+for (const selector of [
+  '.script-editor-shell .script-line-rail',
+  '.script-editor-shell .script-code-overlay'
+]) {
+  assertLastCssDeclarations(
+    selector,
+    { 'padding-bottom': 'calc(24px + var(--script-editor-scrollbar-gutter))' },
+    'Script mirror layers must retain enough scroll range to follow a textarea with native scrollbars.'
+  )
+}
+
+assertLastCssDeclarations(
+  ':root .script-editor-shell textarea',
+  { 'padding-bottom': '24px' },
+  'The textarea keeps its content padding while only mirror layers receive scrollbar compensation.'
+)
+
+assertLastCssDeclarations(
+  '.script-editor-shell .script-code-overlay .shell-token',
+  {
+    font: 'inherit',
+    'font-feature-settings': 'inherit',
+    'font-kerning': 'inherit',
+    'font-variant-ligatures': 'inherit',
+    'letter-spacing': 'inherit'
+  },
+  'Syntax colors must not change glyph metrics used by the native textarea caret.'
+)
+
+assert(
+  scriptPanel.includes('normalizeScriptEditorContent(content)') &&
+    scriptPanel.includes("content.replace(/\\r\\n?/g, '\\n')") &&
+    lastCssDeclaration('.script-editor-shell .script-code-overlay', 'text-rendering') !== 'geometricPrecision',
+  'Script editor mirrors must normalize line endings and preserve platform-native text rendering.'
+)
 
 assert(
   scriptReadiness.includes('analyzeScriptReadiness') &&

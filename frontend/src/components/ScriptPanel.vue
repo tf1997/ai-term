@@ -459,13 +459,18 @@ function handleSelectedEditorInput(event: Event) {
 }
 
 function lineNumbersForScript(content: string) {
-  const lineCount = Math.max(1, content.split('\n').length)
+  const lineCount = Math.max(1, normalizeScriptEditorContent(content).split('\n').length)
   return Array.from({ length: lineCount }, (_, index) => String(index + 1)).join('\n')
 }
 
 function highlightShellScript(content: string, fileName = '') {
-  const language = detectShellScriptLanguage(content, fileName)
-  return content.split('\n').map((line) => highlightShellLine(line, language) || ' ').join('\n')
+  const normalized = normalizeScriptEditorContent(content)
+  const language = detectShellScriptLanguage(normalized, fileName)
+  return normalized.split('\n').map((line) => highlightShellLine(line, language) || ' ').join('\n')
+}
+
+function normalizeScriptEditorContent(content: string) {
+  return content.replace(/\r\n?/g, '\n')
 }
 
 function focusExpandedReadinessIssue(line: number) {

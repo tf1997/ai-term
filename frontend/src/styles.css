@@ -12253,6 +12253,11 @@ button.script-readiness-status:hover {
 /* Keep the transparent textarea and visible syntax layer pixel-aligned. */
 .script-editor-shell {
   --script-editor-line-height: 18px;
+  --script-editor-scrollbar-gutter: 0px;
+}
+
+:root[data-platform="windows"] .script-editor-shell {
+  --script-editor-scrollbar-gutter: 10px;
 }
 
 .script-editor-shell .script-line-rail,
@@ -12271,7 +12276,6 @@ button.script-readiness-status:hover {
   padding-bottom: 24px;
   tab-size: 2;
   text-indent: 0;
-  text-rendering: geometricPrecision;
   white-space: pre;
 }
 
@@ -12298,6 +12302,15 @@ button.script-readiness-status:hover {
   font: inherit;
   letter-spacing: inherit;
   line-height: inherit;
+}
+
+.script-editor-shell .script-code-overlay .shell-token {
+  font: inherit;
+  font-feature-settings: inherit;
+  font-kerning: inherit;
+  font-variant-ligatures: inherit;
+  letter-spacing: inherit;
+  text-decoration: none;
 }
 
 /* The textarea owns input while the synchronized layer renders syntax colors. */
@@ -12412,4 +12425,10 @@ button.script-readiness-status:hover {
 :root .script-expanded-editor textarea {
   padding-left: 10px;
   padding-right: 24px;
+}
+
+/* Match the mirror layers' vertical scroll range to Windows textarea scrollbars. */
+.script-editor-shell .script-line-rail,
+.script-editor-shell .script-code-overlay {
+  padding-bottom: calc(24px + var(--script-editor-scrollbar-gutter));
 }
