@@ -35,6 +35,7 @@ const SFTP_PTY_COLS: u16 = 240;
 const SFTP_PTY_ROWS: u16 = 32;
 const NATIVE_SFTP_POOL_TTL: Duration = Duration::from_secs(120);
 const NATIVE_SFTP_POOL_MAX: usize = 8;
+const NATIVE_SFTP_COPY_BUFFER_SIZE: usize = 1024 * 1024;
 
 pub type SftpCancelToken = Arc<AtomicBool>;
 
@@ -445,7 +446,6 @@ pub fn upload_file_with_progress(
     if let Some(response) = native_result_or_fallback(try_native_upload_file(
         profile,
         &local_path,
-        &remote_dir,
         &remote_path,
         target_override,
         cancel_token,
@@ -520,7 +520,6 @@ pub fn upload_path_with_progress(
     if let Some(response) = native_result_or_fallback(try_native_upload_path(
         profile,
         &local_path,
-        &remote_dir,
         &remote_path,
         is_dir,
         target_override,
@@ -813,7 +812,6 @@ fn try_native_delete_path(
 fn try_native_upload_file(
     profile: &ConnectionProfile,
     local_path: &str,
-    remote_dir: &str,
     remote_path: &str,
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
@@ -830,11 +828,12 @@ fn try_native_upload_file(
             let mut transferred = 0;
             let started = Instant::now();
             let local = Path::new(local_path);
-            native_ensure_dir(&connection.sftp, remote_dir)?;
+            let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
             upload_file_native_to(
                 &connection.sftp,
                 local,
                 remote_path,
+                &mut copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -856,7 +855,6 @@ fn try_native_upload_file(
 fn try_native_upload_path(
     profile: &ConnectionProfile,
     local_path: &str,
-    remote_dir: &str,
     remote_path: &str,
     is_dir: bool,
     target_override: &SftpTargetOverride,
@@ -868,14 +866,15 @@ fn try_native_upload_path(
         target_override,
         cancel_token,
         |connection, _route| {
-            native_ensure_dir(&connection.sftp, remote_dir)?;
             let total = local_transfer_size(Path::new(local_path))?;
             let mut transferred = 0;
             let started = Instant::now();
+            let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
             upload_path_native_to(
                 &connection.sftp,
                 Path::new(local_path),
                 remote_path,
+                &mut copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -914,10 +913,12 @@ fn try_native_download_file(
             let total = stat.size.unwrap_or(0);
             let mut transferred = 0;
             let started = Instant::now();
+            let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
             download_file_native_to(
                 &connection.sftp,
                 remote_path,
                 Path::new(local_path),
+                &mut copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -954,11 +955,13 @@ fn try_native_download_path(
             let total = remote_transfer_size(&connection.sftp, remote_path, is_dir)?;
             let mut transferred = 0;
             let started = Instant::now();
+            let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
             if is_dir {
                 download_dir_native_to(
                     &connection.sftp,
                     remote_path,
                     Path::new(target_path),
+                    &mut copy_buffer,
                     cancel_token,
                     progress,
                     total,
@@ -972,6 +975,7 @@ fn try_native_download_path(
                     &connection.sftp,
                     remote_path,
                     Path::new(target_path),
+                    &mut copy_buffer,
                     cancel_token,
                     progress,
                     total,
@@ -1195,8 +1199,9 @@ fn run_native_sftp_routes<T>(
         if let Err(error) = ensure_not_cancelled(cancel_token) {
             return Some(Err(error));
         }
+        let cache_key = native_sftp_cache_key(profile, &route);
         let result =
-            connect_native_sftp_route(&route).and_then(|connection| action(&connection, &route));
+            run_native_sftp_route(&route, &cache_key, |connection| action(connection, &route));
         match result {
             Ok(value) => return Some(Ok(value)),
             Err(error) => {
@@ -1216,6 +1221,28 @@ fn run_native_sftp_routes<T>(
         "原生 SFTP 路线全部失败\n{}",
         errors.join("\n\n")
     )))
+}
+
+fn run_native_sftp_route<T>(
+    route: &SftpRoute,
+    cache_key: &str,
+    action: impl FnOnce(&NativeSftpConnection) -> Result<T>,
+) -> Result<T> {
+    let connection = match take_cached_native_sftp_connection(cache_key) {
+        Some(connection) => connection,
+        None => connect_native_sftp_route(route)?,
+    };
+
+    // Mutable actions can fail after changing remote state, so do not replay them
+    // on a fresh session. A failure drops the borrowed session and lets the route
+    // caller apply the existing alternate-route/fallback policy.
+    match action(&connection) {
+        Ok(value) => {
+            store_cached_native_sftp_connection(cache_key.to_string(), connection);
+            Ok(value)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn native_sftp_routes(
@@ -1352,6 +1379,7 @@ fn upload_path_native_to(
     sftp: &ssh2::Sftp,
     local_path: &Path,
     remote_path: &str,
+    copy_buffer: &mut [u8],
     cancel_token: Option<&SftpCancelToken>,
     progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
     total: u64,
@@ -1371,6 +1399,7 @@ fn upload_path_native_to(
                 sftp,
                 &entry.path(),
                 &child_remote,
+                copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -1385,6 +1414,7 @@ fn upload_path_native_to(
         sftp,
         local_path,
         remote_path,
+        copy_buffer,
         cancel_token,
         progress,
         total,
@@ -1397,6 +1427,7 @@ fn upload_file_native_to(
     sftp: &ssh2::Sftp,
     local_path: &Path,
     remote_path: &str,
+    copy_buffer: &mut [u8],
     cancel_token: Option<&SftpCancelToken>,
     progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
     total: u64,
@@ -1417,6 +1448,7 @@ fn upload_file_native_to(
     copy_with_native_progress(
         &mut local,
         &mut remote,
+        copy_buffer,
         cancel_token,
         progress,
         total,
@@ -1429,6 +1461,7 @@ fn download_dir_native_to(
     sftp: &ssh2::Sftp,
     remote_path: &str,
     local_path: &Path,
+    copy_buffer: &mut [u8],
     cancel_token: Option<&SftpCancelToken>,
     progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
     total: u64,
@@ -1453,6 +1486,7 @@ fn download_dir_native_to(
                 sftp,
                 &child_remote,
                 &child_local,
+                copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -1464,6 +1498,7 @@ fn download_dir_native_to(
                 sftp,
                 &child_remote,
                 &child_local,
+                copy_buffer,
                 cancel_token,
                 progress,
                 total,
@@ -1479,6 +1514,7 @@ fn download_file_native_to(
     sftp: &ssh2::Sftp,
     remote_path: &str,
     local_path: &Path,
+    copy_buffer: &mut [u8],
     cancel_token: Option<&SftpCancelToken>,
     progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
     total: u64,
@@ -1501,6 +1537,7 @@ fn download_file_native_to(
     copy_with_native_progress(
         &mut remote,
         &mut local,
+        copy_buffer,
         cancel_token,
         progress,
         total,
@@ -1512,16 +1549,16 @@ fn download_file_native_to(
 fn copy_with_native_progress<R: Read, W: Write>(
     reader: &mut R,
     writer: &mut W,
+    buffer: &mut [u8],
     cancel_token: Option<&SftpCancelToken>,
     progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
     total: u64,
     transferred: &mut u64,
     started: &Instant,
 ) -> Result<()> {
-    let mut buffer = [0u8; 64 * 1024];
     loop {
         ensure_not_cancelled(cancel_token)?;
-        let count = reader.read(&mut buffer)?;
+        let count = reader.read(buffer)?;
         if count == 0 {
             break;
         }
@@ -3203,6 +3240,70 @@ mod tests {
         );
         assert_eq!(format_unix_mode(0o040755), "drwxr-xr-x");
         assert_eq!(format_unix_mode(0o100644), "-rw-r--r--");
+    }
+
+    #[test]
+    fn native_copy_uses_the_large_heap_buffer() {
+        struct ProbeReader {
+            emitted: bool,
+            largest_request: usize,
+        }
+
+        impl Read for ProbeReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.largest_request = self.largest_request.max(buffer.len());
+                if self.emitted {
+                    return Ok(0);
+                }
+                self.emitted = true;
+                buffer[..5].copy_from_slice(b"probe");
+                Ok(5)
+            }
+        }
+
+        #[derive(Default)]
+        struct ProbeWriter {
+            bytes: Vec<u8>,
+            flushed: bool,
+        }
+
+        impl Write for ProbeWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushed = true;
+                Ok(())
+            }
+        }
+
+        let mut reader = ProbeReader {
+            emitted: false,
+            largest_request: 0,
+        };
+        let mut writer = ProbeWriter::default();
+        let mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)> = None;
+        let mut transferred = 0;
+        let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
+
+        copy_with_native_progress(
+            &mut reader,
+            &mut writer,
+            &mut copy_buffer,
+            None,
+            &mut progress,
+            5,
+            &mut transferred,
+            &Instant::now(),
+        )
+        .unwrap();
+
+        assert_eq!(reader.largest_request, NATIVE_SFTP_COPY_BUFFER_SIZE);
+        assert_eq!(writer.bytes, b"probe");
+        assert!(writer.flushed);
+        assert_eq!(transferred, 5);
     }
 
     #[test]

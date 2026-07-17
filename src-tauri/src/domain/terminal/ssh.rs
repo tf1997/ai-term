@@ -20,7 +20,9 @@ use crate::domain::pty::{
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SSH_AUTH_TIMEOUT_MS: u32 = 30_000;
 const SSH_IO_RETRY_DELAY: Duration = Duration::from_millis(8);
+const SSH_DATA_RETRY_DELAY: Duration = Duration::from_millis(1);
 const SSH_IO_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
+const SSH_RELAY_BUFFER_SIZE: usize = 64 * 1024;
 
 pub trait TerminalSession: Send + Sync {
     fn write(&mut self, bytes: &[u8]) -> Result<()>;
@@ -971,8 +973,8 @@ fn handle_forward_connection(
 }
 
 fn pump_forward(local: &mut TcpStream, remote: &mut Channel, stop: &AtomicBool) -> Result<()> {
-    let mut local_buffer = [0; 16 * 1024];
-    let mut remote_buffer = [0; 16 * 1024];
+    let mut local_buffer = [0; SSH_RELAY_BUFFER_SIZE];
+    let mut remote_buffer = [0; SSH_RELAY_BUFFER_SIZE];
 
     while !stop.load(Ordering::SeqCst) {
         let mut progressed = false;
@@ -1018,12 +1020,15 @@ fn write_all_retry<W: Write>(writer: &mut W, mut bytes: &[u8]) -> Result<()> {
                 if started.elapsed() > SSH_IO_RETRY_TIMEOUT {
                     return Err(error).context("timed out while writing SSH data");
                 }
-                thread::sleep(SSH_IO_RETRY_DELAY);
+                thread::sleep(SSH_DATA_RETRY_DELAY);
             }
             Err(error) => return Err(error.into()),
         }
     }
-    writer.flush()?;
+    // `ssh2::Channel::flush` maps to libssh2's read-buffer flush and discards
+    // pending inbound data. Successful writes have already handed all bytes to
+    // the underlying stream, so an explicit flush is both unnecessary and
+    // destructive for bidirectional forwarding.
     Ok(())
 }
 
@@ -1182,5 +1187,52 @@ impl TerminalSession for PendingSshSession {
     fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
         self.size = Some((cols, rows));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct PartialNonblockingWriter {
+        bytes: Vec<u8>,
+        write_attempts: usize,
+        flush_attempts: usize,
+    }
+
+    impl Write for PartialNonblockingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.write_attempts += 1;
+            if self.write_attempts == 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "temporarily blocked",
+                ));
+            }
+
+            let count = bytes.len().min(3);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flush_attempts += 1;
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "flush must not be called",
+            ))
+        }
+    }
+
+    #[test]
+    fn write_all_retry_handles_partial_writes_without_flushing() {
+        let mut writer = PartialNonblockingWriter::default();
+
+        write_all_retry(&mut writer, b"forwarded data").unwrap();
+
+        assert_eq!(writer.bytes, b"forwarded data");
+        assert!(writer.write_attempts > 2);
+        assert_eq!(writer.flush_attempts, 0);
     }
 }

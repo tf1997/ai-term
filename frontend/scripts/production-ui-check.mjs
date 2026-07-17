@@ -41,6 +41,7 @@ const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
 const schema = read('../src-tauri/src/domain/storage/schema.sql')
 const aiChat = read('../src-tauri/src/domain/ai/chat.rs')
 const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
+const sshBackend = read('../src-tauri/src/domain/terminal/ssh.rs')
 const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
@@ -973,6 +974,25 @@ assert(
     sftpBackend.includes('run_cached_native_sftp_routes(') &&
     sftpBackend.includes('|connection, _route| list_directory_native(connection, remote_path)'),
   'SFTP probing must discard the target route from the native pool, while normal directory listing should reuse the newly verified target-specific session.'
+)
+assert(
+  sftpBackend.includes('NATIVE_SFTP_COPY_BUFFER_SIZE: usize = 1024 * 1024') &&
+    sftpBackend.includes('vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE]') &&
+    sftpBackend.includes('fn run_native_sftp_route<T>') &&
+    sftpBackend.includes('take_cached_native_sftp_connection(cache_key)') &&
+    sftpBackend.includes('store_cached_native_sftp_connection(cache_key.to_string(), connection)') &&
+    commands.includes('SFTP_PROGRESS_EMIT_INTERVAL') &&
+    commands.includes('SftpProgressThrottle') &&
+    commands.includes('throttle.flush()'),
+  'Native SFTP transfers must use a deep heap-backed pipeline, reuse idle sessions without holding the pool lock, and throttle progress IPC while preserving the final update.'
+)
+assert(
+  sshBackend.includes('SSH_RELAY_BUFFER_SIZE: usize = 64 * 1024') &&
+    sshBackend.includes('thread::sleep(SSH_DATA_RETRY_DELAY)') &&
+    sshBackend.includes('thread::sleep(SSH_IO_RETRY_DELAY)') &&
+    sshBackend.includes('write_all_retry_handles_partial_writes_without_flushing') &&
+    !sshBackend.includes('writer.flush()?'),
+  'Bastion forwarding must use larger relay buffers, retry active writes promptly, avoid busy idle polling, and never discard inbound channel data through ssh2 Channel.flush.'
 )
 assert(
   sftpBackend.includes('fn try_native_sftp_probe') &&

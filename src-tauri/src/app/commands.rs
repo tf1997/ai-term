@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Manager, State};
 use uuid::Uuid;
 
@@ -37,6 +37,38 @@ use crate::domain::workspace::{
 };
 
 const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
+const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Default)]
+struct SftpProgressThrottle {
+    last_emitted_at: Option<Instant>,
+    pending: Option<SftpProgressUpdate>,
+}
+
+impl SftpProgressThrottle {
+    fn push(&mut self, update: SftpProgressUpdate, now: Instant) -> Option<SftpProgressUpdate> {
+        let interval_elapsed = self.last_emitted_at.map_or(true, |last_emitted_at| {
+            now.saturating_duration_since(last_emitted_at) >= SFTP_PROGRESS_EMIT_INTERVAL
+        });
+        let should_emit = self.last_emitted_at.is_none()
+            || update.transferred_bytes.is_none()
+            || update.percent == Some(100)
+            || interval_elapsed;
+
+        if should_emit {
+            self.pending = None;
+            self.last_emitted_at = Some(now);
+            Some(update)
+        } else {
+            self.pending = Some(update);
+            None
+        }
+    }
+
+    fn flush(&mut self) -> Option<SftpProgressUpdate> {
+        self.pending.take()
+    }
+}
 
 #[derive(Default)]
 struct Utf8StreamDecoder {
@@ -102,6 +134,117 @@ mod utf8_stream_decoder_tests {
     fn replaces_invalid_bytes_without_discarding_following_output() {
         let mut decoder = Utf8StreamDecoder::default();
         assert_eq!(decoder.push(b"ok\xffnext"), "ok\u{fffd}next");
+    }
+}
+
+#[cfg(test)]
+mod sftp_progress_throttle_tests {
+    use std::time::{Duration, Instant};
+
+    use super::SftpProgressThrottle;
+    use crate::domain::connection::sftp::SftpProgressUpdate;
+
+    fn update(percent: Option<u8>, transferred_bytes: Option<u64>) -> SftpProgressUpdate {
+        SftpProgressUpdate {
+            percent,
+            text: format!("progress {percent:?}"),
+            transferred_bytes,
+            total_bytes: Some(100),
+            bytes_per_second: None,
+            remaining_seconds: None,
+            eta_seconds: None,
+            estimated_completion_epoch_ms: None,
+            elapsed_seconds: None,
+        }
+    }
+
+    #[test]
+    fn emits_first_update_and_throttles_byte_progress() {
+        let started = Instant::now();
+        let mut throttle = SftpProgressThrottle::default();
+
+        assert_eq!(
+            throttle.push(update(Some(0), Some(0)), started),
+            Some(update(Some(0), Some(0)))
+        );
+        assert_eq!(
+            throttle.push(
+                update(Some(1), Some(1)),
+                started + Duration::from_millis(50)
+            ),
+            None
+        );
+        assert_eq!(
+            throttle.push(
+                update(Some(2), Some(2)),
+                started + Duration::from_millis(100)
+            ),
+            Some(update(Some(2), Some(2)))
+        );
+    }
+
+    #[test]
+    fn emits_status_and_completion_updates_immediately() {
+        let started = Instant::now();
+        let mut throttle = SftpProgressThrottle::default();
+
+        assert!(throttle.push(update(Some(0), Some(0)), started).is_some());
+        assert_eq!(
+            throttle.push(update(None, None), started + Duration::from_millis(10)),
+            Some(update(None, None))
+        );
+        assert_eq!(
+            throttle.push(
+                update(Some(100), Some(100)),
+                started + Duration::from_millis(20)
+            ),
+            Some(update(Some(100), Some(100)))
+        );
+    }
+
+    #[test]
+    fn flushes_only_the_latest_pending_update() {
+        let started = Instant::now();
+        let mut throttle = SftpProgressThrottle::default();
+
+        assert!(throttle.push(update(Some(0), Some(0)), started).is_some());
+        assert!(throttle
+            .push(
+                update(Some(1), Some(1)),
+                started + Duration::from_millis(10)
+            )
+            .is_none());
+        assert!(throttle
+            .push(
+                update(Some(2), Some(2)),
+                started + Duration::from_millis(20)
+            )
+            .is_none());
+
+        assert_eq!(throttle.flush(), Some(update(Some(2), Some(2))));
+        assert_eq!(throttle.flush(), None);
+    }
+
+    #[test]
+    fn completion_discards_older_pending_progress() {
+        let started = Instant::now();
+        let mut throttle = SftpProgressThrottle::default();
+
+        assert!(throttle.push(update(Some(0), Some(0)), started).is_some());
+        assert!(throttle
+            .push(
+                update(Some(50), Some(50)),
+                started + Duration::from_millis(10)
+            )
+            .is_none());
+        assert!(throttle
+            .push(
+                update(Some(100), Some(100)),
+                started + Duration::from_millis(20)
+            )
+            .is_some());
+
+        assert_eq!(throttle.flush(), None);
     }
 }
 
@@ -889,7 +1032,8 @@ where
 {
     if let Some(task_id) = task_id {
         let event_name = sftp_transfer_event_name(&task_id);
-        let mut callback = move |update: SftpProgressUpdate| {
+        let mut throttle = SftpProgressThrottle::default();
+        let emit = |update: SftpProgressUpdate| {
             let _ = app.emit_all(
                 &event_name,
                 SftpTransferEvent {
@@ -906,7 +1050,17 @@ where
                 },
             );
         };
-        action(Some(&mut callback))
+        let mut callback = |update: SftpProgressUpdate| {
+            if let Some(update) = throttle.push(update, Instant::now()) {
+                emit(update);
+            }
+        };
+        let result = action(Some(&mut callback));
+        drop(callback);
+        if let Some(update) = throttle.flush() {
+            emit(update);
+        }
+        result
     } else {
         action(None)
     }
