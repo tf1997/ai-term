@@ -1052,9 +1052,21 @@ assert(
 
 assert(
   terminalPane.includes('dataDisposable = terminal.onData((data) => {') &&
-    terminalPane.includes('void terminalWrite(sessionId, data)') &&
+    terminalPane.includes('writeTerminalInput(data)') &&
     !terminalPane.includes('dataDisposable = terminal.onData((data) => {\n    terminal?.write(data)'),
   'TerminalPane must not echo keyboard input locally when there is no backend session.'
+)
+
+assert(
+  terminalPane.includes('currentRenderedCommandLine') &&
+    terminalPane.includes('submittedTerminalCommand') &&
+    terminalPane.includes('shellPromptText') &&
+    terminalPane.includes('pendingTrackedCommands') &&
+    terminalPane.includes("terminalInputContext === 'shell'") &&
+    terminalPane.includes('.then(() => {') &&
+    terminalPane.includes('commitTrackedCommands(submittedCommands)') &&
+    !terminalPane.includes('recordCommand(inputCommandBuffer)'),
+  'Command history must record the command rendered and accepted by the terminal, not the raw user input buffer.'
 )
 
 assert(
@@ -1153,9 +1165,10 @@ assert(
     terminalPane.includes("resetTrackedTerminalInput('unknown')") &&
     terminalPane.includes("resetTrackedTerminalInput('sensitive')") &&
     terminalPane.includes('writeSyncedTerminalInput') &&
-    terminalPane.includes('sendInteractiveTerminalInput(text)') &&
+    terminalPane.includes('terminal.paste(text)') &&
+    terminalPane.includes("text.replace(/\\r?\\n/g, '\\r')") &&
     appShell.includes('writeSyncedTerminalInput: (data: string) => boolean'),
-  'Terminal input tracking must handle common line editing, avoid recording sensitive prompts, and keep mirrored terminal buffers synchronized.'
+  'Terminal input tracking must handle common line editing, use native bracketed paste with normalized line endings, avoid recording sensitive prompts, and keep mirrored terminal buffers synchronized.'
 )
 
 

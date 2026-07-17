@@ -106,6 +106,8 @@ let inputCommandBuffer = ''
 let inputCommandCursor = 0
 let inputCommandReliable = true
 let terminalInputContext: TerminalInputContext = 'unknown'
+let shellPromptText = ''
+let pendingTrackedCommands: string[] = []
 let completionDebounceTimer: number | undefined
 let pendingInputControlSequence = ''
 let lastRightClickPasteAt = 0
@@ -1180,6 +1182,36 @@ function recordCommand(command: string) {
   })
 }
 
+function currentRenderedCommandLine() {
+  const buffer = terminal?.buffer.active
+  if (!buffer) return ''
+
+  const cursorLine = buffer.baseY + buffer.cursorY
+  let firstLine = cursorLine
+  while (firstLine > 0 && buffer.getLine(firstLine)?.isWrapped) firstLine -= 1
+
+  let value = ''
+  for (let lineIndex = firstLine; lineIndex < buffer.length; lineIndex += 1) {
+    const line = buffer.getLine(lineIndex)
+    if (!line || (lineIndex > firstLine && !line.isWrapped)) break
+    value += line.translateToString(true)
+  }
+  return value.trimEnd()
+}
+
+function submittedTerminalCommand(fallback: string) {
+  const renderedLine = currentRenderedCommandLine()
+  if (shellPromptText && renderedLine.startsWith(shellPromptText)) {
+    const command = renderedLine.slice(shellPromptText.length).trim()
+    if (command) return command
+  }
+  return inputCommandReliable ? fallback.trim() : ''
+}
+
+function commitTrackedCommands(commands: string[]) {
+  commands.forEach(recordCommand)
+}
+
 function resetTrackedTerminalInput(context: TerminalInputContext = terminalInputContext) {
   inputCommandBuffer = ''
   inputCommandCursor = 0
@@ -1225,6 +1257,7 @@ function updateTerminalInputContextFromOutput() {
     return
   }
   if (/^(?:PS\s+[^>]*>|[A-Za-z]:\\[^>]*>|.*[$#%>❯➜›λ»])\s*$/.test(lastLine)) {
+    if (terminalInputContext !== 'shell' && !inputCommandBuffer.trim()) shellPromptText = lastLine
     markTrackedTerminalInputAsShell()
   }
 }
@@ -1290,7 +1323,10 @@ function trackUserInput(data: string): TerminalInputTrackResult {
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
-      if (terminalInputContext !== 'sensitive') recordCommand(inputCommandBuffer)
+      if (terminalInputContext === 'shell') {
+        const command = submittedTerminalCommand(inputCommandBuffer)
+        if (command) pendingTrackedCommands.push(command)
+      }
       resetTrackedTerminalInput('unknown')
       result = 'submitted'
     } else if (code === 127 || code === 8) {
@@ -1449,7 +1485,7 @@ onMounted(async () => {
       const inputResult = trackUserInput(data)
       updateCompletionAfterInput(inputResult)
       emit('terminalInput', { terminalId: props.terminalId, data })
-      void terminalWrite(sessionId, data)
+      writeTerminalInput(data)
     }
   })
   selectionDisposable = terminal.onSelectionChange(() => {
@@ -1754,10 +1790,14 @@ function executeCommand(command: string) {
   if (!value) return false
   if (sessionId) {
     if (!terminalLineReadyForAppInput()) return false
-    recordCommand(value)
     closeCompletion()
     resetTrackedTerminalInput('unknown')
-    void terminalWrite(sessionId, `${value}\r`)
+    const activeSessionId = sessionId
+    void terminalWrite(activeSessionId, `${value}\r`)
+      .then(() => {
+        if (sessionId === activeSessionId) recordCommand(value)
+      })
+      .catch((error) => console.error('failed to execute terminal command', error))
     void nextTick(() => terminal?.focus())
     return true
   }
@@ -1790,14 +1830,22 @@ function writeSyncedTerminalInput(data: string) {
 
 function writeTerminalInput(data: string) {
   if (!data) return false
+  const submittedCommands = pendingTrackedCommands
+  pendingTrackedCommands = []
   if (sessionId) {
-    void terminalWrite(sessionId, data)
+    const activeSessionId = sessionId
+    void terminalWrite(activeSessionId, data)
+      .then(() => {
+        if (sessionId === activeSessionId) commitTrackedCommands(submittedCommands)
+      })
+      .catch((error) => console.error('failed to write terminal input', error))
     void nextTick(() => terminal?.focus())
     return true
   }
   if (status.value === 'preview') {
     writeTerminalView(data, true)
     appendTerminalOutput(data)
+    commitTrackedCommands(submittedCommands)
     return true
   }
   return false
@@ -1807,7 +1855,11 @@ async function pasteClipboardToTerminal() {
   try {
     const text = await readClipboard()
     if (!text) return
-    sendInteractiveTerminalInput(text)
+    if (terminal && sessionId) {
+      terminal.paste(text)
+      return
+    }
+    sendInteractiveTerminalInput(text.replace(/\r?\n/g, '\r'))
   } catch (error) {
     console.warn('failed to paste terminal clipboard', error)
   }
