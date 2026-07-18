@@ -8,7 +8,7 @@ import type {
   TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
-import { cancelTask, chatWithAiProviderStream, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
+import { cancelTask, chatWithAiProviderStream, compressAiConversation, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
 import { parseMessageParts, type MessagePart } from '../lib/aiMarkdown'
 import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import {
@@ -26,6 +26,9 @@ const LONG_MESSAGE_LINES = 18
 const MAX_SELECTED_TERMINAL_CHARS = 20_000
 const MAX_AI_COMMAND_HISTORY = 80
 const MAX_AI_CONVERSATION_MESSAGES = 16
+// Compact when this many eligible turns pile up beyond the recent window,
+// so the compaction call runs occasionally instead of after every exchange.
+const AI_CONTEXT_COMPACT_THRESHOLD = 8
 const STREAM_TIMER_INTERVAL_MS = 1000
 
 const props = defineProps<{
@@ -57,6 +60,7 @@ const emit = defineEmits<{
   renameSession: [sessionId: string, name: string]
   deleteSession: [sessionId: string]
   updateSessionTitle: [connectionId: string, sessionId: string, title: string]
+  updateSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
   aiError: [detail: string]
 }>()
 
@@ -143,6 +147,12 @@ const contextStatusLabel = computed(() => {
   return props.contextStatus.compressed ? `已压缩至 ${chars}` : `完整上下文 ${chars}`
 })
 
+const compactedConversationCount = computed(() => {
+  const { summary, eligibleCount, unsummarized } = conversationContextParts(props.workspaceSessionId)
+  if (!summary) return 0
+  return Math.max(0, eligibleCount - unsummarized.length)
+})
+
 const filteredSessions = computed(() => {
   const keyword = sessionSearch.value.trim().toLowerCase()
   const sessions = props.workspaceSessions.length
@@ -204,6 +214,24 @@ function inferCommand(question: string, terminalSnapshot = props.terminalSnapsho
   return fallbackCommands[fallbackCommands.length - 1] ?? 'uname -a'
 }
 
+/**
+ * Splits the session conversation at the compaction watermark: turns covered
+ * by the stored AI summary vs. turns that still ship verbatim. If the anchor
+ * message no longer exists (cleared or pruned), everything counts as
+ * unsummarized and the summary still rides along as extra context.
+ */
+function conversationContextParts(sessionId: string) {
+  const eligible = props.messages.filter(
+    (message) => !message.streaming && !message.error && message.text.trim()
+  )
+  const session = props.workspaceSessions.find((item) => item.id === sessionId)
+  const summary = session?.contextSummary?.trim() || ''
+  const lastId = session?.contextSummaryLastMessageId || ''
+  const boundary =
+    summary && lastId ? eligible.findIndex((message) => message.id === lastId) + 1 : 0
+  return { summary, eligibleCount: eligible.length, unsummarized: eligible.slice(boundary) }
+}
+
 async function sendMessage() {
   const text = askText.value.trim()
   if (!text || !canSendMessage.value) return
@@ -212,8 +240,8 @@ async function sendMessage() {
   const requestWorkspaceSessionId = props.workspaceSessionId
   const terminalSnapshot = props.terminalSnapshot
   const commandHistory = props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
-  const conversationMessages = props.messages
-    .filter((message) => !message.streaming && !message.error && message.text.trim())
+  const { summary: conversationSummary, unsummarized } = conversationContextParts(requestWorkspaceSessionId)
+  const conversationMessages = unsummarized
     .slice(-MAX_AI_CONVERSATION_MESSAGES)
     .map((message) => ({ role: message.role, content: message.text }))
   const selectedContext = selectedTerminalContext.value
@@ -239,20 +267,39 @@ async function sendMessage() {
   currentRequestId.value = requestId
   currentAssistantMessageId.value = assistantMessage.id
   startAnswerTimer()
+  // Coalesce chunk-driven message updates: emitting per token re-renders the
+  // conversation for every delta, and extracting the shell command re-parses
+  // the whole growing answer (O(n²)). Flush on a short trailing timer and let
+  // the final updateMessage below carry the complete answer and command.
+  let streamFlushTimer: number | undefined
+  const cancelStreamFlush = () => {
+    if (streamFlushTimer !== undefined) {
+      window.clearTimeout(streamFlushTimer)
+      streamFlushTimer = undefined
+    }
+  }
+  const flushStreamedAnswer = () => {
+    streamFlushTimer = undefined
+    if (stopRequested.value || currentRequestId.value !== requestId) return
+    emit('updateMessage', {
+      ...assistantMessage,
+      text: streamedAnswer,
+      command: '',
+      streaming: true
+    })
+  }
   try {
     unlisten = await onAiChatStream(requestId, (event) => {
       if (stopRequested.value || currentRequestId.value !== requestId) return
       if (event.kind === 'chunk') {
         streamedAnswer += event.delta
-        emit('updateMessage', {
-          ...assistantMessage,
-          text: streamedAnswer,
-          command: extractPrimaryShellCommand(streamedAnswer),
-          streaming: true
-        })
+        if (streamFlushTimer === undefined) {
+          streamFlushTimer = window.setTimeout(flushStreamedAnswer, 80)
+        }
       }
       if (event.kind === 'error' && event.error) {
         if (stopRequested.value) return
+        cancelStreamFlush()
         notifyAiError(event.error)
         emit('updateMessage', {
           ...assistantMessage,
@@ -268,9 +315,11 @@ async function sendMessage() {
       buildQuestionWithSelectedTerminalText(text, selectedContext),
       terminalSnapshot,
       commandHistory,
-      conversationMessages
+      conversationMessages,
+      conversationSummary
     )
     if (stopRequested.value || currentRequestId.value !== requestId) return
+    cancelStreamFlush()
     const answer = streamedAnswer || response.answer
     const command = extractPrimaryShellCommand(answer)
     emit('setContextStatus', requestConnectionId, requestWorkspaceSessionId, {
@@ -285,8 +334,10 @@ async function sendMessage() {
       streaming: false
     })
     maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, text, answer, terminalSnapshot, commandHistory)
+    maybeCompactConversation(requestWorkspaceSessionId)
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
+    cancelStreamFlush()
     const detail = formatAiError(error)
     notifyAiError(detail)
     const command = inferCommand(text, terminalSnapshot, commandHistory)
@@ -298,6 +349,7 @@ async function sendMessage() {
       streaming: false
     })
   } finally {
+    cancelStreamFlush()
     unlisten?.()
     if (currentRequestId.value === requestId) {
       finishAnswerTimer(assistantMessage.id)
@@ -453,7 +505,8 @@ async function callConfiguredModelStream(
   question: string,
   terminalSnapshot: string,
   commandHistory: string[],
-  conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>
+  conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  conversationSummary?: string
 ) {
   if (!props.config.baseUrl.trim() || !props.config.model.trim()) {
     throw new Error('请先配置 AI Base URL 和 Model')
@@ -469,7 +522,8 @@ async function callConfiguredModelStream(
     question,
     terminalSnapshot,
     commandHistory,
-    conversationMessages
+    conversationMessages,
+    conversationSummary: conversationSummary?.trim() || undefined
   })
 }
 
@@ -732,6 +786,47 @@ function normalizeGeneratedSessionTitle(generatedTitle: string, userMessage: str
   return fallback || '当前会话'
 }
 
+const compactingSessionIds = ref<Record<string, boolean>>({})
+
+/**
+ * Folds older conversation turns into an AI-generated summary once enough of
+ * them pile up beyond the recent window, then persists the summary on the
+ * workspace session. Runs in the background after an exchange completes.
+ */
+function maybeCompactConversation(sessionId: string) {
+  if (sessionId !== props.workspaceSessionId) return
+  if (compactingSessionIds.value[sessionId]) return
+  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  if (!props.config.baseUrl.trim() || !props.config.model.trim() || !apiKey) return
+  const { summary, unsummarized } = conversationContextParts(sessionId)
+  const overflowCount = unsummarized.length - MAX_AI_CONVERSATION_MESSAGES
+  if (overflowCount < AI_CONTEXT_COMPACT_THRESHOLD) return
+  const toCompact = unsummarized.slice(0, overflowCount)
+  const lastMessageId = toCompact[toCompact.length - 1]?.id
+  if (!lastMessageId) return
+
+  compactingSessionIds.value = { ...compactingSessionIds.value, [sessionId]: true }
+  void compressAiConversation({
+    config: props.config,
+    apiKey,
+    previousSummary: summary || undefined,
+    messages: toCompact.map((message) => ({ role: message.role, content: message.text }))
+  })
+    .then((response) => {
+      const nextSummary = response.summary.trim()
+      if (!nextSummary) return
+      emit('updateSessionContextSummary', sessionId, nextSummary, lastMessageId)
+    })
+    .catch((error) => {
+      console.error('failed to compress AI conversation context', error)
+    })
+    .finally(() => {
+      const next = { ...compactingSessionIds.value }
+      delete next[sessionId]
+      compactingSessionIds.value = next
+    })
+}
+
 function formatSessionDisplayTitle(name?: string) {
   const title = (name?.trim() || '当前会话').replace(/([^\d\s])(\d+)$/, '$1 $2')
   return /^[a-z0-9._-]{1,3}$/i.test(title) ? `${title} 命令` : title
@@ -939,6 +1034,7 @@ watch(
         <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ commandHistory.length }} 条</span>
         <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
         <span><strong>上下文</strong>{{ contextStatusLabel }}</span>
+        <span v-if="compactedConversationCount > 0" title="更早的对话已由 AI 压缩为摘要，并继续作为背景提供给模型"><strong>历史压缩</strong>{{ compactedConversationCount }} 条早期消息已并入摘要</span>
       </div>
     </div>
     <div ref="messageList" class="message-list">

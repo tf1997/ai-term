@@ -192,7 +192,10 @@ fn copied_profile_cannot_overwrite_source_profile_password() {
     let profiles = store.list_connection_profiles().unwrap();
     let saved_source = profiles.iter().find(|item| item.id == "source").unwrap();
     let saved_copy = profiles.iter().find(|item| item.id == "copied").unwrap();
-    assert_eq!(saved_source.target.password.as_deref(), Some("source-secret"));
+    assert_eq!(
+        saved_source.target.password.as_deref(),
+        Some("source-secret")
+    );
     assert_eq!(saved_copy.target.password.as_deref(), Some("copied-secret"));
     assert_eq!(
         saved_copy.target.credential_ref.as_deref(),

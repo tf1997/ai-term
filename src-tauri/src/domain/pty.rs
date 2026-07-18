@@ -135,14 +135,13 @@ pub fn spawn_reader_channel(mut reader: Box<dyn Read + Send>) -> Receiver<Vec<u8
 
 pub fn append_limited_lossy(target: &mut String, bytes: &[u8], max_chars: usize) {
     target.push_str(&String::from_utf8_lossy(bytes));
-    if target.chars().count() > max_chars {
-        *target = target
-            .chars()
-            .rev()
-            .take(max_chars)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
+    let excess_chars = target.chars().count().saturating_sub(max_chars);
+    if excess_chars > 0 {
+        let offset = target
+            .char_indices()
+            .nth(excess_chars)
+            .map(|(index, _)| index)
+            .unwrap_or(target.len());
+        target.drain(..offset);
     }
 }

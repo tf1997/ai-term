@@ -19,7 +19,16 @@ import {
   terminalWrite
 } from '../lib/tauri'
 import type { AiProviderConfig, AuthEndpoint, ConnectionProfile } from '../types/profile'
-import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../types/workspace'
+import type {
+  CommandHistoryEntry,
+  CommandRecordedEvent,
+  TerminalInputEvent,
+  TerminalInputSyncState,
+  TerminalInputWriteFailureEvent,
+  TerminalInputWriteSource,
+  TerminalOutputEvent,
+  TerminalSelectionEvent
+} from '../types/workspace'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
@@ -35,11 +44,36 @@ type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type TerminalSelectionViewportCell = { x: number; y: number }
 type TerminalInputTrackResult = 'idle' | 'changed' | 'submitted'
 type TerminalInputContext = 'shell' | 'sensitive' | 'unknown'
+type TerminalCommandReadiness = 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
 
 interface TerminalVisualSettings {
   terminalFontFamily: string
   terminalFontSize: number
   terminalTheme: TerminalTheme
+}
+
+interface TerminalInputBatch {
+  generation: number
+  sessionId: string
+  data: string
+  source: TerminalInputWriteSource
+  sourceTerminalId?: string
+  commits: Array<() => void>
+}
+
+interface PreparedTerminalInputOptions {
+  source: TerminalInputWriteSource
+  sourceTerminalId?: string
+  submittedCommands?: readonly string[]
+  onWritten?: () => void
+}
+
+type ShellPromptKind = 'powershell' | 'cmd' | 'posix' | 'generic' | 'bare'
+
+interface ShellPromptSignature {
+  kind: ShellPromptKind
+  identity: string
+  sigil: string
 }
 
 interface SshHostKeyTarget {
@@ -74,6 +108,7 @@ const emit = defineEmits<{
   terminalOutput: [event: TerminalOutputEvent]
   terminalSelection: [event: TerminalSelectionEvent]
   terminalInput: [event: TerminalInputEvent]
+  terminalInputWriteFailed: [event: TerminalInputWriteFailureEvent]
   commandRecorded: [event: CommandRecordedEvent]
   statusChanged: [terminalId: string, status: TerminalRuntimeStatus]
   profileUpdated: [profileId: string]
@@ -102,14 +137,25 @@ let terminalSelectionDragging = false
 let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
 let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
 let terminalOutputBuffer = ''
+let terminalOutputEmitTimer: number | undefined
+const TERMINAL_OUTPUT_EMIT_INTERVAL = 40
+let selectionCopyTimer: number | undefined
+const SELECTION_COPY_DEBOUNCE = 150
 let inputCommandBuffer = ''
 let inputCommandCursor = 0
 let inputCommandReliable = true
 let terminalInputContext: TerminalInputContext = 'unknown'
 let shellPromptText = ''
+let shellPromptSignature: ShellPromptSignature | undefined
+let shellPromptDiscoveryOpen = true
 let pendingTrackedCommands: string[] = []
 let completionDebounceTimer: number | undefined
 let pendingInputControlSequence = ''
+let terminalInputGeneration = 0
+let terminalInputReady = false
+let failedTerminalInputGeneration: number | undefined
+const terminalInputQueue: TerminalInputBatch[] = []
+const terminalInputPumpGenerations = new Set<number>()
 let lastRightClickPasteAt = 0
 let quickCommandBarNoticeTimer: number | undefined
 const status = ref<TerminalRuntimeStatus>('idle')
@@ -911,14 +957,35 @@ function scheduleTerminalSizeSyncAfterFonts() {
   void document.fonts.ready.then(() => scheduleTerminalSizeSync(true))
 }
 
-function appendTerminalOutput(data: string) {
-  terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
-  updateTerminalInputContextFromOutput()
-  if (terminalCompletionOpen.value) scheduleCompletionPosition()
+function emitTerminalSnapshot() {
+  if (terminalOutputEmitTimer !== undefined) {
+    window.clearTimeout(terminalOutputEmitTimer)
+    terminalOutputEmitTimer = undefined
+  }
   emit('terminalOutput', {
     terminalId: props.terminalId,
     snapshot: terminalOutputBuffer
   })
+}
+
+// Coalesce the full-snapshot broadcast: high-output commands fire the data
+// handler dozens–hundreds of times/sec, and each emit fans a ~1.5 MB string
+// out to the parent and every context-consuming panel. A trailing timer
+// collapses a burst into one emit per interval; the local input-context and
+// completion updates below still run per chunk since they only read state.
+function scheduleTerminalSnapshotEmit() {
+  if (terminalOutputEmitTimer !== undefined) return
+  terminalOutputEmitTimer = window.setTimeout(() => {
+    terminalOutputEmitTimer = undefined
+    emitTerminalSnapshot()
+  }, TERMINAL_OUTPUT_EMIT_INTERVAL)
+}
+
+function appendTerminalOutput(data: string) {
+  terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
+  updateTerminalInputContextFromOutput()
+  if (terminalCompletionOpen.value) scheduleCompletionPosition()
+  scheduleTerminalSnapshotEmit()
 }
 
 function activeBufferLine(y: number) {
@@ -1200,16 +1267,126 @@ function currentRenderedCommandLine() {
 }
 
 function submittedTerminalCommand(fallback: string) {
+  if (inputCommandReliable) return fallback.trim()
   const renderedLine = currentRenderedCommandLine()
   if (shellPromptText && renderedLine.startsWith(shellPromptText)) {
     const command = renderedLine.slice(shellPromptText.length).trim()
     if (command) return command
   }
-  return inputCommandReliable ? fallback.trim() : ''
+  return ''
 }
 
 function commitTrackedCommands(commands: string[]) {
   commands.forEach(recordCommand)
+}
+
+function advanceTerminalInputGeneration() {
+  terminalInputReady = false
+  terminalInputGeneration += 1
+  failedTerminalInputGeneration = undefined
+  pendingTrackedCommands = []
+  pendingInputControlSequence = ''
+  shellPromptText = ''
+  shellPromptSignature = undefined
+  shellPromptDiscoveryOpen = true
+  terminalInputQueue.length = 0
+}
+
+function terminalBackendInputReady() {
+  return Boolean(
+    sessionId &&
+    terminalInputReady &&
+    failedTerminalInputGeneration !== terminalInputGeneration
+  )
+}
+
+function sameTerminalInputBatch(
+  batch: TerminalInputBatch,
+  generation: number,
+  activeSessionId: string,
+  source: TerminalInputWriteSource,
+  sourceTerminalId?: string
+) {
+  return batch.generation === generation &&
+    batch.sessionId === activeSessionId &&
+    batch.source === source &&
+    batch.sourceTerminalId === sourceTerminalId
+}
+
+function enqueueTerminalInput(
+  data: string,
+  source: TerminalInputWriteSource,
+  commits: Array<() => void> = [],
+  sourceTerminalId?: string
+) {
+  if (!data || !terminalBackendInputReady()) return false
+  const generation = terminalInputGeneration
+  const activeSessionId = sessionId
+  const tail = terminalInputQueue[terminalInputQueue.length - 1]
+  if (tail && sameTerminalInputBatch(tail, generation, activeSessionId, source, sourceTerminalId)) {
+    tail.data += data
+    tail.commits.push(...commits)
+  } else {
+    terminalInputQueue.push({
+      generation,
+      sessionId: activeSessionId,
+      data,
+      source,
+      sourceTerminalId,
+      commits: [...commits]
+    })
+  }
+  if (shellPromptSignature) shellPromptDiscoveryOpen = false
+  void pumpTerminalInputQueue(generation)
+  return true
+}
+
+async function pumpTerminalInputQueue(generation = terminalInputGeneration) {
+  if (terminalInputPumpGenerations.has(generation)) return
+  terminalInputPumpGenerations.add(generation)
+  try {
+    while (true) {
+      const batchIndex = terminalInputQueue.findIndex((item) => item.generation === generation)
+      if (batchIndex < 0) break
+      const [batch] = terminalInputQueue.splice(batchIndex, 1)
+      if (!batch) continue
+      if (
+        batch.generation !== terminalInputGeneration ||
+        batch.sessionId !== sessionId ||
+        !terminalInputReady ||
+        failedTerminalInputGeneration === batch.generation
+      ) {
+        continue
+      }
+      try {
+        await terminalWrite(batch.sessionId, batch.data)
+      } catch (error) {
+        if (batch.generation !== terminalInputGeneration || batch.sessionId !== sessionId) continue
+        terminalInputReady = false
+        failedTerminalInputGeneration = batch.generation
+        pendingTrackedCommands = []
+        invalidateTrackedTerminalInput()
+        for (let index = terminalInputQueue.length - 1; index >= 0; index -= 1) {
+          if (terminalInputQueue[index]?.generation === batch.generation) terminalInputQueue.splice(index, 1)
+        }
+        emit('terminalInputWriteFailed', {
+          terminalId: props.terminalId,
+          sourceTerminalId: batch.sourceTerminalId,
+          source: batch.source,
+          message: formatError(error)
+        })
+        continue
+      }
+      if (batch.generation === terminalInputGeneration && batch.sessionId === sessionId && terminalInputReady) {
+        batch.commits.forEach(runTerminalInputCommit)
+      }
+    }
+  } finally {
+    terminalInputPumpGenerations.delete(generation)
+    if (terminalInputQueue.some((batch) => batch.generation === generation)) {
+      void pumpTerminalInputQueue(generation)
+    }
+  }
 }
 
 function resetTrackedTerminalInput(context: TerminalInputContext = terminalInputContext) {
@@ -1217,6 +1394,76 @@ function resetTrackedTerminalInput(context: TerminalInputContext = terminalInput
   inputCommandCursor = 0
   inputCommandReliable = true
   terminalInputContext = context
+}
+
+function parseShellPrompt(value: string): ShellPromptSignature | undefined {
+  const text = value.trimEnd()
+  if (!text || text.length > 512) return undefined
+
+  if (/^PS\s+[^>\r\n]+>$/.test(text)) {
+    return { kind: 'powershell', identity: 'powershell', sigil: '>' }
+  }
+
+  const cmdPrompt = /^([A-Za-z]):\\[^>\r\n]*>$/.exec(text)
+  if (cmdPrompt) {
+    return { kind: 'cmd', identity: cmdPrompt[1]?.toLowerCase() ?? '', sigil: '>' }
+  }
+
+  const posixPrompt = /^(?:\([^)]+\)\s*)?\[?([^\s@\[\]]+@[^\s:\]\[]+)(?:[:\s][^\r\n]*)?\]?([#$%])$/.exec(text)
+  if (posixPrompt) {
+    return {
+      kind: 'posix',
+      identity: posixPrompt[1]?.toLowerCase() ?? '',
+      sigil: posixPrompt[2] ?? ''
+    }
+  }
+
+  if (/^[$#%>]$/.test(text)) {
+    return { kind: 'bare', identity: text, sigil: text }
+  }
+
+  const genericPrompt = /^[^\r\n]{2,160}([$#%>\u276f\u279c\u203a\u03bb\u00bb])$/.exec(text)
+  if (genericPrompt) {
+    return { kind: 'generic', identity: text, sigil: genericPrompt[1] ?? '' }
+  }
+
+  return undefined
+}
+
+function recognizedShellPrompt(lastLine: string) {
+  const text = lastLine.trimEnd()
+  if (!text) return undefined
+
+  const candidate = parseShellPrompt(text)
+  if (shellPromptDiscoveryOpen) {
+    return candidate ? { text, signature: candidate } : undefined
+  }
+
+  const learned = shellPromptSignature
+  if (!learned || learned.kind === 'bare' || !shellPromptText) return undefined
+  if (text.startsWith(shellPromptText) && text.length > shellPromptText.length) return undefined
+  if (text === shellPromptText || text.endsWith(shellPromptText)) {
+    return { text: shellPromptText, signature: learned }
+  }
+  if (!candidate) return undefined
+  if (learned.kind === 'powershell' && candidate.kind === 'powershell') {
+    return { text, signature: candidate }
+  }
+  if (learned.kind === 'cmd' && candidate.kind === 'cmd') {
+    return { text, signature: candidate }
+  }
+  if (
+    learned.kind === 'posix' &&
+    candidate.kind === 'posix' &&
+    learned.identity === candidate.identity &&
+    learned.sigil === candidate.sigil
+  ) {
+    return { text, signature: candidate }
+  }
+  if (learned.kind === 'generic' && candidate.kind === 'generic' && learned.identity === candidate.identity) {
+    return { text, signature: candidate }
+  }
+  return undefined
 }
 
 function markTrackedTerminalInputAsShell() {
@@ -1243,6 +1490,25 @@ function terminalLineReadyForAppInput() {
   return canOfferCompletion() && inputCommandBuffer.trim().length === 0
 }
 
+function terminalInputSyncState(): TerminalInputSyncState {
+  const available = status.value === 'preview' || terminalBackendInputReady()
+  return {
+    available,
+    context: terminalInputContext,
+    reliable: available && terminalInputContext !== 'sensitive' && inputCommandReliable,
+    command: terminalInputContext === 'sensitive' ? '' : inputCommandBuffer,
+    cursor: terminalInputContext === 'sensitive' ? 0 : inputCommandCursor,
+    pendingControlSequence: terminalInputContext === 'sensitive' ? '' : pendingInputControlSequence
+  }
+}
+
+function commandExecutionReadiness(): TerminalCommandReadiness {
+  if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
+  if (terminalLineReadyForAppInput()) return 'ready'
+  if (terminalInputContext === 'shell') return 'line-busy'
+  return 'shell-busy'
+}
+
 function updateTerminalInputContextFromOutput() {
   const text = terminalOutputBuffer
     .slice(-2_000)
@@ -1256,10 +1522,13 @@ function updateTerminalInputContextFromOutput() {
     closeCompletion()
     return
   }
-  if (/^(?:PS\s+[^>]*>|[A-Za-z]:\\[^>]*>|.*[$#%>❯➜›λ»])\s*$/.test(lastLine)) {
-    if (terminalInputContext !== 'shell' && !inputCommandBuffer.trim()) shellPromptText = lastLine
-    markTrackedTerminalInputAsShell()
-  }
+  if (inputCommandBuffer.length > 0) return
+  if (!shellPromptDiscoveryOpen && terminalInputContext === 'shell') return
+  const prompt = recognizedShellPrompt(lastLine)
+  if (!prompt) return
+  shellPromptText = prompt.text
+  shellPromptSignature = prompt.signature
+  markTrackedTerminalInputAsShell()
 }
 
 function insertTrackedTerminalText(text: string) {
@@ -1277,18 +1546,35 @@ function deleteTrackedTerminalWord() {
   inputCommandCursor = deleteFrom
 }
 
+function previousTrackedTextBoundary(text: string, cursor: number) {
+  if (cursor <= 0) return 0
+  const codePoints = Array.from(text.slice(0, cursor))
+  const previous = codePoints[codePoints.length - 1]
+  return Math.max(0, cursor - (previous?.length ?? 1))
+}
+
+function nextTrackedTextBoundary(text: string, cursor: number) {
+  if (cursor >= text.length) return text.length
+  const [next] = Array.from(text.slice(cursor))
+  return Math.min(text.length, cursor + (next?.length ?? 1))
+}
+
 function trackUserInput(data: string): TerminalInputTrackResult {
-  if (data === '\x1b[A' || data === '\x1b[B') {
+  if (data === '\x1b[A' || data === '\x1bOA' || data === '\x1b[B' || data === '\x1bOB') {
     invalidateTrackedTerminalInput()
     return 'idle'
   }
-  if (data === '\x1b[D') {
-    if (inputCommandReliable) inputCommandCursor = Math.max(0, inputCommandCursor - 1)
+  if (data === '\x1b[D' || data === '\x1bOD') {
+    if (inputCommandReliable) inputCommandCursor = previousTrackedTextBoundary(inputCommandBuffer, inputCommandCursor)
     closeCompletion()
     return 'idle'
   }
-  if (data === '\x1b[C') {
-    if (inputCommandReliable) inputCommandCursor = Math.min(inputCommandBuffer.length, inputCommandCursor + 1)
+  if (data === '\x1b[C' || data === '\x1bOC') {
+    if (inputCommandReliable && inputCommandCursor >= inputCommandBuffer.length) {
+      invalidateTrackedTerminalInput()
+      return 'idle'
+    }
+    if (inputCommandReliable) inputCommandCursor = nextTrackedTextBoundary(inputCommandBuffer, inputCommandCursor)
     closeCompletion()
     return 'idle'
   }
@@ -1298,13 +1584,13 @@ function trackUserInput(data: string): TerminalInputTrackResult {
     return 'idle'
   }
   if (data === '\x1b[F' || data === '\x1bOF') {
-    if (inputCommandReliable) inputCommandCursor = inputCommandBuffer.length
-    closeCompletion()
+    invalidateTrackedTerminalInput()
     return 'idle'
   }
   if (data === '\x1b[3~') {
     if (inputCommandReliable && inputCommandCursor < inputCommandBuffer.length) {
-      inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor)}${inputCommandBuffer.slice(inputCommandCursor + 1)}`
+      const deleteTo = nextTrackedTextBoundary(inputCommandBuffer, inputCommandCursor)
+      inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor)}${inputCommandBuffer.slice(deleteTo)}`
     }
     closeCompletion()
     return 'changed'
@@ -1331,8 +1617,9 @@ function trackUserInput(data: string): TerminalInputTrackResult {
       result = 'submitted'
     } else if (code === 127 || code === 8) {
       if (terminalInputContext !== 'sensitive' && inputCommandReliable && inputCommandCursor > 0) {
-        inputCommandBuffer = `${inputCommandBuffer.slice(0, inputCommandCursor - 1)}${inputCommandBuffer.slice(inputCommandCursor)}`
-        inputCommandCursor -= 1
+        const deleteFrom = previousTrackedTextBoundary(inputCommandBuffer, inputCommandCursor)
+        inputCommandBuffer = `${inputCommandBuffer.slice(0, deleteFrom)}${inputCommandBuffer.slice(inputCommandCursor)}`
+        inputCommandCursor = deleteFrom
       }
       result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
     } else if (code === 1) {
@@ -1341,7 +1628,7 @@ function trackUserInput(data: string): TerminalInputTrackResult {
       resetTrackedTerminalInput('unknown')
       result = 'submitted'
     } else if (code === 5) {
-      if (inputCommandReliable) inputCommandCursor = inputCommandBuffer.length
+      invalidateTrackedTerminalInput()
     } else if (code === 11) {
       if (inputCommandReliable) inputCommandBuffer = inputCommandBuffer.slice(0, inputCommandCursor)
       result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
@@ -1349,10 +1636,6 @@ function trackUserInput(data: string): TerminalInputTrackResult {
       if (inputCommandReliable) {
         inputCommandBuffer = inputCommandBuffer.slice(inputCommandCursor)
         inputCommandCursor = 0
-      } else {
-        inputCommandBuffer = ''
-        inputCommandCursor = 0
-        inputCommandReliable = true
       }
       result = inputCommandBuffer.trim() ? 'changed' : 'submitted'
     } else if (code === 23) {
@@ -1366,6 +1649,22 @@ function trackUserInput(data: string): TerminalInputTrackResult {
     }
   }
   return result
+}
+
+function terminalInputSafeForSync(
+  data: string,
+  beforeState: TerminalInputSyncState,
+  afterState: TerminalInputSyncState
+) {
+  if (data === '\x03') return true
+  if (!beforeState.available || beforeState.context !== 'shell' || !beforeState.reliable) return false
+  if (data === '\r' || data === '\n') return true
+  if (data.includes('\r') || data.includes('\n') || data === '\t') return false
+  if (data.startsWith('\x1b[200~') || data.endsWith('\x1b[201~')) return false
+  const isBackspace = data === '\x7f' || data === '\b'
+  if (!isBackspace && Array.from(data).some((character) => (character.codePointAt(0) ?? 0) < 32)) return false
+  if (data.includes('\x1b')) return false
+  return afterState.context === 'shell' && afterState.reliable
 }
 
 function stripCommandInputControlSequences(data: string) {
@@ -1481,16 +1780,19 @@ onMounted(async () => {
 
   dataDisposable = terminal.onData((data) => {
     if (handleCompletionInput(data)) return
-    if (sessionId) {
-      const inputResult = trackUserInput(data)
-      updateCompletionAfterInput(inputResult)
-      emit('terminalInput', { terminalId: props.terminalId, data })
-      writeTerminalInput(data)
+    if (terminalBackendInputReady()) {
+      forwardInteractiveTerminalInput(data)
     }
   })
   selectionDisposable = terminal.onSelectionChange(() => {
     scheduleTerminalSelectionPolish()
-    void copySelectionToClipboard()
+    // xterm fires this continuously while dragging; a trailing debounce
+    // collapses the drag into a single clipboard IPC + selection emit.
+    if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
+    selectionCopyTimer = window.setTimeout(() => {
+      selectionCopyTimer = undefined
+      void copySelectionToClipboard()
+    }, SELECTION_COPY_DEBOUNCE)
   })
   terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
@@ -1515,8 +1817,7 @@ watch(status, (value) => emitTerminalStatus(value), { immediate: true })
 
 watch(
   () => props.terminalSettings,
-  () => applyTerminalAppearance(),
-  { deep: true }
+  () => applyTerminalAppearance()
 )
 
 watch(
@@ -1560,6 +1861,7 @@ watch(
 function handleTerminalSessionClosed(reason: string) {
   if (!sessionId) return
   const closedSessionId = sessionId
+  advanceTerminalInputGeneration()
   sessionId = ''
   status.value = 'idle'
   resetTrackedTerminalInput('unknown')
@@ -1585,48 +1887,102 @@ async function verifyTerminalSessionStillActive(activeSessionId: string) {
   }
 }
 
-async function attachTerminalEvents() {
+async function attachTerminalEvents(activeSessionId = sessionId) {
   unlisten?.()
   unlistenClosed?.()
-  if (!sessionId) return
-  unlisten = await onTerminalData(sessionId, (event) => {
-    if (event.sessionId === sessionId) {
+  unlisten = undefined
+  unlistenClosed = undefined
+  if (!activeSessionId) return false
+
+  const nextUnlisten = await onTerminalData(activeSessionId, (event) => {
+    if (event.sessionId === activeSessionId && sessionId === activeSessionId) {
       writeTerminalView(event.data)
       appendTerminalOutput(event.data)
     }
   })
-  unlistenClosed = await onTerminalClosed(sessionId, (event) => {
-    if (event.sessionId !== sessionId) return
-    handleTerminalSessionClosed(event.reason)
-  })
+  if (sessionId !== activeSessionId) {
+    nextUnlisten()
+    return false
+  }
+
+  let nextUnlistenClosed: (() => void) | undefined
+  try {
+    nextUnlistenClosed = await onTerminalClosed(activeSessionId, (event) => {
+      if (event.sessionId !== activeSessionId || sessionId !== activeSessionId) return
+      handleTerminalSessionClosed(event.reason)
+    })
+  } catch (error) {
+    nextUnlisten()
+    throw error
+  }
+  if (sessionId !== activeSessionId) {
+    nextUnlisten()
+    nextUnlistenClosed()
+    return false
+  }
+
+  unlisten = nextUnlisten
+  unlistenClosed = nextUnlistenClosed
+  return true
 }
 
 async function connectRemote() {
   if (!terminal || !terminalHost.value || !props.profile) return
+  const attempt = startConnectionAttempt()
+  const profile = props.profile
+  let connectedSessionId = ''
   try {
-    disconnect(false)
+    disconnect(false, false)
     activeSession.value = 'remote'
-    activeSessionProfile.value = props.profile
+    activeSessionProfile.value = profile
     status.value = 'connecting'
     terminal.clear()
     const size = currentTerminalSize()
-    terminal.writeln(`Connecting SSH profile: ${activeSessionProfile.value.name}`)
+    terminal.writeln(`Connecting SSH profile: ${profile.name}`)
     scrollTerminalToBottom()
-    terminalOutputBuffer = `Connecting SSH profile: ${activeSessionProfile.value.name}\n`
-    emit('terminalOutput', {
-      terminalId: props.terminalId,
-      snapshot: terminalOutputBuffer
-    })
-    sessionId = await connectProfile(props.profile.id, size.cols, size.rows)
-    await attachTerminalEvents()
-    if (await verifyTerminalSessionStillActive(sessionId)) {
-      status.value = 'remote'
+    terminalOutputBuffer = `Connecting SSH profile: ${profile.name}\n`
+    emitTerminalSnapshot()
+    connectedSessionId = await connectProfile(profile.id, size.cols, size.rows)
+    if (!isCurrentConnectionAttempt(attempt)) {
+      void disconnectTerminal(connectedSessionId)
+      return
     }
+    sessionId = connectedSessionId
+    if (!await attachTerminalEvents()) {
+      void disconnectTerminal(connectedSessionId)
+      return
+    }
+    if (!isCurrentConnectionAttempt(attempt) || sessionId !== connectedSessionId) {
+      void disconnectTerminal(connectedSessionId)
+      return
+    }
+    const active = await verifyTerminalSessionStillActive(connectedSessionId)
+    if (!isCurrentConnectionAttempt(attempt) || sessionId !== connectedSessionId) {
+      void disconnectTerminal(connectedSessionId)
+      return
+    }
+    if (!active) return
+    terminalInputReady = true
+    status.value = 'remote'
     syncTerminalSize(true)
     await nextTick()
     terminal.focus()
   } catch (error) {
+    if (!isCurrentConnectionAttempt(attempt)) {
+      if (connectedSessionId) void disconnectTerminal(connectedSessionId)
+      return
+    }
+    const failedSessionId = sessionId || connectedSessionId
+    advanceTerminalInputGeneration()
+    sessionId = ''
+    unlisten?.()
+    unlistenClosed?.()
+    unlisten = undefined
+    unlistenClosed = undefined
+    if (failedSessionId) void disconnectTerminal(failedSessionId)
     status.value = 'error'
+    activeSession.value = 'remote'
+    activeSessionProfile.value = profile
     const detail = formatError(error)
     const message = `\r\nSSH connection failed: ${detail}\r\n`
     writeTerminalView(message, true)
@@ -1643,6 +1999,7 @@ async function connectLocal() {
   if (!terminal || !terminalHost.value) return
   const attempt = startConnectionAttempt()
   const requestedSessionId = createTerminalSessionId('local')
+  let connectedSessionId = ''
   try {
     disconnect(false, false)
     status.value = 'connecting'
@@ -1652,35 +2009,49 @@ async function connectLocal() {
     terminal.writeln('Opening local shell...')
     scrollTerminalToBottom()
     terminalOutputBuffer = 'Opening local shell...\n'
-    emit('terminalOutput', {
-      terminalId: props.terminalId,
-      snapshot: terminalOutputBuffer
-    })
+    emitTerminalSnapshot()
     const size = currentTerminalSize()
     sessionId = requestedSessionId
-    await attachTerminalEvents()
-    const connectedSessionId = await connectLocalTerminal(size.cols, size.rows, requestedSessionId)
+    if (!await attachTerminalEvents()) throw new Error('Failed to attach local terminal events')
+    connectedSessionId = await connectLocalTerminal(size.cols, size.rows, requestedSessionId)
     if (!isCurrentConnectionAttempt(attempt)) {
       void disconnectTerminal(connectedSessionId)
       return
     }
     if (connectedSessionId !== sessionId) {
       sessionId = connectedSessionId
-      await attachTerminalEvents()
+      if (!await attachTerminalEvents()) {
+        void disconnectTerminal(connectedSessionId)
+        return
+      }
     }
-    if (await verifyTerminalSessionStillActive(sessionId)) {
-      status.value = 'local'
+    if (!isCurrentConnectionAttempt(attempt) || sessionId !== connectedSessionId) {
+      void disconnectTerminal(connectedSessionId)
+      return
     }
+    const active = await verifyTerminalSessionStillActive(connectedSessionId)
+    if (!isCurrentConnectionAttempt(attempt) || sessionId !== connectedSessionId) {
+      void disconnectTerminal(connectedSessionId)
+      return
+    }
+    if (!active) return
+    terminalInputReady = true
+    status.value = 'local'
     syncTerminalSize(true)
     await nextTick()
     terminal.focus()
   } catch (error) {
-    if (!isCurrentConnectionAttempt(attempt)) return
+    if (!isCurrentConnectionAttempt(attempt)) {
+      if (connectedSessionId) void disconnectTerminal(connectedSessionId)
+      return
+    }
+    advanceTerminalInputGeneration()
+    sessionId = ''
     unlisten?.()
     unlistenClosed?.()
     unlisten = undefined
     unlistenClosed = undefined
-    if (sessionId === requestedSessionId) sessionId = ''
+    if (connectedSessionId) void disconnectTerminal(connectedSessionId)
     if (isTauriUnavailableError(error)) {
       enterPreviewMode()
     } else {
@@ -1690,6 +2061,7 @@ async function connectLocal() {
 }
 
 function enterLocalShellErrorMode(error: unknown) {
+  terminalInputReady = false
   status.value = 'error'
   activeSession.value = 'local'
   activeSessionProfile.value = undefined
@@ -1706,6 +2078,7 @@ function enterLocalShellErrorMode(error: unknown) {
 }
 
 function enterPreviewMode() {
+  terminalInputReady = false
   status.value = 'preview'
   activeSession.value = 'preview'
   activeSessionProfile.value = undefined
@@ -1716,11 +2089,16 @@ function enterPreviewMode() {
   terminal?.writeln('')
   writeTerminalView('\x1b[94mpreview\x1b[0m$ ', true)
   appendTerminalOutput('Tauri backend is not available in browser preview.\nRun `cargo run` inside src-tauri to attach a local shell.\npreview$ ')
+  shellPromptText = 'preview$'
+  shellPromptSignature = parseShellPrompt(shellPromptText)
+  shellPromptDiscoveryOpen = false
+  resetTrackedTerminalInput('shell')
 }
 
 function enterSftpProfileMode() {
   if (!terminal || !props.profile) return
   disconnect(false)
+  terminalInputReady = false
   status.value = 'sftp'
   activeSession.value = 'sftp'
   activeSessionProfile.value = props.profile
@@ -1740,10 +2118,7 @@ function enterSftpProfileMode() {
     `Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连'}`,
     'Use the SFTP workspace on the right to browse, upload, and download files.'
   ].join('\n')
-  emit('terminalOutput', {
-    terminalId: props.terminalId,
-    snapshot: terminalOutputBuffer
-  })
+  emitTerminalSnapshot()
   void nextTick(() => terminal?.focus())
 }
 
@@ -1785,20 +2160,57 @@ function runQuickCommand(command: string) {
   }
 }
 
+function terminalInputDestinationAvailable() {
+  return status.value === 'preview' || terminalBackendInputReady()
+}
+
+function takePendingTrackedCommands() {
+  return pendingTrackedCommands.splice(0)
+}
+
+function runTerminalInputCommit(commit: () => void) {
+  try {
+    commit()
+  } catch (error) {
+    console.error('failed to commit terminal input side effect', error)
+  }
+}
+
+function writePreparedTerminalInput(data: string, options: PreparedTerminalInputOptions) {
+  if (!data || !terminalInputDestinationAvailable()) return false
+  const submittedCommands = [...(options.submittedCommands ?? [])]
+  const commits: Array<() => void> = []
+  if (submittedCommands.length > 0) {
+    commits.push(() => commitTrackedCommands(submittedCommands))
+  }
+  if (options.onWritten) commits.push(options.onWritten)
+
+  if (terminalBackendInputReady()) {
+    if (!enqueueTerminalInput(data, options.source, commits, options.sourceTerminalId)) return false
+    void nextTick(() => terminal?.focus())
+    return true
+  }
+  if (status.value !== 'preview') return false
+  writeTerminalView(data, true)
+  appendTerminalOutput(data)
+  commits.forEach(runTerminalInputCommit)
+  if (shellPromptSignature) shellPromptDiscoveryOpen = false
+  return true
+}
+
 function executeCommand(command: string) {
   const value = command.trim()
   if (!value) return false
-  if (sessionId) {
+  if (terminalBackendInputReady()) {
     if (!terminalLineReadyForAppInput()) return false
     closeCompletion()
+    const accepted = writePreparedTerminalInput(value + '\r', {
+      source: 'command',
+      onWritten: () => recordCommand(value)
+    })
+    if (!accepted) return false
     resetTrackedTerminalInput('unknown')
-    const activeSessionId = sessionId
-    void terminalWrite(activeSessionId, `${value}\r`)
-      .then(() => {
-        if (sessionId === activeSessionId) recordCommand(value)
-      })
-      .catch((error) => console.error('failed to execute terminal command', error))
-    void nextTick(() => terminal?.focus())
+    pendingInputControlSequence = ''
     return true
   }
   if (status.value === 'preview') {
@@ -1813,49 +2225,59 @@ function executeCommand(command: string) {
   return false
 }
 
-function sendInteractiveTerminalInput(data: string) {
-  if (!data || (!sessionId && status.value !== 'preview')) return false
+function forwardInteractiveTerminalInput(data: string) {
+  if (!data || !terminalInputDestinationAvailable()) return false
+  const beforeState = terminalInputSyncState()
   const inputResult = trackUserInput(data)
   updateCompletionAfterInput(inputResult)
-  emit('terminalInput', { terminalId: props.terminalId, data })
-  return writeTerminalInput(data)
+  const afterState = terminalInputSyncState()
+  const submittedCommands = takePendingTrackedCommands()
+  const event: TerminalInputEvent = {
+    terminalId: props.terminalId,
+    data,
+    beforeState,
+    safeToSync: terminalInputSafeForSync(data, beforeState, afterState)
+  }
+  const accepted = writePreparedTerminalInput(data, {
+    source: 'interactive',
+    submittedCommands,
+    onWritten: () => emit('terminalInput', event)
+  })
+  if (!accepted) invalidateTrackedTerminalInput()
+  return accepted
 }
 
-function writeSyncedTerminalInput(data: string) {
-  if (!data || (!sessionId && status.value !== 'preview')) return false
+function sendInteractiveTerminalInput(data: string) {
+  return forwardInteractiveTerminalInput(data)
+}
+
+function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
+  if (!data || !terminalInputDestinationAvailable()) return false
   const inputResult = trackUserInput(data)
   updateCompletionAfterInput(inputResult)
-  return writeTerminalInput(data)
+  const submittedCommands = takePendingTrackedCommands()
+  const accepted = writePreparedTerminalInput(data, {
+    source: 'synced',
+    sourceTerminalId,
+    submittedCommands
+  })
+  if (!accepted) invalidateTrackedTerminalInput()
+  return accepted
 }
 
 function writeTerminalInput(data: string) {
-  if (!data) return false
-  const submittedCommands = pendingTrackedCommands
-  pendingTrackedCommands = []
-  if (sessionId) {
-    const activeSessionId = sessionId
-    void terminalWrite(activeSessionId, data)
-      .then(() => {
-        if (sessionId === activeSessionId) commitTrackedCommands(submittedCommands)
-      })
-      .catch((error) => console.error('failed to write terminal input', error))
-    void nextTick(() => terminal?.focus())
-    return true
-  }
-  if (status.value === 'preview') {
-    writeTerminalView(data, true)
-    appendTerminalOutput(data)
-    commitTrackedCommands(submittedCommands)
-    return true
-  }
-  return false
+  if (!data || !terminalInputDestinationAvailable()) return false
+  resetTrackedTerminalInput('unknown')
+  pendingInputControlSequence = ''
+  closeCompletion()
+  return writePreparedTerminalInput(data, { source: 'direct' })
 }
 
 async function pasteClipboardToTerminal() {
   try {
     const text = await readClipboard()
     if (!text) return
-    if (terminal && sessionId) {
+    if (terminal && terminalBackendInputReady()) {
       terminal.paste(text)
       return
     }
@@ -1901,6 +2323,7 @@ function isTauriUnavailableError(error: unknown) {
 function disconnect(renderReady = true, cancelPending = true) {
   if (cancelPending) connectionAttempt += 1
   const previousSessionId = sessionId
+  advanceTerminalInputGeneration()
   sessionId = ''
   activeSession.value = 'local'
   activeSessionProfile.value = undefined
@@ -1932,6 +2355,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
   window.removeEventListener(QUICK_COMMANDS_CHANGED_EVENT, handleQuickCommandsChanged)
   if (quickCommandBarNoticeTimer !== undefined) window.clearTimeout(quickCommandBarNoticeTimer)
+  if (terminalOutputEmitTimer !== undefined) window.clearTimeout(terminalOutputEmitTimer)
+  if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
   stopTerminalSelectionDrag()
   if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
@@ -1948,10 +2373,12 @@ onBeforeUnmount(() => {
 
 defineExpose({
   clearTerminal,
+  commandExecutionReadiness,
   disconnectFromButton,
   executeCommand,
   focusTerminal,
   restartLocalTerminal,
+  terminalInputSyncState,
   writeTerminalInput,
   writeSyncedTerminalInput
 })

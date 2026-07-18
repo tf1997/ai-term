@@ -1059,10 +1059,12 @@ assert(
 
 assert(
   terminalPane.includes('connectProfile') &&
-    terminalPane.includes('sessionId = await connectProfile(props.profile.id, size.cols, size.rows)') &&
-    terminalPane.includes('await attachTerminalEvents()') &&
+    terminalPane.includes('connectedSessionId = await connectProfile(profile.id, size.cols, size.rows)') &&
+    terminalPane.includes('if (!await attachTerminalEvents())') &&
+    terminalPane.includes('isCurrentConnectionAttempt(attempt)') &&
+    terminalPane.includes('terminalInputReady = true') &&
     !terminalPane.includes('Remote SSH profile editing is ready'),
-  'TerminalPane must attach remote SSH profiles through the Tauri backend instead of rendering a placeholder.'
+  'TerminalPane must attach remote SSH profiles through the Tauri backend and only enable input for the current connected attempt.'
 )
 
 assert(
@@ -1072,21 +1074,25 @@ assert(
 
 assert(
   terminalPane.includes('dataDisposable = terminal.onData((data) => {') &&
-    terminalPane.includes('writeTerminalInput(data)') &&
+    terminalPane.includes('if (terminalBackendInputReady()) {') &&
+    terminalPane.includes('forwardInteractiveTerminalInput(data)') &&
     !terminalPane.includes('dataDisposable = terminal.onData((data) => {\n    terminal?.write(data)'),
-  'TerminalPane must not echo keyboard input locally when there is no backend session.'
+  'TerminalPane must not echo or queue keyboard input before the backend session is writable.'
 )
 
 assert(
   terminalPane.includes('currentRenderedCommandLine') &&
     terminalPane.includes('submittedTerminalCommand') &&
+    terminalPane.includes('if (inputCommandReliable) return fallback.trim()') &&
+    terminalPane.indexOf('if (inputCommandReliable) return fallback.trim()') <
+      terminalPane.indexOf('const renderedLine = currentRenderedCommandLine()') &&
     terminalPane.includes('shellPromptText') &&
     terminalPane.includes('pendingTrackedCommands') &&
     terminalPane.includes("terminalInputContext === 'shell'") &&
-    terminalPane.includes('.then(() => {') &&
+    terminalPane.includes('batch.commits.forEach(runTerminalInputCommit)') &&
     terminalPane.includes('commitTrackedCommands(submittedCommands)') &&
     !terminalPane.includes('recordCommand(inputCommandBuffer)'),
-  'Command history must record the command rendered and accepted by the terminal, not the raw user input buffer.'
+  'Command history must prefer the reliable tracked command over a lagging rendered line, and only use the rendered terminal as an unreliable-input fallback.'
 )
 
 assert(
@@ -1138,7 +1144,7 @@ assert(
     terminalPane.includes('class="terminal-completion"') &&
     appShell.includes(':command-history="commandHistoryForTab(tab)"') &&
     !appShell.includes('key.startsWith(`${tab.connectionId}:`)') &&
-    appShell.includes('writeSyncedTerminalInput(event.data)') &&
+    appShell.includes('writeSyncedTerminalInput(event.data, event.terminalId)') &&
     styles.includes('.terminal-completion') &&
     !styles.includes('.terminal-completion-head') &&
     !styles.includes('.terminal-completion-empty') &&
@@ -1187,8 +1193,70 @@ assert(
     terminalPane.includes('writeSyncedTerminalInput') &&
     terminalPane.includes('terminal.paste(text)') &&
     terminalPane.includes("text.replace(/\\r?\\n/g, '\\r')") &&
-    appShell.includes('writeSyncedTerminalInput: (data: string) => boolean'),
+    appShell.includes('writeSyncedTerminalInput: (data: string, sourceTerminalId: string) => boolean'),
   'Terminal input tracking must handle common line editing, use native bracketed paste with normalized line endings, avoid recording sensitive prompts, and keep mirrored terminal buffers synchronized.'
+)
+
+const terminalForwardInputBlock = terminalPane.slice(
+  terminalPane.indexOf('function forwardInteractiveTerminalInput'),
+  terminalPane.indexOf('function sendInteractiveTerminalInput')
+)
+const terminalDirectInputBlock = terminalPane.slice(
+  terminalPane.indexOf('function writeTerminalInput(data: string)'),
+  terminalPane.indexOf('async function pasteClipboardToTerminal')
+)
+const terminalTrackInputBlock = terminalPane.slice(
+  terminalPane.indexOf('function trackUserInput'),
+  terminalPane.indexOf('function terminalInputSafeForSync')
+)
+const appTerminalSyncBlock = appShell.slice(
+  appShell.indexOf('function syncTerminalInputToTargets'),
+  appShell.indexOf('function handleTerminalInputWriteFailure')
+)
+const appSelectTerminalBlock = appShell.slice(
+  appShell.indexOf('function selectTerminalTab'),
+  appShell.indexOf('function setSessionTabButton')
+)
+
+assert(
+  workspaceTypes.includes('export interface TerminalInputSyncState') &&
+    workspaceTypes.includes('export interface TerminalInputWriteFailureEvent') &&
+    workspaceTypes.includes("'interactive' | 'direct' | 'synced' | 'command'") &&
+    terminalPane.includes('const terminalInputQueue: TerminalInputBatch[] = []') &&
+    terminalPane.includes('const terminalInputPumpGenerations = new Set<number>()') &&
+    terminalPane.includes('async function pumpTerminalInputQueue(generation = terminalInputGeneration)') &&
+    terminalPane.includes('await terminalWrite(batch.sessionId, batch.data)') &&
+    terminalPane.includes('failedTerminalInputGeneration = batch.generation') &&
+    terminalPane.includes("emit('terminalInputWriteFailed'") &&
+    terminalPane.includes('function terminalBackendInputReady()') &&
+    terminalPane.includes('function writePreparedTerminalInput') &&
+    terminalPane.includes("source: 'interactive'") &&
+    terminalForwardInputBlock.includes("onWritten: () => emit('terminalInput', event)") &&
+    !terminalForwardInputBlock.includes('writeTerminalInput(data)') &&
+    terminalDirectInputBlock.includes("resetTrackedTerminalInput('unknown')") &&
+    terminalPane.includes('const beforeState = terminalInputSyncState()') &&
+    terminalPane.includes('safeToSync: terminalInputSafeForSync(data, beforeState, afterState)') &&
+    !terminalTrackInputBlock.includes('inputCommandReliable = true') &&
+    appShell.includes('terminalInputSyncStatesMatch') &&
+    appShell.includes('pauseTerminalSyncTargets') &&
+    appShell.includes('pausedTerminalSyncIds') &&
+    appTerminalSyncBlock.indexOf('event.terminalId !== activeTerminalId.value') <
+      appTerminalSyncBlock.indexOf("event.data === '\\x03'") &&
+    appTerminalSyncBlock.includes('!pausedTerminalSyncIdSet.value.has(terminalId)') &&
+    !appSelectTerminalBlock.includes('pausedTerminalSyncIds.value = []') &&
+    appShell.includes('@terminal-input-write-failed="handleTerminalInputWriteFailure"'),
+  'Terminal input must use a ready-gated per-pane FIFO, mirror only successful active-pane writes, and pause unsafe or divergent targets.'
+)
+
+assert(
+  terminalPane.includes('function parseShellPrompt(value: string)') &&
+    terminalPane.includes('function recognizedShellPrompt(lastLine: string)') &&
+    terminalPane.includes("learned.kind === 'bare'") &&
+    !terminalPane.includes('|.*[$#%>') &&
+    terminalPane.includes('function previousTrackedTextBoundary') &&
+    terminalPane.includes('function nextTrackedTextBoundary') &&
+    terminalPane.includes("if (data.startsWith('\\x1b[200~') || data.endsWith('\\x1b[201~')) return false"),
+  'Terminal tracking must preserve Unicode code points, distrust ambiguous bare prompt output, and never broadcast bracketed paste based on assumed shell modes.'
 )
 
 
@@ -1207,13 +1275,13 @@ assert(
 )
 
 assert(
-  terminalPane.includes('onTerminalData(sessionId') &&
+  terminalPane.includes('onTerminalData(activeSessionId') &&
     tauri.includes('terminalDataEventName(sessionId: string)'),
   'Terminal data listeners must use session-scoped event names.'
 )
 
 assert(
-  terminalPane.includes('onTerminalClosed(sessionId') &&
+  terminalPane.includes('onTerminalClosed(activeSessionId') &&
     terminalPane.includes("status.value = 'idle'") &&
     tauri.includes('terminalClosedEventName(sessionId: string)'),
   'TerminalPane must listen for terminal close events and stop showing the local shell as live after it exits.'
@@ -1238,9 +1306,38 @@ assert(
     commands.includes('terminal_session_active') &&
     commands.includes('remove_terminal_session_after_exit') &&
     terminalPane.includes('verifyTerminalSessionStillActive') &&
-    terminalPane.includes('await verifyTerminalSessionStillActive(sessionId)') &&
+    terminalPane.includes('await verifyTerminalSessionStillActive(connectedSessionId)') &&
     terminalPane.includes('window.setTimeout(resolve, 150)'),
   'Terminal tabs must reflect real terminal runtime status, local shell spawn failures must enter error, and quick shell exits must be detected even if the close event is missed.'
+)
+
+const remoteConnectionBlock = terminalPane.slice(
+  terminalPane.indexOf('async function connectRemote'),
+  terminalPane.indexOf('async function connectLocal')
+)
+const localConnectionBlock = terminalPane.slice(
+  terminalPane.indexOf('async function connectLocal'),
+  terminalPane.indexOf('function enterLocalShellErrorMode')
+)
+const inputGenerationBlock = terminalPane.slice(
+  terminalPane.indexOf('function advanceTerminalInputGeneration'),
+  terminalPane.indexOf('function terminalBackendInputReady')
+)
+
+assert(
+  inputGenerationBlock.includes('terminalInputReady = false') &&
+    remoteConnectionBlock.includes('const attempt = startConnectionAttempt()') &&
+    remoteConnectionBlock.indexOf('connectedSessionId = await connectProfile') <
+      remoteConnectionBlock.indexOf('if (!await attachTerminalEvents())') &&
+    remoteConnectionBlock.indexOf('const active = await verifyTerminalSessionStillActive(connectedSessionId)') <
+      remoteConnectionBlock.indexOf('terminalInputReady = true') &&
+    localConnectionBlock.indexOf('sessionId = requestedSessionId') <
+      localConnectionBlock.indexOf('connectLocalTerminal(size.cols, size.rows, requestedSessionId)') &&
+    localConnectionBlock.indexOf('const active = await verifyTerminalSessionStillActive(connectedSessionId)') <
+      localConnectionBlock.indexOf('terminalInputReady = true') &&
+    terminalPane.includes("status.value !== 'preview' && !terminalBackendInputReady()") &&
+    terminalPane.includes('if (terminal && terminalBackendInputReady())'),
+  'Terminal input must stay detached during connection setup and become writable only after listeners, liveness, attempt, and session checks succeed.'
 )
 
 assert(
@@ -2099,12 +2196,15 @@ assert(
     appShell.includes(':title="terminalTargetTitle"') &&
     styles.includes('.terminal-target-toggle') &&
     styles.includes('.terminal-target-summary') &&
+    styles.includes('.tab.target.active') &&
+    styles.includes('.tab.target.sync-paused') &&
+    styles.includes('box-shadow: inset 0 -2px 0 var(--workbench-accent);') &&
     styles.includes('max-width: min(260px, 28vw);') &&
     aiPanel.includes('executionTargetLabel') &&
     aiPanel.includes('executionTargetTitle') &&
     scriptPanel.includes('executionTargetLabel') &&
     scriptPanel.includes('executionTargetTitle'),
-  'Terminal tabs must keep the active terminal anchored while selecting multiple targets for synchronized input, AI command execution, and script execution.'
+  'Terminal tabs must keep the active terminal anchored and visually distinct while selecting multiple targets for synchronized input, AI command execution, and script execution.'
 )
 
 assert(
@@ -2452,6 +2552,21 @@ assert(
     !styles.includes('order: -1;') &&
     styles.includes('.history-actions'),
   'CommandHistoryPanel must cap visible command history, support search, copy, long-command preview modal, and allow rerunning a command.'
+)
+
+assert(
+  terminalPane.includes("type TerminalCommandReadiness = 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'") &&
+    terminalPane.includes('function commandExecutionReadiness()') &&
+    terminalPane.includes('commandExecutionReadiness,') &&
+    workspacePanel.includes('rerunCommand: [command: string]') &&
+    workspacePanel.includes("@rerun=\"emit('rerunCommand', $event)\"") &&
+    appShell.includes('COMMAND_EXECUTION_RETRY_DELAYS_MS') &&
+    appShell.includes('executeCommandOnTerminalIds') &&
+    appShell.includes('rerunCommandOnActiveTerminal') &&
+    appShell.includes('@rerun-command="rerunCommandOnActiveTerminal"') &&
+    appShell.includes("readiness.includes('line-busy')") &&
+    appShell.includes("readiness.includes('shell-busy')"),
+  'History reruns must target the active terminal, tolerate short mount/prompt races, and distinguish a busy command line from a missing terminal.'
 )
 
 assert(

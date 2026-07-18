@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
 import { isWindowsPlatform } from '../utils/platform'
 
@@ -11,6 +11,8 @@ import type {
   CommandRecordedEvent,
   ScriptRecording,
   TerminalInputEvent,
+  TerminalInputSyncState,
+  TerminalInputWriteFailureEvent,
   TerminalOutputDeltaEvent,
   TerminalOutputEvent,
   TerminalSelectionEvent,
@@ -63,9 +65,11 @@ const defaultUserSettings: AppUserSettings = {
   defaultShell: 'system'
 }
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
+  commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
+  terminalInputSyncState: () => TerminalInputSyncState
   writeTerminalInput: (data: string) => boolean
-  writeSyncedTerminalInput: (data: string) => boolean
+  writeSyncedTerminalInput: (data: string, sourceTerminalId: string) => boolean
   clearTerminal: () => void
   disconnectFromButton: () => void
   focusTerminal: () => void
@@ -177,7 +181,10 @@ const terminalTabs = ref<TerminalTab[]>([
 ])
 const activeTerminalId = ref('local-1')
 const selectedTerminalIds = ref<string[]>(['local-1'])
-const terminalRefs = ref<Record<string, TerminalPaneInstance | null>>({})
+const pausedTerminalSyncIds = ref<string[]>([])
+// shallowRef: component instances are only accessed imperatively; deep
+// reactivity would proxy every TerminalPane instance for no benefit.
+const terminalRefs = shallowRef<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalOutputEvents = ref<Record<string, TerminalOutputDeltaEvent>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
@@ -198,7 +205,7 @@ const workspaceWidth = ref(loadWorkspaceWidth())
 const workspaceResizing = ref(false)
 const themeToggleButton = ref<HTMLButtonElement | null>(null)
 const sessionTabStrip = ref<HTMLDivElement | null>(null)
-const sessionTabButtons = ref<Record<string, HTMLButtonElement | null>>({})
+const sessionTabButtons = shallowRef<Record<string, HTMLButtonElement | null>>({})
 const sessionTabScrollLeft = ref(0)
 const sessionTabClientWidth = ref(1)
 const sessionTabScrollWidth = ref(1)
@@ -206,6 +213,7 @@ const toasts = ref<AppToast[]>([])
 let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
+const COMMAND_EXECUTION_RETRY_DELAYS_MS = [0, 80, 180]
 let sessionTabResizeObserver: ResizeObserver | null = null
 let workspaceSessionListLoadPromise: Promise<void> | null = null
 const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
@@ -223,6 +231,7 @@ const activeTerminal = computed(() => {
 })
 
 const selectedTerminalIdSet = computed(() => new Set(selectedTerminalIds.value))
+const pausedTerminalSyncIdSet = computed(() => new Set(pausedTerminalSyncIds.value))
 
 const targetTerminalTabs = computed(() => {
   const selected = terminalTabs.value.filter((tab) => selectedTerminalIdSet.value.has(tab.id))
@@ -432,7 +441,9 @@ function normalizedTerminalTargetIds(ids: string[], requiredId = activeTerminalI
 }
 
 function setTerminalTargets(ids: string[], requiredId = activeTerminalId.value) {
-  selectedTerminalIds.value = normalizedTerminalTargetIds(ids, requiredId)
+  const next = normalizedTerminalTargetIds(ids, requiredId)
+  selectedTerminalIds.value = next
+  pausedTerminalSyncIds.value = pausedTerminalSyncIds.value.filter((id) => next.includes(id) && id !== requiredId)
 }
 
 function normalizeTerminalTargets(preferredId = activeTerminalId.value) {
@@ -539,6 +550,16 @@ function isTerminalTargetSelected(tabId: string) {
   return selectedTerminalIdSet.value.has(tabId)
 }
 
+function isTerminalSyncPaused(tabId: string) {
+  return pausedTerminalSyncIdSet.value.has(tabId)
+}
+
+function terminalTargetToggleTitle(tabId: string) {
+  if (isTerminalSyncPaused(tabId)) return '键盘同步已暂停；各终端回到空提示符后会自动恢复'
+  if (tabId === activeTerminalId.value) return multiTerminalInputEnabled.value ? '仅同步当前终端' : '当前终端'
+  return isTerminalTargetSelected(tabId) ? '从同步目标移除' : '加入同步目标'
+}
+
 function toggleTerminalTarget(tabId: string) {
   const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
   const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
@@ -554,10 +575,12 @@ function toggleTerminalTarget(tabId: string) {
 }
 
 function selectAllTerminalTargets() {
+  pausedTerminalSyncIds.value = []
   setTerminalTargets(terminalTabs.value.map((tab) => tab.id))
 }
 
 function resetTerminalTargetsToActive() {
+  pausedTerminalSyncIds.value = []
   setTerminalTargets([activeTerminalId.value])
 }
 
@@ -1357,6 +1380,21 @@ async function updateWorkspaceSessionTitle(connectionId: string, sessionId: stri
   }
 }
 
+async function updateWorkspaceSessionContextSummary(sessionId: string, summary: string, lastMessageId: string) {
+  const session = workspaceSessionById(sessionId)
+  if (!session) return
+  // Background compaction keeps updatedAt untouched so it never reorders the
+  // session list on its own.
+  const updated = { ...session, contextSummary: summary, contextSummaryLastMessageId: lastMessageId }
+  replaceWorkspaceSession(updated)
+  if (isDraftWorkspaceSession(sessionId)) return
+  try {
+    await saveWorkspaceSession(updated)
+  } catch (error) {
+    console.error('failed to persist AI conversation context summary', error)
+  }
+}
+
 function isAutoWorkspaceSessionName(name: string) {
   return ['untitled', '无标题', '默认会话', '本地默认会话', '当前会话'].includes(name.trim().toLowerCase())
 }
@@ -1604,17 +1642,51 @@ function focusActiveTerminalFromWorkspace() {
   })
 }
 
-function executeCommandOnTargetTerminals(command: string) {
-  const targets = targetTerminalIds.value
+async function executeCommandOnTerminalIds(command: string, targets: string[]) {
+  const value = command.trim()
+  if (!value) return
+  const pendingTargets = new Set(targets)
+  const lastReadiness = new Map<string, ReturnType<TerminalPaneInstance['commandExecutionReadiness']>>()
   let sentCount = 0
-  targets.forEach((terminalId) => {
-    if (terminalRefs.value[terminalId]?.executeCommand(command)) sentCount += 1
-  })
-  if (sentCount > 0) {
-    showToast('success', sentCount > 1 ? `命令已发送到 ${sentCount} 个终端` : '命令已发送', commandPreview(command))
-  } else {
-    showToast('error', '命令未发送', '目标终端不可用或没有活动 shell。')
+
+  for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay))
+    await nextTick()
+    for (const terminalId of [...pendingTargets]) {
+      const pane = terminalRefs.value[terminalId]
+      const readiness = pane?.commandExecutionReadiness() ?? 'unavailable'
+      lastReadiness.set(terminalId, readiness)
+      if (readiness === 'ready' && pane?.executeCommand(value)) {
+        sentCount += 1
+        pendingTargets.delete(terminalId)
+      } else if (readiness === 'line-busy') {
+        pendingTargets.delete(terminalId)
+      }
+    }
+    if (pendingTargets.size === 0) break
   }
+
+  if (sentCount > 0) {
+    showToast('success', sentCount > 1 ? `命令已发送到 ${sentCount} 个终端` : '命令已发送', commandPreview(value))
+    return
+  }
+
+  const readiness = [...lastReadiness.values()]
+  if (readiness.includes('line-busy')) {
+    showToast('warning', '命令未发送', '当前命令行已有输入或补全内容，请先提交或清空。')
+  } else if (readiness.includes('shell-busy')) {
+    showToast('warning', '命令未发送', 'Shell 尚未返回可执行提示符，请稍后重试。')
+  } else {
+    showToast('error', '命令未发送', '当前终端尚未就绪或连接已断开。')
+  }
+}
+
+function executeCommandOnTargetTerminals(command: string) {
+  void executeCommandOnTerminalIds(command, [...targetTerminalIds.value])
+}
+
+function rerunCommandOnActiveTerminal(command: string) {
+  void executeCommandOnTerminalIds(command, [activeTerminalId.value])
 }
 
 function writeInputToTargetTerminals(data: string) {
@@ -1632,13 +1704,124 @@ function writeInputToTargetTerminals(data: string) {
   }
 }
 
+function terminalInputSyncStatesMatch(source: TerminalInputSyncState, target: TerminalInputSyncState) {
+  return source.available &&
+    target.available &&
+    source.context === 'shell' &&
+    target.context === 'shell' &&
+    source.reliable &&
+    target.reliable &&
+    source.command === target.command &&
+    source.cursor === target.cursor &&
+    source.pendingControlSequence === target.pendingControlSequence
+}
+
+function terminalInputStateIsEmptyPrompt(state: TerminalInputSyncState) {
+  return state.available &&
+    state.context === 'shell' &&
+    state.reliable &&
+    state.command.length === 0 &&
+    state.cursor === 0 &&
+    state.pendingControlSequence.length === 0
+}
+
+function pauseTerminalSyncTargets(ids: string[], message: string, notify = true) {
+  const selected = new Set(targetTerminalIds.value)
+  const current = new Set(pausedTerminalSyncIds.value)
+  const added = ids.filter((id) => id !== activeTerminalId.value && selected.has(id) && !current.has(id))
+  if (added.length === 0) return
+  added.forEach((id) => current.add(id))
+  pausedTerminalSyncIds.value = [...current]
+  if (!notify) return
+  showToast(
+    'warning',
+    added.length > 1 ? '部分终端同步已暂停' : '终端同步已暂停',
+    message
+  )
+}
+
+function resumeTerminalSyncTarget(terminalId: string) {
+  if (!pausedTerminalSyncIdSet.value.has(terminalId)) return
+  pausedTerminalSyncIds.value = pausedTerminalSyncIds.value.filter((id) => id !== terminalId)
+}
+
 function syncTerminalInputToTargets(event: TerminalInputEvent) {
+  if (event.terminalId !== activeTerminalId.value) return
   if (!multiTerminalInputEnabled.value) return
   if (!targetTerminalIds.value.includes(event.terminalId)) return
-  targetTerminalIds.value.forEach((terminalId) => {
-    if (terminalId === event.terminalId) return
-    terminalRefs.value[terminalId]?.writeSyncedTerminalInput(event.data)
+  const targetIds = targetTerminalIds.value.filter((terminalId) => terminalId !== event.terminalId)
+
+  if (event.data === '\x03') {
+    const rejected: string[] = []
+    const interruptTargetIds = targetIds.filter((terminalId) => !pausedTerminalSyncIdSet.value.has(terminalId))
+    interruptTargetIds.forEach((terminalId) => {
+      if (!terminalRefs.value[terminalId]?.writeSyncedTerminalInput(event.data, event.terminalId)) {
+        rejected.push(terminalId)
+      }
+    })
+    pauseTerminalSyncTargets(rejected, '部分终端无法接收中断输入；已停止继续向这些终端同步。')
+    return
+  }
+
+  if (!event.safeToSync) {
+    pauseTerminalSyncTargets(
+      targetIds,
+      '当前按键依赖各终端自己的历史、补全或交互状态，未广播到其他终端。回到空提示符后会自动恢复。'
+    )
+    return
+  }
+
+  const sourceAtEmptyPrompt = terminalInputStateIsEmptyPrompt(event.beforeState)
+  const alignedTargets: Array<{ terminalId: string; pane: TerminalPaneInstance }> = []
+  const mismatched: string[] = []
+  targetIds.forEach((terminalId) => {
+    const pane = terminalRefs.value[terminalId]
+    const targetState = pane?.terminalInputSyncState()
+    if (!pane || !targetState || !terminalInputSyncStatesMatch(event.beforeState, targetState)) {
+      if (!pausedTerminalSyncIdSet.value.has(terminalId)) mismatched.push(terminalId)
+      return
+    }
+    if (pausedTerminalSyncIdSet.value.has(terminalId)) {
+      if (!sourceAtEmptyPrompt || !terminalInputStateIsEmptyPrompt(targetState)) return
+      resumeTerminalSyncTarget(terminalId)
+    }
+    alignedTargets.push({ terminalId, pane })
   })
+
+  pauseTerminalSyncTargets(
+    mismatched,
+    '各终端的命令行、光标或提示符状态不一致；已暂停失配终端，回到空提示符后会自动恢复。'
+  )
+
+  const rejected: string[] = []
+  alignedTargets.forEach(({ terminalId, pane }) => {
+    if (!pane.writeSyncedTerminalInput(event.data, event.terminalId)) rejected.push(terminalId)
+  })
+  pauseTerminalSyncTargets(rejected, '部分终端未能接收输入；已停止继续向这些终端同步。')
+}
+
+function handleTerminalInputWriteFailure(event: TerminalInputWriteFailureEvent) {
+  const terminalTitle = terminalTabs.value.find((tab) => tab.id === event.terminalId)?.title ?? '目标终端'
+  let syncDetail = ''
+  if (targetTerminalIds.value.includes(event.terminalId)) {
+    if (event.terminalId === activeTerminalId.value) {
+      const otherTargetIds = targetTerminalIds.value.filter((id) => id !== event.terminalId)
+      pauseTerminalSyncTargets(
+        otherTargetIds,
+        '当前终端输入失败，多终端键盘同步已暂停。',
+        false
+      )
+      if (otherTargetIds.length > 0) syncDetail = ' 其他选中终端的键盘同步已暂停。'
+    } else {
+      pauseTerminalSyncTargets([event.terminalId], terminalTitle + ' 输入失败，已暂停向该终端同步。', false)
+      syncDetail = ' 已暂停向该终端同步。'
+    }
+  }
+  showToast(
+    'error',
+    '终端输入写入失败',
+    terminalTitle + ' 的输入队列已停止，请重新连接后再试。' + syncDetail + (event.message ? ' ' + event.message : '')
+  )
 }
 
 async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
@@ -1900,13 +2083,9 @@ watch(
   () => void nextTick(updateSessionTabScrollMetrics)
 )
 
-watch(
-  appSettings,
-  (settings) => {
-    persistUserSettings(settings)
-  },
-  { deep: true }
-)
+watch(appSettings, (settings) => {
+  persistUserSettings(settings)
+})
 watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
   endWorkspaceResize()
@@ -1938,14 +2117,14 @@ onBeforeUnmount(() => {
               :key="tab.id"
               :ref="(element) => setSessionTabButton(tab.id, element)"
               class="tab"
-              :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id) }"
+              :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id), 'sync-paused': isTerminalSyncPaused(tab.id) }"
               @click="selectTerminalTab(tab.id)"
               @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
             >
               <span
                 class="terminal-target-toggle"
                 :class="{ selected: isTerminalTargetSelected(tab.id) }"
-                :title="tab.id === activeTerminalId ? (multiTerminalInputEnabled ? '仅同步当前终端' : '当前终端') : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标'"
+                :title="terminalTargetToggleTitle(tab.id)"
                 aria-hidden="true"
                 @click.stop="toggleTerminalTarget(tab.id)"
               >
@@ -2067,6 +2246,7 @@ onBeforeUnmount(() => {
         @terminal-output="updateTerminalOutput"
         @terminal-selection="updateTerminalSelection"
         @terminal-input="syncTerminalInputToTargets"
+        @terminal-input-write-failed="handleTerminalInputWriteFailure"
         @command-recorded="recordCommand"
         @status-changed="updateTerminalStatus"
         @profile-updated="refreshConnectionProfilesAfterTerminalAuth"
@@ -2114,9 +2294,11 @@ onBeforeUnmount(() => {
       @rename-workspace-session="renameWorkspaceSession"
       @delete-workspace-session="deleteWorkspaceSessionForActiveConnection"
       @update-workspace-session-title="updateWorkspaceSessionTitle"
+      @update-workspace-session-context-summary="updateWorkspaceSessionContextSummary"
       @append-ai-message="appendAiMessageToActiveTerminal"
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"
+      @rerun-command="rerunCommandOnActiveTerminal"
       @execute-command="executeCommandOnTargetTerminals"
       @ai-error="showToast('error', 'AI 请求失败', $event)"
       @write-terminal-input="writeInputToTargetTerminals"

@@ -9,6 +9,13 @@ pub struct WorkspaceSession {
     pub connection_id: String,
     pub name: String,
     pub summary: String,
+    /// AI-compressed summary of conversation turns older than the recent
+    /// window; empty when the session has not been compacted yet.
+    #[serde(default)]
+    pub context_summary: String,
+    /// Id of the last conversation message covered by `context_summary`.
+    #[serde(default)]
+    pub context_summary_last_message_id: String,
     pub created_at: String,
     pub updated_at: String,
 }

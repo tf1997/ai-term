@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS workspace_sessions (
   connection_id TEXT NOT NULL,
   name TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
+  context_summary TEXT NOT NULL DEFAULT '',
+  context_summary_last_message_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

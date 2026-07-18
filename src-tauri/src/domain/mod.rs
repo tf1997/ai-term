@@ -5,4 +5,5 @@ pub mod filesystem;
 pub mod pty;
 pub mod storage;
 pub mod terminal;
+pub mod text;
 pub mod workspace;

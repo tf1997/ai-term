@@ -16,6 +16,8 @@ fn session(id: &str, connection_id: &str, name: &str, created_at: &str) -> Works
         connection_id: connection_id.into(),
         name: name.into(),
         summary: "".into(),
+        context_summary: "".into(),
+        context_summary_last_message_id: "".into(),
         created_at: created_at.into(),
         updated_at: created_at.into(),
     }
@@ -365,6 +367,34 @@ fn deleting_workspace_session_keeps_command_history_and_deletes_ai_messages() {
         .list_ai_conversation_messages(&workspace_session.id)
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn sqlite_store_persists_session_context_summary() {
+    let store = SqliteConfigStore::new(temp_db_path("session-context-summary"));
+    let mut compacted = session(
+        "conversation-compacted",
+        "prod-1",
+        "Long investigation",
+        "2026-07-02T09:00:00Z",
+    );
+    compacted.context_summary = "早期对话摘要：已在 web-1 上定位到 nginx 502 由上游超时导致。".into();
+    compacted.context_summary_last_message_id = "ai-0042".into();
+
+    store.save_workspace_session(&compacted).unwrap();
+    store
+        .save_ai_conversation_message(&ai_message(
+            "ai-latest",
+            "prod-1",
+            &compacted.id,
+            "terminal-1",
+            AiMessageRole::User,
+            "继续排查",
+            "2026-07-02T09:00:01Z",
+        ))
+        .unwrap();
+
+    assert_eq!(store.list_workspace_sessions().unwrap(), vec![compacted]);
 }
 
 #[test]

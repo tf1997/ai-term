@@ -4,6 +4,10 @@ export interface WorkspaceSession {
   connectionId: string
   name: string
   summary: string
+  /** AI-compressed summary of conversation turns older than the recent window. */
+  contextSummary?: string
+  /** Id of the last conversation message covered by contextSummary. */
+  contextSummaryLastMessageId?: string
   createdAt: string
   updatedAt: string
 }
@@ -36,9 +40,29 @@ export interface TerminalSelectionEvent {
   endLine: number
 }
 
+export interface TerminalInputSyncState {
+  available: boolean
+  context: 'shell' | 'sensitive' | 'unknown'
+  reliable: boolean
+  command: string
+  cursor: number
+  pendingControlSequence: string
+}
+
 export interface TerminalInputEvent {
   terminalId: string
   data: string
+  beforeState: TerminalInputSyncState
+  safeToSync: boolean
+}
+
+export type TerminalInputWriteSource = 'interactive' | 'direct' | 'synced' | 'command'
+
+export interface TerminalInputWriteFailureEvent {
+  terminalId: string
+  sourceTerminalId?: string
+  source: TerminalInputWriteSource
+  message: string
 }
 
 export interface CommandRecordedEvent {

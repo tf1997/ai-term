@@ -11,9 +11,10 @@ use crate::app::events::{
 };
 use crate::app::state::AppState;
 use crate::domain::ai::chat::{
-    chat_with_provider, chat_with_provider_stream, generate_script_title, generate_session_title,
-    AiChatRequest, AiChatResponse, AiScriptTitleRequest, AiScriptTitleResponse,
-    AiSessionTitleRequest, AiSessionTitleResponse,
+    chat_with_provider, chat_with_provider_stream, compress_conversation_context,
+    generate_script_title, generate_session_title, AiChatRequest, AiChatResponse,
+    AiConversationCompactRequest, AiConversationCompactResponse, AiScriptTitleRequest,
+    AiScriptTitleResponse, AiSessionTitleRequest, AiSessionTitleResponse,
 };
 use crate::domain::ai::config::validate_ai_config;
 use crate::domain::connection::bastion::{probe_servers, BastionServerCandidate};
@@ -32,6 +33,7 @@ use crate::domain::filesystem::local::{
 };
 use crate::domain::terminal::local::spawn_local_terminal;
 use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
+use crate::domain::text::Utf8StreamDecoder;
 use crate::domain::workspace::{
     AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
 };
@@ -67,73 +69,6 @@ impl SftpProgressThrottle {
 
     fn flush(&mut self) -> Option<SftpProgressUpdate> {
         self.pending.take()
-    }
-}
-
-#[derive(Default)]
-struct Utf8StreamDecoder {
-    pending: Vec<u8>,
-}
-
-impl Utf8StreamDecoder {
-    fn push(&mut self, bytes: &[u8]) -> String {
-        self.pending.extend_from_slice(bytes);
-        let mut decoded = String::new();
-
-        loop {
-            match std::str::from_utf8(&self.pending) {
-                Ok(text) => {
-                    decoded.push_str(text);
-                    self.pending.clear();
-                    break;
-                }
-                Err(error) => {
-                    let valid_up_to = error.valid_up_to();
-                    if valid_up_to > 0 {
-                        decoded.push_str(
-                            std::str::from_utf8(&self.pending[..valid_up_to])
-                                .expect("Utf8Error valid prefix must decode"),
-                        );
-                        self.pending.drain(..valid_up_to);
-                    }
-                    match error.error_len() {
-                        Some(invalid_len) => {
-                            decoded.push('\u{fffd}');
-                            self.pending.drain(..invalid_len);
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-
-        decoded
-    }
-}
-
-#[cfg(test)]
-mod utf8_stream_decoder_tests {
-    use super::Utf8StreamDecoder;
-
-    #[test]
-    fn preserves_multibyte_terminal_text_split_across_reads() {
-        let text = "\u{001b}[32m请选择资产分类\u{001b}[0m";
-        let bytes = text.as_bytes();
-        let split = bytes.iter().position(|byte| *byte >= 0x80).unwrap() + 1;
-        let mut decoder = Utf8StreamDecoder::default();
-
-        let first = decoder.push(&bytes[..split]);
-        let second = decoder.push(&bytes[split..]);
-
-        assert_eq!(format!("{first}{second}"), text);
-        assert!(!first.contains('\u{fffd}'));
-        assert!(!second.contains('\u{fffd}'));
-    }
-
-    #[test]
-    fn replaces_invalid_bytes_without_discarding_following_output() {
-        let mut decoder = Utf8StreamDecoder::default();
-        assert_eq!(decoder.push(b"ok\xffnext"), "ok\u{fffd}next");
     }
 }
 
@@ -515,6 +450,15 @@ pub async fn delete_ai_provider_config(
 #[tauri::command]
 pub async fn chat_with_ai_provider(request: AiChatRequest) -> Result<AiChatResponse, String> {
     chat_with_provider(request)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn compress_ai_conversation(
+    request: AiConversationCompactRequest,
+) -> Result<AiConversationCompactResponse, String> {
+    compress_conversation_context(request)
         .await
         .map_err(|err| err.to_string())
 }

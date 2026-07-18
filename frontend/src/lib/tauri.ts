@@ -20,11 +20,25 @@ export interface AiChatRequest {
   terminalSnapshot: string
   commandHistory: string[]
   conversationMessages?: AiConversationTurn[]
+  /** Compressed summary of turns older than conversationMessages. */
+  conversationSummary?: string
 }
 
 export interface AiConversationTurn {
   role: 'user' | 'assistant'
   content: string
+}
+
+export interface AiConversationCompactRequest {
+  config: AiProviderConfig
+  apiKey: string
+  previousSummary?: string
+  messages: AiConversationTurn[]
+}
+
+export interface AiConversationCompactResponse {
+  summary: string
+  sourceCount: number
 }
 
 export interface AiChatResponse {
@@ -195,6 +209,10 @@ export function chatWithAiProvider(request: AiChatRequest) {
 
 export function chatWithAiProviderStream(requestId: string, request: AiChatRequest) {
   return invoke<AiChatResponse>('chat_with_ai_provider_stream', { requestId, request })
+}
+
+export function compressAiConversation(request: AiConversationCompactRequest) {
+  return invoke<AiConversationCompactResponse>('compress_ai_conversation', { request })
 }
 
 export function generateAiSessionTitle(request: AiSessionTitleRequest) {

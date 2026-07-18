@@ -1,6 +1,12 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::{fmt, path::Path, sync::Arc};
+use std::{
+    fmt,
+    ops::Deref,
+    path::Path,
+    sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
+};
 
 use crate::domain::auth::credentials::{
     CredentialStore, MemoryCredentialStore, SystemCredentialStore,
@@ -15,11 +21,116 @@ use crate::domain::workspace::{
 
 pub const SCHEMA: &str = include_str!("schema.sql");
 const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;
+const AI_CONVERSATION_RETENTION_LIMIT: i64 = 1000;
+
+const CONNECTION_PROFILE_SELECT: &str = r#"
+    SELECT
+      id,
+      name,
+      connection_role,
+      gateway_host,
+      gateway_port,
+      gateway_username,
+      gateway_auth_mode,
+      gateway_credential_ref,
+      gateway_password,
+      target_host,
+      target_port,
+      target_username,
+      target_auth_mode,
+      target_credential_ref,
+      target_password,
+      jump_mode,
+      menu_profile_id,
+      file_transfer_mode
+    FROM connection_profiles
+"#;
+
+const AI_PROVIDER_CONFIG_SELECT: &str = r#"
+    SELECT
+      id,
+      provider,
+      base_url,
+      model,
+      api_key_ref,
+      api_key,
+      context_policy,
+      system_prompt,
+      risk_policy
+    FROM ai_provider_configs
+"#;
+
+fn map_connection_profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionProfile> {
+    let connection_role: String = row.get(2)?;
+    let gateway_auth_mode: String = row.get(6)?;
+    let target_auth_mode: String = row.get(12)?;
+    let jump_mode: String = row.get(15)?;
+    let file_transfer_mode: String = row.get(17)?;
+
+    Ok(ConnectionProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        connection_role: connection_role_from_str(&connection_role),
+        gateway: AuthEndpoint {
+            host: row.get(3)?,
+            port: optional_i64_to_u16(row.get::<_, Option<i64>>(4)?),
+            username: row.get(5)?,
+            auth_mode: auth_mode_from_str(&gateway_auth_mode),
+            credential_ref: row.get(7)?,
+            password: row.get(8)?,
+        },
+        target: AuthEndpoint {
+            host: row.get(9)?,
+            port: optional_i64_to_u16(row.get::<_, Option<i64>>(10)?),
+            username: row.get(11)?,
+            auth_mode: auth_mode_from_str(&target_auth_mode),
+            credential_ref: row.get(13)?,
+            password: row.get(14)?,
+        },
+        jump_mode: jump_mode_from_str(&jump_mode),
+        menu_profile_id: row.get(16)?,
+        file_transfer_mode: file_transfer_mode_from_str(&file_transfer_mode),
+    })
+}
+
+fn map_ai_provider_config_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiProviderConfig> {
+    let provider: String = row.get(1)?;
+    let context_policy: String = row.get(6)?;
+    Ok(AiProviderConfig {
+        id: row.get(0)?,
+        provider: ai_provider_type_from_str(&provider),
+        base_url: row.get(2)?,
+        model: row.get(3)?,
+        api_key_ref: row.get(4)?,
+        api_key: row.get(5)?,
+        context_policy: context_policy_from_str(&context_policy),
+        system_prompt: row.get(7)?,
+        risk_policy: row.get(8)?,
+    })
+}
 
 #[derive(Clone)]
 pub struct SqliteConfigStore {
     database_path: String,
     credential_store: Arc<dyn CredentialStore>,
+    // Shared across clones so the schema/migration pass runs once per process
+    // and every operation reuses one connection instead of reopening the file.
+    connection: Arc<Mutex<Option<Connection>>>,
+}
+
+/// Locked handle to the store's persistent connection.
+pub struct StoreConnection<'a> {
+    guard: MutexGuard<'a, Option<Connection>>,
+}
+
+impl Deref for StoreConnection<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.guard
+            .as_ref()
+            .expect("sqlite connection must be initialized while guard exists")
+    }
 }
 
 impl fmt::Debug for SqliteConfigStore {
@@ -47,6 +158,7 @@ impl SqliteConfigStore {
         Self {
             database_path: database_path.into(),
             credential_store,
+            connection: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -55,18 +167,10 @@ impl SqliteConfigStore {
     }
 
     pub fn initialize(&self) -> Result<()> {
-        let connection = self.connection()?;
-        connection.execute_batch(SCHEMA)?;
-        migrate_connection_profiles(&connection)?;
-        migrate_ai_provider_configs(&connection)?;
-        migrate_command_history(&connection)?;
-        migrate_ai_conversation_messages(&connection)?;
-        migrate_update_scripts(&connection)?;
-        Ok(())
+        self.connection().map(|_| ())
     }
 
     pub fn save_connection_profile(&self, profile: &ConnectionProfile) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
         let stored = self.prepare_connection_profile_for_storage(profile)?;
         connection.execute(
@@ -138,66 +242,12 @@ impl SqliteConfigStore {
     }
 
     pub fn list_connection_profiles(&self) -> Result<Vec<ConnectionProfile>> {
-        self.initialize()?;
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            r#"
-            SELECT
-              id,
-              name,
-              connection_role,
-              gateway_host,
-              gateway_port,
-              gateway_username,
-              gateway_auth_mode,
-              gateway_credential_ref,
-              gateway_password,
-              target_host,
-              target_port,
-              target_username,
-              target_auth_mode,
-              target_credential_ref,
-              target_password,
-              jump_mode,
-              menu_profile_id,
-              file_transfer_mode
-            FROM connection_profiles
-            ORDER BY name ASC, id ASC
-            "#,
-        )?;
+        let mut statement = connection.prepare_cached(&format!(
+            "{CONNECTION_PROFILE_SELECT} ORDER BY name ASC, id ASC"
+        ))?;
 
-        let rows = statement.query_map([], |row| {
-            let connection_role: String = row.get(2)?;
-            let gateway_auth_mode: String = row.get(6)?;
-            let target_auth_mode: String = row.get(12)?;
-            let jump_mode: String = row.get(15)?;
-            let file_transfer_mode: String = row.get(17)?;
-
-            Ok(ConnectionProfile {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                connection_role: connection_role_from_str(&connection_role),
-                gateway: AuthEndpoint {
-                    host: row.get(3)?,
-                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(4)?),
-                    username: row.get(5)?,
-                    auth_mode: auth_mode_from_str(&gateway_auth_mode),
-                    credential_ref: row.get(7)?,
-                    password: row.get(8)?,
-                },
-                target: AuthEndpoint {
-                    host: row.get(9)?,
-                    port: optional_i64_to_u16(row.get::<_, Option<i64>>(10)?),
-                    username: row.get(11)?,
-                    auth_mode: auth_mode_from_str(&target_auth_mode),
-                    credential_ref: row.get(13)?,
-                    password: row.get(14)?,
-                },
-                jump_mode: jump_mode_from_str(&jump_mode),
-                menu_profile_id: row.get(16)?,
-                file_transfer_mode: file_transfer_mode_from_str(&file_transfer_mode),
-            })
-        })?;
+        let rows = statement.query_map([], map_connection_profile_row)?;
 
         let mut profiles = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
@@ -208,14 +258,22 @@ impl SqliteConfigStore {
     }
 
     pub fn get_connection_profile(&self, id: &str) -> Result<Option<ConnectionProfile>> {
-        Ok(self
-            .list_connection_profiles()?
-            .into_iter()
-            .find(|profile| profile.id == id))
+        let connection = self.connection()?;
+        let mut statement =
+            connection.prepare_cached(&format!("{CONNECTION_PROFILE_SELECT} WHERE id = ?1"))?;
+        let mut rows = statement.query_map([id], map_connection_profile_row)?;
+
+        let Some(profile) = rows.next().transpose()? else {
+            return Ok(None);
+        };
+        drop(rows);
+        drop(statement);
+        let mut profile = profile;
+        self.hydrate_connection_profile_secrets(&connection, &mut profile)?;
+        Ok(Some(profile))
     }
 
     pub fn delete_connection_profile(&self, id: &str) -> Result<bool> {
-        self.initialize()?;
         if let Some(profile) = self.get_connection_profile(id)? {
             self.delete_connection_profile_secrets(&profile)?;
         }
@@ -225,7 +283,6 @@ impl SqliteConfigStore {
     }
 
     pub fn save_ai_provider_config(&self, config: &AiProviderConfig) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
         let stored = self.prepare_ai_provider_config_for_storage(config)?;
         connection.execute(
@@ -270,40 +327,11 @@ impl SqliteConfigStore {
     }
 
     pub fn list_ai_provider_configs(&self) -> Result<Vec<AiProviderConfig>> {
-        self.initialize()?;
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            r#"
-            SELECT
-              id,
-              provider,
-              base_url,
-              model,
-              api_key_ref,
-              api_key,
-              context_policy,
-              system_prompt,
-              risk_policy
-            FROM ai_provider_configs
-            ORDER BY id ASC
-            "#,
-        )?;
+        let mut statement =
+            connection.prepare_cached(&format!("{AI_PROVIDER_CONFIG_SELECT} ORDER BY id ASC"))?;
 
-        let rows = statement.query_map([], |row| {
-            let provider: String = row.get(1)?;
-            let context_policy: String = row.get(6)?;
-            Ok(AiProviderConfig {
-                id: row.get(0)?,
-                provider: ai_provider_type_from_str(&provider),
-                base_url: row.get(2)?,
-                model: row.get(3)?,
-                api_key_ref: row.get(4)?,
-                api_key: row.get(5)?,
-                context_policy: context_policy_from_str(&context_policy),
-                system_prompt: row.get(7)?,
-                risk_policy: row.get(8)?,
-            })
-        })?;
+        let rows = statement.query_map([], map_ai_provider_config_row)?;
 
         let mut configs = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
@@ -314,14 +342,22 @@ impl SqliteConfigStore {
     }
 
     pub fn get_ai_provider_config(&self, id: &str) -> Result<Option<AiProviderConfig>> {
-        Ok(self
-            .list_ai_provider_configs()?
-            .into_iter()
-            .find(|config| config.id == id))
+        let connection = self.connection()?;
+        let mut statement =
+            connection.prepare_cached(&format!("{AI_PROVIDER_CONFIG_SELECT} WHERE id = ?1"))?;
+        let mut rows = statement.query_map([id], map_ai_provider_config_row)?;
+
+        let Some(config) = rows.next().transpose()? else {
+            return Ok(None);
+        };
+        drop(rows);
+        drop(statement);
+        let mut config = config;
+        self.hydrate_ai_provider_config_secret(&connection, &mut config)?;
+        Ok(Some(config))
     }
 
     pub fn delete_ai_provider_config(&self, id: &str) -> Result<bool> {
-        self.initialize()?;
         if let Some(config) = self.get_ai_provider_config(id)? {
             self.delete_ai_provider_config_secret(&config)?;
         }
@@ -331,7 +367,6 @@ impl SqliteConfigStore {
     }
 
     pub fn save_workspace_session(&self, session: &WorkspaceSession) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
         connection.execute(
             r#"
@@ -340,14 +375,18 @@ impl SqliteConfigStore {
               connection_id,
               name,
               summary,
+              context_summary,
+              context_summary_last_message_id,
               created_at,
               updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(id) DO UPDATE SET
               connection_id = excluded.connection_id,
               name = excluded.name,
               summary = excluded.summary,
+              context_summary = excluded.context_summary,
+              context_summary_last_message_id = excluded.context_summary_last_message_id,
               updated_at = excluded.updated_at
             "#,
             params![
@@ -355,6 +394,8 @@ impl SqliteConfigStore {
                 session.connection_id,
                 session.name,
                 session.summary,
+                session.context_summary,
+                session.context_summary_last_message_id,
                 session.created_at,
                 session.updated_at,
             ],
@@ -363,11 +404,18 @@ impl SqliteConfigStore {
     }
 
     pub fn list_workspace_sessions(&self) -> Result<Vec<WorkspaceSession>> {
-        self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
-            SELECT sessions.id, sessions.connection_id, sessions.name, sessions.summary, sessions.created_at, sessions.updated_at
+            SELECT
+              sessions.id,
+              sessions.connection_id,
+              sessions.name,
+              sessions.summary,
+              sessions.context_summary,
+              sessions.context_summary_last_message_id,
+              sessions.created_at,
+              sessions.updated_at
             FROM workspace_sessions AS sessions
             WHERE EXISTS (
               SELECT 1
@@ -384,8 +432,10 @@ impl SqliteConfigStore {
                 connection_id: row.get(1)?,
                 name: row.get(2)?,
                 summary: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                context_summary: row.get(4)?,
+                context_summary_last_message_id: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })?;
 
@@ -394,7 +444,6 @@ impl SqliteConfigStore {
     }
 
     pub fn delete_workspace_session(&self, id: &str) -> Result<bool> {
-        self.initialize()?;
         let connection = self.connection()?;
         let transaction = connection.unchecked_transaction()?;
         let deleted = transaction.execute("DELETE FROM workspace_sessions WHERE id = ?1", [id])?;
@@ -407,9 +456,9 @@ impl SqliteConfigStore {
     }
 
     pub fn save_command_history_record(&self, record: &CommandHistoryRecord) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
-        connection.execute(
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute(
             r#"
             INSERT INTO command_history (
               id,
@@ -436,7 +485,8 @@ impl SqliteConfigStore {
                 record.created_at,
             ],
         )?;
-        Self::prune_command_history(&connection, &record.connection_id)?;
+        Self::prune_command_history(&transaction, &record.connection_id)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -459,7 +509,6 @@ impl SqliteConfigStore {
     }
 
     pub fn list_command_history(&self, connection_id: &str) -> Result<Vec<CommandHistoryRecord>> {
-        self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
@@ -491,7 +540,6 @@ impl SqliteConfigStore {
     }
 
     pub fn save_ai_conversation_message(&self, message: &AiConversationMessage) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
         connection.execute(
             r#"
@@ -529,6 +577,28 @@ impl SqliteConfigStore {
                 message.created_at,
             ],
         )?;
+        Self::prune_ai_conversation_messages(&connection, &message.workspace_session_id)?;
+        Ok(())
+    }
+
+    fn prune_ai_conversation_messages(
+        connection: &Connection,
+        workspace_session_id: &str,
+    ) -> Result<()> {
+        connection.execute(
+            r#"
+            DELETE FROM ai_conversation_messages
+            WHERE workspace_session_id = ?1
+              AND id NOT IN (
+                SELECT id
+                FROM ai_conversation_messages
+                WHERE workspace_session_id = ?1
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?2
+              )
+            "#,
+            params![workspace_session_id, AI_CONVERSATION_RETENTION_LIMIT],
+        )?;
         Ok(())
     }
 
@@ -536,7 +606,6 @@ impl SqliteConfigStore {
         &self,
         workspace_session_id: &str,
     ) -> Result<Vec<AiConversationMessage>> {
-        self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
@@ -573,7 +642,6 @@ impl SqliteConfigStore {
     }
 
     pub fn save_update_script(&self, script: &UpdateScript) -> Result<()> {
-        self.initialize()?;
         let connection = self.connection()?;
         let source_commands_json = serde_json::to_string(&script.source_commands)?;
         connection.execute(
@@ -615,7 +683,6 @@ impl SqliteConfigStore {
     }
 
     pub fn list_update_scripts(&self) -> Result<Vec<UpdateScript>> {
-        self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
@@ -656,7 +723,6 @@ impl SqliteConfigStore {
     }
 
     pub fn get_update_script(&self, id: &str) -> Result<Option<UpdateScript>> {
-        self.initialize()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
@@ -696,7 +762,6 @@ impl SqliteConfigStore {
     }
 
     pub fn delete_update_script(&self, id: &str) -> Result<bool> {
-        self.initialize()?;
         let connection = self.connection()?;
         let deleted = connection.execute("DELETE FROM update_scripts WHERE id = ?1", [id])?;
         Ok(deleted > 0)
@@ -874,11 +939,30 @@ impl SqliteConfigStore {
         }
         Ok(())
     }
-    fn connection(&self) -> Result<Connection> {
-        if let Some(parent) = Path::new(&self.database_path).parent() {
-            std::fs::create_dir_all(parent)?;
+    fn connection(&self) -> Result<StoreConnection<'_>> {
+        let mut guard = self
+            .connection
+            .lock()
+            .expect("sqlite connection mutex poisoned");
+        if guard.is_none() {
+            if let Some(parent) = Path::new(&self.database_path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let connection = Connection::open(&self.database_path)?;
+            connection.busy_timeout(Duration::from_secs(5))?;
+            connection.execute_batch(
+                "PRAGMA journal_mode = WAL;\n                 PRAGMA synchronous = NORMAL;",
+            )?;
+            connection.execute_batch(SCHEMA)?;
+            migrate_connection_profiles(&connection)?;
+            migrate_ai_provider_configs(&connection)?;
+            migrate_command_history(&connection)?;
+            migrate_ai_conversation_messages(&connection)?;
+            migrate_workspace_sessions(&connection)?;
+            migrate_update_scripts(&connection)?;
+            *guard = Some(connection);
         }
-        Ok(Connection::open(&self.database_path)?)
+        Ok(StoreConnection { guard })
     }
 }
 
@@ -926,6 +1010,22 @@ fn migrate_ai_conversation_messages(connection: &Connection) -> Result<()> {
         "ai_conversation_messages",
         "workspace_session_id",
         "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    Ok(())
+}
+
+fn migrate_workspace_sessions(connection: &Connection) -> Result<()> {
+    ensure_column(
+        connection,
+        "workspace_sessions",
+        "context_summary",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "workspace_sessions",
+        "context_summary_last_message_id",
+        "TEXT NOT NULL DEFAULT ''",
     )?;
     Ok(())
 }

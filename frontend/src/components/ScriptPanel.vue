@@ -613,15 +613,33 @@ async function sendScriptRequest(
   const prompt = buildScriptPrompt(text, mode)
   let answer = ''
   let unlisten: (() => void) | undefined
+  // Writing every streamed token into `messages` re-renders (and re-parses)
+  // the whole conversation per token; coalesce chunk updates on a short
+  // trailing timer and let the final update below flush the complete answer.
+  let streamFlushTimer: number | undefined
+  const cancelStreamFlush = () => {
+    if (streamFlushTimer !== undefined) {
+      window.clearTimeout(streamFlushTimer)
+      streamFlushTimer = undefined
+    }
+  }
+  const flushStreamedAnswer = () => {
+    streamFlushTimer = undefined
+    if (stopRequested.value || currentRequestId.value !== requestId) return
+    updateAssistantMessage(assistantMessage.id, answer, true)
+  }
   try {
     unlisten = await onAiChatStream(requestId, (event) => {
       if (stopRequested.value || currentRequestId.value !== requestId) return
       if (event.kind === 'chunk') {
         answer += event.delta
-        updateAssistantMessage(assistantMessage.id, answer, true)
+        if (streamFlushTimer === undefined) {
+          streamFlushTimer = window.setTimeout(flushStreamedAnswer, 80)
+        }
       }
       if (event.kind === 'error' && event.error) {
         if (stopRequested.value) return
+        cancelStreamFlush()
         finishAnswerTimer(assistantMessage.id)
         updateAssistantMessage(assistantMessage.id, `模型调用失败。\n\n错误详情：${event.error}`, false, true)
       }
@@ -634,6 +652,7 @@ async function sendScriptRequest(
       commandHistory: userMessage.sourceCommands ?? []
     })
     if (stopRequested.value || currentRequestId.value !== requestId) return
+    cancelStreamFlush()
     const finalAnswer = answer || response.answer
     const script = extractBashScript(finalAnswer)
     finishAnswerTimer(assistantMessage.id)
@@ -648,9 +667,11 @@ async function sendScriptRequest(
     }
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
+    cancelStreamFlush()
     finishAnswerTimer(assistantMessage.id)
     updateAssistantMessage(assistantMessage.id, `模型调用失败。\n\n错误详情：${formatError(error)}`, false, true)
   } finally {
+    cancelStreamFlush()
     unlisten?.()
     if (currentRequestId.value === requestId) {
       currentRequestId.value = ''

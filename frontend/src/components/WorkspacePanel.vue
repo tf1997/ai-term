@@ -49,9 +49,11 @@ const emit = defineEmits<{
   renameWorkspaceSession: [sessionId: string, name: string]
   deleteWorkspaceSession: [sessionId: string]
   updateWorkspaceSessionTitle: [connectionId: string, sessionId: string, title: string]
+  updateWorkspaceSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
   appendAiMessage: [message: AiMessage]
   updateAiMessage: [message: AiMessage]
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
+  rerunCommand: [command: string]
   executeCommand: [command: string]
   writeTerminalInput: [data: string]
   focusTerminal: []
@@ -130,7 +132,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
     <CommandHistoryPanel
       v-if="activeWorkspaceTab === 'history'"
       :commands="commandHistory"
-      @rerun="emit('executeCommand', $event)"
+      @rerun="emit('rerunCommand', $event)"
     />
     <AiPanel
       v-if="activeWorkspaceTab === 'ai'"
@@ -155,6 +157,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @rename-session="(sessionId, name) => emit('renameWorkspaceSession', sessionId, name)"
       @delete-session="emit('deleteWorkspaceSession', $event)"
       @update-session-title="(connectionId, sessionId, title) => emit('updateWorkspaceSessionTitle', connectionId, sessionId, title)"
+      @update-session-context-summary="(sessionId, summary, lastMessageId) => emit('updateWorkspaceSessionContextSummary', sessionId, summary, lastMessageId)"
       @append-message="emit('appendAiMessage', $event)"
       @update-message="emit('updateAiMessage', $event)"
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"

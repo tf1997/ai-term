@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
 use std::time::Duration;
 
@@ -8,9 +8,9 @@ use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::api::http::{Body, ClientBuilder, HttpRequestBuilder, ResponseType};
 
 use crate::domain::connection::models::AiProviderConfig;
+use crate::domain::text::Utf8StreamDecoder;
 
 const MAX_CONTEXT_CHARS: usize = 12_000;
 const TERMINAL_HEAD_CHARS: usize = 2_000;
@@ -19,6 +19,9 @@ const MAX_HISTORY_COMMANDS: usize = 80;
 const MAX_CONVERSATION_MESSAGES: usize = 16;
 const MAX_CONVERSATION_CHARS: usize = 8_000;
 const MAX_CONVERSATION_MESSAGE_CHARS: usize = 3_000;
+const MAX_CONVERSATION_SUMMARY_CHARS: usize = 2_000;
+const MAX_COMPACT_SOURCE_MESSAGE_CHARS: usize = 1_500;
+const MAX_COMPACT_SOURCE_TOTAL_CHARS: usize = 12_000;
 const MAX_KEY_LINES: usize = 36;
 const AI_TERM_CLIENT_NAME: &str = "ai-term";
 const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,6 +39,10 @@ pub struct AiChatRequest {
     pub command_history: Vec<String>,
     #[serde(default)]
     pub conversation_messages: Vec<AiConversationTurn>,
+    /// Compressed summary of conversation turns older than
+    /// `conversation_messages`, produced by `compress_conversation_context`.
+    #[serde(default)]
+    pub conversation_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,6 +101,23 @@ pub struct AiScriptTitleResponse {
     pub title: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConversationCompactRequest {
+    pub config: AiProviderConfig,
+    pub api_key: String,
+    #[serde(default)]
+    pub previous_summary: Option<String>,
+    pub messages: Vec<AiConversationTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiConversationCompactResponse {
+    pub summary: String,
+    pub source_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContextBundle {
     terminal: String,
@@ -107,6 +131,7 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
     validate_chat_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
     let conversation = conversation_messages_for_payload(&request.conversation_messages);
+    let summary_chars = conversation_summary_chars(&request);
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_chat_payload(&request, &context, &conversation, false);
 
@@ -117,8 +142,9 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
     Ok(AiChatResponse {
         answer,
         context_compressed: context.compressed
+            || summary_chars > 0
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
-        context_chars: context.chars + conversation_context_chars(&conversation),
+        context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
         history_count: context.history.len(),
     })
 }
@@ -134,6 +160,7 @@ where
     validate_chat_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
     let conversation = conversation_messages_for_payload(&request.conversation_messages);
+    let summary_chars = conversation_summary_chars(&request);
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_chat_payload(&request, &context, &conversation, true);
 
@@ -149,8 +176,9 @@ where
     Ok(AiChatResponse {
         answer,
         context_compressed: context.compressed
+            || summary_chars > 0
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
-        context_chars: context.chars + conversation_context_chars(&conversation),
+        context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
         history_count: context.history.len(),
     })
 }
@@ -216,15 +244,133 @@ pub async fn generate_script_title(request: AiScriptTitleRequest) -> Result<AiSc
     Ok(AiScriptTitleResponse { title })
 }
 
+/// Compresses older conversation turns (plus an optional previous summary)
+/// into a compact context summary so long sessions keep bounded prompts
+/// without losing earlier decisions and results.
+pub async fn compress_conversation_context(
+    request: AiConversationCompactRequest,
+) -> Result<AiConversationCompactResponse> {
+    validate_compact_request(&request)?;
+    let endpoint = chat_completions_endpoint(&request.config.base_url);
+    let payload = json!({
+        "model": request.config.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是 AI Term 的会话压缩助手。把提供的历史对话（可能包含一份旧摘要）压缩成一份精炼的上下文摘要，供后续对话作为背景。必须保留：用户目标、关键结论、执行过的重要命令及其结果、涉及的主机/路径/服务名、尚未解决的问题。省略寒暄、重复内容和无效尝试的细节。直接输出摘要正文，不要解释，不要 Markdown 标题。中文为主，不超过 600 字。"
+            },
+            {
+                "role": "user",
+                "content": build_compact_prompt(&request)
+            }
+        ],
+        "temperature": 0.1,
+        "stream": false
+    });
+
+    let response_text =
+        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let answer = extract_chat_answer(&response_text)?;
+    let summary = truncate_for_prompt(answer.trim(), MAX_CONVERSATION_SUMMARY_CHARS);
+    if summary.trim().is_empty() {
+        bail!("AI 未返回会话摘要");
+    }
+
+    Ok(AiConversationCompactResponse {
+        summary,
+        source_count: request.messages.len(),
+    })
+}
+
+fn validate_compact_request(request: &AiConversationCompactRequest) -> Result<()> {
+    if request.config.base_url.trim().is_empty() {
+        bail!("请先配置 AI Base URL");
+    }
+    if request.config.model.trim().is_empty() {
+        bail!("请先配置 AI Model");
+    }
+    if request.api_key.trim().is_empty() {
+        bail!("请在 AI 配置中填写 API Key 并保存");
+    }
+    if request
+        .messages
+        .iter()
+        .all(|message| message.content.trim().is_empty())
+    {
+        bail!("会话压缩缺少历史消息");
+    }
+    Ok(())
+}
+
+fn build_compact_prompt(request: &AiConversationCompactRequest) -> String {
+    let mut sections = Vec::new();
+    if let Some(previous) = request
+        .previous_summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+    {
+        sections.push(format!(
+            "【旧摘要】（请把其中仍然有效的信息合并进新摘要）\n{}",
+            truncate_for_prompt(previous, MAX_CONVERSATION_SUMMARY_CHARS)
+        ));
+    }
+
+    // Bound the request body: cap each turn, then drop oldest turns until the
+    // total fits so a very long backlog cannot blow up the compaction call.
+    let mut turns = request
+        .messages
+        .iter()
+        .filter(|message| !message.content.trim().is_empty())
+        .map(|message| {
+            let role = match message.role {
+                AiConversationRole::User => "用户",
+                AiConversationRole::Assistant => "AI",
+            };
+            format!(
+                "{role}：{}",
+                truncate_for_prompt(message.content.trim(), MAX_COMPACT_SOURCE_MESSAGE_CHARS)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut total_chars = turns
+        .iter()
+        .map(|turn| turn.chars().count())
+        .sum::<usize>();
+    let mut dropped = 0usize;
+    while total_chars > MAX_COMPACT_SOURCE_TOTAL_CHARS && turns.len() > 1 {
+        let removed = turns.remove(0);
+        total_chars -= removed.chars().count();
+        dropped += 1;
+    }
+    let mut conversation_block = String::from("【待压缩对话】\n");
+    if dropped > 0 {
+        conversation_block.push_str(&format!("（更早的 {dropped} 条消息因过长已省略）\n"));
+    }
+    conversation_block.push_str(&turns.join("\n\n"));
+    sections.push(conversation_block);
+
+    sections.push("请输出合并后的最新上下文摘要。".to_string());
+    sections.join("\n\n")
+}
+
 fn build_chat_payload(
     request: &AiChatRequest,
     context: &ContextBundle,
     conversation: &[AiConversationTurn],
     stream: bool,
 ) -> Value {
+    let mut system_content = build_system_prompt(&request.config.system_prompt);
+    if let Some(summary) = normalized_conversation_summary(request) {
+        system_content.push_str(
+            "\n\n【历史对话摘要】以下是本会话更早对话的压缩摘要，仅作背景参考；当前终端内容与最新消息优先：\n",
+        );
+        system_content.push_str(&summary);
+    }
+
     let mut messages = vec![json!({
         "role": "system",
-        "content": build_system_prompt(&request.config.system_prompt)
+        "content": system_content
     })];
     messages.extend(conversation.iter().map(|message| {
         json!({
@@ -441,6 +587,20 @@ fn conversation_context_was_compressed(
             != conversation_context_chars(selected)
 }
 
+fn normalized_conversation_summary(request: &AiChatRequest) -> Option<String> {
+    let summary = request.conversation_summary.as_deref()?.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    Some(truncate_for_prompt(summary, MAX_CONVERSATION_SUMMARY_CHARS))
+}
+
+fn conversation_summary_chars(request: &AiChatRequest) -> usize {
+    normalized_conversation_summary(request)
+        .map(|summary| summary.chars().count())
+        .unwrap_or(0)
+}
+
 fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<String> {
     let mut points = Vec::new();
     let keywords = [
@@ -610,37 +770,45 @@ fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
     format!("{head}...")
 }
 
+/// Shared HTTP client reused across all AI requests.
+///
+/// Building a client per request re-initializes TLS and discards the connection
+/// pool every call. A single lazily-built client keeps connections warm; the
+/// long overall deadline is applied per-request via `RequestBuilder::timeout`.
+fn ai_http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .user_agent(AI_TERM_USER_AGENT)
+        .build()
+        .context("failed to build AI HTTP client")?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
 async fn send_openai_compatible_request(
     endpoint: &str,
     api_key: &str,
     payload: Value,
 ) -> Result<String> {
-    let client = ClientBuilder::new()
-        .connect_timeout(Duration::from_secs(20))
-        .build()
-        .context("failed to build AI HTTP client")?;
-
-    let request = HttpRequestBuilder::new("POST", endpoint)
-        .with_context(|| format!("invalid AI Base URL: {endpoint}"))?
-        .header("Content-Type", "application/json")?
-        .header("User-Agent", AI_TERM_USER_AGENT)?
-        .header("X-Client-Name", AI_TERM_CLIENT_NAME)?
-        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)?
-        .header("Authorization", format!("Bearer {}", api_key.trim()))?
-        .body(Body::Json(payload))
+    let response = ai_http_client()?
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .header("X-Client-Name", AI_TERM_CLIENT_NAME)
+        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .body(payload.to_string())
         .timeout(Duration::from_secs(90))
-        .response_type(ResponseType::Text);
-
-    let response = client
-        .send(request)
+        .send()
         .await
         .with_context(|| format!("AI 网络请求失败：{endpoint}"))?;
     let status = response.status().as_u16();
-    let data = response
-        .read()
+    let raw = response
+        .text()
         .await
         .context("failed to read AI response")?;
-    let raw = data.data.as_str().unwrap_or("").to_string();
 
     if !(200..300).contains(&status) {
         bail!("模型请求失败：HTTP {status}\n{}", parse_model_error(&raw));
@@ -660,21 +828,15 @@ async fn send_openai_compatible_stream_request<F>(
 where
     F: FnMut(String) + Send,
 {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(90))
-        .build()
-        .context("failed to build AI streaming HTTP client")?;
-
-    let response = client
+    let response = ai_http_client()?
         .post(endpoint)
         .header("Content-Type", "application/json")
         .header("Accept", "text/event-stream")
-        .header(reqwest::header::USER_AGENT, AI_TERM_USER_AGENT)
         .header("X-Client-Name", AI_TERM_CLIENT_NAME)
         .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
         .bearer_auth(api_key.trim())
         .body(payload.to_string())
+        .timeout(Duration::from_secs(90))
         .send()
         .await
         .with_context(|| format!("AI 流式网络请求失败：{endpoint}"))?;
@@ -686,6 +848,7 @@ where
     }
 
     let mut stream = response.bytes_stream();
+    let mut decoder = Utf8StreamDecoder::default();
     let mut raw = String::new();
     let mut event_buffer = String::new();
     let mut answer = String::new();
@@ -696,13 +859,20 @@ where
             return Ok(answer);
         }
         let chunk = chunk.context("failed to read AI stream chunk")?;
-        let text = String::from_utf8_lossy(&chunk);
-        raw.push_str(&text);
+        let text = decoder.push(&chunk);
+        if text.is_empty() {
+            continue;
+        }
+        // `raw` is only consulted as a fallback when the stream carries no SSE
+        // deltas, so stop growing a full copy of the response once we have one.
+        if !saw_sse_delta {
+            raw.push_str(&text);
+        }
         event_buffer.push_str(&text);
 
         while let Some(index) = event_buffer.find("\n\n") {
             let event = event_buffer[..index].to_string();
-            event_buffer = event_buffer[index + 2..].to_string();
+            event_buffer.drain(..index + 2);
             for delta in parse_sse_event_deltas(&event)? {
                 if is_cancelled(cancel_token) {
                     return Ok(answer);
@@ -1117,5 +1287,137 @@ mod tests {
             chat_completions_endpoint("https://gateway.example/v1/"),
             "https://gateway.example/v1/chat/completions"
         );
+    }
+
+    fn compact_test_config() -> AiProviderConfig {
+        AiProviderConfig {
+            id: "config-1".into(),
+            provider: crate::domain::connection::models::AiProviderType::OpenAiCompatible,
+            base_url: "https://provider.example/v1".into(),
+            model: "test-model".into(),
+            api_key_ref: String::new(),
+            api_key: None,
+            context_policy: crate::domain::connection::models::ContextPolicy::SelectedOutputOnly,
+            system_prompt: String::new(),
+            risk_policy: String::new(),
+        }
+    }
+
+    fn chat_request_with_summary(summary: Option<&str>) -> AiChatRequest {
+        AiChatRequest {
+            config: compact_test_config(),
+            api_key: "key".into(),
+            question: "内存占用怎么看".into(),
+            terminal_snapshot: String::new(),
+            command_history: Vec::new(),
+            conversation_messages: Vec::new(),
+            conversation_summary: summary.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn chat_payload_injects_conversation_summary_into_system_message() {
+        let request = chat_request_with_summary(Some("早期对话：已在 web-1 上排查过 nginx 502。"));
+        let no_history: Vec<String> = Vec::new();
+        let no_turns: Vec<AiConversationTurn> = Vec::new();
+        let context = build_context_bundle("", &no_history);
+        let payload = build_chat_payload(&request, &context, &no_turns, false);
+
+        let system = payload
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(system.contains("【历史对话摘要】"));
+        assert!(system.contains("nginx 502"));
+        assert!(conversation_summary_chars(&request) > 0);
+    }
+
+    #[test]
+    fn chat_payload_ignores_blank_conversation_summary() {
+        let request = chat_request_with_summary(Some("   "));
+        let no_history: Vec<String> = Vec::new();
+        let no_turns: Vec<AiConversationTurn> = Vec::new();
+        let context = build_context_bundle("", &no_history);
+        let payload = build_chat_payload(&request, &context, &no_turns, false);
+
+        let system = payload
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(!system.contains("【历史对话摘要】"));
+        assert_eq!(conversation_summary_chars(&request), 0);
+        assert_eq!(conversation_summary_chars(&chat_request_with_summary(None)), 0);
+    }
+
+    #[test]
+    fn caps_overlong_conversation_summary() {
+        let long_summary = "长".repeat(MAX_CONVERSATION_SUMMARY_CHARS + 500);
+        let request = chat_request_with_summary(Some(&long_summary));
+
+        let normalized = normalized_conversation_summary(&request).unwrap();
+        assert!(normalized.chars().count() <= MAX_CONVERSATION_SUMMARY_CHARS + 3);
+        assert!(normalized.ends_with("..."));
+    }
+
+    #[test]
+    fn compact_prompt_merges_previous_summary_and_turns() {
+        let request = AiConversationCompactRequest {
+            config: compact_test_config(),
+            api_key: "key".into(),
+            previous_summary: Some("旧摘要：目标主机 web-1。".into()),
+            messages: vec![
+                AiConversationTurn {
+                    role: AiConversationRole::User,
+                    content: "查看 nginx 日志".into(),
+                },
+                AiConversationTurn {
+                    role: AiConversationRole::Assistant,
+                    content: "tail -n 100 /var/log/nginx/error.log".into(),
+                },
+            ],
+        };
+
+        let prompt = build_compact_prompt(&request);
+        assert!(prompt.contains("【旧摘要】"));
+        assert!(prompt.contains("web-1"));
+        assert!(prompt.contains("用户：查看 nginx 日志"));
+        assert!(prompt.contains("AI：tail -n 100"));
+        assert!(validate_compact_request(&request).is_ok());
+    }
+
+    #[test]
+    fn compact_prompt_drops_oldest_turns_when_over_budget() {
+        let request = AiConversationCompactRequest {
+            config: compact_test_config(),
+            api_key: "key".into(),
+            previous_summary: None,
+            messages: (0..20)
+                .map(|index| AiConversationTurn {
+                    role: AiConversationRole::User,
+                    content: format!("turn-{index} {}", "x".repeat(1_400)),
+                })
+                .collect(),
+        };
+
+        let prompt = build_compact_prompt(&request);
+        assert!(prompt.chars().count() < MAX_COMPACT_SOURCE_TOTAL_CHARS + 500);
+        assert!(prompt.contains("因过长已省略"));
+        assert!(!prompt.contains("turn-0 "));
+        assert!(prompt.contains("turn-19"));
+    }
+
+    #[test]
+    fn rejects_compact_request_without_messages() {
+        let request = AiConversationCompactRequest {
+            config: compact_test_config(),
+            api_key: "key".into(),
+            previous_summary: None,
+            messages: vec![AiConversationTurn {
+                role: AiConversationRole::User,
+                content: "   ".into(),
+            }],
+        };
+
+        assert!(validate_compact_request(&request).is_err());
     }
 }

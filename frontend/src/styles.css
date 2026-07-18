@@ -10033,6 +10033,24 @@ code {
   box-shadow: none;
 }
 
+.tab.target.active,
+.theme-light .tab.target.active {
+  border-color: var(--workbench-line);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+  box-shadow: inset 0 -2px 0 var(--workbench-accent);
+  font-weight: 600;
+}
+
+.tab.target.sync-paused,
+.theme-light .tab.target.sync-paused {
+  border-style: dashed;
+  background: var(--workbench-panel);
+  color: var(--workbench-muted);
+  box-shadow: none;
+  opacity: .76;
+}
+
 .terminal-target-toggle {
   width: 0;
   height: 14px;
