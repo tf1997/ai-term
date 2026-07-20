@@ -333,10 +333,7 @@ fn build_compact_prompt(request: &AiConversationCompactRequest) -> String {
             )
         })
         .collect::<Vec<_>>();
-    let mut total_chars = turns
-        .iter()
-        .map(|turn| turn.chars().count())
-        .sum::<usize>();
+    let mut total_chars = turns.iter().map(|turn| turn.chars().count()).sum::<usize>();
     let mut dropped = 0usize;
     while total_chars > MAX_COMPACT_SOURCE_TOTAL_CHARS && turns.len() > 1 {
         let removed = turns.remove(0);
@@ -1346,7 +1343,10 @@ mod tests {
             .unwrap();
         assert!(!system.contains("【历史对话摘要】"));
         assert_eq!(conversation_summary_chars(&request), 0);
-        assert_eq!(conversation_summary_chars(&chat_request_with_summary(None)), 0);
+        assert_eq!(
+            conversation_summary_chars(&chat_request_with_summary(None)),
+            0
+        );
     }
 
     #[test]

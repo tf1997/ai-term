@@ -378,7 +378,8 @@ fn sqlite_store_persists_session_context_summary() {
         "Long investigation",
         "2026-07-02T09:00:00Z",
     );
-    compacted.context_summary = "早期对话摘要：已在 web-1 上定位到 nginx 502 由上游超时导致。".into();
+    compacted.context_summary =
+        "早期对话摘要：已在 web-1 上定位到 nginx 502 由上游超时导致。".into();
     compacted.context_summary_last_message_id = "ai-0042".into();
 
     store.save_workspace_session(&compacted).unwrap();
