@@ -81,7 +81,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm install
 
       - name: Run frontend UI checks
         working-directory: frontend
@@ -171,7 +171,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm install
 
       - name: Run frontend UI checks
         working-directory: frontend
@@ -247,7 +247,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm install
 
       - name: Run frontend UI checks
         working-directory: frontend
@@ -307,7 +307,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm install
 
       - name: Run frontend UI checks
         working-directory: frontend
@@ -382,7 +382,7 @@ jobs:
                 wget
               rustup target add x86_64-unknown-linux-musl
               cd frontend
-              npm ci
+              npm install
               npm run test:ui
               npm run build
               cd ../src-tauri
