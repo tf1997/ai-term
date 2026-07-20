@@ -1084,8 +1084,8 @@ assert(
   terminalPane.includes('currentRenderedCommandLine') &&
     terminalPane.includes('submittedTerminalCommand') &&
     terminalPane.includes('if (inputCommandReliable) return fallback.trim()') &&
-    terminalPane.indexOf('if (inputCommandReliable) return fallback.trim()') <
-      terminalPane.indexOf('const renderedLine = currentRenderedCommandLine()') &&
+    terminalPane.indexOf('if (inputCommandReliable) return fallback.trim()', terminalPane.indexOf('function submittedTerminalCommand')) <
+      terminalPane.indexOf('const renderedLine = currentRenderedCommandLine()', terminalPane.indexOf('function submittedTerminalCommand')) &&
     terminalPane.includes('shellPromptText') &&
     terminalPane.includes('pendingTrackedCommands') &&
     terminalPane.includes("terminalInputContext === 'shell'") &&
@@ -1107,10 +1107,11 @@ assert(
     terminalPane.includes('completionSourceLabel') &&
     terminalPane.includes('handleDocumentPointerDown') &&
     terminalPane.includes('terminalBodyWrap.value?.contains(target)') &&
-    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 350') &&
+    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 220') &&
     terminalPane.includes('COMPLETION_LIMIT = 6') &&
     !terminalPane.includes('completionKeyboardMode') &&
     terminalPane.includes('scheduleCompletionSuggestions') &&
+    terminalPane.includes('recoverTrackedTerminalInputFromRenderedLine') &&
     terminalPane.includes('updateCompletionAfterInput') &&
     terminalPane.includes('moveCompletionSelection') &&
     terminalPane.includes("data === '\\x1bOA'") &&
@@ -1224,11 +1225,15 @@ assert(
     workspaceTypes.includes("'interactive' | 'direct' | 'synced' | 'command'") &&
     terminalPane.includes('const terminalInputQueue: TerminalInputBatch[] = []') &&
     terminalPane.includes('const terminalInputPumpGenerations = new Set<number>()') &&
+    terminalPane.includes('const pendingTerminalProtocolResponses: string[] = []') &&
     terminalPane.includes('async function pumpTerminalInputQueue(generation = terminalInputGeneration)') &&
     terminalPane.includes('await terminalWrite(batch.sessionId, batch.data)') &&
     terminalPane.includes('failedTerminalInputGeneration = batch.generation') &&
     terminalPane.includes("emit('terminalInputWriteFailed'") &&
     terminalPane.includes('function terminalBackendInputReady()') &&
+    terminalPane.includes('function handleTerminalProtocolResponse(data: string)') &&
+    terminalPane.includes("enqueueTerminalInput(data, 'direct')") &&
+    terminalPane.includes('if (handleTerminalProtocolResponse(data)) return') &&
     terminalPane.includes('function writePreparedTerminalInput') &&
     terminalPane.includes("source: 'interactive'") &&
     terminalForwardInputBlock.includes("onWritten: () => emit('terminalInput', event)") &&
@@ -1738,9 +1743,10 @@ assert(
     scriptExecution.includes("language === 'powershell' || language === 'cmd') return source") &&
     scriptExecution.includes("!state.quote && state.arithmeticDepth === 0 && /^\\s*#/.test(line)") &&
     scriptExecution.includes('state.heredocs.push(...result.heredocs)') &&
-    scriptPanel.includes("import { prepareScriptForExecution } from '../lib/scriptExecution'") &&
+    scriptPanel.includes("import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../lib/scriptExecution'") &&
     scriptPanel.includes('prepareScriptForExecution(content, language)') &&
-    scriptPanel.includes('${prepared}') &&
+    scriptPanel.includes('buildBashScriptTerminalInput(prepared)') &&
+    !scriptPanel.includes("bash -s <<'AI_TERM_SCRIPT'") &&
     (scriptPanel.match(/wrap="off"/g) ?? []).length >= 3 &&
     scriptPanel.includes('@scroll="syncDraftLineRail"') &&
     scriptPanel.includes('@scroll="syncSelectedScriptLineRail"') &&
@@ -2189,6 +2195,8 @@ assert(
     appShell.includes('resetTerminalTargetsToActive') &&
     appShell.includes('syncTerminalInputToTargets') &&
     appShell.includes('writeInputToTargetTerminals') &&
+    appShell.includes("pane?.commandExecutionReadiness() !== 'ready'") &&
+    appShell.includes('脚本已部分发送') &&
     appShell.includes('terminal-target-toggle') &&
     appShell.includes('terminal-target-summary') &&
     appShell.includes('仅同步当前终端') &&
@@ -2399,7 +2407,9 @@ assert(
     scriptPanel.includes('deleteUpdateScript') &&
     scriptPanel.includes('loadPreviewScripts') &&
     scriptPanel.includes('localStorage') &&
-    scriptPanel.includes('bash -s <<') &&
+    scriptExecution.includes('export function buildBashScriptTerminalInput') &&
+    scriptExecution.includes('base64 --decode') &&
+    scriptPanel.includes('buildBashScriptTerminalInput(prepared)') &&
     scriptPanel.includes('../lib/scriptRisk') &&
     scriptPanel.includes('analyzeScriptRisks') &&
     scriptPanel.includes('scriptRiskStatusForContent') &&
@@ -2634,6 +2644,10 @@ assert(
     terminalPane.includes("scriptRiskStatusForContent(value).level === 'high'") &&
     terminalPane.includes('recommendQuickCommandsWithAi') &&
     terminalPane.includes('chatWithAiProvider') &&
+    terminalPane.includes('QUICK_COMMAND_AI_TIMEOUT_MS = 15_000') &&
+    terminalPane.includes('quickCommandRecommendationGeneration') &&
+    terminalPane.includes('withQuickCommandAiTimeout') &&
+    terminalPane.includes('已生成历史候选，正在获取 AI 优化。') &&
     terminalPane.includes('class="modal quick-command-modal"') &&
     terminalPane.includes('quick-command-backdrop') &&
     !terminalPane.includes('@click.self="closeQuickCommandSettings"') &&

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { prepareScriptForExecution } from '../src/lib/scriptExecution.ts'
+import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../src/lib/scriptExecution.ts'
 import { shellCommandFromCodeBlock } from '../src/lib/shellCommand.ts'
 
 test('explicit shell code blocks preserve source comments for editing', () => {
@@ -101,4 +101,15 @@ test('comment filtering normalizes CRLF while preserving line count', () => {
   const prepared = prepareScriptForExecution(source, 'bash')
   assert.equal(prepared, '\necho ok\n')
   assert.equal(prepared.split('\n').length, source.replace(/\r\n/g, '\n').split('\n').length)
+})
+
+test('terminal script input uses one UTF-8-safe line without heredoc continuation prompts', () => {
+  const source = 'log_info "更新服务"\nprintf \'%s\\n\' "$SERVICE_NAME"\n'
+  const input = buildBashScriptTerminalInput(source)
+  const payload = /printf '%s' '([^']+)'/.exec(input)?.[1]
+
+  assert.ok(payload)
+  assert.equal(input.split('\n').length, 2)
+  assert.equal(input.includes('AI_TERM_SCRIPT'), false)
+  assert.equal(Buffer.from(payload, 'base64').toString('utf8'), source)
 })

@@ -2,6 +2,7 @@ import type { ShellScriptLanguage } from './shellCommand'
 
 const BACKTICK = String.fromCharCode(96)
 const ANSI_SINGLE_QUOTE = 'ansi-single'
+const BASE64_BINARY_CHUNK_SIZE = 0x8000
 
 interface BashHeredoc {
   delimiter: string
@@ -22,6 +23,16 @@ export function prepareScriptForExecution(content: string, language: ShellScript
   const source = content.replace(/\r\n?/g, '\n')
   if (language === 'powershell' || language === 'cmd') return source
   return stripBashComments(source)
+}
+
+export function buildBashScriptTerminalInput(content: string) {
+  const bytes = new TextEncoder().encode(content)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += BASE64_BINARY_CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + BASE64_BINARY_CHUNK_SIZE))
+  }
+  const payload = btoa(binary)
+  return `if command -v base64 >/dev/null 2>&1; then printf '%s' '${payload}' | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null) | bash; else printf '%s\\n' 'AI Term: base64 decoder not found' >&2; fi\n`
 }
 
 function stripBashComments(source: string) {

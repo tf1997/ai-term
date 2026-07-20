@@ -1696,11 +1696,23 @@ function writeInputToTargetTerminals(data: string) {
     return
   }
   let sentCount = 0
+  let busyCount = 0
   targetTerminalIds.value.forEach((terminalId) => {
-    if (terminalRefs.value[terminalId]?.writeTerminalInput(data)) sentCount += 1
+    const pane = terminalRefs.value[terminalId]
+    if (pane?.commandExecutionReadiness() !== 'ready') {
+      busyCount += 1
+      return
+    }
+    if (pane.writeTerminalInput(data)) sentCount += 1
   })
   if (sentCount === 0) {
-    showToast('error', '脚本未发送', '目标终端不可用或没有活动 shell。')
+    showToast(
+      busyCount > 0 ? 'warning' : 'error',
+      '脚本未发送',
+      busyCount > 0 ? '目标终端仍在执行命令或命令行已有输入，请等待空提示符后重试。' : '目标终端不可用或没有活动 shell。'
+    )
+  } else if (busyCount > 0) {
+    showToast('warning', '脚本已部分发送', `已发送到 ${sentCount} 个终端；${busyCount} 个忙碌终端已跳过。`)
   }
 }
 

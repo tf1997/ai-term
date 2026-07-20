@@ -154,8 +154,10 @@ let pendingInputControlSequence = ''
 let terminalInputGeneration = 0
 let terminalInputReady = false
 let failedTerminalInputGeneration: number | undefined
+let quickCommandRecommendationGeneration = 0
 const terminalInputQueue: TerminalInputBatch[] = []
 const terminalInputPumpGenerations = new Set<number>()
+const pendingTerminalProtocolResponses: string[] = []
 let lastRightClickPasteAt = 0
 let quickCommandBarNoticeTimer: number | undefined
 const status = ref<TerminalRuntimeStatus>('idle')
@@ -169,11 +171,12 @@ const completionPrefixLength = ref(0)
 const completionPlacement = ref<'above' | 'below'>('below')
 const completionPositionStyle = ref<Record<string, string>>({ left: '8px', top: '8px', width: 'min(430px, calc(100% - 16px))' })
 const localCommandHistory = ref<string[]>([])
-const COMPLETION_DEBOUNCE_MS = 350
+const COMPLETION_DEBOUNCE_MS = 220
 const COMPLETION_LIMIT = 6
 const DEFAULT_QUICK_COMMANDS = ['pwd', 'ls -la', 'df -h', 'free -m', 'ps aux', 'git status']
 const QUICK_COMMAND_STORAGE_KEY_PREFIX = 'ai-term:quick-commands:v1'
 const QUICK_COMMAND_LIMIT = 12
+const QUICK_COMMAND_AI_TIMEOUT_MS = 15_000
 const quickCommands = ref<string[]>(loadQuickCommands())
 const quickCommandSettingsOpen = ref(false)
 const quickCommandItems = ref<string[]>([...quickCommands.value])
@@ -514,15 +517,18 @@ function handleQuickCommandSettingsPointerDown(event: PointerEvent) {
 }
 
 function openQuickCommandSettings() {
+  quickCommandRecommendationGeneration += 1
   syncQuickCommandItems(quickCommands.value)
   quickCommandRecommendations.value = []
   quickCommandResetConfirm.value = false
   quickCommandNotice.value = ''
   quickCommandError.value = ''
+  quickCommandAiLoading.value = false
   quickCommandSettingsOpen.value = true
 }
 
 function closeQuickCommandSettings() {
+  quickCommandRecommendationGeneration += 1
   quickCommandSettingsOpen.value = false
   quickCommandAiLoading.value = false
   quickCommandRecommendations.value = []
@@ -638,11 +644,30 @@ function localQuickCommandRecommendations() {
   )
 }
 
+function withQuickCommandAiTimeout<T>(request: Promise<T>) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('AI 推荐请求超时')), QUICK_COMMAND_AI_TIMEOUT_MS)
+    request.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
+
 async function recommendQuickCommandsWithAi() {
   if (quickCommandAiLoading.value) return
+  const generation = ++quickCommandRecommendationGeneration
+  const local = localQuickCommandRecommendations()
+  quickCommandRecommendations.value = local
   quickCommandAiLoading.value = true
   quickCommandError.value = ''
-  quickCommandNotice.value = ''
+  quickCommandNotice.value = '已生成历史候选，正在获取 AI 优化。'
   quickCommandResetConfirm.value = false
   const history = quickCommandHistorySeed()
   const config = props.aiConfig
@@ -650,29 +675,29 @@ async function recommendQuickCommandsWithAi() {
 
   try {
     if (config?.baseUrl.trim() && config.model.trim() && apiKey) {
-      const response = await chatWithAiProvider({
+      const response = await withQuickCommandAiTimeout(chatWithAiProvider({
         config,
         apiKey,
         question: buildQuickCommandPrompt(history),
         terminalSnapshot: terminalOutputBuffer.slice(-12_000),
         commandHistory: history
-      })
+      }))
+      if (generation !== quickCommandRecommendationGeneration || !quickCommandSettingsOpen.value) return
       const recommended = parseQuickCommandRecommendations(response.answer)
       if (recommended.length > 0) {
         quickCommandRecommendations.value = recommended
         quickCommandNotice.value = '已生成推荐候选，可选择追加或替换。'
         return
       }
+      quickCommandNotice.value = 'AI 未返回可用候选，已保留历史命令推荐。'
+      return
     }
-    const local = localQuickCommandRecommendations()
-    quickCommandRecommendations.value = local
-    quickCommandNotice.value = config ? 'AI 未返回可用候选，已使用历史命令推荐。' : '未配置 AI，已使用历史命令推荐。'
+    quickCommandNotice.value = '未配置可用 AI，已使用历史命令推荐。'
   } catch (error) {
-    const local = localQuickCommandRecommendations()
-    quickCommandRecommendations.value = local
-    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已生成本地候选。`
+    if (generation !== quickCommandRecommendationGeneration || !quickCommandSettingsOpen.value) return
+    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已保留历史候选。`
   } finally {
-    quickCommandAiLoading.value = false
+    if (generation === quickCommandRecommendationGeneration) quickCommandAiLoading.value = false
   }
 }
 function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
@@ -915,6 +940,7 @@ function writeTerminalView(data: string, forceScroll = false) {
   const shouldScroll = forceScroll || terminalIsPinnedToBottom()
   terminal.write(data, () => {
     if (shouldScroll) scrollTerminalToBottom()
+    if (recoverTrackedTerminalInputFromRenderedLine()) scheduleCompletionSuggestions()
     if (terminalCompletionOpen.value) scheduleCompletionPosition()
   })
 }
@@ -1266,6 +1292,17 @@ function currentRenderedCommandLine() {
   return value.trimEnd()
 }
 
+function recoverTrackedTerminalInputFromRenderedLine() {
+  if (inputCommandReliable || terminalInputContext !== 'shell' || !shellPromptText) return false
+  const renderedLine = currentRenderedCommandLine()
+  if (!renderedLine.startsWith(shellPromptText)) return false
+  const command = renderedLine.slice(shellPromptText.length).trimStart()
+  inputCommandBuffer = command
+  inputCommandCursor = command.length
+  inputCommandReliable = true
+  return true
+}
+
 function submittedTerminalCommand(fallback: string) {
   if (inputCommandReliable) return fallback.trim()
   const renderedLine = currentRenderedCommandLine()
@@ -1290,6 +1327,7 @@ function advanceTerminalInputGeneration() {
   shellPromptSignature = undefined
   shellPromptDiscoveryOpen = true
   terminalInputQueue.length = 0
+  pendingTerminalProtocolResponses.length = 0
 }
 
 function terminalBackendInputReady() {
@@ -1298,6 +1336,19 @@ function terminalBackendInputReady() {
     terminalInputReady &&
     failedTerminalInputGeneration !== terminalInputGeneration
   )
+}
+
+function handleTerminalProtocolResponse(data: string) {
+  if (!/^\x1b\[\d{1,4};\d{1,4}R$/.test(data)) return false
+  pendingTerminalProtocolResponses.push(data)
+  flushTerminalProtocolResponses()
+  return true
+}
+
+function flushTerminalProtocolResponses() {
+  if (!terminalBackendInputReady() || pendingTerminalProtocolResponses.length === 0) return
+  const data = pendingTerminalProtocolResponses.splice(0).join('')
+  enqueueTerminalInput(data, 'direct')
 }
 
 function sameTerminalInputBatch(
@@ -1779,6 +1830,7 @@ onMounted(async () => {
   renderIdlePrompt(terminal)
 
   dataDisposable = terminal.onData((data) => {
+    if (handleTerminalProtocolResponse(data)) return
     if (handleCompletionInput(data)) return
     if (terminalBackendInputReady()) {
       forwardInteractiveTerminalInput(data)
@@ -1963,6 +2015,7 @@ async function connectRemote() {
     }
     if (!active) return
     terminalInputReady = true
+    flushTerminalProtocolResponses()
     status.value = 'remote'
     syncTerminalSize(true)
     await nextTick()
@@ -2036,6 +2089,7 @@ async function connectLocal() {
     }
     if (!active) return
     terminalInputReady = true
+    flushTerminalProtocolResponses()
     status.value = 'local'
     syncTerminalSize(true)
     await nextTick()

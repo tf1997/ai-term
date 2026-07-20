@@ -24,7 +24,7 @@ import {
 import { parseMessageParts, renderMarkdown, type MessagePart } from '../lib/aiMarkdown'
 import { codeBlockLabel, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import { detectShellScriptLanguage, type ShellScriptLanguage } from '../lib/shellCommand'
-import { prepareScriptForExecution } from '../lib/scriptExecution'
+import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../lib/scriptExecution'
 import ContextMenu from './ContextMenu.vue'
 import UiIcon from './UiIcon.vue'
 
@@ -995,7 +995,7 @@ function writeScriptToTerminal(content: string, sourceScript?: ScriptExecutionSo
     scriptExecutionNotice.value = ''
     return false
   }
-  emit('writeTerminalInput', `bash -s <<'AI_TERM_SCRIPT'\n${prepared}\nAI_TERM_SCRIPT\n`)
+  emit('writeTerminalInput', buildBashScriptTerminalInput(prepared))
   return true
 }
 
