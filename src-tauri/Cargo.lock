@@ -216,9 +216,6 @@ name = "bytes"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "cairo-rs"
@@ -3334,7 +3331,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae1f57c291a6ab8e1d2e6b8ad0a35ff769c9925deb8a89de85425ff08762d0c"
 dependencies = [
  "anyhow",
- "bytes",
  "cocoa",
  "dirs-next",
  "dunce",
@@ -3349,7 +3345,6 @@ dependencies = [
  "heck 0.5.0",
  "http",
  "ignore",
- "indexmap 1.9.3",
  "log",
  "objc",
  "once_cell",
@@ -3359,7 +3354,6 @@ dependencies = [
  "rand 0.8.6",
  "raw-window-handle",
  "regex",
- "reqwest",
  "semver",
  "serde",
  "serde_json",
