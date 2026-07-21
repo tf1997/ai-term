@@ -5251,11 +5251,16 @@ code {
 .script-risk-body {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.script-risk-body > .script-risk-summary,
+.script-risk-body > .script-risk-ai {
+  flex: 0 0 auto;
 }
 .script-risk-summary {
   display: flex;
@@ -5296,6 +5301,7 @@ code {
   background: rgba(120, 53, 15, .22);
 }
 .script-risk-preview {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 118px;
   max-height: min(340px, 42vh);
@@ -6075,7 +6081,8 @@ code {
 }
 /* AI-assisted risk explanation inside confirmation modal. */
 .script-risk-body {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
 }
 .script-risk-ai {
   min-width: 0;
@@ -6088,7 +6095,7 @@ code {
   background: rgba(18, 24, 38, .72);
   padding: 9px 10px;
 }
-.script-risk-ai > div {
+.script-risk-ai > div:not(.script-risk-ai-output) {
   min-width: 0;
   display: grid;
   gap: 2px;
@@ -6097,13 +6104,12 @@ code {
   color: #eef2ff;
   font-size: var(--font-sm);
 }
-.script-risk-ai span {
+.script-risk-ai > div:not(.script-risk-ai-output) > span {
   min-width: 0;
-  overflow: hidden;
   color: #9aa8c2;
   font-size: var(--font-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .script-risk-ai .text-button {
   height: 30px;
@@ -6111,14 +6117,15 @@ code {
 }
 .script-risk-ai-output {
   grid-column: 1 / -1;
-  max-height: 150px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   margin: 0;
   border-top: 1px solid rgba(148, 163, 184, .16);
   color: #dbeafe;
   font-size: var(--font-sm);
   line-height: 1.55;
   padding-top: 8px;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .script-risk-ai-output p {

@@ -1074,10 +1074,23 @@ assert(
 
 assert(
   terminalPane.includes('dataDisposable = terminal.onData((data) => {') &&
-    terminalPane.includes('if (terminalBackendInputReady()) {') &&
+    terminalPane.includes('if (terminalInputDestinationAvailable()) {') &&
     terminalPane.includes('forwardInteractiveTerminalInput(data)') &&
     !terminalPane.includes('dataDisposable = terminal.onData((data) => {\n    terminal?.write(data)'),
-  'TerminalPane must not echo or queue keyboard input before the backend session is writable.'
+  'TerminalPane must only forward keyboard input after a destination is writable and must not echo it locally.'
+)
+
+assert(
+  terminalPane.includes('const pendingPreReadyTerminalInput: PendingTerminalInput[] = []') &&
+    terminalPane.includes('function bufferPreReadyTerminalInput(data: string)') &&
+    terminalPane.includes('bufferPreReadyTerminalInput(data)') &&
+    terminalPane.includes('function flushPreReadyTerminalInput()') &&
+    terminalPane.includes('flushPreReadyTerminalInput()') &&
+    terminalPane.includes('item.generation === terminalInputGeneration') &&
+    terminalPane.includes('pendingPreReadyTerminalInput.length = 0') &&
+    terminalPane.includes('terminal?.focus()') &&
+    terminalPane.includes('terminalHost.value?.focus()'),
+  'TerminalPane must preserve generation-scoped keystrokes during connection readiness checks and restore focus when a terminal tab becomes active.'
 )
 
 assert(
@@ -2440,6 +2453,10 @@ assert(
     styles.includes('.script-risk-line') &&
     styles.includes('.script-risk-line.flagged') &&
     styles.includes('max-height: min(640px, calc(100vh - 44px));') &&
+    styles.includes('display: flex;\n  flex-direction: column;') &&
+    styles.includes('overflow: auto;\n  overscroll-behavior: contain;') &&
+    styles.includes('.script-risk-body > .script-risk-summary') &&
+    styles.includes('flex: 1 1 auto;') &&
     styles.includes('overflow-x: hidden;') &&
     styles.includes('grid-template-rows: auto minmax(0, 1fr);') &&
     styles.includes('.script-risk-line {\n  min-width: 0;') &&

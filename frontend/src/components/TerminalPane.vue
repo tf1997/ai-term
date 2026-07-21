@@ -61,6 +61,11 @@ interface TerminalInputBatch {
   commits: Array<() => void>
 }
 
+interface PendingTerminalInput {
+  generation: number
+  data: string
+}
+
 interface PreparedTerminalInputOptions {
   source: TerminalInputWriteSource
   sourceTerminalId?: string
@@ -157,6 +162,9 @@ let failedTerminalInputGeneration: number | undefined
 let quickCommandRecommendationGeneration = 0
 const terminalInputQueue: TerminalInputBatch[] = []
 const terminalInputPumpGenerations = new Set<number>()
+const pendingPreReadyTerminalInput: PendingTerminalInput[] = []
+const PRE_READY_INPUT_LIMIT = 64 * 1024
+let pendingPreReadyTerminalInputSize = 0
 const pendingTerminalProtocolResponses: string[] = []
 let lastRightClickPasteAt = 0
 let quickCommandBarNoticeTimer: number | undefined
@@ -1327,6 +1335,8 @@ function advanceTerminalInputGeneration() {
   shellPromptSignature = undefined
   shellPromptDiscoveryOpen = true
   terminalInputQueue.length = 0
+  pendingPreReadyTerminalInput.length = 0
+  pendingPreReadyTerminalInputSize = 0
   pendingTerminalProtocolResponses.length = 0
 }
 
@@ -1349,6 +1359,33 @@ function flushTerminalProtocolResponses() {
   if (!terminalBackendInputReady() || pendingTerminalProtocolResponses.length === 0) return
   const data = pendingTerminalProtocolResponses.splice(0).join('')
   enqueueTerminalInput(data, 'direct')
+}
+
+function terminalMayBecomeInputReady() {
+  return status.value === 'connecting' && failedTerminalInputGeneration !== terminalInputGeneration
+}
+
+function bufferPreReadyTerminalInput(data: string) {
+  if (!data || !terminalMayBecomeInputReady()) return false
+  if (pendingPreReadyTerminalInputSize + data.length > PRE_READY_INPUT_LIMIT) {
+    pendingPreReadyTerminalInput.length = 0
+    pendingPreReadyTerminalInputSize = 0
+    return false
+  }
+  pendingPreReadyTerminalInput.push({ generation: terminalInputGeneration, data })
+  pendingPreReadyTerminalInputSize += data.length
+  return true
+}
+
+function flushPreReadyTerminalInput() {
+  if (!terminalBackendInputReady() || pendingPreReadyTerminalInput.length === 0) return
+  const pending = pendingPreReadyTerminalInput.splice(0)
+  pendingPreReadyTerminalInputSize = 0
+  pending
+    .filter((item) => item.generation === terminalInputGeneration)
+    .forEach((item) => {
+      if (!forwardInteractiveTerminalInput(item.data)) invalidateTrackedTerminalInput()
+    })
 }
 
 function sameTerminalInputBatch(
@@ -1831,10 +1868,12 @@ onMounted(async () => {
 
   dataDisposable = terminal.onData((data) => {
     if (handleTerminalProtocolResponse(data)) return
-    if (handleCompletionInput(data)) return
-    if (terminalBackendInputReady()) {
+    if (terminalInputDestinationAvailable()) {
+      if (handleCompletionInput(data)) return
       forwardInteractiveTerminalInput(data)
+      return
     }
+    bufferPreReadyTerminalInput(data)
   })
   selectionDisposable = terminal.onSelectionChange(() => {
     scheduleTerminalSelectionPolish()
@@ -1883,6 +1922,8 @@ watch(
     if (!active) return
     await nextTick()
     scheduleTerminalSizeSync(true)
+    terminal?.focus()
+    terminalHost.value?.focus()
   }
 )
 
@@ -2016,6 +2057,7 @@ async function connectRemote() {
     if (!active) return
     terminalInputReady = true
     flushTerminalProtocolResponses()
+    flushPreReadyTerminalInput()
     status.value = 'remote'
     syncTerminalSize(true)
     await nextTick()
@@ -2090,6 +2132,7 @@ async function connectLocal() {
     if (!active) return
     terminalInputReady = true
     flushTerminalProtocolResponses()
+    flushPreReadyTerminalInput()
     status.value = 'local'
     syncTerminalSize(true)
     await nextTick()
