@@ -155,6 +155,7 @@ let shellPromptSignature: ShellPromptSignature | undefined
 let shellPromptDiscoveryOpen = true
 let pendingTrackedCommands: string[] = []
 let completionDebounceTimer: number | undefined
+let completionSuppressedForHistoryNavigation = false
 let pendingInputControlSequence = ''
 let terminalInputGeneration = 0
 let terminalInputReady = false
@@ -786,7 +787,10 @@ function updateCompletionAfterInput(result: TerminalInputTrackResult) {
     closeCompletion()
     return
   }
-  if (result === 'changed') scheduleCompletionSuggestions()
+  if (result === 'changed') {
+    completionSuppressedForHistoryNavigation = false
+    scheduleCompletionSuggestions()
+  }
 }
 
 function closeCompletion() {
@@ -869,15 +873,8 @@ function acceptCompletionSuggestion(suggestion: CompletionSuggestion) {
   return true
 }
 
-function moveCompletionSelection(direction: -1 | 1) {
-  const count = completionSuggestions.value.length
-  if (!count) return false
-  if (selectedCompletionIndex.value < 0) {
-    selectedCompletionIndex.value = direction > 0 ? 0 : count - 1
-  } else {
-    selectedCompletionIndex.value = (selectedCompletionIndex.value + direction + count) % count
-  }
-  return true
+function isHistoryNavigationInput(data: string) {
+  return data === '\x1b[A' || data === '\x1bOA' || data === '\x1b[B' || data === '\x1bOB'
 }
 
 function handleCompletionInput(data: string) {
@@ -886,11 +883,10 @@ function handleCompletionInput(data: string) {
     closeCompletion()
     return true
   }
-  if (data === '\x1b[A' || data === '\x1bOA') {
-    return moveCompletionSelection(-1)
-  }
-  if (data === '\x1b[B' || data === '\x1bOB') {
-    return moveCompletionSelection(1)
+  if (isHistoryNavigationInput(data)) {
+    completionSuppressedForHistoryNavigation = true
+    closeCompletion()
+    return false
   }
   if ((data === '\r' || data === '\n') && selectedCompletionIndex.value >= 0) {
     const suggestion = completionSuggestions.value[selectedCompletionIndex.value]
@@ -1482,6 +1478,7 @@ function resetTrackedTerminalInput(context: TerminalInputContext = terminalInput
   inputCommandCursor = 0
   inputCommandReliable = true
   terminalInputContext = context
+  completionSuppressedForHistoryNavigation = false
 }
 
 function parseShellPrompt(value: string): ShellPromptSignature | undefined {
@@ -1571,7 +1568,7 @@ function invalidateTrackedTerminalInput() {
 }
 
 function canOfferCompletion() {
-  return terminalInputContext === 'shell' && inputCommandReliable
+  return terminalInputContext === 'shell' && inputCommandReliable && !completionSuppressedForHistoryNavigation
 }
 
 function terminalLineReadyForAppInput() {
@@ -1648,7 +1645,8 @@ function nextTrackedTextBoundary(text: string, cursor: number) {
 }
 
 function trackUserInput(data: string): TerminalInputTrackResult {
-  if (data === '\x1b[A' || data === '\x1bOA' || data === '\x1b[B' || data === '\x1bOB') {
+  if (isHistoryNavigationInput(data)) {
+    completionSuppressedForHistoryNavigation = true
     invalidateTrackedTerminalInput()
     return 'idle'
   }

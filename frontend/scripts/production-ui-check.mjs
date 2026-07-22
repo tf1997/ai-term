@@ -1126,7 +1126,10 @@ assert(
     terminalPane.includes('scheduleCompletionSuggestions') &&
     terminalPane.includes('recoverTrackedTerminalInputFromRenderedLine') &&
     terminalPane.includes('updateCompletionAfterInput') &&
-    terminalPane.includes('moveCompletionSelection') &&
+    terminalPane.includes('completionSuppressedForHistoryNavigation') &&
+    terminalPane.includes('isHistoryNavigationInput(data)') &&
+    terminalPane.includes('!completionSuppressedForHistoryNavigation') &&
+    !terminalPane.includes('moveCompletionSelection') &&
     terminalPane.includes("data === '\\x1bOA'") &&
     terminalPane.includes("data === '\\x1bOB'") &&
     terminalPane.includes('const inputResult = trackUserInput(data)') &&
