@@ -1,15 +1,16 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 use super::models::{
     AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
@@ -36,6 +37,8 @@ const SFTP_PTY_ROWS: u16 = 32;
 const NATIVE_SFTP_POOL_TTL: Duration = Duration::from_secs(120);
 const NATIVE_SFTP_POOL_MAX: usize = 8;
 const NATIVE_SFTP_COPY_BUFFER_SIZE: usize = 1024 * 1024;
+pub const REMOTE_TEXT_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
+pub const REMOTE_FILE_CHANGED_PREFIX: &str = "REMOTE_FILE_CHANGED:";
 
 pub type SftpCancelToken = Arc<AtomicBool>;
 
@@ -87,6 +90,15 @@ pub struct SftpProbeResponse {
     pub available: bool,
     pub path: Option<String>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTextFileResponse {
+    pub path: String,
+    pub content: String,
+    pub revision: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -623,6 +635,180 @@ pub fn download_file_with_progress(
         Some(local_path),
         false,
     ))
+}
+
+pub fn read_remote_text_file(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+) -> Result<RemoteTextFileResponse> {
+    let remote_path = normalize_remote_path(remote_path);
+    let temp_file = RemoteEditTempFile::new()?;
+    download_file_with_cancel(
+        profile,
+        &remote_path,
+        temp_file.path_string(),
+        target_override,
+        None,
+    )?;
+
+    let bytes = fs::read(&temp_file.path)
+        .with_context(|| format!("failed to read downloaded remote file {remote_path}"))?;
+    validate_remote_text_bytes(&bytes)?;
+    let revision = remote_text_revision(&bytes);
+    let size = bytes.len() as u64;
+    let content = String::from_utf8(bytes)
+        .with_context(|| format!("remote file is not valid UTF-8 text: {remote_path}"))?;
+
+    Ok(RemoteTextFileResponse {
+        path: remote_path,
+        content,
+        revision,
+        size,
+    })
+}
+
+pub fn save_remote_text_file(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    content: &str,
+    expected_revision: &str,
+    force: bool,
+    target_override: &SftpTargetOverride,
+) -> Result<RemoteTextFileResponse> {
+    validate_remote_text_bytes(content.as_bytes())?;
+    let remote_path = normalize_remote_path(remote_path);
+
+    if !force {
+        let current = read_remote_text_file(profile, &remote_path, target_override)?;
+        if current.revision != expected_revision {
+            bail!(
+                "{REMOTE_FILE_CHANGED_PREFIX} remote file changed after it was opened: {remote_path}"
+            );
+        }
+    }
+
+    let temp_file = RemoteEditTempFile::new()?;
+    fs::write(&temp_file.path, content.as_bytes())
+        .with_context(|| format!("failed to stage remote file update for {remote_path}"))?;
+    upload_file_to_remote_path_with_cancel(
+        profile,
+        temp_file.path_string(),
+        &remote_path,
+        target_override,
+        None,
+    )?;
+
+    Ok(RemoteTextFileResponse {
+        path: remote_path,
+        content: content.to_string(),
+        revision: remote_text_revision(content.as_bytes()),
+        size: content.len() as u64,
+    })
+}
+
+pub fn upload_file_to_remote_path_with_cancel(
+    profile: &ConnectionProfile,
+    local_path: &str,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Result<SftpTransferResponse> {
+    let local_path = expand_tilde(local_path);
+    if !Path::new(&local_path).is_file() {
+        bail!("local file does not exist: {local_path}");
+    }
+    let remote_path = normalize_remote_path(remote_path);
+    let mut progress = None;
+    if let Some(response) = native_result_or_fallback(try_native_upload_file(
+        profile,
+        &local_path,
+        &remote_path,
+        target_override,
+        cancel_token,
+        &mut progress,
+    ))? {
+        return Ok(response);
+    }
+    run_sftp_profile_commands_with_progress(
+        profile,
+        target_override,
+        vec![
+            format!(
+                "put {} {}",
+                quote_sftp_path(&local_path)?,
+                quote_sftp_path(&remote_path)?
+            ),
+            "bye".into(),
+        ],
+        TRANSFER_TIMEOUT,
+        cancel_token,
+        None,
+    )?;
+    Ok(transfer_response(
+        format!("uploaded {local_path} to {remote_path}"),
+        Some(local_path),
+        Some(remote_path.clone()),
+        Some(remote_path),
+        false,
+    ))
+}
+
+fn validate_remote_text_bytes(bytes: &[u8]) -> Result<()> {
+    if bytes.len() > REMOTE_TEXT_FILE_MAX_BYTES {
+        bail!(
+            "remote text file exceeds the {} byte editor limit",
+            REMOTE_TEXT_FILE_MAX_BYTES
+        );
+    }
+    if bytes.contains(&0) {
+        bail!("remote file contains binary data and cannot be opened in the text editor");
+    }
+    std::str::from_utf8(bytes).context("remote file is not valid UTF-8 text")?;
+    Ok(())
+}
+
+fn remote_text_revision(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{}-{hash:016x}", bytes.len())
+}
+
+struct RemoteEditTempFile {
+    path: PathBuf,
+    path_text: String,
+}
+
+impl RemoteEditTempFile {
+    fn new() -> Result<Self> {
+        let path = std::env::temp_dir().join(format!("ai-term-remote-edit-{}", Uuid::new_v4()));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&path).with_context(|| {
+            format!(
+                "failed to create remote edit temporary file {}",
+                path.display()
+            )
+        })?;
+        let path_text = path.to_string_lossy().into_owned();
+        Ok(Self { path, path_text })
+    }
+
+    fn path_string(&self) -> &str {
+        &self.path_text
+    }
+}
+
+impl Drop for RemoteEditTempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 pub fn download_path(
@@ -2928,6 +3114,25 @@ fn summarize_sftp_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_text_revision_changes_with_content() {
+        assert_eq!(
+            remote_text_revision(b"hello"),
+            remote_text_revision(b"hello")
+        );
+        assert_ne!(
+            remote_text_revision(b"hello"),
+            remote_text_revision(b"hello\n")
+        );
+    }
+
+    #[test]
+    fn remote_text_validation_rejects_binary_and_oversized_files() {
+        assert!(validate_remote_text_bytes(b"plain utf-8 text").is_ok());
+        assert!(validate_remote_text_bytes(b"binary\0text").is_err());
+        assert!(validate_remote_text_bytes(&vec![b'a'; REMOTE_TEXT_FILE_MAX_BYTES + 1]).is_err());
+    }
 
     fn test_endpoint(host: &str, username: &str, port: Option<u16>) -> AuthEndpoint {
         AuthEndpoint {

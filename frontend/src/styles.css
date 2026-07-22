@@ -12457,3 +12457,112 @@ button.script-readiness-status:hover {
 .script-editor-shell .script-code-overlay {
   padding-bottom: calc(24px + var(--script-editor-scrollbar-gutter));
 }
+
+/* Remote text editing stays in the SFTP workflow and preserves the terminal workspace behind it. */
+.remote-file-editor-backdrop {
+  z-index: 72;
+}
+
+.remote-file-editor-modal {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 0;
+}
+
+.remote-file-editor-modal .modal-head span {
+  max-width: min(760px, calc(100vw - 180px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-editor-loading {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  color: #98a6b8;
+  font-size: var(--font-sm);
+}
+
+.remote-file-editor-textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: #090d13;
+  color: #dbe5f1;
+  padding: 14px 16px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.remote-file-editor-textarea:focus {
+  box-shadow: inset 0 0 0 1px #3b82f6;
+}
+
+.remote-file-editor-status {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border-top: 1px solid #1b2635;
+  color: #8190a4;
+  background: #0d131c;
+  padding: 0 14px;
+  font-size: var(--font-xs);
+}
+
+.remote-file-editor-status span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-editor-status.error {
+  color: #fca5a5;
+}
+
+.remote-file-editor-modal .modal-actions {
+  min-height: 52px;
+  align-items: center;
+  border-top: 1px solid #1b2130;
+}
+
+.app-shell.theme-light .remote-file-editor-textarea,
+.theme-light .remote-file-editor-textarea {
+  background: #f8fafc;
+  color: #172033;
+}
+
+.app-shell.theme-light .remote-file-editor-status,
+.theme-light .remote-file-editor-status {
+  border-color: #dbe3ee;
+  background: #eef3f8;
+  color: #5f6f82;
+}
+
+.app-shell.theme-light .remote-file-editor-status.error,
+.theme-light .remote-file-editor-status.error {
+  color: #b42318;
+}
+
+.app-shell.theme-light .remote-file-editor-modal,
+.theme-light .remote-file-editor-modal {
+  border-color: #cbd5e1;
+  background: #ffffff;
+}
+
+.app-shell.theme-light .modal-actions,
+.theme-light .modal-actions {
+  border-color: #dbe3ee;
+}

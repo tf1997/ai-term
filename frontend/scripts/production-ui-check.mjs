@@ -1120,7 +1120,7 @@ assert(
     terminalPane.includes('completionSourceLabel') &&
     terminalPane.includes('handleDocumentPointerDown') &&
     terminalPane.includes('terminalBodyWrap.value?.contains(target)') &&
-    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 220') &&
+    terminalPane.includes('COMPLETION_DEBOUNCE_MS = 400') &&
     terminalPane.includes('COMPLETION_LIMIT = 6') &&
     !terminalPane.includes('completionKeyboardMode') &&
     terminalPane.includes('scheduleCompletionSuggestions') &&

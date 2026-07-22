@@ -1775,6 +1775,25 @@ function syncTerminalInputToTargets(event: TerminalInputEvent) {
     return
   }
 
+  if (event.data === '\t') {
+    if (
+      event.beforeState.available &&
+      event.beforeState.context === 'shell' &&
+      event.beforeState.reliable
+    ) {
+      const rejected: string[] = []
+      targetIds.forEach((terminalId) => {
+        const pane = terminalRefs.value[terminalId]
+        const targetState = pane?.terminalInputSyncState()
+        if (!pane || !targetState || !terminalInputSyncStatesMatch(event.beforeState, targetState)) return
+        resumeTerminalSyncTarget(terminalId)
+        if (!pane.writeSyncedTerminalInput(event.data, event.terminalId)) rejected.push(terminalId)
+      })
+      pauseTerminalSyncTargets(rejected, '部分 Shell 无法接收补全按键；已暂停向这些终端同步。')
+    }
+    return
+  }
+
   if (!event.safeToSync) {
     pauseTerminalSyncTargets(
       targetIds,

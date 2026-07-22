@@ -24,7 +24,8 @@ use crate::domain::connection::profiles::validate_profile;
 use crate::domain::connection::sftp::{
     create_directory_with_cancel, delete_path_with_cancel, download_file_with_progress,
     download_path_with_progress, list_directory_with_cancel, probe_sftp_with_cancel,
-    upload_file_with_progress, upload_path_with_progress, SftpCancelToken, SftpListResponse,
+    read_remote_text_file, save_remote_text_file, upload_file_with_progress,
+    upload_path_with_progress, RemoteTextFileResponse, SftpCancelToken, SftpListResponse,
     SftpProbeResponse, SftpProgressUpdate, SftpTargetOverride, SftpTransferResponse,
 };
 use crate::domain::filesystem::local::{
@@ -952,6 +953,58 @@ pub async fn sftp_download_path(
     .map_err(|err| err.to_string());
     finish_optional_task(task_id, &state).await;
     result
+}
+
+#[tauri::command]
+pub async fn sftp_read_text_file(
+    connection_id: String,
+    remote_path: String,
+    target_host: Option<String>,
+    target_username: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<RemoteTextFileResponse, String> {
+    let profile = sftp_profile(&connection_id, &state).await?;
+    let target_override = SftpTargetOverride {
+        host: target_host,
+        username: target_username,
+    };
+    tokio::task::spawn_blocking(move || {
+        read_remote_text_file(&profile, &remote_path, &target_override)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_save_text_file(
+    connection_id: String,
+    remote_path: String,
+    content: String,
+    expected_revision: String,
+    force: bool,
+    target_host: Option<String>,
+    target_username: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<RemoteTextFileResponse, String> {
+    let profile = sftp_profile(&connection_id, &state).await?;
+    let target_override = SftpTargetOverride {
+        host: target_host,
+        username: target_username,
+    };
+    tokio::task::spawn_blocking(move || {
+        save_remote_text_file(
+            &profile,
+            &remote_path,
+            &content,
+            &expected_revision,
+            force,
+            &target_override,
+        )
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

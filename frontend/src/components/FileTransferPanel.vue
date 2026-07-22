@@ -16,6 +16,8 @@ import {
   sftpDownloadPath,
   sftpListDirectory,
   sftpProbe,
+  sftpReadTextFile,
+  sftpSaveTextFile,
   sftpUploadFile,
   sftpUploadPath,
   type LocalFileEntry,
@@ -48,6 +50,7 @@ const emit = defineEmits<{
 }>()
 
 const INLINE_TRANSFER_LIMIT = 700 * 1024
+const REMOTE_TEXT_EDITOR_LIMIT = 2 * 1024 * 1024
 const IDENT_MARKER_ID_PATTERN = '\\d+_[A-Za-z0-9]+'
 const REMOTE_DIRECTORY_CACHE_TTL_MS = 30_000
 
@@ -146,6 +149,17 @@ interface FileContextMenuState {
   items: FileContextMenuItem[]
 }
 
+interface RemoteEditorState {
+  name: string
+  path: string
+  content: string
+  savedContent: string
+  revision: string
+  loading: boolean
+  saving: boolean
+  error: string
+}
+
 const fileInput = ref<HTMLInputElement | null>(null)
 const remoteDropZone = ref<HTMLElement | null>(null)
 const currentPath = ref('.')
@@ -173,6 +187,8 @@ const identifying = ref(false)
 const activeTask = ref<ActiveTask | null>(null)
 const lastTransfer = ref<ActiveTask | null>(null)
 const fileContextMenu = ref<FileContextMenuState | null>(null)
+const remoteEditor = ref<RemoteEditorState | null>(null)
+const remoteEditorTextarea = ref<HTMLTextAreaElement | null>(null)
 const status = ref('')
 const error = ref('')
 const selectedTarget = ref<SftpTarget | null>(null)
@@ -217,6 +233,9 @@ const terminalDetectionReady = computed(() => {
 })
 const taskInProgress = computed(() => Boolean(activeTask.value))
 const remoteBusy = computed(() => loading.value || directoryLoading.value || identifying.value)
+const remoteEditorDirty = computed(() => Boolean(remoteEditor.value && remoteEditor.value.content !== remoteEditor.value.savedContent))
+const remoteEditorLineCount = computed(() => remoteEditor.value ? remoteEditor.value.content.split('\n').length : 0)
+const remoteEditorByteSize = computed(() => remoteEditor.value ? new TextEncoder().encode(remoteEditor.value.content).length : 0)
 const transferActionReady = computed(() => {
   return transferMode.value === 'terminal' ? terminalDetectionReady.value : remoteReady.value
 })
@@ -981,8 +1000,12 @@ function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
 }
 
 function openEntry(entry: SftpFileEntry) {
-  if (!entry.isDir || remoteBusy.value) return
-  void loadDirectory(entry.path)
+  if (remoteBusy.value) return
+  if (entry.isDir) {
+    void loadDirectory(entry.path)
+    return
+  }
+  void openRemoteFileEditor(entry)
 }
 
 function selectRemoteEntry(entry: SftpFileEntry) {
@@ -994,8 +1017,8 @@ function openRemoteContextMenu(event: MouseEvent, entry: SftpFileEntry) {
   openFileContextMenu(event, entry.name, [
     {
       id: 'open',
-      label: '打开目录',
-      disabled: !entry.isDir || remoteBusy.value,
+      label: entry.isDir ? '打开目录' : '编辑文件',
+      disabled: remoteBusy.value,
       action: () => openEntry(entry)
     },
     {
@@ -1017,6 +1040,111 @@ function openRemoteContextMenu(event: MouseEvent, entry: SftpFileEntry) {
       action: () => void deleteEntry(entry)
     }
   ])
+}
+
+async function openRemoteFileEditor(entry: SftpFileEntry) {
+  if (entry.isDir || !remoteReady.value || remoteBusy.value) return
+  if (entry.size > REMOTE_TEXT_EDITOR_LIMIT) {
+    error.value = `文件超过内置编辑器限制 ${formatSize(REMOTE_TEXT_EDITOR_LIMIT)}，请先下载后使用本机编辑器。`
+    return
+  }
+  const operationEpoch = remoteRequestEpoch
+  const operationStateKey = transferStateKey()
+  const operationGeneration = props.terminalConnectionGeneration
+  remoteEditor.value = {
+    name: entry.name,
+    path: entry.path,
+    content: '',
+    savedContent: '',
+    revision: '',
+    loading: true,
+    saving: false,
+    error: ''
+  }
+  error.value = ''
+  status.value = `正在打开 ${entry.path}...`
+  try {
+    const response = await sftpReadTextFile(props.connectionId, entry.path, targetOverride.value)
+    if (!isCurrentRemoteRequest(operationEpoch, operationStateKey, operationGeneration)) {
+      remoteEditor.value = null
+      return
+    }
+    remoteEditor.value = {
+      name: entry.name,
+      path: response.path,
+      content: response.content,
+      savedContent: response.content,
+      revision: response.revision,
+      loading: false,
+      saving: false,
+      error: ''
+    }
+    status.value = `已打开远端文件：${response.path}`
+    void nextTick(() => remoteEditorTextarea.value?.focus())
+  } catch (err) {
+    if (!remoteEditor.value || remoteEditor.value.path !== entry.path) return
+    remoteEditor.value.loading = false
+    remoteEditor.value.error = remoteEditorErrorMessage(err)
+    status.value = ''
+  }
+}
+
+function closeRemoteFileEditor() {
+  const editor = remoteEditor.value
+  if (!editor || editor.loading || editor.saving) return
+  if (remoteEditorDirty.value && !window.confirm(`放弃对 ${editor.name} 的未保存修改？`)) return
+  remoteEditor.value = null
+}
+
+async function saveRemoteFileEditor(force = false) {
+  const editor = remoteEditor.value
+  if (!editor || editor.loading || editor.saving || !remoteEditorDirty.value) return
+  editor.saving = true
+  editor.error = ''
+  try {
+    const response = await sftpSaveTextFile(
+      props.connectionId,
+      editor.path,
+      editor.content,
+      editor.revision,
+      force,
+      targetOverride.value
+    )
+    if (remoteEditor.value !== editor) return
+    editor.content = response.content
+    editor.savedContent = response.content
+    editor.revision = response.revision
+    editor.path = response.path
+    status.value = `已保存远端文件：${response.path}`
+    invalidateRemoteDirectoryCache(currentPath.value)
+    await loadDirectory(currentPath.value, { force: true, recordHistory: false })
+  } catch (err) {
+    if (remoteEditor.value !== editor) return
+    const message = formatError(err)
+    if (message.includes('REMOTE_FILE_CHANGED:')) {
+      const overwrite = window.confirm(`${editor.name} 在远端已被修改。是否覆盖远端版本？`)
+      editor.saving = false
+      if (overwrite) await saveRemoteFileEditor(true)
+      return
+    }
+    editor.error = remoteEditorErrorMessage(err)
+  } finally {
+    if (remoteEditor.value === editor) editor.saving = false
+  }
+}
+
+function remoteEditorErrorMessage(err: unknown) {
+  const message = formatError(err)
+  if (message.includes('editor limit')) return '文件超过 2 MB，不能在内置编辑器中打开。'
+  if (message.includes('not valid UTF-8') || message.includes('binary data')) return '该文件不是 UTF-8 文本，不能在内置编辑器中打开。'
+  return message
+}
+
+function handleRemoteEditorKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    void saveRemoteFileEditor()
+  }
 }
 
 function openLocalEntry(entry: LocalFileEntry) {
@@ -2316,6 +2444,7 @@ function shellQuote(value: string) {
               </div>
               <div class="file-actions">
                 <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" :disabled="remoteBusy" @click.stop="openEntry(entry)"><UiIcon name="folder-open" /></button>
+                <button v-else class="icon-button" type="button" title="编辑远端文件" aria-label="编辑远端文件" :disabled="remoteBusy" @click.stop="openEntry(entry)"><UiIcon name="edit" /></button>
                 <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" :disabled="remoteBusy" @click.stop="downloadEntry(entry)"><UiIcon name="download" /></button>
                 <button class="icon-button danger" type="button" title="删除" aria-label="删除" :disabled="remoteBusy" @click.stop="deleteEntry(entry)"><UiIcon name="trash" /></button>
               </div>
@@ -2341,6 +2470,44 @@ function shellQuote(value: string) {
           {{ item.label }}
         </button>
       </section>
+    </teleport>
+    <teleport to="body">
+      <div v-if="remoteEditor" class="modal-backdrop remote-file-editor-backdrop" role="presentation">
+        <section class="modal remote-file-editor-modal" role="dialog" aria-modal="true" :aria-label="`编辑远端文件 ${remoteEditor.name}`">
+          <header class="modal-head">
+            <div>
+              <strong>{{ remoteEditor.name }}</strong>
+              <span :title="remoteEditor.path">{{ remoteEditor.path }}</span>
+            </div>
+            <button class="icon-button" type="button" title="关闭编辑器" aria-label="关闭编辑器" :disabled="remoteEditor.loading || remoteEditor.saving" @click="closeRemoteFileEditor"><UiIcon name="close" /></button>
+          </header>
+          <div v-if="remoteEditor.loading" class="remote-file-editor-loading" role="status">正在读取远端文件...</div>
+          <template v-else>
+            <textarea
+              ref="remoteEditorTextarea"
+              v-model="remoteEditor.content"
+              class="remote-file-editor-textarea"
+              spellcheck="false"
+              :disabled="remoteEditor.saving"
+              :aria-label="`编辑 ${remoteEditor.name}`"
+              @keydown="handleRemoteEditorKeydown"
+            />
+            <div class="remote-file-editor-status" :class="{ error: remoteEditor.error }" role="status">
+              <span v-if="remoteEditor.error">{{ remoteEditor.error }}</span>
+              <span v-else>{{ remoteEditorDirty ? '未保存' : '已保存' }}</span>
+              <span>{{ remoteEditorLineCount }} 行</span>
+              <span>{{ formatSize(remoteEditorByteSize) }}</span>
+              <span>UTF-8</span>
+            </div>
+          </template>
+          <footer class="modal-actions">
+            <button type="button" :disabled="remoteEditor.loading || remoteEditor.saving" @click="closeRemoteFileEditor">关闭</button>
+            <button type="button" :disabled="remoteEditor.loading || remoteEditor.saving || !remoteEditorDirty" @click="saveRemoteFileEditor()">
+              {{ remoteEditor.saving ? '保存中...' : '保存到服务器' }}
+            </button>
+          </footer>
+        </section>
+      </div>
     </teleport>
   </section>
 </template>

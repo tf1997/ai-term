@@ -124,6 +124,13 @@ export interface SftpProbeResponse {
   message: string
 }
 
+export interface RemoteTextFileResponse {
+  path: string
+  content: string
+  revision: string
+  size: number
+}
+
 export interface LocalFileEntry {
   name: string
   path: string
@@ -326,6 +333,28 @@ export function sftpDownloadFile(connectionId: string, remotePath: string, local
 
 export function sftpDownloadPath(connectionId: string, remotePath: string, localDir: string, isDir: boolean, target?: SftpTargetOverride, options?: TaskOptions) {
   return invoke<SftpTransferResponse>('sftp_download_path', { connectionId, remotePath, localDir, isDir, ...target, ...options })
+}
+
+export function sftpReadTextFile(connectionId: string, remotePath: string, target?: SftpTargetOverride) {
+  return invoke<RemoteTextFileResponse>('sftp_read_text_file', { connectionId, remotePath, ...target })
+}
+
+export function sftpSaveTextFile(
+  connectionId: string,
+  remotePath: string,
+  content: string,
+  expectedRevision: string,
+  force: boolean,
+  target?: SftpTargetOverride
+) {
+  return invoke<RemoteTextFileResponse>('sftp_save_text_file', {
+    connectionId,
+    remotePath,
+    content,
+    expectedRevision,
+    force,
+    ...target
+  })
 }
 
 export function probeBastionServers(connectionId: string) {
