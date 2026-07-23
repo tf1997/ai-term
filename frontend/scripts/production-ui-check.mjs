@@ -1095,17 +1095,25 @@ assert(
 
 assert(
   terminalPane.includes('currentRenderedCommandLine') &&
+    terminalPane.includes('currentRenderedCommandLinePosition') &&
     terminalPane.includes('submittedTerminalCommand') &&
-    terminalPane.includes('if (inputCommandReliable) return fallback.trim()') &&
-    terminalPane.indexOf('if (inputCommandReliable) return fallback.trim()', terminalPane.indexOf('function submittedTerminalCommand')) <
+    terminalPane.includes("if (inputCommandReliable && terminalInputContext === 'shell') return fallback.trim()") &&
+    terminalPane.indexOf("if (inputCommandReliable && terminalInputContext === 'shell') return fallback.trim()", terminalPane.indexOf('function submittedTerminalCommand')) <
       terminalPane.indexOf('const renderedLine = currentRenderedCommandLine()', terminalPane.indexOf('function submittedTerminalCommand')) &&
+    terminalPane.includes('deferredCommandCapture') &&
+    terminalPane.includes('scheduleDeferredCommandCapture') &&
+    terminalPane.includes('deferredCommandCaptureTimers') &&
+    terminalPane.includes('candidate === previousCandidate') &&
+    terminalPane.includes("terminalInputContext === 'sensitive'") &&
+    terminalPane.includes("terminal?.buffer.active.type === 'alternate'") &&
     terminalPane.includes('shellPromptText') &&
     terminalPane.includes('pendingTrackedCommands') &&
+    terminalPane.includes('pendingDeferredCommandCaptures') &&
     terminalPane.includes("terminalInputContext === 'shell'") &&
     terminalPane.includes('batch.commits.forEach(runTerminalInputCommit)') &&
     terminalPane.includes('commitTrackedCommands(submittedCommands)') &&
     !terminalPane.includes('recordCommand(inputCommandBuffer)'),
-  'Command history must prefer the reliable tracked command over a lagging rendered line, and only use the rendered terminal as an unreliable-input fallback.'
+  'Command history and script recording must capture reliable input immediately, defer lagging terminal echoes until stable, and exclude sensitive or alternate-screen input.'
 )
 
 assert(
@@ -1252,7 +1260,9 @@ assert(
     terminalPane.includes('if (handleTerminalProtocolResponse(data)) return') &&
     terminalPane.includes('function writePreparedTerminalInput') &&
     terminalPane.includes("source: 'interactive'") &&
-    terminalForwardInputBlock.includes("onWritten: () => emit('terminalInput', event)") &&
+    terminalForwardInputBlock.includes('onWritten: () => {') &&
+    terminalForwardInputBlock.includes('deferredCaptures.forEach(scheduleDeferredCommandCapture)') &&
+    terminalForwardInputBlock.includes("emit('terminalInput', event)") &&
     !terminalForwardInputBlock.includes('writeTerminalInput(data)') &&
     terminalDirectInputBlock.includes("resetTrackedTerminalInput('unknown')") &&
     terminalPane.includes('const beforeState = terminalInputSyncState()') &&

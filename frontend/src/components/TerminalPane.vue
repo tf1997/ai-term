@@ -66,6 +66,11 @@ interface PendingTerminalInput {
   data: string
 }
 
+interface DeferredCommandCapture {
+  promptText: string
+  startLine: number
+}
+
 interface PreparedTerminalInputOptions {
   source: TerminalInputWriteSource
   sourceTerminalId?: string
@@ -155,6 +160,7 @@ let shellPromptSignature: ShellPromptSignature | undefined
 let shellPromptDiscoveryOpen = true
 let shellCommandAwaitingPrompt = false
 let pendingTrackedCommands: string[] = []
+let pendingDeferredCommandCaptures: DeferredCommandCapture[] = []
 let completionDebounceTimer: number | undefined
 let completionSuppressedForHistoryNavigation = false
 let pendingInputControlSequence = ''
@@ -168,6 +174,7 @@ const pendingPreReadyTerminalInput: PendingTerminalInput[] = []
 const PRE_READY_INPUT_LIMIT = 64 * 1024
 let pendingPreReadyTerminalInputSize = 0
 const pendingTerminalProtocolResponses: string[] = []
+const deferredCommandCaptureTimers = new Set<number>()
 let lastRightClickPasteAt = 0
 let quickCommandBarNoticeTimer: number | undefined
 const status = ref<TerminalRuntimeStatus>('idle')
@@ -1280,21 +1287,29 @@ function recordCommand(command: string) {
   })
 }
 
-function currentRenderedCommandLine() {
+function renderedLogicalLineAt(startLine: number) {
   const buffer = terminal?.buffer.active
   if (!buffer) return ''
 
-  const cursorLine = buffer.baseY + buffer.cursorY
-  let firstLine = cursorLine
-  while (firstLine > 0 && buffer.getLine(firstLine)?.isWrapped) firstLine -= 1
-
   let value = ''
-  for (let lineIndex = firstLine; lineIndex < buffer.length; lineIndex += 1) {
+  for (let lineIndex = startLine; lineIndex < buffer.length; lineIndex += 1) {
     const line = buffer.getLine(lineIndex)
-    if (!line || (lineIndex > firstLine && !line.isWrapped)) break
+    if (!line || (lineIndex > startLine && !line.isWrapped)) break
     value += line.translateToString(true)
   }
   return value.trimEnd()
+}
+
+function currentRenderedCommandLinePosition() {
+  const buffer = terminal?.buffer.active
+  if (!buffer) return { startLine: -1, text: '' }
+  let startLine = buffer.baseY + buffer.cursorY
+  while (startLine > 0 && buffer.getLine(startLine)?.isWrapped) startLine -= 1
+  return { startLine, text: renderedLogicalLineAt(startLine) }
+}
+
+function currentRenderedCommandLine() {
+  return currentRenderedCommandLinePosition().text
 }
 
 function recoverTrackedTerminalInputFromRenderedLine() {
@@ -1309,13 +1324,51 @@ function recoverTrackedTerminalInputFromRenderedLine() {
 }
 
 function submittedTerminalCommand(fallback: string) {
-  if (inputCommandReliable) return fallback.trim()
+  if (terminalInputContext === 'sensitive' || terminal?.buffer.active.type === 'alternate') return ''
+  if (inputCommandReliable && terminalInputContext === 'shell') return fallback.trim()
   const renderedLine = currentRenderedCommandLine()
-  if (shellPromptText && renderedLine.startsWith(shellPromptText)) {
-    const command = renderedLine.slice(shellPromptText.length).trim()
-    if (command) return command
-  }
+  if (inputCommandReliable && shellPromptText && renderedLine.startsWith(shellPromptText)) return fallback.trim()
   return ''
+}
+
+function deferredCommandCapture(): DeferredCommandCapture | undefined {
+  if (
+    !shellPromptText ||
+    terminalInputContext === 'sensitive' ||
+    terminal?.buffer.active.type === 'alternate'
+  ) return undefined
+  const rendered = currentRenderedCommandLinePosition()
+  if (rendered.startLine < 0 || !rendered.text.startsWith(shellPromptText)) return undefined
+  return { promptText: shellPromptText, startLine: rendered.startLine }
+}
+
+function renderedCommandForCapture(capture: DeferredCommandCapture) {
+  const renderedLine = renderedLogicalLineAt(capture.startLine)
+  if (!renderedLine.startsWith(capture.promptText)) return ''
+  return renderedLine.slice(capture.promptText.length).trim()
+}
+
+function scheduleDeferredCommandCapture(capture: DeferredCommandCapture) {
+  const delays = [40, 120, 300, 650]
+  let previousCandidate = ''
+  const attempt = (index: number) => {
+    const timer = window.setTimeout(() => {
+      deferredCommandCaptureTimers.delete(timer)
+      const candidate = renderedCommandForCapture(capture)
+      if (candidate && candidate === previousCandidate) {
+        recordCommand(candidate)
+        return
+      }
+      if (candidate) previousCandidate = candidate
+      if (index + 1 < delays.length) {
+        attempt(index + 1)
+      } else if (previousCandidate) {
+        recordCommand(previousCandidate)
+      }
+    }, delays[index])
+    deferredCommandCaptureTimers.add(timer)
+  }
+  attempt(0)
 }
 
 function commitTrackedCommands(commands: string[]) {
@@ -1323,10 +1376,13 @@ function commitTrackedCommands(commands: string[]) {
 }
 
 function advanceTerminalInputGeneration() {
+  deferredCommandCaptureTimers.forEach((timer) => window.clearTimeout(timer))
+  deferredCommandCaptureTimers.clear()
   terminalInputReady = false
   terminalInputGeneration += 1
   failedTerminalInputGeneration = undefined
   pendingTrackedCommands = []
+  pendingDeferredCommandCaptures = []
   pendingInputControlSequence = ''
   shellPromptText = ''
   shellPromptSignature = undefined
@@ -1709,13 +1765,16 @@ function trackUserInput(data: string): TerminalInputTrackResult {
   }
 
   const commandInput = stripCommandInputControlSequences(data)
+  const allowDeferredCapture = data === '\r' || data === '\n'
   let result: TerminalInputTrackResult = 'idle'
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
-      if (terminalInputContext === 'shell') {
-        const command = submittedTerminalCommand(inputCommandBuffer)
-        if (command) pendingTrackedCommands.push(command)
+      const command = submittedTerminalCommand(inputCommandBuffer)
+      const deferredCapture = command || !allowDeferredCapture ? undefined : deferredCommandCapture()
+      if (command) pendingTrackedCommands.push(command)
+      if (deferredCapture) pendingDeferredCommandCaptures.push(deferredCapture)
+      if (terminalInputContext === 'shell' || command || deferredCapture) {
         shellCommandAwaitingPrompt = true
       }
       resetTrackedTerminalInput('unknown')
@@ -2282,6 +2341,10 @@ function takePendingTrackedCommands() {
   return pendingTrackedCommands.splice(0)
 }
 
+function takePendingDeferredCommandCaptures() {
+  return pendingDeferredCommandCaptures.splice(0)
+}
+
 function runTerminalInputCommit(commit: () => void) {
   try {
     commit()
@@ -2347,6 +2410,7 @@ function forwardInteractiveTerminalInput(data: string) {
   updateCompletionAfterInput(inputResult)
   const afterState = terminalInputSyncState()
   const submittedCommands = takePendingTrackedCommands()
+  const deferredCaptures = takePendingDeferredCommandCaptures()
   const event: TerminalInputEvent = {
     terminalId: props.terminalId,
     data,
@@ -2356,7 +2420,10 @@ function forwardInteractiveTerminalInput(data: string) {
   const accepted = writePreparedTerminalInput(data, {
     source: 'interactive',
     submittedCommands,
-    onWritten: () => emit('terminalInput', event)
+    onWritten: () => {
+      deferredCaptures.forEach(scheduleDeferredCommandCapture)
+      emit('terminalInput', event)
+    }
   })
   if (!accepted) invalidateTrackedTerminalInput()
   return accepted
@@ -2371,10 +2438,12 @@ function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
   const inputResult = trackUserInput(data)
   updateCompletionAfterInput(inputResult)
   const submittedCommands = takePendingTrackedCommands()
+  const deferredCaptures = takePendingDeferredCommandCaptures()
   const accepted = writePreparedTerminalInput(data, {
     source: 'synced',
     sourceTerminalId,
-    submittedCommands
+    submittedCommands,
+    onWritten: () => deferredCaptures.forEach(scheduleDeferredCommandCapture)
   })
   if (!accepted) invalidateTrackedTerminalInput()
   return accepted
