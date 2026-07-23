@@ -2413,6 +2413,12 @@ assert(
     scriptPanel.includes('buildScriptPrompt') &&
     scriptPanel.includes('MAX_SCRIPT_SOURCE_COMMANDS') &&
     scriptPanel.includes('recordedOutput') &&
+    scriptPanel.includes('const sourceCommands = computed(() => recordedCommands.value)') &&
+    scriptPanel.includes('terminalSnapshot: recordedOutput.value') &&
+    !scriptPanel.includes('recordedOutput.value || props.terminalSnapshot') &&
+    !scriptPanel.includes('props.commandHistory') &&
+    !scriptPanel.includes('compactHistoryCommands') &&
+    !scriptPanel.includes('CommandHistoryEntry') &&
     scriptPanel.includes('chatWithAiProviderStream') &&
     scriptPanel.includes('cancelTask') &&
     scriptPanel.includes('stopScriptGeneration') &&

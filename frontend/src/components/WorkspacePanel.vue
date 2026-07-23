@@ -177,8 +177,6 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :selected-config-id="selectedAiConfigId"
       :config="aiConfig"
       :api-key="apiKey"
-      :terminal-snapshot="terminalSnapshot"
-      :command-history="commandHistory"
       :recording="scriptRecording"
       @start-recording="emit('startScriptRecording')"
       @stop-recording="emit('stopScriptRecording')"

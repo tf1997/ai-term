@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
-import type { CommandHistoryEntry, ScriptRecording, UpdateScript } from '../types/workspace'
+import type { ScriptRecording, UpdateScript } from '../types/workspace'
 import {
   analyzeScriptRisks,
   buildScriptRiskPreviewLines,
@@ -59,8 +59,6 @@ const props = defineProps<{
   selectedConfigId: string
   config: AiProviderConfig
   apiKey: string
-  terminalSnapshot: string
-  commandHistory: CommandHistoryEntry[]
   recording: ScriptRecording
 }>()
 
@@ -148,8 +146,7 @@ let answerTimer: number | undefined
 const selectedScript = computed(() => scripts.value.find((script) => script.id === selectedScriptId.value))
 const selectedScriptContent = computed(() => selectedScriptDraft.value)
 const recordedCommands = computed(() => compactCommands(props.recording.commands, MAX_SCRIPT_SOURCE_COMMANDS))
-const fallbackCommands = computed(() => compactHistoryCommands(props.commandHistory, MAX_SCRIPT_SOURCE_COMMANDS))
-const sourceCommands = computed(() => recordedCommands.value.length ? recordedCommands.value : fallbackCommands.value)
+const sourceCommands = computed(() => recordedCommands.value)
 const recordedOutput = computed(() => {
   const output = props.recording.terminalOutput || ''
   return output.length > MAX_RECORDED_OUTPUT_CHARS ? output.slice(-MAX_RECORDED_OUTPUT_CHARS) : output
@@ -648,7 +645,7 @@ async function sendScriptRequest(
       config: props.config,
       apiKey,
       question: prompt,
-      terminalSnapshot: recordedOutput.value || props.terminalSnapshot,
+      terminalSnapshot: recordedOutput.value,
       commandHistory: userMessage.sourceCommands ?? []
     })
     if (stopRequested.value || currentRequestId.value !== requestId) return
@@ -934,7 +931,7 @@ async function explainPendingScriptRisk() {
       config: props.config,
       apiKey,
       question: buildScriptRiskExplanationPrompt(content),
-      terminalSnapshot: recordedOutput.value || props.terminalSnapshot,
+      terminalSnapshot: recordedOutput.value,
       commandHistory: sourceCommands.value
     })
     if (scriptRiskExplanationRequestId.value !== requestId) return
@@ -1490,12 +1487,8 @@ function buildScriptPrompt(userRequest: string, mode: 'generate' | 'revise' | 'r
     sourceCommands.value.length ? sourceCommands.value.map((command) => `- ${command}`).join('\n') : '- 无',
     '',
     '录制期间终端输出摘要原文：',
-    recordedOutput.value || '(无录制输出，将只能参考当前历史命令或当前脚本草稿)'
+    recordedOutput.value || '(无录制输出)'
   ].join('\n')
-}
-
-function compactHistoryCommands(history: CommandHistoryEntry[], limit: number) {
-  return compactCommands(history.map((entry) => entry.command), limit)
 }
 
 function compactCommands(commands: string[], limit: number) {
