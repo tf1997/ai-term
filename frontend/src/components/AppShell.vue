@@ -213,7 +213,7 @@ const toasts = ref<AppToast[]>([])
 let lastThemeToggleAt = 0
 let toastSequence = 0
 let terminalOutputSequence = 0
-const COMMAND_EXECUTION_RETRY_DELAYS_MS = [0, 80, 180]
+const COMMAND_EXECUTION_RETRY_DELAYS_MS = [0, 100, 250, 500, 1_000]
 let sessionTabResizeObserver: ResizeObserver | null = null
 let workspaceSessionListLoadPromise: Promise<void> | null = null
 const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
@@ -1689,30 +1689,49 @@ function rerunCommandOnActiveTerminal(command: string) {
   void executeCommandOnTerminalIds(command, [activeTerminalId.value])
 }
 
-function writeInputToTargetTerminals(data: string) {
+async function writeInputToTargetTerminals(data: string) {
   if (!data) return
   if (isActiveTerminalOnlyInput(data)) {
     writeInputToActiveTerminal(data)
     return
   }
+  const pendingTargets = new Set(targetTerminalIds.value)
+  const lineBusyTargets = new Set<string>()
+  const lastReadiness = new Map<string, ReturnType<TerminalPaneInstance['commandExecutionReadiness']>>()
   let sentCount = 0
-  let busyCount = 0
-  targetTerminalIds.value.forEach((terminalId) => {
-    const pane = terminalRefs.value[terminalId]
-    if (pane?.commandExecutionReadiness() !== 'ready') {
-      busyCount += 1
-      return
+
+  for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay))
+    await nextTick()
+    for (const terminalId of [...pendingTargets]) {
+      const pane = terminalRefs.value[terminalId]
+      const readiness = pane?.commandExecutionReadiness() ?? 'unavailable'
+      lastReadiness.set(terminalId, readiness)
+      if (readiness === 'ready' && pane?.writeTerminalInput(data)) {
+        sentCount += 1
+        pendingTargets.delete(terminalId)
+      } else if (readiness === 'line-busy') {
+        lineBusyTargets.add(terminalId)
+        pendingTargets.delete(terminalId)
+      }
     }
-    if (pane.writeTerminalInput(data)) sentCount += 1
-  })
+    if (pendingTargets.size === 0) break
+  }
+
+  const waitingCount = [...pendingTargets].filter((terminalId) => lastReadiness.get(terminalId) === 'shell-busy').length
+  const skippedCount = pendingTargets.size + lineBusyTargets.size
   if (sentCount === 0) {
     showToast(
-      busyCount > 0 ? 'warning' : 'error',
+      lineBusyTargets.size > 0 || waitingCount > 0 ? 'warning' : 'error',
       '脚本未发送',
-      busyCount > 0 ? '目标终端仍在执行命令或命令行已有输入，请等待空提示符后重试。' : '目标终端不可用或没有活动 shell。'
+      lineBusyTargets.size > 0
+        ? '目标终端命令行已有输入，请先提交或清空后重试。'
+        : waitingCount > 0
+          ? '等待提示符超时；目标终端可能仍在执行命令或处于交互程序中。'
+          : '目标终端不可用或没有活动 shell。'
     )
-  } else if (busyCount > 0) {
-    showToast('warning', '脚本已部分发送', `已发送到 ${sentCount} 个终端；${busyCount} 个忙碌终端已跳过。`)
+  } else if (skippedCount > 0) {
+    showToast('warning', '脚本已部分发送', `已发送到 ${sentCount} 个终端；${skippedCount} 个未就绪终端已跳过。`)
   }
 }
 

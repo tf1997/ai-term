@@ -1273,6 +1273,9 @@ assert(
   terminalPane.includes('function parseShellPrompt(value: string)') &&
     terminalPane.includes('function recognizedShellPrompt(lastLine: string)') &&
     terminalPane.includes("learned.kind === 'bare'") &&
+    terminalPane.includes('shellCommandAwaitingPrompt') &&
+    terminalPane.includes("terminal?.buffer.active.type === 'alternate'") &&
+    terminalPane.includes("learned.sigil === candidate.sigil") &&
     !terminalPane.includes('|.*[$#%>') &&
     terminalPane.includes('function previousTrackedTextBoundary') &&
     terminalPane.includes('function nextTrackedTextBoundary') &&
@@ -2211,7 +2214,10 @@ assert(
     appShell.includes('resetTerminalTargetsToActive') &&
     appShell.includes('syncTerminalInputToTargets') &&
     appShell.includes('writeInputToTargetTerminals') &&
-    appShell.includes("pane?.commandExecutionReadiness() !== 'ready'") &&
+    appShell.includes('for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS)') &&
+    appShell.includes("readiness === 'ready' && pane?.writeTerminalInput(data)") &&
+    appShell.includes("readiness === 'line-busy'") &&
+    appShell.includes('等待提示符超时') &&
     appShell.includes('脚本已部分发送') &&
     appShell.includes('terminal-target-toggle') &&
     appShell.includes('terminal-target-summary') &&

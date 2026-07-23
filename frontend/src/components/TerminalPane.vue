@@ -153,6 +153,7 @@ let terminalInputContext: TerminalInputContext = 'unknown'
 let shellPromptText = ''
 let shellPromptSignature: ShellPromptSignature | undefined
 let shellPromptDiscoveryOpen = true
+let shellCommandAwaitingPrompt = false
 let pendingTrackedCommands: string[] = []
 let completionDebounceTimer: number | undefined
 let completionSuppressedForHistoryNavigation = false
@@ -944,6 +945,7 @@ function writeTerminalView(data: string, forceScroll = false) {
   const shouldScroll = forceScroll || terminalIsPinnedToBottom()
   terminal.write(data, () => {
     if (shouldScroll) scrollTerminalToBottom()
+    updateTerminalInputContextFromOutput()
     if (recoverTrackedTerminalInputFromRenderedLine()) scheduleCompletionSuggestions()
     if (terminalCompletionOpen.value) scheduleCompletionPosition()
   })
@@ -1013,7 +1015,6 @@ function scheduleTerminalSnapshotEmit() {
 
 function appendTerminalOutput(data: string) {
   terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
-  updateTerminalInputContextFromOutput()
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
   scheduleTerminalSnapshotEmit()
 }
@@ -1330,6 +1331,7 @@ function advanceTerminalInputGeneration() {
   shellPromptText = ''
   shellPromptSignature = undefined
   shellPromptDiscoveryOpen = true
+  shellCommandAwaitingPrompt = false
   terminalInputQueue.length = 0
   pendingPreReadyTerminalInput.length = 0
   pendingPreReadyTerminalInputSize = 0
@@ -1525,11 +1527,15 @@ function recognizedShellPrompt(lastLine: string) {
   }
 
   const learned = shellPromptSignature
-  if (!learned || learned.kind === 'bare' || !shellPromptText) return undefined
+  if (!learned || !shellPromptText) return undefined
   if (text.startsWith(shellPromptText) && text.length > shellPromptText.length) return undefined
-  if (text === shellPromptText || text.endsWith(shellPromptText)) {
+  if (
+    (text === shellPromptText || text.endsWith(shellPromptText)) &&
+    (learned.kind !== 'bare' || shellCommandAwaitingPrompt)
+  ) {
     return { text: shellPromptText, signature: learned }
   }
+  if (learned.kind === 'bare') return undefined
   if (!candidate) return undefined
   if (learned.kind === 'powershell' && candidate.kind === 'powershell') {
     return { text, signature: candidate }
@@ -1545,13 +1551,19 @@ function recognizedShellPrompt(lastLine: string) {
   ) {
     return { text, signature: candidate }
   }
-  if (learned.kind === 'generic' && candidate.kind === 'generic' && learned.identity === candidate.identity) {
+  if (
+    learned.kind === 'generic' &&
+    candidate.kind === 'generic' &&
+    learned.sigil === candidate.sigil &&
+    shellCommandAwaitingPrompt
+  ) {
     return { text, signature: candidate }
   }
   return undefined
 }
 
 function markTrackedTerminalInputAsShell() {
+  shellCommandAwaitingPrompt = false
   if (!inputCommandReliable) {
     resetTrackedTerminalInput('shell')
     return
@@ -1589,12 +1601,18 @@ function terminalInputSyncState(): TerminalInputSyncState {
 
 function commandExecutionReadiness(): TerminalCommandReadiness {
   if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
+  updateTerminalInputContextFromOutput()
   if (terminalLineReadyForAppInput()) return 'ready'
   if (terminalInputContext === 'shell') return 'line-busy'
   return 'shell-busy'
 }
 
 function updateTerminalInputContextFromOutput() {
+  if (terminal?.buffer.active.type === 'alternate') {
+    terminalInputContext = 'unknown'
+    invalidateTrackedTerminalInput()
+    return
+  }
   const text = terminalOutputBuffer
     .slice(-2_000)
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
@@ -1698,6 +1716,7 @@ function trackUserInput(data: string): TerminalInputTrackResult {
       if (terminalInputContext === 'shell') {
         const command = submittedTerminalCommand(inputCommandBuffer)
         if (command) pendingTrackedCommands.push(command)
+        shellCommandAwaitingPrompt = true
       }
       resetTrackedTerminalInput('unknown')
       result = 'submitted'
@@ -2304,6 +2323,7 @@ function executeCommand(command: string) {
       onWritten: () => recordCommand(value)
     })
     if (!accepted) return false
+    shellCommandAwaitingPrompt = true
     resetTrackedTerminalInput('unknown')
     pendingInputControlSequence = ''
     return true
@@ -2362,6 +2382,7 @@ function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
 
 function writeTerminalInput(data: string) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  if (data.includes('\r') || data.includes('\n')) shellCommandAwaitingPrompt = true
   resetTrackedTerminalInput('unknown')
   pendingInputControlSequence = ''
   closeCompletion()
