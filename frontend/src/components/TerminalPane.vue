@@ -1656,8 +1656,30 @@ function recognizedShellPrompt(lastLine: string) {
   return undefined
 }
 
+// 远端把行按终端宽度截断时(如 systemctl 的 ellipsized 输出)可能连同 SGR 重置
+// 序列一起截掉,导致下划线/反显等属性泄漏到后续所有输出。提示符回归时若光标前
+// 的字符仍带这些属性,向显示层补一个重置。
+function clearLeakedTextAttributes() {
+  if (!terminal) return
+  const buffer = terminal.buffer.active
+  if (buffer.type === 'alternate' || buffer.cursorX <= 0) return
+  const cell = buffer.getLine(buffer.baseY + buffer.cursorY)?.getCell(buffer.cursorX - 1)
+  if (!cell) return
+  if (
+    cell.isUnderline() ||
+    cell.isInverse() ||
+    cell.isBlink() ||
+    cell.isStrikethrough() ||
+    cell.isDim() ||
+    cell.isItalic()
+  ) {
+    terminal.write('\x1b[0m')
+  }
+}
+
 function markTrackedTerminalInputAsShell() {
   shellCommandAwaitingPrompt = false
+  clearLeakedTextAttributes()
   if (!inputCommandReliable) {
     resetTrackedTerminalInput('shell')
     return
