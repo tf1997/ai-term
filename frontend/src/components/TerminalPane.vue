@@ -147,8 +147,11 @@ let terminalSelectionDragging = false
 let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
 let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
 let terminalOutputBuffer = ''
+let terminalOutputRecentTail = ''
 let terminalOutputEmitTimer: number | undefined
-const TERMINAL_OUTPUT_EMIT_INTERVAL = 40
+const TERMINAL_OUTPUT_EMIT_INTERVAL = 200
+const TERMINAL_OUTPUT_BUFFER_LIMIT = 1_500_000
+const TERMINAL_OUTPUT_TAIL_LIMIT = 4_000
 let selectionCopyTimer: number | undefined
 const SELECTION_COPY_DEBOUNCE = 150
 let inputCommandBuffer = ''
@@ -1040,6 +1043,8 @@ function emitTerminalSnapshot() {
 // out to the parent and every context-consuming panel. A trailing timer
 // collapses a burst into one emit per interval; the local input-context and
 // completion updates below still run per chunk since they only read state.
+// 面板消费方(AI 上下文、SFTP 握手、录制)都不需要高频快照,200ms 足够;
+// 更高频率会在 vim 等全屏程序持续重绘时把右侧面板的重渲染打满主线程。
 function scheduleTerminalSnapshotEmit() {
   if (terminalOutputEmitTimer !== undefined) return
   terminalOutputEmitTimer = window.setTimeout(() => {
@@ -1048,8 +1053,21 @@ function scheduleTerminalSnapshotEmit() {
   }, TERMINAL_OUTPUT_EMIT_INTERVAL)
 }
 
+function setTerminalOutputBuffer(text: string) {
+  terminalOutputBuffer = text
+  terminalOutputRecentTail = text.slice(-TERMINAL_OUTPUT_TAIL_LIMIT)
+}
+
 function appendTerminalOutput(data: string) {
-  terminalOutputBuffer = `${terminalOutputBuffer}${data}`.slice(-1_500_000)
+  // 追加依赖 V8 的 rope 优化;超限一倍才压缩,避免高频输出时每块都整体拷贝 1.5MB
+  terminalOutputBuffer = `${terminalOutputBuffer}${data}`
+  if (terminalOutputBuffer.length > TERMINAL_OUTPUT_BUFFER_LIMIT * 2) {
+    terminalOutputBuffer = terminalOutputBuffer.slice(-TERMINAL_OUTPUT_BUFFER_LIMIT)
+  }
+  terminalOutputRecentTail = `${terminalOutputRecentTail}${data}`
+  if (terminalOutputRecentTail.length > TERMINAL_OUTPUT_TAIL_LIMIT * 2) {
+    terminalOutputRecentTail = terminalOutputRecentTail.slice(-TERMINAL_OUTPUT_TAIL_LIMIT)
+  }
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
   scheduleTerminalSnapshotEmit()
 }
@@ -1735,7 +1753,7 @@ function updateTerminalInputContextFromOutput() {
     // 退出全屏程序(vim 等)后 shell 会重绘提示符,视同等待新提示符
     shellCommandAwaitingPrompt = true
   }
-  const text = terminalOutputBuffer
+  const text = terminalOutputRecentTail
     .slice(-2_000)
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
@@ -2175,7 +2193,7 @@ async function connectRemote() {
     const size = currentTerminalSize()
     terminal.writeln(`Connecting SSH profile: ${profile.name}`)
     scrollTerminalToBottom()
-    terminalOutputBuffer = `Connecting SSH profile: ${profile.name}\n`
+    setTerminalOutputBuffer(`Connecting SSH profile: ${profile.name}\n`)
     emitTerminalSnapshot()
     connectedSessionId = await connectProfile(profile.id, size.cols, size.rows)
     if (!isCurrentConnectionAttempt(attempt)) {
@@ -2245,7 +2263,7 @@ async function connectLocal() {
     terminal.clear()
     terminal.writeln('Opening local shell...')
     scrollTerminalToBottom()
-    terminalOutputBuffer = 'Opening local shell...\n'
+    setTerminalOutputBuffer('Opening local shell...\n')
     emitTerminalSnapshot()
     const size = currentTerminalSize()
     sessionId = requestedSessionId
@@ -2350,13 +2368,13 @@ function enterSftpProfileMode() {
   terminal.writeln('')
   terminal.writeln('Use the SFTP workspace on the right to browse, upload, and download files.')
   scrollTerminalToBottom()
-  terminalOutputBuffer = [
+  setTerminalOutputBuffer([
     'SFTP profile is ready.',
     `Profile: ${props.profile.name}`,
     `Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`,
     `Mode: ${props.profile.fileTransferMode === 'sftp-gateway' ? 'SFTP 经网关' : 'SFTP 直连'}`,
     'Use the SFTP workspace on the right to browse, upload, and download files.'
-  ].join('\n')
+  ].join('\n'))
   emitTerminalSnapshot()
   void nextTick(() => terminal?.focus())
 }
@@ -2430,7 +2448,11 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
 
   if (terminalBackendInputReady()) {
     if (!enqueueTerminalInput(data, options.source, commits, options.sourceTerminalId)) return false
-    void nextTick(() => terminal?.focus())
+    // vim 鼠标模式下 xterm 会以 onData 形式发出鼠标上报等转义序列,并不代表
+    // 用户在终端打字;此时不抢焦点,避免把 AI/脚本面板输入框的焦点拉回终端
+    if (options.source !== 'interactive' || !data.startsWith('\x1b')) {
+      void nextTick(() => terminal?.focus())
+    }
     return true
   }
   if (status.value !== 'preview') return false
