@@ -885,16 +885,43 @@ function isHistoryNavigationInput(data: string) {
   return data === '\x1b[A' || data === '\x1bOA' || data === '\x1b[B' || data === '\x1bOB'
 }
 
+function moveCompletionSelection(delta: number) {
+  const count = completionSuggestions.value.length
+  if (!count) return
+  const current = selectedCompletionIndex.value
+  selectedCompletionIndex.value = current < 0
+    ? (delta > 0 ? 0 : count - 1)
+    : (current + delta + count) % count
+  void nextTick(() => {
+    terminalCompletion.value
+      ?.querySelectorAll<HTMLElement>('[role="option"]')[selectedCompletionIndex.value]
+      ?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 function handleCompletionInput(data: string) {
   if (!terminalCompletionOpen.value) return false
   if (data === '\x1b') {
     closeCompletion()
     return true
   }
-  if (isHistoryNavigationInput(data)) {
-    completionSuppressedForHistoryNavigation = true
-    closeCompletion()
-    return false
+  if (data === '\x1b[B' || data === '\x1bOB') {
+    moveCompletionSelection(1)
+    return true
+  }
+  if (data === '\x1b[A' || data === '\x1bOA') {
+    // 未选中任何项时按 ↑ 仍走 shell 历史;进入列表后 ↑ 在首项回到未选中态
+    if (selectedCompletionIndex.value < 0) {
+      completionSuppressedForHistoryNavigation = true
+      closeCompletion()
+      return false
+    }
+    if (selectedCompletionIndex.value === 0) {
+      selectedCompletionIndex.value = -1
+      return true
+    }
+    moveCompletionSelection(-1)
+    return true
   }
   if ((data === '\r' || data === '\n') && selectedCompletionIndex.value >= 0) {
     const suggestion = completionSuggestions.value[selectedCompletionIndex.value]
