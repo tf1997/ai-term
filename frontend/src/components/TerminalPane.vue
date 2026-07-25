@@ -159,6 +159,7 @@ let shellPromptText = ''
 let shellPromptSignature: ShellPromptSignature | undefined
 let shellPromptDiscoveryOpen = true
 let shellCommandAwaitingPrompt = false
+let terminalWasInAlternateBuffer = false
 let pendingTrackedCommands: string[] = []
 let pendingDeferredCommandCaptures: DeferredCommandCapture[] = []
 let completionDebounceTimer: number | undefined
@@ -1415,6 +1416,7 @@ function advanceTerminalInputGeneration() {
   shellPromptSignature = undefined
   shellPromptDiscoveryOpen = true
   shellCommandAwaitingPrompt = false
+  terminalWasInAlternateBuffer = false
   terminalInputQueue.length = 0
   pendingPreReadyTerminalInput.length = 0
   pendingPreReadyTerminalInputSize = 0
@@ -1618,6 +1620,15 @@ function recognizedShellPrompt(lastLine: string) {
   ) {
     return { text: shellPromptText, signature: learned }
   }
+  // 命令提交后等待新提示符时,接受强特征提示符并重新学习签名,
+  // 覆盖嵌套 ssh/su/堡垒机跳转等切换 shell 身份的场景
+  if (
+    shellCommandAwaitingPrompt &&
+    candidate &&
+    (candidate.kind === 'posix' || candidate.kind === 'cmd' || candidate.kind === 'powershell')
+  ) {
+    return { text, signature: candidate }
+  }
   if (learned.kind === 'bare') return undefined
   if (!candidate) return undefined
   if (learned.kind === 'powershell' && candidate.kind === 'powershell') {
@@ -1692,9 +1703,15 @@ function commandExecutionReadiness(): TerminalCommandReadiness {
 
 function updateTerminalInputContextFromOutput() {
   if (terminal?.buffer.active.type === 'alternate') {
+    terminalWasInAlternateBuffer = true
     terminalInputContext = 'unknown'
     invalidateTrackedTerminalInput()
     return
+  }
+  if (terminalWasInAlternateBuffer) {
+    terminalWasInAlternateBuffer = false
+    // 退出全屏程序(vim 等)后 shell 会重绘提示符,视同等待新提示符
+    shellCommandAwaitingPrompt = true
   }
   const text = terminalOutputBuffer
     .slice(-2_000)
