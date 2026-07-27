@@ -499,7 +499,7 @@ impl SqliteConfigStore {
                 SELECT id
                 FROM command_history
                 WHERE connection_id = ?1
-                ORDER BY created_at DESC, id DESC
+                ORDER BY COALESCE(julianday(created_at), 0.0) DESC, rowid DESC, id DESC
                 LIMIT ?2
               )
             "#,
@@ -514,13 +514,21 @@ impl SqliteConfigStore {
             r#"
             SELECT id, connection_id, workspace_session_id, terminal_id, command, created_at
             FROM (
-              SELECT id, connection_id, workspace_session_id, terminal_id, command, created_at
+              SELECT
+                id,
+                connection_id,
+                workspace_session_id,
+                terminal_id,
+                command,
+                created_at,
+                COALESCE(julianday(created_at), 0.0) AS created_sort,
+                rowid AS history_rowid
               FROM command_history
               WHERE connection_id = ?1
-              ORDER BY created_at DESC, id DESC
+              ORDER BY created_sort DESC, history_rowid DESC, id DESC
               LIMIT 300
             )
-            ORDER BY created_at ASC, id ASC
+            ORDER BY created_sort ASC, history_rowid ASC, id ASC
             "#,
         )?;
 

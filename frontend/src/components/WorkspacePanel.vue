@@ -53,7 +53,8 @@ const emit = defineEmits<{
   appendAiMessage: [message: AiMessage]
   updateAiMessage: [message: AiMessage]
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
-  rerunCommand: [command: string]
+  fillCommand: [command: string]
+  pinQuickCommand: [command: string]
   executeCommand: [command: string]
   writeTerminalInput: [data: string]
   focusTerminal: []
@@ -132,7 +133,9 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
     <CommandHistoryPanel
       v-if="activeWorkspaceTab === 'history'"
       :commands="commandHistory"
-      @rerun="emit('rerunCommand', $event)"
+      :connection-label="connectionLabels[connectionId] ?? connectionProfile?.name ?? '当前连接'"
+      @fill="emit('fillCommand', $event)"
+      @pin="emit('pinQuickCommand', $event)"
     />
     <AiPanel
       v-if="activeWorkspaceTab === 'ai'"

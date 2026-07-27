@@ -33,6 +33,7 @@ import {
   saveConnectionProfile,
   saveWorkspaceSession
 } from '../lib/tauri'
+import { isSensitiveCommand } from '../lib/commandPrivacy'
 import ConnectionSidebar from './ConnectionSidebar.vue'
 import ContextMenu from './ContextMenu.vue'
 import SettingsSidebar from './SettingsSidebar.vue'
@@ -67,6 +68,8 @@ const defaultUserSettings: AppUserSettings = {
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
+  fillCommand: (command: string) => boolean
+  pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'
   terminalInputSyncState: () => TerminalInputSyncState
   writeTerminalInput: (data: string) => boolean
   writeSyncedTerminalInput: (data: string, sourceTerminalId: string) => boolean
@@ -1518,6 +1521,7 @@ function updateTerminalSelection(event: TerminalSelectionEvent) {
 }
 
 function recordCommand(event: CommandRecordedEvent) {
+  if (isSensitiveCommand(event.command)) return
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   const connectionId = tab?.connectionId ?? LOCAL_CONNECTION_ID
   const nextIndex = (commandHistoryByConnection.value[connectionId]?.length ?? 0) + 1
@@ -1527,7 +1531,7 @@ function recordCommand(event: CommandRecordedEvent) {
     workspaceSessionId: COMMAND_HISTORY_SESSION_ID,
     terminalId: event.terminalId,
     command: event.command,
-    createdAt: new Date().toLocaleString()
+    createdAt: nowText()
   }
   commandHistoryByConnection.value = {
     ...commandHistoryByConnection.value,
@@ -1685,8 +1689,37 @@ function executeCommandOnTargetTerminals(command: string) {
   void executeCommandOnTerminalIds(command, [...targetTerminalIds.value])
 }
 
-function rerunCommandOnActiveTerminal(command: string) {
-  void executeCommandOnTerminalIds(command, [activeTerminalId.value])
+function fillHistoryCommandOnActiveTerminal(command: string) {
+  const value = command.trim()
+  if (!value) return
+  const pane = terminalRefs.value[activeTerminalId.value]
+  if (pane?.fillCommand(value)) {
+    showToast('success', '已填入终端', commandPreview(value))
+    return
+  }
+
+  const readiness = pane?.commandExecutionReadiness() ?? 'unavailable'
+  if (readiness === 'line-busy') {
+    showToast('warning', '命令未填入', '当前命令行已有输入或补全内容，请先提交或清空。')
+  } else if (readiness === 'shell-busy') {
+    showToast('warning', '命令未填入', 'Shell 尚未返回可输入提示符，请稍后重试。')
+  } else {
+    showToast('error', '命令未填入', '当前终端尚未就绪或连接已断开。')
+  }
+}
+
+function pinQuickCommandOnActiveTerminal(command: string) {
+  const pane = terminalRefs.value[activeTerminalId.value]
+  const result = pane?.pinQuickCommand(command) ?? 'invalid'
+  if (result === 'added') {
+    showToast('success', '已固定命令', commandPreview(command))
+  } else if (result === 'exists') {
+    showToast('info', '命令已固定', commandPreview(command))
+  } else if (result === 'limit') {
+    showToast('warning', '无法固定命令', '当前连接最多保留 12 条固定命令，请先移除一条。')
+  } else {
+    showToast('warning', '无法固定命令', '该命令为空、过长、包含敏感信息或风险过高。')
+  }
 }
 
 async function writeInputToTargetTerminals(data: string) {
@@ -2291,8 +2324,6 @@ onBeforeUnmount(() => {
         :command-history="commandHistoryForTab(tab)"
         :terminal-settings="appSettings"
         :app-theme="appTheme"
-        :ai-config="aiConfig"
-        :api-key="activeAiRuntimeApiKey"
         @terminal-output="updateTerminalOutput"
         @terminal-selection="updateTerminalSelection"
         @terminal-input="syncTerminalInputToTargets"
@@ -2348,7 +2379,8 @@ onBeforeUnmount(() => {
       @append-ai-message="appendAiMessageToActiveTerminal"
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"
-      @rerun-command="rerunCommandOnActiveTerminal"
+      @fill-command="fillHistoryCommandOnActiveTerminal"
+      @pin-quick-command="pinQuickCommandOnActiveTerminal"
       @execute-command="executeCommandOnTargetTerminals"
       @ai-error="showToast('error', 'AI 请求失败', $event)"
       @write-terminal-input="writeInputToTargetTerminals"

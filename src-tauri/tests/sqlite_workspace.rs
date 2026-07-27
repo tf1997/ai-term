@@ -222,6 +222,52 @@ fn sqlite_store_lists_command_history_by_connection_across_workspace_sessions() 
 }
 
 #[test]
+fn command_history_keeps_new_iso_records_visible_with_legacy_locale_timestamps() {
+    let store = SqliteConfigStore::new(temp_db_path("workspace-history-mixed-time"));
+    store.initialize().unwrap();
+
+    let mut connection = rusqlite::Connection::open(store.database_path()).unwrap();
+    let transaction = connection.transaction().unwrap();
+    for index in 0..300 {
+        transaction
+            .execute(
+                r#"
+                INSERT INTO command_history (
+                  id, connection_id, workspace_session_id, terminal_id, command, created_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+                rusqlite::params![
+                    format!("legacy-{index:04}"),
+                    "prod-mixed",
+                    "connection-history",
+                    "terminal-legacy",
+                    format!("echo legacy-{index:04}"),
+                    "7/26/2026, 11:00:00 PM",
+                ],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+
+    let newest = command(
+        "newest-iso",
+        "prod-mixed",
+        "connection-history",
+        "terminal-new",
+        "uname -a",
+        "2026-07-27T00:00:00.000Z",
+    );
+    store.save_command_history_record(&newest).unwrap();
+
+    let history = store.list_command_history("prod-mixed").unwrap();
+    assert_eq!(history.len(), 300);
+    assert_eq!(history.last(), Some(&newest));
+    assert!(!history.iter().any(|entry| entry.id == "legacy-0000"));
+    assert!(history.iter().any(|entry| entry.id == "legacy-0299"));
+}
+
+#[test]
 fn command_history_retention_is_shared_by_all_sessions_on_a_connection() {
     let store = SqliteConfigStore::new(temp_db_path("workspace-history-retention"));
     store.initialize().unwrap();
@@ -247,7 +293,7 @@ fn command_history_retention_is_shared_by_all_sessions_on_a_connection() {
                     },
                     "terminal-1",
                     format!("echo {index}"),
-                    format!("2026-07-02T10:00:{index:04}Z"),
+                    format!("2026-07-02T10:00:00.{index:03}Z"),
                 ],
             )
             .unwrap();
@@ -260,7 +306,7 @@ fn command_history_retention_is_shared_by_all_sessions_on_a_connection() {
         "conversation-3",
         "terminal-3",
         "uname -a",
-        "2026-07-02T10:00:9999Z",
+        "2026-07-02T10:00:01.000Z",
     );
     store.save_command_history_record(&newest).unwrap();
 
@@ -272,6 +318,23 @@ fn command_history_retention_is_shared_by_all_sessions_on_a_connection() {
         )
         .unwrap();
     assert_eq!(retained, 1000);
+
+    let oldest_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM command_history WHERE id = ?1)",
+            ["existing-0000"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let newest_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM command_history WHERE id = ?1)",
+            ["newest"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!oldest_exists);
+    assert!(newest_exists);
 }
 
 #[test]

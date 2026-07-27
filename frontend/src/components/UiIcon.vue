@@ -25,6 +25,7 @@ defineProps<{
     | 'more'
     | 'moon'
     | 'network'
+    | 'pin'
     | 'play'
     | 'plus'
     | 'refresh'
@@ -176,6 +177,11 @@ defineProps<{
     </template>
     <template v-else-if="name === 'play'">
       <path d="m8 5 11 7-11 7Z" />
+    </template>
+    <template v-else-if="name === 'pin'">
+      <path d="M12 17v5" />
+      <path d="M5 17h14" />
+      <path d="M6 3h12l-2 7 3 3H5l3-3Z" />
     </template>
     <template v-else-if="name === 'plus'">
       <path d="M5 12h14" />

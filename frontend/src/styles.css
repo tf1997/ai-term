@@ -5825,6 +5825,9 @@ code {
 .terminal-completion .completion-source.session {
   color: #85c99f;
 }
+.terminal-completion .completion-source.pinned {
+  color: #73d6c6;
+}
 .terminal-completion .completion-source.history {
   color: #93a6ba;
 }
@@ -7539,6 +7542,9 @@ code {
 .theme-light .terminal-completion .completion-source.session {
   color: #257a52;
 }
+.theme-light .terminal-completion .completion-source.pinned {
+  color: #087d73;
+}
 .theme-light .terminal-completion .completion-source.history {
   color: #617485;
 }
@@ -7785,7 +7791,53 @@ code {
 .history-toolbar {
   border-bottom-color: #1d2838;
   background: #0b1018;
+  display: grid;
+  gap: 8px;
   padding: 10px 12px;
+}
+.history-view-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.history-view-tabs > span {
+  margin-left: auto;
+  color: #718198;
+  font-size: var(--font-xs);
+}
+.history-view-tab {
+  height: 27px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #8492a7;
+  padding: 0 10px;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background-color .16s ease, color .16s ease, border-color .16s ease;
+}
+.history-view-tab:hover {
+  color: #dce6f5;
+  background: rgba(127, 145, 173, .08);
+}
+.history-view-tab[aria-selected="true"] {
+  border-color: #2b3b52;
+  background: #152033;
+  color: #f0f5ff;
+}
+.history-search-wrap {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.history-search-wrap > .ui-icon {
+  position: absolute;
+  left: 10px;
+  z-index: 1;
+  color: #718198;
+  pointer-events: none;
 }
 .history-toolbar input {
   height: 32px;
@@ -7793,15 +7845,42 @@ code {
   border-radius: 8px;
   background: #080e16;
   color: #d9e4f2;
+  padding-left: 31px;
+  padding-right: 32px;
 }
 .history-toolbar input:focus {
   border-color: rgba(91, 111, 255, .58);
   box-shadow: 0 0 0 3px rgba(91, 111, 255, .12);
 }
+.history-search-clear {
+  position: absolute;
+  right: 5px;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #8290a4;
+  cursor: pointer;
+}
+.history-search-clear:hover {
+  background: rgba(127, 145, 173, .12);
+  color: #eef4ff;
+}
 .history-list {
   gap: 0;
   background: #0b1018;
   padding: 4px 0 8px;
+}
+.history-results {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .history-row {
   position: relative;
@@ -7817,8 +7896,9 @@ code {
   border-bottom-color: rgba(120, 139, 169, .22);
   background: rgba(91, 111, 255, .07);
 }
-.history-row.is-long {
-  cursor: zoom-in;
+.history-row:focus-within {
+  border-bottom-color: rgba(91, 111, 255, .38);
+  background: rgba(91, 111, 255, .08);
 }
 .history-command-cell {
   gap: 5px;
@@ -7829,11 +7909,11 @@ code {
   line-height: 1.35;
   letter-spacing: 0;
 }
-.history-row.is-long code {
-  color: #f3f7ff;
-}
 .history-row span {
   color: #718198;
+}
+.history-row .history-frequency {
+  color: #8291a8;
 }
 .history-actions {
   display: inline-flex;
@@ -7858,6 +7938,32 @@ code {
 .history-preview-trigger {
   color: #b8c1ff;
 }
+.history-actions .history-action-fill {
+  border-color: rgba(82, 201, 143, .32);
+  color: #83dbae;
+}
+.history-actions .history-action-fill:hover:not(:disabled) {
+  border-color: rgba(82, 201, 143, .58);
+  background: rgba(35, 145, 93, .16);
+  color: #b9f4d4;
+}
+.history-status {
+  flex: 0 0 auto;
+  min-height: 24px;
+  margin: 0;
+  border-top: 1px solid #1d2838;
+  color: #9dacbf;
+  padding: 5px 12px;
+  font-size: var(--font-xs);
+}
+.history-status:empty {
+  min-height: 0;
+  border-top: 0;
+  padding-block: 0;
+}
+.history-empty-search {
+  gap: 10px;
+}
 .history-preview-modal {
   width: min(820px, calc(100vw - 36px));
   border-color: #2b3950;
@@ -7881,6 +7987,14 @@ code {
   border-top-color: #223047;
   background: #0d1521;
 }
+.history-preview-copy-status {
+  min-width: 0;
+  min-height: 17px;
+  margin-right: auto;
+  color: #9dacbf;
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
 .app-shell.theme-light .history-panel,
 .app-shell.theme-light .history-toolbar,
 .app-shell.theme-light .history-list {
@@ -7895,6 +8009,30 @@ code {
   background: #fff;
   color: var(--light-text);
 }
+.app-shell.theme-light .history-view-tabs > span,
+.app-shell.theme-light .history-row .history-frequency {
+  color: var(--light-muted);
+}
+.app-shell.theme-light .history-view-tab {
+  color: #627289;
+}
+.app-shell.theme-light .history-view-tab:hover {
+  background: #eef4f1;
+  color: #24443a;
+}
+.app-shell.theme-light .history-view-tab[aria-selected="true"] {
+  border-color: #ccebdd;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
+}
+.app-shell.theme-light .history-search-wrap > .ui-icon,
+.app-shell.theme-light .history-search-clear {
+  color: var(--light-muted);
+}
+.app-shell.theme-light .history-search-clear:hover {
+  background: #eef4f1;
+  color: var(--light-accent-strong);
+}
 .app-shell.theme-light .history-row {
   border-bottom-color: #e4ebf1;
   background: #fff;
@@ -7905,9 +8043,6 @@ code {
 }
 .app-shell.theme-light .history-row code {
   color: #17324d;
-}
-.app-shell.theme-light .history-row.is-long code {
-  color: var(--light-accent-strong);
 }
 .app-shell.theme-light .history-row span {
   color: var(--light-muted);
@@ -7922,6 +8057,15 @@ code {
   background: var(--light-accent-soft);
   color: var(--light-accent-strong);
 }
+.app-shell.theme-light .history-actions .history-action-fill {
+  border-color: #ccebdd;
+  background: #f7fcfa;
+  color: var(--light-accent-strong);
+}
+.app-shell.theme-light .history-status {
+  border-top-color: var(--light-border);
+  color: var(--light-muted);
+}
 .app-shell.theme-light .history-preview-modal {
   border-color: var(--light-border);
   background: #fff;
@@ -7931,12 +8075,21 @@ code {
   border-color: var(--light-border);
   background: #fbfcfd;
 }
+.app-shell.theme-light .history-preview-copy-status {
+  color: var(--light-muted);
+}
 .app-shell.theme-light .history-preview-body {
   background: #f6f8fb;
 }
 .app-shell.theme-light .history-preview-body pre {
   border-color: var(--light-border);
   background: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .history-view-tab,
+  .history-row {
+    transition: none;
+  }
 }
 /* Light theme shell structure parity contract. */
 /* White theme inherits base shell, right workspace, and tab geometry. */

@@ -6,7 +6,6 @@ import type { IDisposable } from '@xterm/xterm'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
 import '@xterm/xterm/css/xterm.css'
 import {
-  chatWithAiProvider,
   connectProfile,
   connectLocalTerminal,
   forgetAiTermKnownHost,
@@ -18,7 +17,7 @@ import {
   terminalSessionActive,
   terminalWrite
 } from '../lib/tauri'
-import type { AiProviderConfig, AuthEndpoint, ConnectionProfile } from '../types/profile'
+import type { AuthEndpoint, ConnectionProfile } from '../types/profile'
 import type {
   CommandHistoryEntry,
   CommandRecordedEvent,
@@ -29,6 +28,7 @@ import type {
   TerminalOutputEvent,
   TerminalSelectionEvent
 } from '../types/workspace'
+import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
@@ -39,7 +39,8 @@ const terminalTypographyOptions = isWindowsPlatform()
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
-type CompletionSuggestionSource = 'system' | 'history' | 'session'
+type CompletionSuggestionSource = 'pinned' | 'system' | 'history' | 'session'
+type PinQuickCommandResult = 'added' | 'exists' | 'invalid' | 'limit'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 type TerminalSelectionViewportCell = { x: number; y: number }
 type TerminalInputTrackResult = 'idle' | 'changed' | 'submitted'
@@ -110,8 +111,6 @@ const props = defineProps<{
   commandHistory: CommandHistoryEntry[]
   terminalSettings?: TerminalVisualSettings
   appTheme?: 'dark' | 'light'
-  aiConfig?: AiProviderConfig
-  apiKey?: string
 }>()
 
 const emit = defineEmits<{
@@ -171,7 +170,6 @@ let pendingInputControlSequence = ''
 let terminalInputGeneration = 0
 let terminalInputReady = false
 let failedTerminalInputGeneration: number | undefined
-let quickCommandRecommendationGeneration = 0
 const terminalInputQueue: TerminalInputBatch[] = []
 const terminalInputPumpGenerations = new Set<number>()
 const pendingPreReadyTerminalInput: PendingTerminalInput[] = []
@@ -197,7 +195,6 @@ const COMPLETION_LIMIT = 6
 const DEFAULT_QUICK_COMMANDS = ['pwd', 'ls -la', 'df -h', 'free -m', 'ps aux', 'git status']
 const QUICK_COMMAND_STORAGE_KEY_PREFIX = 'ai-term:quick-commands:v1'
 const QUICK_COMMAND_LIMIT = 12
-const QUICK_COMMAND_AI_TIMEOUT_MS = 15_000
 const quickCommands = ref<string[]>(loadQuickCommands())
 const quickCommandSettingsOpen = ref(false)
 const quickCommandItems = ref<string[]>([...quickCommands.value])
@@ -205,7 +202,6 @@ const quickCommandRecommendations = ref<string[]>([])
 const quickCommandResetConfirm = ref(false)
 const quickCommandNotice = ref('')
 const quickCommandError = ref('')
-const quickCommandAiLoading = ref(false)
 const quickCommandBarNotice = ref('')
 const QUICK_COMMANDS_CHANGED_EVENT = 'ai-term:quick-commands-changed'
 const sshAuthPromptOpen = ref(false)
@@ -386,9 +382,12 @@ async function confirmSshHostKeyReset() {
 function systemCommandSuggestions() {
   const common = ['cd', 'ls', 'pwd', 'cat', 'grep', 'find', 'mkdir', 'touch', 'cp', 'mv', 'rm', 'echo', 'curl', 'wget', 'ssh', 'scp', 'rsync', 'tar', 'chmod', 'chown', 'ps', 'top', 'htop', 'kill', 'df -h', 'du -sh', 'free -m', 'ping', 'git status', 'git pull', 'git checkout', 'git log --oneline', 'docker ps', 'docker logs', 'kubectl get pods']
   const windows = ['dir', 'cd', 'cls', 'type', 'copy', 'move', 'del', 'findstr', 'where', 'tasklist', 'taskkill', 'ipconfig', 'netstat -ano', 'powershell', 'Get-Process', 'Get-Service', 'Get-ChildItem']
+  const shellKind = shellPromptSignature?.kind
+  if (shellKind === 'powershell' || shellKind === 'cmd') return [...windows, 'git status', 'docker ps']
   if (activeSession.value === 'remote') {
-    const recent = terminalOutputBuffer.slice(-4_000)
-    if (/(?:^|\n)(?:PS\s+[A-Z]:\\[^>]*>|[A-Z]:\\[^>]*>)\s*$/im.test(recent)) return [...windows, 'git status', 'docker ps']
+    return ['systemctl status', 'journalctl -xe', 'ss -tulpn', 'ip addr', ...common]
+  }
+  if (shellKind === 'posix') {
     return ['systemctl status', 'journalctl -xe', 'ss -tulpn', 'ip addr', ...common]
   }
   const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase()
@@ -402,7 +401,9 @@ function systemCommandSuggestions() {
 }
 
 function historyCommandSuggestions() {
-  return [...props.commandHistory.map((entry) => entry.command), ...localCommandHistory.value]
+  const persisted = props.commandHistory.map((entry) => entry.command)
+  const persistedCommands = new Set(persisted)
+  return [...persisted, ...localCommandHistory.value.filter((command) => !persistedCommands.has(command))]
 }
 
 function loadQuickCommands() {
@@ -425,6 +426,7 @@ function handleQuickCommandsChanged(event: Event) {
   const detail = (event as CustomEvent<QuickCommandsChangedDetail>).detail
   if (!detail || detail.storageKey !== quickCommandStorageKey() || !Array.isArray(detail.commands)) return
   quickCommands.value = safeQuickCommandList(detail.commands)
+  if (terminalCompletionOpen.value) refreshCompletionSuggestions()
 }
 
 function quickCommandStorageKey() {
@@ -432,9 +434,11 @@ function quickCommandStorageKey() {
 }
 
 function safeQuickCommandList(commands: string[]) {
-  return normalizeQuickCommandList(commands).filter((command) => (
-    !isHighRiskQuickCommand(command) && scriptRiskStatusForContent(command).level !== 'high'
-  ))
+  return normalizeQuickCommandList(commands.filter((command) => (
+    !isSensitiveCommand(command)
+    && !isHighRiskQuickCommand(command)
+    && scriptRiskStatusForContent(command).level !== 'high'
+  )))
 }
 
 function normalizeQuickCommandList(commands: string[]) {
@@ -442,9 +446,8 @@ function normalizeQuickCommandList(commands: string[]) {
   const result: string[] = []
   commands.forEach((command) => {
     const value = command.trim()
-    const key = value.toLowerCase()
-    if (!value || seen.has(key) || value.length > 140) return
-    seen.add(key)
+    if (!value || seen.has(value) || value.length > 140) return
+    seen.add(value)
     result.push(value)
   })
   return result.slice(0, QUICK_COMMAND_LIMIT)
@@ -453,14 +456,23 @@ function normalizeQuickCommandList(commands: string[]) {
 const normalizedQuickCommandItems = computed(() => normalizeQuickCommandList(
   quickCommandItems.value.filter((command) => {
     const value = command.trim()
-    return value && value.length <= 140 && !isHighRiskQuickCommand(value) && scriptRiskStatusForContent(value).level !== 'high'
+    return value
+      && value.length <= 140
+      && !isSensitiveCommand(value)
+      && !isHighRiskQuickCommand(value)
+      && scriptRiskStatusForContent(value).level !== 'high'
   })
 ))
 const quickCommandEnabledCount = computed(() => normalizedQuickCommandItems.value.length)
 const quickCommandHasBlockingIssues = computed(() =>
   quickCommandItems.value.some((command) => {
     const value = command.trim()
-    return Boolean(value && (value.length > 140 || isHighRiskQuickCommand(value) || scriptRiskStatusForContent(value).level === 'high'))
+    return Boolean(value && (
+      value.length > 140
+      || isSensitiveCommand(value)
+      || isHighRiskQuickCommand(value)
+      || scriptRiskStatusForContent(value).level === 'high'
+    ))
   })
 )
 const quickCommandCanSave = computed(() => quickCommandEnabledCount.value > 0 && !quickCommandHasBlockingIssues.value)
@@ -470,9 +482,9 @@ function syncQuickCommandItems(commands: string[]) {
 }
 
 function quickCommandDuplicate(command: string, index: number) {
-  const value = command.trim().toLowerCase()
+  const value = command.trim()
   if (!value) return false
-  return quickCommandItems.value.some((item, itemIndex) => itemIndex !== index && item.trim().toLowerCase() === value)
+  return quickCommandItems.value.some((item, itemIndex) => itemIndex !== index && item.trim() === value)
 }
 
 function quickCommandStatus(command: string, index: number) {
@@ -483,8 +495,11 @@ function quickCommandStatus(command: string, index: number) {
   if (value.length > 140) {
     return { label: '过长', level: 'high', message: '超过 140 个字符，请缩短后保存。', blocking: true }
   }
+  if (isSensitiveCommand(value)) {
+    return { label: '敏感', level: 'high', message: '包含凭证或密钥的命令不能保存。', blocking: true }
+  }
   if (isHighRiskQuickCommand(value)) {
-    return { label: '高风险', level: 'high', message: '高风险命令不能保存为快速命令。', blocking: true }
+    return { label: '高风险', level: 'high', message: '高风险命令不能保存为固定命令。', blocking: true }
   }
   if (quickCommandDuplicate(command, index)) {
     return { label: '重复', level: 'medium', message: '重复命令会在保存时自动合并。', blocking: false }
@@ -506,7 +521,7 @@ function shouldShowQuickCommandMessage(command: string, index: number) {
 
 function addQuickCommandItem(index = quickCommandItems.value.length - 1) {
   if (quickCommandItems.value.length >= QUICK_COMMAND_LIMIT) {
-    quickCommandNotice.value = `最多保留 ${QUICK_COMMAND_LIMIT} 条快速命令。`
+    quickCommandNotice.value = `最多保留 ${QUICK_COMMAND_LIMIT} 条固定命令。`
     return
   }
   quickCommandItems.value.splice(index + 1, 0, '')
@@ -538,40 +553,57 @@ function handleQuickCommandSettingsPointerDown(event: PointerEvent) {
 }
 
 function openQuickCommandSettings() {
-  quickCommandRecommendationGeneration += 1
   syncQuickCommandItems(quickCommands.value)
   quickCommandRecommendations.value = []
   quickCommandResetConfirm.value = false
   quickCommandNotice.value = ''
   quickCommandError.value = ''
-  quickCommandAiLoading.value = false
   quickCommandSettingsOpen.value = true
 }
 
 function closeQuickCommandSettings() {
-  quickCommandRecommendationGeneration += 1
   quickCommandSettingsOpen.value = false
-  quickCommandAiLoading.value = false
   quickCommandRecommendations.value = []
   quickCommandResetConfirm.value = false
 }
 
 function saveQuickCommandSettings() {
   if (!quickCommandCanSave.value) {
-    quickCommandError.value = quickCommandEnabledCount.value === 0 ? '至少保留 1 条快速命令。' : '请先处理高风险或过长命令。'
+    quickCommandError.value = quickCommandEnabledCount.value === 0 ? '至少保留 1 条固定命令。' : '请先处理高风险或过长命令。'
     return
   }
-  const nextCommands = normalizedQuickCommandItems.value
-  quickCommands.value = nextCommands
+  const nextCommands = commitQuickCommands(normalizedQuickCommandItems.value)
   syncQuickCommandItems(nextCommands)
+  quickCommandRecommendations.value = []
+  quickCommandResetConfirm.value = false
+  quickCommandError.value = ''
+  quickCommandNotice.value = '固定命令已保存。'
+}
+
+function commitQuickCommands(commands: string[]) {
+  const nextCommands = safeQuickCommandList(commands)
+  quickCommands.value = nextCommands
   persistQuickCommands(nextCommands)
   window.dispatchEvent(new CustomEvent<QuickCommandsChangedDetail>(QUICK_COMMANDS_CHANGED_EVENT, {
     detail: { storageKey: quickCommandStorageKey(), commands: nextCommands }
   }))
-  quickCommandRecommendations.value = []
-  quickCommandResetConfirm.value = false
-  quickCommandError.value = ''
-  quickCommandNotice.value = '快速命令已保存。'
+  if (terminalCompletionOpen.value) refreshCompletionSuggestions()
+  return nextCommands
+}
+
+function pinQuickCommand(command: string): PinQuickCommandResult {
+  const value = command.trim()
+  if (
+    !value
+    || value.length > 140
+    || isSensitiveCommand(value)
+    || isHighRiskQuickCommand(value)
+    || scriptRiskStatusForContent(value).level === 'high'
+  ) return 'invalid'
+  if (quickCommands.value.includes(value)) return 'exists'
+  if (quickCommands.value.length >= QUICK_COMMAND_LIMIT) return 'limit'
+  commitQuickCommands([...quickCommands.value, value])
+  return 'added'
 }
 
 function resetQuickCommandDraft() {
@@ -612,39 +644,10 @@ function replaceQuickCommandsWithRecommendations() {
   quickCommandNotice.value = '已替换为推荐候选，保存后生效。'
 }
 function quickCommandHistorySeed() {
-  const seen = new Set<string>()
   return historyCommandSuggestions()
     .map((command) => command.trim())
-    .filter((command) => {
-      const key = command.toLowerCase()
-      if (!command || seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+    .filter((command) => command && !isSensitiveCommand(command))
     .slice(-80)
-}
-
-function buildQuickCommandPrompt(history: string[]) {
-  return [
-    '你是 AI Term 的终端效率助手。',
-    '请根据用户历史命令推荐 8 个适合放在快速命令栏的常用命令。',
-    '只返回命令本身，每行一个，不要编号、不要解释、不要 Markdown。',
-    '不要推荐删除、格式化、重启、关机、覆盖写入等高风险命令。',
-    '',
-    '历史命令：',
-    history.join('\n') || '暂无历史命令'
-  ].join('\n')
-}
-
-function parseQuickCommandRecommendations(answer: string) {
-  return normalizeQuickCommandList(
-    answer
-      .replace(/```[a-zA-Z0-9_-]*\n?/g, '')
-      .replace(/```/g, '')
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)、])\s*/, '').replace(/^`|`$/g, '').trim())
-      .filter((command) => command && !isHighRiskQuickCommand(command) && scriptRiskStatusForContent(command).level !== 'high')
-  )
 }
 
 function isHighRiskQuickCommand(command: string) {
@@ -652,74 +655,45 @@ function isHighRiskQuickCommand(command: string) {
 }
 
 function localQuickCommandRecommendations() {
-  const counts = new Map<string, number>()
-  quickCommandHistorySeed().forEach((command) => {
+  const events = quickCommandHistorySeed()
+  const stats = new Map<string, { command: string; count: number; lastIndex: number }>()
+  events.forEach((command, index) => {
     if (isHighRiskQuickCommand(command) || scriptRiskStatusForContent(command).level === 'high') return
-    counts.set(command, (counts.get(command) ?? 0) + 1)
+    const current = stats.get(command)
+    if (current) {
+      current.count += 1
+      current.lastIndex = index
+    } else {
+      stats.set(command, { command, count: 1, lastIndex: index })
+    }
   })
+  const recencyWindow = Math.max(1, events.length / 4)
+  const score = (item: { count: number; lastIndex: number }) => {
+    const age = Math.max(0, events.length - item.lastIndex - 1)
+    return Math.log1p(item.count) + Math.exp(-age / recencyWindow)
+  }
   return normalizeQuickCommandList(
-    [...counts.entries()]
-      .sort((first, second) => second[1] - first[1])
-      .map(([command]) => command)
+    [...stats.values()]
+      .sort((first, second) => (
+        score(second) - score(first)
+        || second.count - first.count
+        || second.lastIndex - first.lastIndex
+        || first.command.localeCompare(second.command)
+      ))
+      .map(({ command }) => command)
       .concat(DEFAULT_QUICK_COMMANDS)
   )
 }
 
-function withQuickCommandAiTimeout<T>(request: Promise<T>) {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('AI 推荐请求超时')), QUICK_COMMAND_AI_TIMEOUT_MS)
-    request.then(
-      (value) => {
-        window.clearTimeout(timer)
-        resolve(value)
-      },
-      (error) => {
-        window.clearTimeout(timer)
-        reject(error)
-      }
-    )
-  })
-}
-
-async function recommendQuickCommandsWithAi() {
-  if (quickCommandAiLoading.value) return
-  const generation = ++quickCommandRecommendationGeneration
-  const local = localQuickCommandRecommendations()
-  quickCommandRecommendations.value = local
-  quickCommandAiLoading.value = true
+function recommendQuickCommandsFromHistory() {
+  const current = new Set(normalizedQuickCommandItems.value)
+  quickCommandRecommendations.value = localQuickCommandRecommendations()
+    .filter((command) => !current.has(command))
   quickCommandError.value = ''
-  quickCommandNotice.value = '已生成历史候选，正在获取 AI 优化。'
+  quickCommandNotice.value = quickCommandRecommendations.value.length > 0
+    ? '已根据本机历史生成推荐候选。'
+    : '当前固定命令已覆盖可用的历史候选。'
   quickCommandResetConfirm.value = false
-  const history = quickCommandHistorySeed()
-  const config = props.aiConfig
-  const apiKey = config?.apiKey?.trim() || props.apiKey?.trim() || ''
-
-  try {
-    if (config?.baseUrl.trim() && config.model.trim() && apiKey) {
-      const response = await withQuickCommandAiTimeout(chatWithAiProvider({
-        config,
-        apiKey,
-        question: buildQuickCommandPrompt(history),
-        terminalSnapshot: terminalOutputBuffer.slice(-12_000),
-        commandHistory: history
-      }))
-      if (generation !== quickCommandRecommendationGeneration || !quickCommandSettingsOpen.value) return
-      const recommended = parseQuickCommandRecommendations(response.answer)
-      if (recommended.length > 0) {
-        quickCommandRecommendations.value = recommended
-        quickCommandNotice.value = '已生成推荐候选，可选择追加或替换。'
-        return
-      }
-      quickCommandNotice.value = 'AI 未返回可用候选，已保留历史命令推荐。'
-      return
-    }
-    quickCommandNotice.value = '未配置可用 AI，已使用历史命令推荐。'
-  } catch (error) {
-    if (generation !== quickCommandRecommendationGeneration || !quickCommandSettingsOpen.value) return
-    quickCommandError.value = `AI 推荐失败：${formatError(error)}。已保留历史候选。`
-  } finally {
-    if (generation === quickCommandRecommendationGeneration) quickCommandAiLoading.value = false
-  }
 }
 function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
   const normalizedPrefix = prefix.toLowerCase()
@@ -727,41 +701,57 @@ function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
   const matchesPrefix = (command: string) => !normalizedPrefix || command.toLowerCase().startsWith(normalizedPrefix)
   const addHistory = (command: string, source: CompletionSuggestionSource, index: number) => {
     const value = command.trim()
-    if (!value) return
+    if (!value || isSensitiveCommand(value)) return
     if (!matchesPrefix(value)) return
-    const key = value.toLowerCase()
-    const current = historyStats.get(key)
+    const current = historyStats.get(value)
     if (current) {
       current.count += 1
       current.lastIndex = Math.max(current.lastIndex, index)
       if (source === 'session') current.source = source
       return
     }
-    historyStats.set(key, { command: value, count: 1, source, lastIndex: index })
+    historyStats.set(value, { command: value, count: 1, source, lastIndex: index })
   }
 
   const historyCommandKeys = new Set<string>()
   props.commandHistory.forEach((entry, index) => {
-    const key = entry.command.trim().toLowerCase()
+    const key = entry.command.trim()
     if (key) historyCommandKeys.add(key)
-    addHistory(entry.command, entry.terminalId === props.terminalId ? 'session' : 'history', index)
+    addHistory(entry.command, 'history', index)
   })
   localCommandHistory.value.forEach((command, index) => {
-    if (historyCommandKeys.has(command.trim().toLowerCase())) return
+    const value = command.trim()
+    if (historyCommandKeys.has(value)) {
+      const persisted = historyStats.get(value)
+      if (persisted) persisted.source = 'session'
+      return
+    }
     addHistory(command, 'session', props.commandHistory.length + index)
   })
+
+  const pinnedSuggestions = quickCommands.value
+    .map((command) => command.trim())
+    .filter((command) => command && !isSensitiveCommand(command) && matchesPrefix(command))
+    .map((command) => {
+      const history = historyStats.get(command)
+      historyStats.delete(command)
+      return { command, source: 'pinned' as CompletionSuggestionSource, count: history?.count ?? 0 }
+    })
 
   const historySuggestions = [...historyStats.values()]
     .sort((a, b) => b.count - a.count || b.lastIndex - a.lastIndex || a.command.localeCompare(b.command))
     .map(({ command, source, count }) => ({ command, source, count }))
 
-  const seen = new Set(historySuggestions.map((suggestion) => suggestion.command.toLowerCase()))
+  const seen = new Set([
+    ...pinnedSuggestions.map((suggestion) => suggestion.command),
+    ...historySuggestions.map((suggestion) => suggestion.command)
+  ])
   const systemSuggestions = systemCommandSuggestions()
     .map((command) => command.trim())
-    .filter((command) => command && matchesPrefix(command) && !seen.has(command.toLowerCase()))
+    .filter((command) => command && matchesPrefix(command) && !seen.has(command))
     .map((command) => ({ command, source: 'system' as CompletionSuggestionSource, count: 0 }))
 
-  return [...historySuggestions, ...systemSuggestions].slice(0, COMPLETION_LIMIT)
+  return [...pinnedSuggestions, ...historySuggestions, ...systemSuggestions].slice(0, COMPLETION_LIMIT)
 }
 
 function refreshCompletionSuggestions() {
@@ -814,9 +804,10 @@ function closeCompletion() {
 }
 
 function completionSourceLabel(source: CompletionSuggestionSource) {
+  if (source === 'pinned') return '固定'
   if (source === 'system') return '系统'
   if (source === 'history') return '历史'
-  return '本次'
+  return '当前'
 }
 
 function scheduleCompletionPosition() {
@@ -1325,8 +1316,8 @@ async function writeClipboard(text: string) {
 
 function recordCommand(command: string) {
   const value = command.trim()
-  if (!value) return
-  localCommandHistory.value = [...localCommandHistory.value.filter((item) => item !== value), value].slice(-120)
+  if (!value || isSensitiveCommand(value)) return
+  localCommandHistory.value = [...localCommandHistory.value, value].slice(-120)
   emit('commandRecorded', {
     terminalId: props.terminalId,
     command: value
@@ -1714,11 +1705,17 @@ function invalidateTrackedTerminalInput() {
 }
 
 function canOfferCompletion() {
-  return terminalInputContext === 'shell' && inputCommandReliable && !completionSuppressedForHistoryNavigation
+  return terminalInputContext === 'shell'
+    && inputCommandReliable
+    && !completionSuppressedForHistoryNavigation
+    && inputCommandBuffer.trimStart().length >= 2
+    && inputCommandCursor === inputCommandBuffer.length
 }
 
 function terminalLineReadyForAppInput() {
-  return canOfferCompletion() && inputCommandBuffer.trim().length === 0
+  return terminalInputContext === 'shell'
+    && inputCommandReliable
+    && inputCommandBuffer.trim().length === 0
 }
 
 function terminalInputSyncState(): TerminalInputSyncState {
@@ -2401,20 +2398,21 @@ function showQuickCommandBarNotice(message: string) {
   }, 2600)
 }
 
-function runQuickCommand(command: string) {
+function fillCommand(command: string) {
   const value = command.trim()
-  if (!value) return
+  if (!value) return false
   if (!terminalLineReadyForAppInput()) {
     showQuickCommandBarNotice(inputCommandBuffer.trim() ? '当前命令行已有输入，请先提交或清空。' : '当前终端不在可识别的命令提示符。')
     focusTerminal()
-    return
+    return false
   }
   closeCompletion()
-  if (sendInteractiveTerminalInput(value)) {
+  if (sendInteractiveTerminalInput(value, false)) {
     showQuickCommandBarNotice('已填入终端，按 Enter 执行。')
-  } else {
-    showQuickCommandBarNotice('当前终端不可用。')
+    return true
   }
+  showQuickCommandBarNotice('当前终端不可用。')
+  return false
 }
 
 function terminalInputDestinationAvailable() {
@@ -2491,7 +2489,7 @@ function executeCommand(command: string) {
   return false
 }
 
-function forwardInteractiveTerminalInput(data: string) {
+function forwardInteractiveTerminalInput(data: string, synchronize = true) {
   if (!data || !terminalInputDestinationAvailable()) return false
   const beforeState = terminalInputSyncState()
   const inputResult = trackUserInput(data)
@@ -2499,26 +2497,28 @@ function forwardInteractiveTerminalInput(data: string) {
   const afterState = terminalInputSyncState()
   const submittedCommands = takePendingTrackedCommands()
   const deferredCaptures = takePendingDeferredCommandCaptures()
-  const event: TerminalInputEvent = {
-    terminalId: props.terminalId,
-    data,
-    beforeState,
-    safeToSync: terminalInputSafeForSync(data, beforeState, afterState)
-  }
+  const event: TerminalInputEvent | undefined = synchronize
+    ? {
+        terminalId: props.terminalId,
+        data,
+        beforeState,
+        safeToSync: terminalInputSafeForSync(data, beforeState, afterState)
+      }
+    : undefined
   const accepted = writePreparedTerminalInput(data, {
     source: 'interactive',
     submittedCommands,
     onWritten: () => {
       deferredCaptures.forEach(scheduleDeferredCommandCapture)
-      emit('terminalInput', event)
+      if (event) emit('terminalInput', event)
     }
   })
   if (!accepted) invalidateTrackedTerminalInput()
   return accepted
 }
 
-function sendInteractiveTerminalInput(data: string) {
-  return forwardInteractiveTerminalInput(data)
+function sendInteractiveTerminalInput(data: string, synchronize = true) {
+  return forwardInteractiveTerminalInput(data, synchronize)
 }
 
 function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
@@ -2649,7 +2649,9 @@ defineExpose({
   commandExecutionReadiness,
   disconnectFromButton,
   executeCommand,
+  fillCommand,
   focusTerminal,
+  pinQuickCommand,
   restartLocalTerminal,
   terminalInputSyncState,
   writeTerminalInput,
@@ -2707,13 +2709,13 @@ defineExpose({
         </div>
       </div>
     </section>
-    <section class="quick-command-bar" aria-label="快速命令">
-      <span>快速命令</span>
-      <button v-for="command in quickCommands" :key="command" type="button" title="填入终端" @click="runQuickCommand(command)">
+    <section class="quick-command-bar" aria-label="固定命令">
+      <span>固定命令</span>
+      <button v-for="command in quickCommands" :key="command" type="button" title="填入终端" @click="fillCommand(command)">
         {{ command }}
       </button>
       <span v-if="quickCommandBarNotice" class="quick-command-bar-notice" aria-live="polite">{{ quickCommandBarNotice }}</span>
-      <button ref="quickCommandSettingsButton" class="icon-button" type="button" title="快速命令设置" aria-label="快速命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
+      <button ref="quickCommandSettingsButton" class="icon-button" type="button" title="固定命令设置" aria-label="固定命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
     </section>
 
     <teleport to="body">
@@ -2786,11 +2788,11 @@ defineExpose({
     </teleport>
 
     <teleport to="body">
-            <div v-if="quickCommandSettingsOpen" class="modal-backdrop quick-command-backdrop" :class="props.appTheme === 'light' ? 'theme-light' : 'theme-dark'" role="presentation">
-        <section class="modal quick-command-modal" role="dialog" aria-modal="true" aria-label="快速命令设置">
+      <div v-if="quickCommandSettingsOpen" class="modal-backdrop quick-command-backdrop" :class="props.appTheme === 'light' ? 'theme-light' : 'theme-dark'" role="presentation">
+        <section class="modal quick-command-modal" role="dialog" aria-modal="true" aria-label="固定命令设置">
           <div class="modal-head">
             <div>
-              <strong>快速命令</strong>
+              <strong>固定命令</strong>
               <span>{{ quickCommandEnabledCount }} 个将启用</span>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeQuickCommandSettings"><UiIcon name="close" /></button>
@@ -2815,7 +2817,7 @@ defineExpose({
                   v-model="quickCommandItems[index]"
                   spellcheck="false"
                   placeholder="输入命令，例如 df -h"
-                  aria-label="快速命令"
+                  aria-label="固定命令"
                   @keydown.enter.prevent="addQuickCommandItem(index)"
                 />
                 <span
@@ -2863,7 +2865,7 @@ defineExpose({
             </div>
 
             <div v-if="quickCommandResetConfirm" class="quick-command-reset-confirm">
-              <span>确认恢复默认快速命令？当前草稿会被替换。</span>
+              <span>确认恢复默认固定命令？当前草稿会被替换。</span>
               <button class="text-button" type="button" @click="cancelResetQuickCommandDraft">取消</button>
               <button class="text-button danger" type="button" @click="confirmResetQuickCommandDraft">确认恢复</button>
             </div>
@@ -2873,9 +2875,7 @@ defineExpose({
           <p v-else-if="quickCommandNotice" class="save-feedback ok">{{ quickCommandNotice }}</p>
           <div class="modal-actions quick-command-actions">
             <button class="text-button" type="button" @click="resetQuickCommandDraft">恢复默认</button>
-            <button class="text-button" type="button" :disabled="quickCommandAiLoading" @click="recommendQuickCommandsWithAi">
-              {{ quickCommandAiLoading ? '推荐中...' : '根据历史推荐' }}
-            </button>
+            <button class="text-button" type="button" @click="recommendQuickCommandsFromHistory">根据历史推荐</button>
             <button class="text-button" type="button" @click="closeQuickCommandSettings">取消</button>
             <button class="text-button primary-action" type="button" :disabled="!quickCommandCanSave" @click="saveQuickCommandSettings">保存</button>
           </div>

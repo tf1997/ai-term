@@ -13,6 +13,16 @@ function assert(condition, message) {
   }
 }
 
+function sourceSection(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker)
+  const end = source.indexOf(endMarker, start + startMarker.length)
+  assert(start !== -1, `Missing source marker: ${startMarker}`)
+  assert(end !== -1, `Missing source marker: ${endMarker}`)
+  return source.slice(start, end)
+}
+
+const packageJson = read('package.json')
+const packageManifest = JSON.parse(packageJson)
 const appShell = read('src/components/AppShell.vue')
 const main = read('src/main.ts')
 const terminalPane = read('src/components/TerminalPane.vue')
@@ -24,6 +34,8 @@ const aiConfig = read('src/components/AiConfigPanel.vue')
 const fileTransfer = read('src/components/FileTransferPanel.vue')
 const scriptPanel = read('src/components/ScriptPanel.vue')
 const scriptExecution = read('src/lib/scriptExecution.ts')
+const commandPrivacy = read('src/lib/commandPrivacy.ts')
+const commandPrivacyTest = read('scripts/command-privacy.test.mjs')
 const scriptRisk = read('src/lib/scriptRisk.ts')
 const scriptReadiness = read('src/lib/scriptReadiness.ts')
 const sidebar = read('src/components/ConnectionSidebar.vue')
@@ -1137,7 +1149,7 @@ assert(
     terminalPane.includes('completionSuppressedForHistoryNavigation') &&
     terminalPane.includes('isHistoryNavigationInput(data)') &&
     terminalPane.includes('!completionSuppressedForHistoryNavigation') &&
-    !terminalPane.includes('moveCompletionSelection') &&
+    terminalPane.includes('moveCompletionSelection') &&
     terminalPane.includes("data === '\\x1bOA'") &&
     terminalPane.includes("data === '\\x1bOB'") &&
     terminalPane.includes('const inputResult = trackUserInput(data)') &&
@@ -1183,6 +1195,7 @@ assert(
     styles.includes('.terminal-completion button.selected::before') &&
     styles.includes('.terminal-completion mark') &&
     styles.includes('.terminal-completion .completion-source.session') &&
+    styles.includes('.terminal-completion .completion-source.pinned') &&
     styles.includes('.theme-light .terminal-completion mark') &&
     styles.includes('.theme-light .terminal-completion .completion-source.system') &&
     styles.includes('.terminal-native-code') &&
@@ -1212,7 +1225,8 @@ assert(
     terminalPane.includes('code === 3') &&
     terminalPane.includes('code === 21') &&
     terminalPane.includes('code === 23') &&
-    terminalPane.includes("terminalInputContext === 'shell' && inputCommandReliable") &&
+    terminalPane.includes("terminalInputContext === 'shell'") &&
+    terminalPane.includes('&& inputCommandReliable') &&
     terminalPane.includes("resetTrackedTerminalInput('unknown')") &&
     terminalPane.includes("resetTrackedTerminalInput('sensitive')") &&
     terminalPane.includes('writeSyncedTerminalInput') &&
@@ -2257,7 +2271,9 @@ assert(
     aiPanel.includes('selected-terminal-note') &&
     !aiPanel.includes('selected-context-chip') &&
     !styles.includes('.selected-context-chip') &&
-    aiPanel.includes('const commandHistory = props.commandHistory.map') &&
+    aiPanel.includes('function aiCommandHistory()') &&
+    aiPanel.includes('const commandHistory = aiCommandHistory()') &&
+    aiPanel.includes('.filter((command) => !isSensitiveCommand(command))') &&
     aiPanel.includes('contextStatusLabel') &&
     aiPanel.includes('已压缩至') &&
     aiPanel.includes('messages: AiMessage[]') &&
@@ -2566,26 +2582,104 @@ assert(
   'Right AI workspace must constrain chips, inputs, and long model text so it does not overflow horizontally.'
 )
 
+const historyFrequentBlock = sourceSection(
+  commandHistoryPanel,
+  'const matchingFrequentCommands',
+  'const frequentCommands'
+)
+const terminalCompletionBlock = sourceSection(
+  terminalPane,
+  'function buildCompletionSuggestions',
+  'function refreshCompletionSuggestions'
+)
+const terminalSystemSuggestionsBlock = sourceSection(
+  terminalPane,
+  'function systemCommandSuggestions',
+  'function historyCommandSuggestions'
+)
+const terminalRecommendationBlock = sourceSection(
+  terminalPane,
+  'function localQuickCommandRecommendations',
+  'function recommendQuickCommandsFromHistory'
+)
+const terminalRecommendationSeedBlock = sourceSection(
+  terminalPane,
+  'function quickCommandHistorySeed',
+  'function isHighRiskQuickCommand'
+)
+const terminalCommitQuickCommandsBlock = sourceSection(
+  terminalPane,
+  'function commitQuickCommands',
+  'function resetQuickCommandDraft'
+)
+const terminalFillCommandBlock = sourceSection(
+  terminalPane,
+  'function fillCommand',
+  'function terminalInputDestinationAvailable'
+)
+const appHistoryFillBlock = sourceSection(
+  appShell,
+  'function fillHistoryCommandOnActiveTerminal',
+  'function pinQuickCommandOnActiveTerminal'
+)
+const appHistoryPinBlock = sourceSection(
+  appShell,
+  'function pinQuickCommandOnActiveTerminal',
+  'async function writeInputToTargetTerminals'
+)
+const appNowTextBlock = sourceSection(
+  appShell,
+  'function nowText()',
+  'function newWorkspaceSession'
+)
+
 assert(
   commandHistoryPanel.includes('defineProps') &&
     commandHistoryPanel.includes('commands') &&
     commandHistoryPanel.includes('MAX_VISIBLE_COMMANDS = 100') &&
+    commandHistoryPanel.includes('MAX_FREQUENT_COMMANDS = 50') &&
+    commandHistoryPanel.includes("type HistoryView = 'recent' | 'frequent'") &&
     commandHistoryPanel.includes('visibleCommands') &&
+    commandHistoryPanel.includes('matchingFrequentCommands') &&
+    historyFrequentBlock.includes('grouped.get(command)') &&
+    historyFrequentBlock.includes('current.count += 1') &&
+    historyFrequentBlock.includes('current.lastIndex = index') &&
+    historyFrequentBlock.includes('second.count - first.count') &&
+    historyFrequentBlock.includes('second.lastIndex - first.lastIndex') &&
+    !historyFrequentBlock.includes('command.toLowerCase()') &&
+    commandHistoryPanel.includes('handleViewTabKeydown') &&
+    commandHistoryPanel.includes('role="tablist"') &&
+    commandHistoryPanel.includes('role="tabpanel"') &&
+    commandHistoryPanel.includes(`:tabindex="activeView === 'recent' ? 0 : -1"`) &&
     commandHistoryPanel.includes('historySearch') &&
+    commandHistoryPanel.includes('history-search-clear') &&
     commandHistoryPanel.includes('copyCommand') &&
     commandHistoryPanel.includes('previewEntry') &&
     commandHistoryPanel.includes('previewCommand') &&
     commandHistoryPanel.includes('closePreview') &&
     commandHistoryPanel.includes('copyPreviewCommand') &&
-    commandHistoryPanel.includes('executePreviewCommand') &&
+    commandHistoryPanel.includes('fillPreviewCommand') &&
     commandHistoryPanel.includes('isLongCommand') &&
     commandHistoryPanel.includes('history-command-cell') &&
     commandHistoryPanel.includes('预览完整命令') &&
     commandHistoryPanel.includes('history-preview-trigger') &&
     commandHistoryPanel.includes('<UiIcon name="eye" />') &&
-    commandHistoryPanel.includes("@dblclick=\"isLongCommand(entry.command) && previewCommand(entry)\"") &&
+    commandHistoryPanel.includes('<UiIcon name="pin" />') &&
+    commandHistoryPanel.includes('<UiIcon name="terminal" />') &&
+    commandHistoryPanel.includes('fill: [command: string]') &&
+    commandHistoryPanel.includes('pin: [command: string]') &&
+    commandHistoryPanel.includes("emit('fill'") &&
+    commandHistoryPanel.includes("emit('pin'") &&
+    !commandHistoryPanel.includes('@dblclick') &&
     commandHistoryPanel.includes('history-preview-modal') &&
-    commandHistoryPanel.includes("emit('rerun'") &&
+    commandHistoryPanel.includes('history-preview-copy-status') &&
+    commandHistoryPanel.includes('aria-live="polite"') &&
+    commandHistoryPanel.includes("event.key === 'Escape'") &&
+    commandHistoryPanel.includes('previewCloseButton.value?.focus()') &&
+    commandHistoryPanel.includes('trigger.isConnected') &&
+    commandHistoryPanel.includes("event.key !== 'Tab'") &&
+    !commandHistoryPanel.includes("emit('rerun'") &&
+    !commandHistoryPanel.includes('executeCommand') &&
     !commandHistoryPanel.includes('expandedCommandIds') &&
     !commandHistoryPanel.includes('toggleCommand') &&
     !commandHistoryPanel.includes(':class="{ expanded') &&
@@ -2594,42 +2688,73 @@ assert(
     styles.includes('.history-meta') &&
     styles.includes('/* Command history preview modal. */') &&
     styles.includes('/* Command history visual polish. */') &&
-    styles.includes('.history-row.is-long') &&
     styles.includes('.history-preview-trigger') &&
     styles.includes('.history-preview-modal') &&
     styles.includes('.history-preview-body') &&
     styles.includes('.history-preview-actions') &&
+    styles.includes('.history-preview-copy-status') &&
     styles.includes('overflow-wrap: anywhere;') &&
     !styles.includes('/* Command history expanded action polish. */') &&
     !styles.includes('order: -1;') &&
     styles.includes('.history-actions'),
-  'CommandHistoryPanel must cap visible command history, support search, copy, long-command preview modal, and allow rerunning a command.'
+  'CommandHistoryPanel must provide recent/frequent views, accessible search and preview, and explicit copy, pin, and fill actions without direct execution.'
 )
 
 assert(
   terminalPane.includes("type TerminalCommandReadiness = 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'") &&
     terminalPane.includes('function commandExecutionReadiness()') &&
     terminalPane.includes('commandExecutionReadiness,') &&
-    workspacePanel.includes('rerunCommand: [command: string]') &&
-    workspacePanel.includes("@rerun=\"emit('rerunCommand', $event)\"") &&
-    appShell.includes('COMMAND_EXECUTION_RETRY_DELAYS_MS') &&
-    appShell.includes('executeCommandOnTerminalIds') &&
-    appShell.includes('rerunCommandOnActiveTerminal') &&
-    appShell.includes('@rerun-command="rerunCommandOnActiveTerminal"') &&
-    appShell.includes("readiness.includes('line-busy')") &&
-    appShell.includes("readiness.includes('shell-busy')"),
-  'History reruns must target the active terminal, tolerate short mount/prompt races, and distinguish a busy command line from a missing terminal.'
+    terminalPane.includes('fillCommand,') &&
+    terminalPane.includes('pinQuickCommand,') &&
+    terminalFillCommandBlock.includes('sendInteractiveTerminalInput(value, false)') &&
+    !terminalFillCommandBlock.includes("value + '\\r'") &&
+    !terminalFillCommandBlock.includes('executeCommand(') &&
+    terminalPane.includes('const event: TerminalInputEvent | undefined = synchronize') &&
+    workspacePanel.includes('fillCommand: [command: string]') &&
+    workspacePanel.includes('pinQuickCommand: [command: string]') &&
+    workspacePanel.includes(`v-if="activeWorkspaceTab === 'history'"`) &&
+    !workspacePanel.includes('historyPanelVisited') &&
+    !workspacePanel.includes(`v-show="activeWorkspaceTab === 'history'"`) &&
+    workspacePanel.includes("@fill=\"emit('fillCommand', $event)\"") &&
+    workspacePanel.includes("@pin=\"emit('pinQuickCommand', $event)\"") &&
+    appShell.includes('fillHistoryCommandOnActiveTerminal') &&
+    appShell.includes('pinQuickCommandOnActiveTerminal') &&
+    appHistoryFillBlock.includes('terminalRefs.value[activeTerminalId.value]') &&
+    appHistoryFillBlock.includes('pane?.fillCommand(value)') &&
+    !appHistoryFillBlock.includes('executeCommandOnTerminalIds') &&
+    appHistoryPinBlock.includes('terminalRefs.value[activeTerminalId.value]') &&
+    appHistoryPinBlock.includes('pane?.pinQuickCommand(command)') &&
+    !appHistoryPinBlock.includes('executeCommandOnTerminalIds') &&
+    appShell.includes('@fill-command="fillHistoryCommandOnActiveTerminal"') &&
+    appShell.includes('@pin-quick-command="pinQuickCommandOnActiveTerminal"') &&
+    !workspacePanel.includes('rerunCommand') &&
+    !appShell.includes('rerunCommandOnActiveTerminal'),
+  'History fill and pin actions must target the active terminal, keep fill out of multi-terminal synchronization, and never execute the command directly.'
 )
 
 assert(
   appShell.includes('const COMMAND_HISTORY_CACHE_LIMIT = 300') &&
     appShell.includes('.slice(-COMMAND_HISTORY_CACHE_LIMIT)') &&
+    appShell.includes('createdAt: nowText()') &&
+    appNowTextBlock.includes('return new Date().toISOString()') &&
+    appShell.includes('if (isSensitiveCommand(event.command)) return') &&
+    !appShell.includes('createdAt: new Date().toLocaleString()') &&
     sqlite.includes('const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;') &&
     sqlite.includes('prune_command_history') &&
     sqlite.includes('DELETE FROM command_history') &&
+    sqlite.includes('COALESCE(julianday(created_at), 0.0) DESC, rowid DESC, id DESC') &&
+    sqlite.includes('ORDER BY created_sort ASC, history_rowid ASC, id ASC') &&
     aiPanel.includes('const MAX_AI_COMMAND_HISTORY = 80') &&
-    aiPanel.includes('.slice(-MAX_AI_COMMAND_HISTORY)'),
-  'Command history must be bounded: database keeps a finite recent window, frontend cache stays capped, and AI only receives recent useful commands.'
+    aiPanel.includes('.slice(-MAX_AI_COMMAND_HISTORY)') &&
+    aiPanel.includes('.filter((command) => !isSensitiveCommand(command))') &&
+    terminalPane.includes('if (!value || isSensitiveCommand(value)) return') &&
+    commandPrivacy.includes('export function isSensitiveCommand') &&
+    commandPrivacy.includes('AUTHORIZATION_HEADER_PATTERN') &&
+    commandPrivacy.includes('CREDENTIAL_URL_PATTERN') &&
+    packageManifest.scripts?.['test:scripts']?.includes('scripts/command-privacy.test.mjs') &&
+    commandPrivacyTest.includes("test('command privacy detects common inline credentials'") &&
+    commandPrivacyTest.includes("test('command privacy keeps ordinary operational commands recordable'"),
+  'Command history must use ISO timestamps, mixed-format SQLite ordering, bounded retention, and defense-in-depth filtering before persistence, completion, recommendation, or AI context.'
 )
 
 assert(
@@ -2684,12 +2809,38 @@ assert(
     terminalPane.includes('shouldShowQuickCommandMessage') &&
     terminalPane.includes('scriptRiskStatusForContent') &&
     terminalPane.includes("scriptRiskStatusForContent(value).level === 'high'") &&
-    terminalPane.includes('recommendQuickCommandsWithAi') &&
-    terminalPane.includes('chatWithAiProvider') &&
-    terminalPane.includes('QUICK_COMMAND_AI_TIMEOUT_MS = 15_000') &&
-    terminalPane.includes('quickCommandRecommendationGeneration') &&
-    terminalPane.includes('withQuickCommandAiTimeout') &&
-    terminalPane.includes('已生成历史候选，正在获取 AI 优化。') &&
+    terminalPane.includes('recommendQuickCommandsFromHistory') &&
+    terminalPane.includes('localQuickCommandRecommendations') &&
+    terminalRecommendationBlock.includes('const events = quickCommandHistorySeed()') &&
+    terminalRecommendationSeedBlock.includes('!isSensitiveCommand(command)') &&
+    terminalRecommendationBlock.includes('events.forEach((command, index) => {') &&
+    terminalRecommendationBlock.includes('stats.get(command)') &&
+    terminalRecommendationBlock.includes('Math.log1p(item.count) + Math.exp(-age / recencyWindow)') &&
+    terminalPane.includes('commitQuickCommands') &&
+    terminalPane.includes('pinQuickCommand(command: string)') &&
+    terminalPane.includes("type CompletionSuggestionSource = 'pinned'") &&
+    terminalCompletionBlock.includes('const current = historyStats.get(value)') &&
+    terminalCompletionBlock.includes('isSensitiveCommand(value)') &&
+    !terminalCompletionBlock.includes('historyStats.get(value.toLowerCase())') &&
+    terminalCompletionBlock.includes('const pinnedSuggestions = quickCommands.value') &&
+    terminalCompletionBlock.includes('historyStats.delete(command)') &&
+    terminalPane.includes("if (source === 'pinned') return '固定'") &&
+    terminalCompletionBlock.includes('return [...pinnedSuggestions, ...historySuggestions, ...systemSuggestions]') &&
+    terminalSystemSuggestionsBlock.includes('const shellKind = shellPromptSignature?.kind') &&
+    terminalSystemSuggestionsBlock.includes("shellKind === 'powershell' || shellKind === 'cmd'") &&
+    terminalPane.includes('inputCommandBuffer.trimStart().length >= 2') &&
+    terminalPane.includes('inputCommandCursor === inputCommandBuffer.length') &&
+    terminalPane.includes('localCommandHistory.value = [...localCommandHistory.value, value].slice(-120)') &&
+    terminalCommitQuickCommandsBlock.includes('persistQuickCommands(nextCommands)') &&
+    terminalCommitQuickCommandsBlock.includes('isSensitiveCommand(value)') &&
+    terminalCommitQuickCommandsBlock.includes('window.dispatchEvent(new CustomEvent<QuickCommandsChangedDetail>') &&
+    terminalCommitQuickCommandsBlock.includes('if (quickCommands.value.includes(value)) return') &&
+    terminalCommitQuickCommandsBlock.includes('if (quickCommands.value.length >= QUICK_COMMAND_LIMIT) return') &&
+    !terminalPane.includes('recommendQuickCommandsWithAi') &&
+    !terminalPane.includes('chatWithAiProvider') &&
+    !terminalPane.includes('QUICK_COMMAND_AI_TIMEOUT_MS') &&
+    !terminalPane.includes('quickCommandRecommendationGeneration') &&
+    !terminalPane.includes('withQuickCommandAiTimeout') &&
     terminalPane.includes('class="modal quick-command-modal"') &&
     terminalPane.includes('quick-command-backdrop') &&
     !terminalPane.includes('@click.self="closeQuickCommandSettings"') &&
@@ -2697,17 +2848,15 @@ assert(
     terminalPane.includes('根据历史推荐') &&
     terminalPane.includes('推荐候选') &&
     terminalPane.includes('确认恢复') &&
-    terminalPane.includes('aiConfig?: AiProviderConfig') &&
-    terminalPane.includes('apiKey?: string') &&
+    !terminalPane.includes('aiConfig?: AiProviderConfig') &&
+    !terminalPane.includes('apiKey?: string') &&
     terminalPane.includes('terminalLineReadyForAppInput()') &&
-    terminalPane.includes('sendInteractiveTerminalInput(value)') &&
-    !terminalPane.includes('function runQuickCommand(command: string) {\n  executeCommand(command)') &&
+    terminalPane.includes('sendInteractiveTerminalInput(value, false)') &&
+    !terminalPane.includes('function runQuickCommand') &&
     terminalPane.includes('title="填入终端"') &&
     terminalPane.includes('QUICK_COMMAND_STORAGE_KEY_PREFIX') &&
     terminalPane.includes("props.profile?.id || 'local'") &&
     terminalPane.includes('QUICK_COMMANDS_CHANGED_EVENT') &&
-    (appShell.match(/:ai-config="aiConfig"/g) ?? []).length >= 2 &&
-    (appShell.match(/:api-key="activeAiRuntimeApiKey"/g) ?? []).length >= 2 &&
     styles.includes('.quick-command-modal') &&
     styles.includes('.quick-command-list') &&
     styles.includes('.quick-command-row') &&
@@ -2717,11 +2866,12 @@ assert(
     styles.includes('.theme-light .quick-command-row') &&
     styles.includes('.quick-command-recommendations') &&
     styles.includes('.quick-command-reset-confirm') &&
+    styles.includes('.completion-source.pinned') &&
     styles.includes('.command-risk-status.risk-muted') &&
     terminalPane.includes('terminal-heading') &&
     terminalPane.includes('copyTerminalOutput') &&
     !terminalPane.includes('connection-strip'),
-  'TerminalPane must expose a compact terminal header and managed quick command settings without the old tall connection summary.'
+  'TerminalPane must provide local deterministic fixed-command recommendations, pinned-first completion, guarded fill, and managed fixed-command settings without an AI dependency.'
 )
 
 assert(
@@ -2913,7 +3063,7 @@ assert(
 )
 
 assert(
-  commandHistoryPanel.includes('\u6682\u65e0\u547d\u4ee4\u5386\u53f2') &&
+  commandHistoryPanel.includes('执行命令后，记录会显示在这里。') &&
     commandHistoryPanel.includes('\u6ca1\u6709\u5339\u914d\u7684\u547d\u4ee4') &&
     commandHistoryPanel.includes('UiIcon') &&
     !commandHistoryPanel.includes('No command history') &&
@@ -2935,6 +3085,7 @@ assert(
     uiIcon.includes("'list'") &&
     uiIcon.includes("'search'") &&
     uiIcon.includes("'stop'") &&
+    uiIcon.includes("'pin'") &&
     aiPanel.includes('import UiIcon') &&
     aiPanel.includes('title="会话列表"') &&
     aiPanel.includes('name="list"') &&
@@ -2948,7 +3099,9 @@ assert(
     fileTransfer.includes('name="download"') &&
     fileTransfer.includes('name="folder-open"') &&
     fileTransfer.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
-    uiIcon.includes("name === 'file'"),
+    uiIcon.includes("name === 'file'") &&
+    uiIcon.includes("name === 'pin'") &&
+    commandHistoryPanel.includes('name="pin"'),
   'AI, script, SFTP, and history surfaces must use UiIcon for common action buttons instead of fragile character glyphs.'
 )
 assert(

@@ -10,6 +10,7 @@ import type {
 } from '../types/workspace'
 import { cancelTask, chatWithAiProviderStream, compressAiConversation, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
 import { parseMessageParts, type MessagePart } from '../lib/aiMarkdown'
+import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import {
   analyzeScriptRisks,
@@ -135,7 +136,8 @@ const selectedTerminalContext = computed(() => {
 })
 
 const aiModelLabel = computed(() => props.config.model.trim() || props.selectedConfigId || '未选择模型')
-const aiContextHistoryCount = computed(() => Math.min(props.commandHistory.length, MAX_AI_COMMAND_HISTORY))
+const aiEligibleHistoryCount = computed(() => props.commandHistory.filter((entry) => !isSensitiveCommand(entry.command)).length)
+const aiContextHistoryCount = computed(() => Math.min(aiEligibleHistoryCount.value, MAX_AI_COMMAND_HISTORY))
 const assistantContextSummary = computed(() => `模型 ${aiModelLabel.value}`)
 const contextSummaryLabel = computed(() => {
   const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
@@ -197,7 +199,14 @@ function formatCharacterCount(count: number) {
   return `${Math.max(0, count).toLocaleString('zh-CN')} 字符`
 }
 
-function inferCommand(question: string, terminalSnapshot = props.terminalSnapshot, commandHistory = props.commandHistory.map((entry) => entry.command)) {
+function aiCommandHistory() {
+  return props.commandHistory
+    .map((entry) => entry.command)
+    .filter((command) => !isSensitiveCommand(command))
+    .slice(-MAX_AI_COMMAND_HISTORY)
+}
+
+function inferCommand(question: string, terminalSnapshot = props.terminalSnapshot, commandHistory = aiCommandHistory()) {
   const text = question.toLowerCase()
   const recentCommands = commandHistory.slice(-8).join('\n')
   const context = `${terminalSnapshot}\n${recentCommands}`.toLowerCase()
@@ -239,7 +248,7 @@ async function sendMessage() {
   const requestConnectionId = props.connectionId
   const requestWorkspaceSessionId = props.workspaceSessionId
   const terminalSnapshot = props.terminalSnapshot
-  const commandHistory = props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY)
+  const commandHistory = aiCommandHistory()
   const { summary: conversationSummary, unsummarized } = conversationContextParts(requestWorkspaceSessionId)
   const conversationMessages = unsummarized
     .slice(-MAX_AI_CONVERSATION_MESSAGES)
@@ -609,7 +618,7 @@ async function explainPendingAiCommandRisk() {
       apiKey,
       question: buildAiRiskExplanationPrompt(command),
       terminalSnapshot: props.terminalSnapshot,
-      commandHistory: props.commandHistory.map((entry) => entry.command).slice(-MAX_AI_COMMAND_HISTORY),
+      commandHistory: aiCommandHistory(),
       conversationMessages: []
     })
     if (aiRiskExplanationRequestId.value !== requestId) return
@@ -1031,7 +1040,7 @@ watch(
       </div>
       <div v-if="contextOpen" class="ai-context-detail">
         <span><strong>终端</strong>{{ formatCharacterCount(terminalSnapshot.length) }}</span>
-        <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ commandHistory.length }} 条</span>
+        <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ aiEligibleHistoryCount }} 条</span>
         <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
         <span><strong>上下文</strong>{{ contextStatusLabel }}</span>
         <span v-if="compactedConversationCount > 0" title="更早的对话已由 AI 压缩为摘要，并继续作为背景提供给模型"><strong>历史压缩</strong>{{ compactedConversationCount }} 条早期消息已并入摘要</span>
