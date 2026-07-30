@@ -156,6 +156,7 @@ const SELECTION_COPY_DEBOUNCE = 150
 let inputCommandBuffer = ''
 let inputCommandCursor = 0
 let inputCommandReliable = true
+let lastTrackedUserInputAt = 0
 let terminalInputContext: TerminalInputContext = 'unknown'
 let shellPromptText = ''
 let shellPromptSignature: ShellPromptSignature | undefined
@@ -1666,8 +1667,10 @@ function recognizedShellPrompt(lastLine: string) {
 }
 
 // 远端把行按终端宽度截断时(如 systemctl 的 ellipsized 输出)可能连同 SGR 重置
-// 序列一起截掉,导致下划线/反显等属性泄漏到后续所有输出。提示符回归时若光标前
-// 的字符仍带这些属性,向显示层补一个重置。
+// 或 OSC 8 超链接结束序列一起截掉,导致下划线/反显/超链接状态泄漏到后续所有
+// 输出。未关闭的 OSC 8 超链接在 xterm.js 中会把之后每个单元格都渲染成虚线下
+// 划线,且 SGR 重置按设计不清除链接状态,必须单独补 \x1b]8;;ST。提示符回归时
+// 若光标前的字符仍带这些属性,向显示层补一个完整重置。
 function clearLeakedTextAttributes() {
   if (!terminal) return
   const buffer = terminal.buffer.active
@@ -1682,7 +1685,7 @@ function clearLeakedTextAttributes() {
     cell.isDim() ||
     cell.isItalic()
   ) {
-    terminal.write('\x1b[0m')
+    terminal.write('\x1b[0m\x1b]8;;\x1b\\')
   }
 }
 
@@ -1738,6 +1741,20 @@ function commandExecutionReadiness(): TerminalCommandReadiness {
   return 'shell-busy'
 }
 
+// read -n1、y/n 确认、分页器按键等输入会被程序直接消费而没有回车,跟踪缓冲会
+// 残留这次按键;残留会永久挡住提示符识别,脚本/快捷命令随之一直报"未就绪"。
+// 用户已停止输入且屏幕当前行就是干净的已学习提示符时,判定缓冲为残留。
+const TRACKED_INPUT_STALE_AFTER_MS = 1_500
+
+function trackedInputResidueIsStale() {
+  if (Date.now() - lastTrackedUserInputAt < TRACKED_INPUT_STALE_AFTER_MS) return false
+  if (!shellPromptText || !terminal || terminal.buffer.active.type === 'alternate') return false
+  const rendered = currentRenderedCommandLine()
+  if (!rendered) return false
+  if (rendered === shellPromptText) return true
+  return shellPromptSignature?.kind !== 'bare' && rendered.endsWith(shellPromptText)
+}
+
 function updateTerminalInputContextFromOutput() {
   if (terminal?.buffer.active.type === 'alternate') {
     terminalWasInAlternateBuffer = true
@@ -1762,7 +1779,10 @@ function updateTerminalInputContextFromOutput() {
     closeCompletion()
     return
   }
-  if (inputCommandBuffer.length > 0) return
+  if (inputCommandBuffer.length > 0) {
+    if (!trackedInputResidueIsStale()) return
+    resetTrackedTerminalInput()
+  }
   if (!shellPromptDiscoveryOpen && terminalInputContext === 'shell') return
   const prompt = recognizedShellPrompt(lastLine)
   if (!prompt) return
@@ -1800,6 +1820,7 @@ function nextTrackedTextBoundary(text: string, cursor: number) {
 }
 
 function trackUserInput(data: string): TerminalInputTrackResult {
+  lastTrackedUserInputAt = Date.now()
   if (isHistoryNavigationInput(data)) {
     completionSuppressedForHistoryNavigation = true
     invalidateTrackedTerminalInput()
