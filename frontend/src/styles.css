@@ -416,7 +416,7 @@ code,
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   border: 1px solid #1c2534;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(22, 29, 42, .94), rgba(16, 22, 32, .94));
@@ -10491,6 +10491,28 @@ code {
   border-color: transparent;
   background: var(--workbench-panel-strong);
   color: var(--workbench-text-strong);
+}
+
+/* 运行按钮:实心绿色三角 + 悬停绿色底,和右侧灰色的"更多"区分开,
+   也避免和左侧绿色描边的角色徽标(堡垒机/直连)混成一体 */
+.server-card .card-actions .icon-button.connect,
+.theme-light .server-card .card-actions .icon-button.connect {
+  color: var(--workbench-accent);
+}
+
+.server-card .card-actions .icon-button.connect .ui-icon path {
+  fill: currentColor;
+}
+
+.server-card .card-actions .icon-button.connect:hover:not(:disabled),
+.theme-light .server-card .card-actions .icon-button.connect:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+}
+
+.server-card .card-actions .icon-button.connect:disabled {
+  color: var(--workbench-quiet);
 }
 
 .terminal-stack,

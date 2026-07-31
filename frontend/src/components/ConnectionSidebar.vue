@@ -157,7 +157,7 @@ function profileReadyToConnect(profile: ConnectionProfile) {
           </div>
         </div>
         <div class="card-actions">
-          <button class="icon-button" type="button" title="连接服务器" aria-label="连接服务器" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">
+          <button class="icon-button connect" type="button" title="连接服务器" aria-label="连接服务器" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">
             <UiIcon name="play" />
           </button>
           <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click.stop="emit('openMenu', $event, profile.id)">
