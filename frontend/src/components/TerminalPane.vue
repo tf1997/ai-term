@@ -35,7 +35,7 @@ import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
 
 const terminalTypographyOptions = isWindowsPlatform()
-  ? { lineHeight: 1.12, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
+  ? { lineHeight: 1.18, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
   : { lineHeight: 1, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
@@ -1974,7 +1974,6 @@ onMounted(async () => {
   terminal.open(terminalHost.value)
   syncTerminalSize()
   terminal.focus()
-  renderIdlePrompt(terminal)
 
   dataDisposable = terminal.onData((data) => {
     if (handleTerminalProtocolResponse(data)) return

@@ -11,6 +11,7 @@ const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consol
 const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
 const windowsPlatform = isWindowsPlatform()
 const DEFAULT_TERMINAL_FONT_FAMILY = windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
+const DEFAULT_TERMINAL_FONT_SIZE = windowsPlatform ? 15 : 13
 
 interface AppUserSettings {
   terminalFontFamily: string
@@ -115,7 +116,7 @@ function closeAiConfig() {
 function saveSettings() {
   emit('updateSettings', {
     ...draft,
-    terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || 13)),
+    terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || DEFAULT_TERMINAL_FONT_SIZE)),
     terminalFontFamily: draft.terminalFontFamily.trim() || DEFAULT_TERMINAL_FONT_FAMILY,
     terminalTheme: 'midnight',
     defaultShell: draft.defaultShell.trim() || 'system'
@@ -124,7 +125,7 @@ function saveSettings() {
 
 function resetTerminalAppearance() {
   draft.terminalFontFamily = DEFAULT_TERMINAL_FONT_FAMILY
-  draft.terminalFontSize = 13
+  draft.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
   saveSettings()
 }
 </script>

@@ -61,7 +61,10 @@ const tauriLib = read('../src-tauri/src/lib.rs')
 
 assert(
   styles.includes('--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC"') &&
-    styles.includes('--font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC Variable"') &&
+    styles.includes('--font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"') &&
+    styles.includes('--font-xs: 12px;') &&
+    styles.includes('--font-md: 14px;') &&
+    styles.includes('--control-h: 34px;') &&
     styles.includes('font-synthesis: none;') &&
     styles.includes('font-kerning: normal;') &&
     !styles.includes('letter-spacing: -.005em;') &&
@@ -69,7 +72,7 @@ assert(
     !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
     main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
-    terminalPane.includes('lineHeight: 1.12') &&
+    terminalPane.includes('lineHeight: 1.18') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
   'macOS must keep native typography while Windows uses native UI fonts, real bundled terminal weights, and integer type metrics.'
