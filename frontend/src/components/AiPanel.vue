@@ -117,7 +117,7 @@ const canSendMessage = computed(() => hasUsableConfig.value && Boolean(props.wor
 
 const composerPlaceholder = computed(() => {
   if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
-  if (hasUsableConfig.value) return '输入问题，Ctrl+Enter / ⌘+Enter 发送'
+  if (hasUsableConfig.value) return '输入问题'
   return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
 })
 

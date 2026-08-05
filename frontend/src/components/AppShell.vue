@@ -2224,7 +2224,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="session-tab-actions">
-          <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="openLocalTerminal"><UiIcon name="plus" /></button>
           <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="terminalTargetTitle">
             <UiIcon name="terminal" size="13" />
             <span>{{ terminalTargetLabel }}</span>

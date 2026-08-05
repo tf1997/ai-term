@@ -1045,8 +1045,10 @@ assert(
 assert(
   appShell.includes('function openLocalTerminal()') &&
     appShell.includes("selectedProfileId.value = ''") &&
-    appShell.includes('@click="openLocalTerminal"'),
-  'AppShell must provide an explicit local terminal action that clears the selected profile and reconnects locally.'
+    appShell.includes("label: '新建本地终端'") &&
+    appShell.includes('action: openLocalTerminal') &&
+    !appShell.includes('@click="openLocalTerminal"'),
+  'AppShell must provide local terminal creation through context menus without a misleading standalone add button.'
 )
 
 assert(

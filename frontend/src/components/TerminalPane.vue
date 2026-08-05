@@ -932,7 +932,7 @@ function handleCompletionInput(data: string) {
 }
 
 function renderIdlePrompt(term: Terminal) {
-  term.clear()
+  term.reset()
   term.writeln('No active shell.')
   term.writeln('Use New Local Shell to start a local terminal.')
   term.writeln('')
@@ -2145,7 +2145,7 @@ async function connectRemote() {
     activeSession.value = 'remote'
     activeSessionProfile.value = profile
     status.value = 'connecting'
-    terminal.clear()
+    terminal.reset()
     const size = currentTerminalSize()
     terminal.writeln(`Connecting SSH profile: ${profile.name}`)
     scrollTerminalToBottom()
@@ -2216,7 +2216,7 @@ async function connectLocal() {
     status.value = 'connecting'
     activeSession.value = 'local'
     activeSessionProfile.value = undefined
-    terminal.clear()
+    terminal.reset()
     terminal.writeln('Opening local shell...')
     scrollTerminalToBottom()
     setTerminalOutputBuffer('Opening local shell...\n')
@@ -2286,7 +2286,7 @@ function enterLocalShellErrorMode(error: unknown) {
   sessionId = ''
   const detail = formatError(error)
   const message = `Local shell failed to start: ${detail}`
-  terminal?.clear()
+  terminal?.reset()
   terminal?.writeln('\x1b[31mLocal shell failed to start.\x1b[0m')
   terminal?.writeln(detail)
   terminal?.writeln('')
@@ -2321,7 +2321,7 @@ function enterSftpProfileMode() {
   activeSession.value = 'sftp'
   activeSessionProfile.value = props.profile
   sessionId = ''
-  terminal.clear()
+  terminal.reset()
   terminal.writeln('\x1b[36mSFTP profile is ready.\x1b[0m')
   terminal.writeln(`Profile: ${props.profile.name}`)
   terminal.writeln(`Target: ${props.profile.target.username || 'user'}@${props.profile.target.host || 'server'}`)
