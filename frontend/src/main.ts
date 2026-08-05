@@ -7,9 +7,7 @@ async function bootstrap() {
   if (isWindowsPlatform()) {
     document.documentElement.dataset.platform = 'windows'
     await Promise.all([
-      import('@fontsource/noto-sans-sc/chinese-simplified-400.css'),
-      import('@fontsource/noto-sans-sc/chinese-simplified-500.css'),
-      import('@fontsource/noto-sans-sc/chinese-simplified-600.css'),
+      import('@fontsource-variable/noto-sans-sc'),
       import('@fontsource/jetbrains-mono/400.css'),
       import('@fontsource/jetbrains-mono/500.css'),
       import('@fontsource/jetbrains-mono/600.css')

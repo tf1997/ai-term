@@ -61,12 +61,13 @@ const tauriLib = read('../src-tauri/src/lib.rs')
 
 assert(
   styles.includes('--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC"') &&
-    styles.includes('--font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC"') &&
+    styles.includes('--font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Noto Sans SC Variable"') &&
     styles.includes('font-synthesis: none;') &&
     styles.includes('font-kerning: normal;') &&
     !styles.includes('letter-spacing: -.005em;') &&
     !/font-weight:\s*(?:650|700|720|750|760|800);/.test(styles) &&
     !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
+    main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
     terminalPane.includes('lineHeight: 1.12') &&
     terminalPane.includes("fontWeight: '400' as const") &&
