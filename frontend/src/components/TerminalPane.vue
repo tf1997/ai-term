@@ -43,7 +43,6 @@ type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
 type CompletionSuggestionSource = 'pinned' | 'system' | 'history' | 'session'
 type PinQuickCommandResult = 'added' | 'exists' | 'invalid' | 'limit'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
-type TerminalSelectionViewportCell = { x: number; y: number }
 type TerminalInputTrackResult = 'idle' | 'changed' | 'submitted'
 type TerminalInputContext = 'shell' | 'sensitive' | 'unknown'
 type TerminalCommandReadiness = 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
@@ -142,10 +141,7 @@ let terminalFitFrame = 0
 let forcePtyResizeOnNextFit = false
 let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
-let terminalSelectionPolishFrame = 0
-let terminalSelectionDragging = false
-let terminalSelectionDragStart: TerminalSelectionViewportCell | undefined
-let terminalSelectionDragCurrent: TerminalSelectionViewportCell | undefined
+let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
 let terminalOutputRecentTail = ''
 let terminalOutputEmitTimer: number | undefined
@@ -951,18 +947,6 @@ function terminalHostIsMeasurable(element: HTMLElement) {
   return props.active && element.clientWidth > 0 && element.clientHeight > 0
 }
 
-function renderedTerminalCellSize() {
-  const settings = resolvedTerminalSettings()
-  const screen = terminalHost.value?.querySelector<HTMLElement>('.xterm-screen')
-  const rect = screen?.getBoundingClientRect()
-  const cols = terminal?.cols ?? 0
-  const rows = terminal?.rows ?? 0
-  return {
-    width: rect && rect.width > 0 && cols > 0 ? rect.width / cols : settings.terminalFontSize * 0.62,
-    height: rect && rect.height > 0 && rows > 0 ? rect.height / rows : settings.terminalFontSize * 1.18
-  }
-}
-
 function currentTerminalSize() {
   syncTerminalSize()
   return terminal ? { cols: terminal.cols, rows: terminal.rows } : terminalSize.value
@@ -1112,178 +1096,53 @@ function normalizedTerminalSelectionText(value: string) {
     .replace(/\n+$/g, '')
 }
 
-function terminalRowContentRight(row: HTMLElement) {
-  const rowRect = row.getBoundingClientRect()
-  const text = row.textContent ?? ''
-  const contentLength = text.trimEnd().length
-  if (!contentLength) return rowRect.left
+function normalizeTerminalSelectionToContent() {
+  if (!terminal || terminalSelectionNormalizing) return false
+  const selection = terminal.getSelectionPosition()
+  if (!selection) return false
 
-  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
-  let remaining = contentLength
-  let right = rowRect.left
-  let node = walker.nextNode() as Text | null
+  const buffer = terminal.buffer.active
+  const cols = terminal.cols
+  let firstOffset: number | undefined
+  let lastOffset: number | undefined
 
-  while (node && remaining > 0) {
-    const take = Math.min(node.data.length, remaining)
-    if (take > 0) {
-      const range = document.createRange()
-      range.setStart(node, 0)
-      range.setEnd(node, take)
-      const rect = range.getBoundingClientRect()
-      right = Math.max(right, rect.right)
-      range.detach()
-      remaining -= take
+  for (let rowIndex = selection.start.y; rowIndex <= selection.end.y; rowIndex += 1) {
+    const line = buffer.getLine(rowIndex)
+    if (!line) continue
+    const startColumn = rowIndex === selection.start.y ? selection.start.x : 0
+    const endColumn = rowIndex === selection.end.y ? selection.end.x : cols
+    if (endColumn <= startColumn) continue
+
+    let selectedContentStart: number | undefined
+    let selectedContentEnd: number | undefined
+    for (let column = startColumn; column < Math.min(endColumn, cols); column += 1) {
+      const cell = line.getCell(column)
+      if (!cell?.getChars().trim()) continue
+      selectedContentStart ??= column
+      selectedContentEnd = Math.min(cols, column + Math.max(1, cell.getWidth()))
     }
-    node = walker.nextNode() as Text | null
+    if (selectedContentStart === undefined || selectedContentEnd === undefined) continue
+
+    firstOffset ??= rowIndex * cols + selectedContentStart
+    lastOffset = rowIndex * cols + selectedContentEnd
   }
 
-  if (right > rowRect.left) return right
-  return rowRect.left + contentLength * renderedTerminalCellSize().width
-}
-
-function terminalSelectionOverlay() {
-  const host = terminalHost.value
-  const screen = host?.querySelector<HTMLElement>('.xterm-screen')
-  if (!host || !screen) return undefined
-  let overlay = screen.querySelector<HTMLElement>('.ai-term-selection-overlay')
-  if (!overlay) {
-    overlay = document.createElement('div')
-    overlay.className = 'ai-term-selection-overlay'
-    screen.appendChild(overlay)
-  }
-  return { host, screen, overlay }
-}
-
-function clearTerminalSelectionOverlay() {
-  const host = terminalHost.value
-  host?.classList.remove('ai-term-selection-polished')
-  host?.querySelector<HTMLElement>('.ai-term-selection-overlay')?.replaceChildren()
-}
-
-function terminalSelectionCellToViewport(cell: { x: number; y: number }) {
-  const viewportY = terminal?.buffer.active.viewportY ?? 0
-  return {
-    x: Math.max(0, cell.x),
-    y: Math.max(0, cell.y - viewportY)
-  }
-}
-
-function terminalPointerViewportCell(event: PointerEvent): TerminalSelectionViewportCell | undefined {
-  const host = terminalHost.value
-  const firstRow = host?.querySelector<HTMLElement>('.xterm-rows > div')
-  if (!host || !firstRow) return undefined
-
-  const cell = renderedTerminalCellSize()
-  const firstRowRect = firstRow.getBoundingClientRect()
-  const rowHeight = Math.max(1, firstRowRect.height || cell.height)
-  const rowCount = Math.max(1, terminal?.rows ?? host.querySelectorAll('.xterm-rows > div').length)
-  return {
-    x: Math.max(0, Math.floor((event.clientX - firstRowRect.left) / cell.width)),
-    y: Math.max(0, Math.min(rowCount - 1, Math.floor((event.clientY - firstRowRect.top) / rowHeight)))
-  }
-}
-
-function polishTerminalSelection() {
-  const overlayTarget = terminalSelectionOverlay()
-  const selectionPosition = terminal?.getSelectionPosition()
-  if (!overlayTarget || !selectionPosition) {
-    clearTerminalSelectionOverlay()
-    return
-  }
-
-  const { host, screen, overlay } = overlayTarget
-  const rows = Array.from(host.querySelectorAll<HTMLElement>('.xterm-rows > div'))
-  overlay.replaceChildren()
-  host.classList.add('ai-term-selection-polished')
-  if (!rows.length) return
-
-  const rawStart = terminalSelectionCellToViewport(selectionPosition.start)
-  const rawEnd = terminalSelectionCellToViewport(selectionPosition.end)
-  const isReverseSelection = rawStart.y > rawEnd.y || (rawStart.y === rawEnd.y && rawStart.x > rawEnd.x)
-  const start = { ...rawStart }
-  const end = { ...rawEnd }
-  if (isReverseSelection) {
-    const previousStart = { ...start }
-    start.x = end.x
-    start.y = end.y
-    end.x = previousStart.x
-    end.y = previousStart.y
-  }
-  const isPointerReverseSelection = Boolean(
-    terminalSelectionDragStart &&
-      terminalSelectionDragCurrent &&
-      (terminalSelectionDragCurrent.y < terminalSelectionDragStart.y ||
-        (terminalSelectionDragCurrent.y === terminalSelectionDragStart.y && terminalSelectionDragCurrent.x < terminalSelectionDragStart.x))
-  )
-  const isReverseMultiLineSelection = (isReverseSelection || isPointerReverseSelection) && start.y !== end.y
-
-  const cellWidth = renderedTerminalCellSize().width
-  const screenRect = screen.getBoundingClientRect()
-  const startY = Math.max(0, Math.min(rows.length - 1, start.y))
-  const endY = Math.max(0, Math.min(rows.length - 1, end.y))
-
-  for (let rowIndex = startY; rowIndex <= endY; rowIndex += 1) {
-    const row = rows[rowIndex]
-    const textLength = (row.textContent ?? '').trimEnd().length
-    if (!textLength) continue
-
-    const rowRect = row.getBoundingClientRect()
-    const contentRight = terminalRowContentRight(row)
-    let left = rowRect.left
-    let right = contentRight
-
-    if (rowIndex === start.y) {
-      left = rowRect.left + (isReverseMultiLineSelection ? 0 : start.x) * cellWidth
+  terminalSelectionNormalizing = true
+  try {
+    if (firstOffset === undefined || lastOffset === undefined) {
+      terminal.clearSelection()
+      return true
     }
-    if (rowIndex === end.y) right = Math.min(right, rowRect.left + end.x * cellWidth)
 
-    left = Math.max(rowRect.left, Math.min(left, contentRight))
-    right = Math.max(rowRect.left, Math.min(right, contentRight))
-    const width = Math.ceil(right - left)
-    if (width <= 0) continue
+    const currentStart = selection.start.y * cols + selection.start.x
+    const currentEnd = selection.end.y * cols + selection.end.x
+    if (currentStart === firstOffset && currentEnd === lastOffset) return false
 
-    const line = document.createElement('div')
-    line.className = 'ai-term-selection-line'
-    line.style.left = `${Math.floor(left - screenRect.left)}px`
-    line.style.top = `${Math.floor(rowRect.top - screenRect.top)}px`
-    line.style.width = `${width}px`
-    line.style.height = `${Math.ceil(rowRect.height)}px`
-    overlay.appendChild(line)
+    terminal.select(firstOffset % cols, Math.floor(firstOffset / cols), lastOffset - firstOffset)
+    return true
+  } finally {
+    terminalSelectionNormalizing = false
   }
-}
-
-function scheduleTerminalSelectionPolish() {
-  if (terminalSelectionPolishFrame) {
-    window.cancelAnimationFrame(terminalSelectionPolishFrame)
-  }
-  terminalSelectionPolishFrame = window.requestAnimationFrame(() => {
-    terminalSelectionPolishFrame = 0
-    polishTerminalSelection()
-  })
-}
-function handleTerminalSelectionPointerMove(event: PointerEvent) {
-  if (!terminalSelectionDragging || (event.buttons & 1) === 0) return
-  terminalSelectionDragCurrent = terminalPointerViewportCell(event) ?? terminalSelectionDragCurrent
-  scheduleTerminalSelectionPolish()
-}
-
-function stopTerminalSelectionDrag() {
-  if (!terminalSelectionDragging) return
-  terminalSelectionDragging = false
-  window.removeEventListener('pointermove', handleTerminalSelectionPointerMove, true)
-  window.removeEventListener('pointerup', stopTerminalSelectionDrag, true)
-  window.removeEventListener('pointercancel', stopTerminalSelectionDrag, true)
-  scheduleTerminalSelectionPolish()
-}
-
-function startTerminalSelectionDrag(event: PointerEvent) {
-  terminalSelectionDragging = true
-  terminalSelectionDragStart = terminalPointerViewportCell(event)
-  terminalSelectionDragCurrent = terminalSelectionDragStart
-  scheduleTerminalSelectionPolish()
-  window.addEventListener('pointermove', handleTerminalSelectionPointerMove, true)
-  window.addEventListener('pointerup', stopTerminalSelectionDrag, true)
-  window.addEventListener('pointercancel', stopTerminalSelectionDrag, true)
 }
 
 function emitTerminalSelection(text: string) {
@@ -1307,6 +1166,7 @@ function emitTerminalSelection(text: string) {
 }
 
 async function copySelectionToClipboard() {
+  normalizeTerminalSelectionToContent()
   const selectedText = normalizedTerminalSelectionText(terminal?.getSelection() ?? '')
   emitTerminalSelection(selectedText)
   if (!selectedText.trim()) return
@@ -2040,6 +1900,8 @@ function terminalThemeOptions(theme: TerminalTheme) {
       background: '#050807',
       foreground: '#d8ffe7',
       cursor: '#7cffb2',
+      selectionBackground: '#68d39138',
+      selectionInactiveBackground: '#68d39124',
       blue: '#8cc8ff',
       cyan: '#5ff1d2',
       green: '#63ff91',
@@ -2052,6 +1914,8 @@ function terminalThemeOptions(theme: TerminalTheme) {
       background: '#f6f8fb',
       foreground: '#172033',
       cursor: '#1d4ed8',
+      selectionBackground: '#10b98133',
+      selectionInactiveBackground: '#10b98124',
       blue: '#2563eb',
       cyan: '#0891b2',
       green: '#047857',
@@ -2063,6 +1927,8 @@ function terminalThemeOptions(theme: TerminalTheme) {
     background: '#0b0d0e',
     foreground: '#d5dde5',
     cursor: '#d8f3ff',
+    selectionBackground: '#e2e8f042',
+    selectionInactiveBackground: '#e2e8f02e',
     blue: '#88b7ff',
     cyan: '#60d8e8',
     green: '#7ee094',
@@ -2120,7 +1986,13 @@ onMounted(async () => {
     bufferPreReadyTerminalInput(data)
   })
   selectionDisposable = terminal.onSelectionChange(() => {
-    scheduleTerminalSelectionPolish()
+    if (terminalSelectionNormalizing) return
+    const activeTerminal = terminal
+    if (activeTerminal?.hasSelection() && !normalizedTerminalSelectionText(activeTerminal.getSelection()).trim()) {
+      normalizeTerminalSelectionToContent()
+      emitTerminalSelection('')
+      return
+    }
     // xterm fires this continuously while dragging; a trailing debounce
     // collapses the drag into a single clipboard IPC + selection emit.
     if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
@@ -2665,10 +2537,6 @@ function requestTerminalPaste(event: MouseEvent | PointerEvent) {
 }
 
 function handleTerminalPointerDown(event: PointerEvent) {
-  if (event.button === 0) {
-    startTerminalSelectionDrag(event)
-    return
-  }
   if (event.button !== 2) return
   requestTerminalPaste(event)
 }
@@ -2727,8 +2595,6 @@ onBeforeUnmount(() => {
   if (terminalOutputEmitTimer !== undefined) window.clearTimeout(terminalOutputEmitTimer)
   if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
-  stopTerminalSelectionDrag()
-  if (terminalSelectionPolishFrame) window.cancelAnimationFrame(terminalSelectionPolishFrame)
   if (terminalFitFrame) window.cancelAnimationFrame(terminalFitFrame)
   disconnect(false)
   resizeObserver?.disconnect()

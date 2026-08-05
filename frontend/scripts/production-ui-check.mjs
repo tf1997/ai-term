@@ -553,18 +553,13 @@ assert(
 
 assert(
   styles.includes('/* Native terminal code surface and completion menu. */') &&
-    styles.includes('background: rgba(226, 232, 240, .26) !important;') &&
-    styles.includes('overflow: hidden;') &&
-    styles.includes('.xterm-host .xterm-selection {') &&
-    styles.includes('z-index: 4 !important;') &&
-    styles.includes('pointer-events: none;') &&
-    styles.includes('Native xterm selection is replaced by ai-term-selection-overlay.') &&
-    styles.includes('opacity: 0 !important;') &&
-    styles.includes('.xterm-host .ai-term-selection-overlay') &&
-    styles.includes('.xterm-host .ai-term-selection-line') &&
-    styles.includes('.app-shell.theme-light .xterm-host .ai-term-selection-line') &&
-    styles.includes('.app-shell.theme-light .xterm-host .xterm-selection div') &&
-    styles.includes('background: rgba(16, 185, 129, .20) !important;') &&
+    !styles.includes('.xterm-host .xterm-selection {') &&
+    !styles.includes('z-index: 4 !important;') &&
+    !styles.includes('ai-term-selection-overlay') &&
+    !styles.includes('ai-term-selection-line') &&
+    terminalPane.includes("selectionBackground: '#e2e8f042'") &&
+    terminalPane.includes("selectionBackground: '#10b98133'") &&
+    terminalPane.includes('selectionInactiveBackground') &&
     styles.includes('background: rgba(104, 211, 145, .09);') &&
     styles.includes('.terminal-completion button:hover::before') &&
     styles.includes('background: #68d391;') &&
@@ -2196,32 +2191,14 @@ assert(
     terminalPane.includes('getSelectionPosition') &&
     terminalPane.includes('copySelectionToClipboard') &&
     terminalPane.includes('normalizedTerminalSelectionText') &&
-    terminalPane.includes('polishTerminalSelection') &&
-    terminalPane.includes('scheduleTerminalSelectionPolish') &&
-    terminalPane.includes('terminalSelectionOverlay') &&
-    terminalPane.includes('terminalSelectionDragging') &&
-    terminalPane.includes('handleTerminalSelectionPointerMove') &&
-    terminalPane.includes('startTerminalSelectionDrag') &&
-    terminalPane.includes('stopTerminalSelectionDrag') &&
-    terminalPane.includes("window.addEventListener('pointermove', handleTerminalSelectionPointerMove, true)") &&
-    terminalPane.includes("window.removeEventListener('pointermove', handleTerminalSelectionPointerMove, true)") &&
-    terminalPane.includes('clearTerminalSelectionOverlay') &&
-    terminalPane.includes('terminalSelectionCellToViewport') &&
-    terminalPane.includes('terminal?.buffer.active.viewportY') &&
-    terminalPane.includes('cell.y - viewportY') &&
-    terminalPane.includes('rawStart') &&
-    terminalPane.includes('rawEnd') &&
-    terminalPane.includes('isReverseSelection') &&
-    terminalPane.includes('isReverseMultiLineSelection') &&
-    terminalPane.includes('TerminalSelectionViewportCell') &&
-    terminalPane.includes('terminalPointerViewportCell') &&
-    terminalPane.includes('terminalSelectionDragStart') &&
-    terminalPane.includes('terminalSelectionDragCurrent') &&
-    terminalPane.includes('isPointerReverseSelection') &&
-    terminalPane.includes('startTerminalSelectionDrag(event)') &&
-    terminalPane.includes('ai-term-selection-overlay') &&
-    terminalPane.includes('ai-term-selection-line') &&
-    terminalPane.includes("host.classList.add('ai-term-selection-polished')") &&
+    terminalPane.includes('selectionBackground') &&
+    terminalPane.includes('selectionInactiveBackground') &&
+    terminalPane.includes('normalizeTerminalSelectionToContent') &&
+    terminalPane.includes('terminal.clearSelection()') &&
+    terminalPane.includes('terminal.select(firstOffset % cols') &&
+    terminalPane.includes("!normalizedTerminalSelectionText(activeTerminal.getSelection()).trim()") &&
+    !terminalPane.includes('ai-term-selection-overlay') &&
+    !terminalPane.includes('terminalSelectionDragging') &&
     terminalPane.includes('pasteClipboardToTerminal') &&
     terminalPane.includes("@tauri-apps/api/clipboard") &&
     terminalPane.includes('readClipboardText') &&
