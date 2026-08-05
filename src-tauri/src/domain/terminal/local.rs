@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::domain::pty::{spawn_pty_process, PtyCommand, PtySession};
+use crate::domain::terminal::shell_integration::apply_shell_integration;
 
 use super::ssh::TerminalSession;
 
@@ -32,10 +33,11 @@ impl TerminalSession for LocalTerminalSession {
 pub fn spawn_local_terminal(
     cols: u16,
     rows: u16,
+    shell_integration_dir: Option<&Path>,
     on_output: impl Fn(Vec<u8>) + Send + 'static,
     on_exit: impl FnOnce() + Send + 'static,
 ) -> Result<LocalTerminalSession> {
-    let command = local_shell_command()?;
+    let command = local_shell_command(shell_integration_dir)?;
     let process = spawn_pty_process(command, cols, rows)?;
     let mut reader = process.reader;
     let mut child = process.child;
@@ -79,7 +81,7 @@ pub fn default_shell() -> PathBuf {
     }
 }
 
-fn local_shell_command() -> Result<PtyCommand> {
+fn local_shell_command(shell_integration_dir: Option<&Path>) -> Result<PtyCommand> {
     let shell = default_shell();
     let program = shell
         .to_str()
@@ -92,5 +94,10 @@ fn local_shell_command() -> Result<PtyCommand> {
         vec!["-i".into()]
     };
 
-    Ok(PtyCommand::new(program, args))
+    let mut command = PtyCommand::new(program, args);
+    if let Some(dir) = shell_integration_dir {
+        let shell_program = command.program.clone();
+        apply_shell_integration(&shell_program, &mut command.args, &mut command.envs, dir);
+    }
+    Ok(command)
 }

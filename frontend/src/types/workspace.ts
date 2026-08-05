@@ -21,6 +21,8 @@ export interface CommandHistoryEntry {
   terminalId: string
   command: string
   createdAt: string
+  /** Shell integration(OSC 133;D)上报的退出码;启发式捕获的记录没有该值。 */
+  exitCode?: number
 }
 
 export interface TerminalOutputEvent {
@@ -68,6 +70,7 @@ export interface TerminalInputWriteFailureEvent {
 export interface CommandRecordedEvent {
   terminalId: string
   command: string
+  exitCode?: number
 }
 
 export interface AiContextStatus {

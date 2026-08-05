@@ -29,6 +29,8 @@ pub struct CommandHistoryRecord {
     pub terminal_id: String,
     pub command: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

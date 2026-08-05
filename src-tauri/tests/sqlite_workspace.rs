@@ -38,6 +38,7 @@ fn command(
         terminal_id: terminal_id.into(),
         command: value.into(),
         created_at: created_at.into(),
+        exit_code: None,
     }
 }
 

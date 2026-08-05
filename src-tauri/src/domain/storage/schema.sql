@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS command_history (
   workspace_session_id TEXT NOT NULL DEFAULT 'default',
   terminal_id TEXT NOT NULL,
   command TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  exit_code INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_command_history_connection_created

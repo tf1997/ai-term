@@ -466,15 +466,17 @@ impl SqliteConfigStore {
               workspace_session_id,
               terminal_id,
               command,
-              created_at
+              created_at,
+              exit_code
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
               connection_id = excluded.connection_id,
               workspace_session_id = excluded.workspace_session_id,
               terminal_id = excluded.terminal_id,
               command = excluded.command,
-              created_at = excluded.created_at
+              created_at = excluded.created_at,
+              exit_code = excluded.exit_code
             "#,
             params![
                 record.id,
@@ -483,6 +485,7 @@ impl SqliteConfigStore {
                 record.terminal_id,
                 record.command,
                 record.created_at,
+                record.exit_code,
             ],
         )?;
         Self::prune_command_history(&transaction, &record.connection_id)?;
@@ -512,7 +515,7 @@ impl SqliteConfigStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
-            SELECT id, connection_id, workspace_session_id, terminal_id, command, created_at
+            SELECT id, connection_id, workspace_session_id, terminal_id, command, created_at, exit_code
             FROM (
               SELECT
                 id,
@@ -521,6 +524,7 @@ impl SqliteConfigStore {
                 terminal_id,
                 command,
                 created_at,
+                exit_code,
                 COALESCE(julianday(created_at), 0.0) AS created_sort,
                 rowid AS history_rowid
               FROM command_history
@@ -540,6 +544,7 @@ impl SqliteConfigStore {
                 terminal_id: row.get(3)?,
                 command: row.get(4)?,
                 created_at: row.get(5)?,
+                exit_code: row.get(6)?,
             })
         })?;
 
@@ -1009,6 +1014,7 @@ fn migrate_command_history(connection: &Connection) -> Result<()> {
         "terminal_id",
         "TEXT NOT NULL DEFAULT 'unknown'",
     )?;
+    ensure_column(connection, "command_history", "exit_code", "INTEGER")?;
     Ok(())
 }
 

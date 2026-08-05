@@ -9,6 +9,7 @@ fn local_terminal_executes_shell_commands_and_streams_output() {
     let mut terminal = spawn_local_terminal(
         80,
         24,
+        None,
         move |bytes| {
             let _ = tx.send(bytes);
         },
@@ -47,6 +48,7 @@ fn local_terminal_notifies_when_shell_exits() {
     let mut terminal = spawn_local_terminal(
         80,
         24,
+        None,
         move |_bytes| {},
         move || {
             let _ = exit_tx.send(());

@@ -33,6 +33,7 @@ use crate::domain::filesystem::local::{
     root_directories, LocalDirectoryResponse,
 };
 use crate::domain::terminal::local::spawn_local_terminal;
+use crate::domain::terminal::shell_integration::ensure_integration_scripts;
 use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
 use crate::domain::text::Utf8StreamDecoder;
 use crate::domain::workspace::{
@@ -258,12 +259,23 @@ pub async fn connect_local_terminal(
     cols: u16,
     rows: u16,
     session_id: Option<String>,
+    shell_integration: Option<bool>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let session_id = session_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
+    // 注入失败(目录不可写等)不阻塞终端启动,回落到无集成模式
+    let integration_dir = if shell_integration.unwrap_or(true) {
+        app.path_resolver().app_config_dir().and_then(|config_dir| {
+            ensure_integration_scripts(&config_dir)
+                .map_err(|err| eprintln!("failed to prepare shell integration scripts: {err:#}"))
+                .ok()
+        })
+    } else {
+        None
+    };
     let output_session_id = session_id.clone();
     let closed_session_id = session_id.clone();
     let app_for_output = app.clone();
@@ -272,6 +284,7 @@ pub async fn connect_local_terminal(
     let terminal = spawn_local_terminal(
         cols,
         rows,
+        integration_dir.as_deref(),
         move |bytes| {
             let data = output_decoder
                 .lock()

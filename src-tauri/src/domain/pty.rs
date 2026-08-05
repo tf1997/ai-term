@@ -11,6 +11,7 @@ pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 pub struct PtyCommand {
     pub program: String,
     pub args: Vec<String>,
+    pub envs: Vec<(String, String)>,
 }
 
 impl PtyCommand {
@@ -18,12 +19,16 @@ impl PtyCommand {
         Self {
             program: program.into(),
             args,
+            envs: Vec::new(),
         }
     }
 
     fn builder(&self) -> CommandBuilder {
         let mut command = CommandBuilder::new(&self.program);
         command.args(&self.args);
+        for (key, value) in &self.envs {
+            command.env(key, value);
+        }
         command
     }
 }

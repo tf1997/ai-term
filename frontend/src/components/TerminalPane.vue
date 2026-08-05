@@ -29,6 +29,7 @@ import type {
   TerminalSelectionEvent
 } from '../types/workspace'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
+import { attachShellIntegration, type AttachedShellIntegration } from '../lib/shellIntegration'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
@@ -167,6 +168,7 @@ let pendingTrackedCommands: string[] = []
 let pendingDeferredCommandCaptures: DeferredCommandCapture[] = []
 let completionDebounceTimer: number | undefined
 let completionSuppressedForHistoryNavigation = false
+let shellIntegrationAttachment: AttachedShellIntegration | undefined
 let pendingInputControlSequence = ''
 let terminalInputGeneration = 0
 let terminalInputReady = false
@@ -696,29 +698,32 @@ function recommendQuickCommandsFromHistory() {
     : '当前固定命令已覆盖可用的历史候选。'
   quickCommandResetConfirm.value = false
 }
-function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
+function buildCompletionSuggestions(prefix = completionInputLine().trimStart()) {
   const normalizedPrefix = prefix.toLowerCase()
-  const historyStats = new Map<string, { command: string; count: number; source: CompletionSuggestionSource; lastIndex: number }>()
+  const historyStats = new Map<string, { command: string; count: number; source: CompletionSuggestionSource; lastIndex: number; lastExitCode?: number }>()
   const matchesPrefix = (command: string) => !normalizedPrefix || command.toLowerCase().startsWith(normalizedPrefix)
-  const addHistory = (command: string, source: CompletionSuggestionSource, index: number) => {
+  const addHistory = (command: string, source: CompletionSuggestionSource, index: number, exitCode?: number) => {
     const value = command.trim()
     if (!value || isSensitiveCommand(value)) return
     if (!matchesPrefix(value)) return
     const current = historyStats.get(value)
     if (current) {
       current.count += 1
-      current.lastIndex = Math.max(current.lastIndex, index)
+      if (index >= current.lastIndex) {
+        current.lastIndex = index
+        current.lastExitCode = exitCode
+      }
       if (source === 'session') current.source = source
       return
     }
-    historyStats.set(value, { command: value, count: 1, source, lastIndex: index })
+    historyStats.set(value, { command: value, count: 1, source, lastIndex: index, lastExitCode: exitCode })
   }
 
   const historyCommandKeys = new Set<string>()
   props.commandHistory.forEach((entry, index) => {
     const key = entry.command.trim()
     if (key) historyCommandKeys.add(key)
-    addHistory(entry.command, 'history', index)
+    addHistory(entry.command, 'history', index, entry.exitCode)
   })
   localCommandHistory.value.forEach((command, index) => {
     const value = command.trim()
@@ -739,8 +744,11 @@ function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
       return { command, source: 'pinned' as CompletionSuggestionSource, count: history?.count ?? 0 }
     })
 
+  // 最近一次执行失败(退出码非 0)的命令排在同频次的成功命令之后
+  const lastRunFailed = (entry: { lastExitCode?: number }) =>
+    entry.lastExitCode !== undefined && entry.lastExitCode !== 0 ? 1 : 0
   const historySuggestions = [...historyStats.values()]
-    .sort((a, b) => b.count - a.count || b.lastIndex - a.lastIndex || a.command.localeCompare(b.command))
+    .sort((a, b) => b.count - a.count || lastRunFailed(a) - lastRunFailed(b) || b.lastIndex - a.lastIndex || a.command.localeCompare(b.command))
     .map(({ command, source, count }) => ({ command, source, count }))
 
   const seen = new Set([
@@ -756,13 +764,13 @@ function buildCompletionSuggestions(prefix = inputCommandBuffer.trimStart()) {
 }
 
 function refreshCompletionSuggestions() {
-  if (!canOfferCompletion() || !inputCommandBuffer.trim()) {
+  if (!canOfferCompletion() || !completionInputLine().trim()) {
     closeCompletion()
     return
   }
   completionSuggestions.value = buildCompletionSuggestions()
   selectedCompletionIndex.value = -1
-  completionPrefixLength.value = inputCommandBuffer.trimStart().length
+  completionPrefixLength.value = completionInputLine().trimStart().length
   terminalCompletionOpen.value = completionSuggestions.value.length > 0
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
 }
@@ -775,7 +783,7 @@ function clearCompletionTimer() {
 
 function scheduleCompletionSuggestions() {
   clearCompletionTimer()
-  if (!canOfferCompletion() || !inputCommandBuffer.trim()) {
+  if (!canOfferCompletion() || !completionInputLine().trim()) {
     closeCompletion()
     return
   }
@@ -865,7 +873,7 @@ function handleDocumentPointerDown(event: PointerEvent) {
 
 function acceptCompletionSuggestion(suggestion: CompletionSuggestion) {
   if (!suggestion) return false
-  const current = inputCommandBuffer.trimStart()
+  const current = completionInputLine().trimStart()
   if (!suggestion.command.toLowerCase().startsWith(current.toLowerCase())) return false
   const tail = suggestion.command.slice(current.length)
   if (!tail) {
@@ -976,7 +984,17 @@ function writeTerminalView(data: string, forceScroll = false) {
   terminal.write(data, () => {
     if (shouldScroll) scrollTerminalToBottom()
     updateTerminalInputContextFromOutput()
-    if (recoverTrackedTerminalInputFromRenderedLine()) scheduleCompletionSuggestions()
+    if (shellIntegrationInputActive()) {
+      // 集成模式下输入内容以屏幕回显为准:回显落地后再评估是否弹补全,
+      // Tab 补全、autosuggestion、历史翻找造成的行内容变化都会经过这里
+      if (shellIntegrationCommandLine().trim()) {
+        scheduleCompletionSuggestions()
+      } else if (terminalCompletionOpen.value) {
+        closeCompletion()
+      }
+    } else if (recoverTrackedTerminalInputFromRenderedLine()) {
+      scheduleCompletionSuggestions()
+    }
     if (terminalCompletionOpen.value) scheduleCompletionPosition()
   })
 }
@@ -1315,13 +1333,14 @@ async function writeClipboard(text: string) {
   }
 }
 
-function recordCommand(command: string) {
+function recordCommand(command: string, exitCode?: number) {
   const value = command.trim()
   if (!value || isSensitiveCommand(value)) return
   localCommandHistory.value = [...localCommandHistory.value, value].slice(-120)
   emit('commandRecorded', {
     terminalId: props.terminalId,
-    command: value
+    command: value,
+    ...(exitCode === undefined ? {} : { exitCode })
   })
 }
 
@@ -1416,6 +1435,7 @@ function commitTrackedCommands(commands: string[]) {
 function advanceTerminalInputGeneration() {
   deferredCommandCaptureTimers.forEach((timer) => window.clearTimeout(timer))
   deferredCommandCaptureTimers.clear()
+  shellIntegrationAttachment?.tracker.reset()
   terminalInputReady = false
   terminalInputGeneration += 1
   failedTerminalInputGeneration = undefined
@@ -1707,7 +1727,36 @@ function invalidateTrackedTerminalInput() {
   closeCompletion()
 }
 
+// Shell integration(OSC 133)集成模式:tracker 处于 input 态(shell 上报了
+// 提示符边界)时,输入内容与命令边界以语义标记为准;其余状态(如从集成 shell
+// ssh 进无集成远端后 tracker 停在 executing)回落到启发式兜底层,互不锁死。
+// 见 docs/shell-integration-development.md。
+const SHELL_INTEGRATION_SETTING_KEY = 'ai-term:shell-integration'
+
+function shellIntegrationInjectionEnabled() {
+  return window.localStorage.getItem(SHELL_INTEGRATION_SETTING_KEY) !== '0'
+}
+
+function shellIntegrationInputActive() {
+  return status.value !== 'preview'
+    && terminal?.buffer.active.type !== 'alternate'
+    && shellIntegrationAttachment?.tracker.state === 'input'
+}
+
+function shellIntegrationCommandLine() {
+  return shellIntegrationInputActive() ? shellIntegrationAttachment!.tracker.commandLine() : ''
+}
+
+function completionInputLine() {
+  return shellIntegrationInputActive() ? shellIntegrationCommandLine() : inputCommandBuffer
+}
+
 function canOfferCompletion() {
+  if (shellIntegrationInputActive()) {
+    return !completionSuppressedForHistoryNavigation
+      && shellIntegrationCommandLine().trimStart().length >= 2
+      && shellIntegrationAttachment!.tracker.cursorAtInputEnd()
+  }
   return terminalInputContext === 'shell'
     && inputCommandReliable
     && !completionSuppressedForHistoryNavigation
@@ -1716,6 +1765,9 @@ function canOfferCompletion() {
 }
 
 function terminalLineReadyForAppInput() {
+  if (shellIntegrationInputActive()) {
+    return shellIntegrationCommandLine().trim().length === 0
+  }
   return terminalInputContext === 'shell'
     && inputCommandReliable
     && inputCommandBuffer.trim().length === 0
@@ -1735,6 +1787,9 @@ function terminalInputSyncState(): TerminalInputSyncState {
 
 function commandExecutionReadiness(): TerminalCommandReadiness {
   if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
+  if (shellIntegrationInputActive()) {
+    return shellIntegrationCommandLine().trim() ? 'line-busy' : 'ready'
+  }
   updateTerminalInputContextFromOutput()
   if (terminalLineReadyForAppInput()) return 'ready'
   if (terminalInputContext === 'shell') return 'line-busy'
@@ -1872,8 +1927,12 @@ function trackUserInput(data: string): TerminalInputTrackResult {
   for (const character of commandInput) {
     const code = character.charCodeAt(0)
     if (code === 13 || code === 10) {
-      const command = submittedTerminalCommand(inputCommandBuffer)
-      const deferredCapture = command || !allowDeferredCapture ? undefined : deferredCommandCapture()
+      // 集成模式下命令由 OSC 133;C/D 精确捕获(含退出码),跳过影子捕获避免重复记录
+      const integrationCaptures = shellIntegrationInputActive()
+      const command = integrationCaptures ? '' : submittedTerminalCommand(inputCommandBuffer)
+      const deferredCapture = integrationCaptures || command || !allowDeferredCapture
+        ? undefined
+        : deferredCommandCapture()
       if (command) pendingTrackedCommands.push(command)
       if (deferredCapture) pendingDeferredCommandCaptures.push(deferredCapture)
       if (terminalInputContext === 'shell' || command || deferredCapture) {
@@ -2039,6 +2098,13 @@ onMounted(async () => {
   })
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
+  shellIntegrationAttachment = attachShellIntegration(terminal, {
+    onInputStart: () => {
+      completionSuppressedForHistoryNavigation = false
+    },
+    onCommandStart: () => closeCompletion(),
+    onCommandFinished: (result) => recordCommand(result.command, result.exitCode)
+  })
   terminal.open(terminalHost.value)
   syncTerminalSize()
   terminal.focus()
@@ -2286,7 +2352,12 @@ async function connectLocal() {
     const size = currentTerminalSize()
     sessionId = requestedSessionId
     if (!await attachTerminalEvents()) throw new Error('Failed to attach local terminal events')
-    connectedSessionId = await connectLocalTerminal(size.cols, size.rows, requestedSessionId)
+    connectedSessionId = await connectLocalTerminal(
+      size.cols,
+      size.rows,
+      requestedSessionId,
+      shellIntegrationInjectionEnabled()
+    )
     if (!isCurrentConnectionAttempt(attempt)) {
       void disconnectTerminal(connectedSessionId)
       return
@@ -2423,7 +2494,7 @@ function fillCommand(command: string) {
   const value = command.trim()
   if (!value) return false
   if (!terminalLineReadyForAppInput()) {
-    showQuickCommandBarNotice(inputCommandBuffer.trim() ? '当前命令行已有输入，请先提交或清空。' : '当前终端不在可识别的命令提示符。')
+    showQuickCommandBarNotice(completionInputLine().trim() ? '当前命令行已有输入，请先提交或清空。' : '当前终端不在可识别的命令提示符。')
     focusTerminal()
     return false
   }
@@ -2488,9 +2559,13 @@ function executeCommand(command: string) {
   if (terminalBackendInputReady()) {
     if (!terminalLineReadyForAppInput()) return false
     closeCompletion()
+    const integrationCaptures = shellIntegrationInputActive()
     const accepted = writePreparedTerminalInput(value + '\r', {
       source: 'command',
-      onWritten: () => recordCommand(value)
+      // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
+      onWritten: () => {
+        if (!integrationCaptures) recordCommand(value)
+      }
     })
     if (!accepted) return false
     shellCommandAwaitingPrompt = true
@@ -2661,6 +2736,8 @@ onBeforeUnmount(() => {
   unlistenClosed?.()
   dataDisposable?.dispose()
   selectionDisposable?.dispose()
+  shellIntegrationAttachment?.dispose()
+  shellIntegrationAttachment = undefined
   terminal?.dispose()
   fitAddon = undefined
 })

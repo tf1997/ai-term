@@ -1531,7 +1531,8 @@ function recordCommand(event: CommandRecordedEvent) {
     workspaceSessionId: COMMAND_HISTORY_SESSION_ID,
     terminalId: event.terminalId,
     command: event.command,
-    createdAt: nowText()
+    createdAt: nowText(),
+    ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode })
   }
   commandHistoryByConnection.value = {
     ...commandHistoryByConnection.value,
