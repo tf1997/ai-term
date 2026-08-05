@@ -10520,7 +10520,7 @@ code {
 
 .terminal-frame,
 .theme-light .terminal-frame {
-  grid-template-rows: 38px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   border-color: var(--workbench-line);
   border-radius: 7px;
   background: var(--workbench-terminal);

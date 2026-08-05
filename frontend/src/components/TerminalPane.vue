@@ -2627,20 +2627,6 @@ defineExpose({
   <main class="terminal-pane">
     <section class="terminal-wrap">
       <div class="terminal-frame terminal-native-code">
-        <div class="terminal-head">
-          <div class="terminal-heading">
-            <span class="terminal-title">{{ activeSessionProfile?.name ?? '本地终端' }}</span>
-            <span class="terminal-subtitle">
-              {{ activeSessionProfile ? `${activeSessionProfile.target.username || 'user'}@${activeSessionProfile.target.host || 'server'}` : 'localhost' }}
-            </span>
-          </div>
-          <div class="terminal-tools">
-            <button class="icon-button" type="button" title="复制终端输出" aria-label="复制终端输出" @click="copyTerminalOutput"><UiIcon name="copy" /></button>
-            <button class="icon-button" type="button" title="清屏" aria-label="清屏" @click="clearTerminal"><UiIcon name="trash" /></button>
-            <button class="icon-button" type="button" title="新建本地终端" aria-label="新建本地终端" @click="restartLocalTerminal"><UiIcon name="plus" /></button>
-            <button class="icon-button" type="button" title="断开连接" aria-label="断开连接" @click="disconnectFromButton"><UiIcon name="close" /></button>
-          </div>
-        </div>
         <div ref="terminalBodyWrap" class="terminal-body-wrap">
           <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
           <div

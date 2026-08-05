@@ -2885,7 +2885,8 @@ assert(
     styles.includes('.quick-command-reset-confirm') &&
     styles.includes('.completion-source.pinned') &&
     styles.includes('.command-risk-status.risk-muted') &&
-    terminalPane.includes('terminal-heading') &&
+    !terminalPane.includes('class="terminal-head"') &&
+    !terminalPane.includes('class="terminal-tools"') &&
     terminalPane.includes('copyTerminalOutput') &&
     !terminalPane.includes('connection-strip'),
   'TerminalPane must provide local deterministic fixed-command recommendations, pinned-first completion, guarded fill, and managed fixed-command settings without an AI dependency.'
