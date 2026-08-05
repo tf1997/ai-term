@@ -5689,7 +5689,7 @@ code {
   overflow: hidden;
   box-sizing: border-box;
   background: #03070c;
-  padding: 16px 6px 16px 18px;
+  padding: 8px;
 }
 .terminal-native-code .xterm-host {
   min-height: 0;
@@ -10414,7 +10414,10 @@ code {
 .server-card,
 .theme-light .server-card {
   min-height: 58px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 56px;
   gap: 6px;
+  overflow: hidden;
   border-color: transparent;
   border-radius: 6px;
   background: transparent;
@@ -10432,11 +10435,21 @@ code {
 }
 
 .server-content {
+  overflow: hidden;
   gap: 3px;
+}
+
+.server-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
 }
 
 .server-main strong,
 .theme-light .server-main strong {
+  display: block;
   color: var(--workbench-text-strong);
   font-size: 12px;
 }
@@ -10468,6 +10481,8 @@ code {
 }
 
 .server-card .card-actions {
+  width: 56px;
+  min-width: 56px;
   grid-template-columns: repeat(2, 26px);
   opacity: 0;
   transition: opacity .15s ease;

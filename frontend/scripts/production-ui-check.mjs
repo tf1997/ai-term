@@ -1060,11 +1060,23 @@ assert(
     terminalPane.includes("status.value = 'local'"),
   'TerminalPane must automatically attach a local terminal when no connection profile is configured.'
 )
+
+const localTerminalSessionIndex = terminalPane.indexOf('sessionId = requestedSessionId')
+const localTerminalListenerIndex = terminalPane.indexOf(
+  'await attachTerminalEvents()',
+  localTerminalSessionIndex
+)
+const localTerminalSpawnIndex = terminalPane.indexOf(
+  'connectedSessionId = await connectLocalTerminal(',
+  localTerminalSessionIndex
+)
+
 assert(
-  terminalPane.indexOf('sessionId = requestedSessionId') > -1 &&
-    terminalPane.indexOf('await attachTerminalEvents()', terminalPane.indexOf('sessionId = requestedSessionId')) > -1 &&
-    terminalPane.indexOf('await attachTerminalEvents()', terminalPane.indexOf('sessionId = requestedSessionId')) < terminalPane.indexOf('connectLocalTerminal(size.cols, size.rows, requestedSessionId)') &&
-    tauri.includes('connectLocalTerminal(cols: number, rows: number, sessionId?: string)') &&
+  localTerminalSessionIndex > -1 &&
+    localTerminalListenerIndex > localTerminalSessionIndex &&
+    localTerminalSpawnIndex > localTerminalListenerIndex &&
+    tauri.includes('export function connectLocalTerminal(') &&
+    tauri.includes('shellIntegration?: boolean') &&
     commands.includes('session_id: Option<String>'),
   'Local terminal startup must pre-bind a session-scoped listener before spawning the shell so first-launch prompt output is not lost.'
 )
@@ -1203,7 +1215,7 @@ assert(
     styles.includes('.xterm-host {\n  width: 100%;') &&
     styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
     styles.includes('.xterm-host .xterm {\n  width: 100%;\n  min-width: 0;') &&
-    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 16px 6px 16px 18px;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 8px;') &&
     terminalPane.includes("import { FitAddon } from '@xterm/addon-fit'") &&
     terminalPane.includes('terminal.loadAddon(fitAddon)') &&
     terminalPane.includes('fitAddon.fit()') &&
@@ -1380,7 +1392,7 @@ assert(
     remoteConnectionBlock.indexOf('const active = await verifyTerminalSessionStillActive(connectedSessionId)') <
       remoteConnectionBlock.indexOf('terminalInputReady = true') &&
     localConnectionBlock.indexOf('sessionId = requestedSessionId') <
-      localConnectionBlock.indexOf('connectLocalTerminal(size.cols, size.rows, requestedSessionId)') &&
+      localConnectionBlock.indexOf('connectedSessionId = await connectLocalTerminal(') &&
     localConnectionBlock.indexOf('const active = await verifyTerminalSessionStillActive(connectedSessionId)') <
       localConnectionBlock.indexOf('terminalInputReady = true') &&
     terminalPane.includes("status.value !== 'preview' && !terminalBackendInputReady()") &&
@@ -2011,6 +2023,34 @@ assert(
     styles.includes('.server-card .card-actions') &&
     styles.includes('grid-template-columns: repeat(2, 26px);'),
   'ConnectionSidebar must keep profile duplication available through the compact more menu instead of crowding every connection card.'
+)
+
+assertLastCssDeclarations(
+  '.server-card',
+  {
+    'min-width': '0',
+    'grid-template-columns': 'minmax(0, 1fr) 56px',
+    'overflow': 'hidden',
+  },
+  'Connection cards must reserve a stable action column without allowing long names to push badges or buttons outside the sidebar.'
+)
+
+assertLastCssDeclarations(
+  '.server-main',
+  {
+    'min-width': '0',
+    'display': 'grid',
+    'grid-template-columns': 'minmax(0, 1fr) max-content',
+  },
+  'Connection names must shrink while role badges remain visible.'
+)
+
+assertLastCssDeclarations(
+  '.terminal-body-wrap',
+  {
+    'padding': '8px',
+  },
+  'The terminal command surface must use compact, equal inset spacing on all four sides.'
 )
 
 assert(
@@ -2901,7 +2941,7 @@ assert(
     styles.includes('--workspace-width: clamp(300px, 34vw, 360px);') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
     styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
-    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 16px 6px 16px 18px;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 8px;') &&
     !styles.includes('width: min(380px, calc(100vw - 56px));') &&
     !styles.includes('.app-shell:not(.right-collapsed) .right-panel {\n    display: none;'),
   'Frontend layout must keep the right workspace as a proportional grid column at the 1280 default and 980 minimum window widths without terminal overlap or workspace shrinkage.'
