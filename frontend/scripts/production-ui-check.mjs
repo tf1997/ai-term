@@ -2913,9 +2913,18 @@ assert(
     workspacePanel.includes("activeWorkspaceTab === 'history'") &&
     workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
     workspacePanel.includes('SFTP') &&
-    aiConfig.includes('Custom AI Provider') &&
+    aiConfig.includes('OpenAI 兼容接口') &&
     aiConfig.includes('已配置') &&
     aiConfig.includes('待配置') &&
+    !aiConfig.includes('<span>Provider</span>') &&
+    !aiConfig.includes('v-model="draft.provider"') &&
+    !aiConfig.includes('company-gateway') &&
+    !aiConfig.includes('<span>Context</span>') &&
+    !aiConfig.includes('v-model="draft.contextPolicy"') &&
+    aiConfig.includes("provider: 'open-ai-compatible'") &&
+    aiConfig.includes("contextPolicy: 'selected-output-only'") &&
+    aiConfig.includes('v-model="draft.systemPrompt"') &&
+    aiChat.includes('request.config.system_prompt') &&
     !aiConfig.includes('configured') &&
     !aiConfig.includes('required') &&
     settingsSidebar.includes('AiConfigPanel') &&
@@ -2967,7 +2976,8 @@ assert(
     schema.includes('api_key TEXT') &&
     sqlite.includes('api_key = excluded.api_key') &&
     workspacePanel.includes(':api-key="apiKey"') &&
-    aiConfig.includes("emit('save', { ...draft, id, apiKey, apiKeyRef }, apiKey)") &&
+    aiConfig.includes("provider: 'open-ai-compatible'") &&
+    aiConfig.includes("contextPolicy: 'selected-output-only'") &&
     aiPanelUsesBackendModelCall(),
   'AI configuration must support multiple SQLite-backed configs and AiPanel must call the configured model through the Tauri backend instead of using only local rules.'
 )

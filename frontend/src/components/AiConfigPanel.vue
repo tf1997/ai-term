@@ -26,7 +26,14 @@ function save() {
   const id = draft.id.trim() || 'default'
   const apiKey = draft.apiKey?.trim() ?? ''
   const apiKeyRef = apiKey ? `ai-provider:${id}` : draft.apiKeyRef
-  emit('save', { ...draft, id, apiKey, apiKeyRef }, apiKey)
+  emit('save', {
+    ...draft,
+    id,
+    provider: 'open-ai-compatible',
+    apiKey,
+    apiKeyRef,
+    contextPolicy: 'selected-output-only'
+  }, apiKey)
   saved.value = true
 }
 
@@ -35,7 +42,7 @@ function save() {
 <template>
   <section class="ai-config" aria-label="AI configuration">
     <div class="config-top">
-      <strong>Custom AI Provider</strong>
+      <strong>OpenAI 兼容接口</strong>
       <span class="badge" :class="{ ok: draft.baseUrl && draft.model }">
         {{ draft.baseUrl && draft.model ? '已配置' : '待配置' }}
       </span>
@@ -46,34 +53,16 @@ function save() {
         <input v-model="draft.id" :disabled="editorMode === 'edit'" placeholder="company-gpt4" />
       </label>
       <label>
-        <span>Provider</span>
-        <select v-model="draft.provider">
-          <option value="open-ai-compatible">OpenAI Compatible</option>
-          <option value="open-ai">OpenAI</option>
-          <option value="company-gateway">Company Gateway</option>
-          <option value="ollama">Ollama</option>
-          <option value="custom-http">Custom HTTP</option>
-        </select>
-      </label>
-      <label>
         <span>Model</span>
         <input v-model="draft.model" placeholder="gpt-4.1-mini" />
-      </label>
-      <label class="wide">
-        <span>Base URL（API 根路径，不是网页登录页）</span>
-        <input v-model="draft.baseUrl" placeholder="https://ai-gateway.company.com/v1 或完整 /chat/completions" />
       </label>
       <label>
         <span>API Key</span>
         <input v-model="draft.apiKey" type="password" placeholder="保存到系统凭据管理器" />
       </label>
-      <label>
-        <span>Context</span>
-        <select v-model="draft.contextPolicy">
-          <option value="selected-output-only">Selected output only</option>
-          <option value="active-command-output">Active command output</option>
-          <option value="manual-attachments">Manual attachments</option>
-        </select>
+      <label class="wide">
+        <span>Base URL（API 根路径，不是网页登录页）</span>
+        <input v-model="draft.baseUrl" placeholder="https://ai-gateway.company.com/v1 或完整 /chat/completions" />
       </label>
       <label class="wide">
         <span>System Prompt</span>

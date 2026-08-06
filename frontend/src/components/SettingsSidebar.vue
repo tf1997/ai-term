@@ -71,7 +71,7 @@ const filteredAiConfigs = computed(() => {
   if (!query) return sortedAiConfigs.value
 
   return sortedAiConfigs.value.filter((config) =>
-    [config.id, config.model, config.baseUrl, config.provider].some((value) => value.toLowerCase().includes(query))
+    [config.id, config.model, config.baseUrl].some((value) => value.toLowerCase().includes(query))
   )
 })
 
