@@ -58,13 +58,19 @@ const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
+const windowsRootStyles = styles.match(/:root\[data-platform="windows"\]\s*\{([^}]*)\}/)?.[1] ?? ''
 
 assert(
   styles.includes('--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC"') &&
     styles.includes('--font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"') &&
-    styles.includes('--font-xs: 12px;') &&
-    styles.includes('--font-md: 14px;') &&
-    styles.includes('--control-h: 34px;') &&
+    styles.includes('--font-xs: 11px;') &&
+    styles.includes('--font-sm: 12px;') &&
+    styles.includes('--font-md: 13px;') &&
+    styles.includes('--font-lg: 14px;') &&
+    styles.includes('--font-xl: 16px;') &&
+    styles.includes('--control-h: 32px;') &&
+    styles.includes('--icon-size: 32px;') &&
+    !/--(?:font-(?:xs|sm|md|lg|xl)|control-h|icon-size)\s*:/.test(windowsRootStyles) &&
     styles.includes('font-synthesis: none;') &&
     styles.includes('font-kerning: normal;') &&
     !styles.includes('letter-spacing: -.005em;') &&
@@ -72,10 +78,14 @@ assert(
     !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
     main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
-    terminalPane.includes('lineHeight: 1.18') &&
+    terminalPane.includes('lineHeight: 1.12') &&
+    appShell.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
+    settingsSidebar.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
+    appShell.includes('WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY') &&
+    appShell.includes('settings.terminalFontSize === 15') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
-  'macOS must keep native typography while Windows uses native UI fonts, real bundled terminal weights, and integer type metrics.'
+  'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, compact terminal metrics, and real bundled terminal weights.'
 )
 
 assert(

@@ -29,13 +29,6 @@ body {
 :root[data-platform="windows"] {
   --font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  --font-xs: 12px;
-  --font-sm: 13px;
-  --font-md: 14px;
-  --font-lg: 15px;
-  --font-xl: 17px;
-  --control-h: 34px;
-  --icon-size: 34px;
   text-rendering: auto;
 }
 

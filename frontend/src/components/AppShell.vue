@@ -53,7 +53,8 @@ interface TerminalTab {
 
 const COMMAND_HISTORY_CACHE_LIMIT = 300
 const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
-const WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-density:v1'
+const LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-density:v1'
+const WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY = 'ai-term:windows-terminal-size-correction:v1'
 const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
 const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
 const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
@@ -61,7 +62,7 @@ const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrai
 const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, monospace'
 const WINDOWS_PLATFORM = isWindowsPlatform()
 const DEFAULT_TERMINAL_FONT_FAMILY = WINDOWS_PLATFORM ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
-const DEFAULT_TERMINAL_FONT_SIZE = WINDOWS_PLATFORM ? 15 : 13
+const DEFAULT_TERMINAL_FONT_SIZE = 13
 const defaultUserSettings: AppUserSettings = {
   terminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
@@ -954,7 +955,9 @@ function loadUserSettings(): AppUserSettings {
   try {
     const raw = localStorage.getItem(USER_SETTINGS_STORAGE_KEY)
     if (!raw) {
-      if (WINDOWS_PLATFORM) localStorage.setItem(WINDOWS_DENSITY_MIGRATION_STORAGE_KEY, '1')
+      if (WINDOWS_PLATFORM && localStorage.getItem(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY)) {
+        localStorage.setItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1')
+      }
       return { ...defaultUserSettings }
     }
     const parsed = JSON.parse(raw) as Partial<AppUserSettings>
@@ -971,10 +974,16 @@ function loadUserSettings(): AppUserSettings {
       terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
       terminalTheme: 'midnight'
     }
-    if (WINDOWS_PLATFORM && !localStorage.getItem(WINDOWS_DENSITY_MIGRATION_STORAGE_KEY)) {
-      if (settings.terminalFontSize === 13) settings.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
-      localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
-      localStorage.setItem(WINDOWS_DENSITY_MIGRATION_STORAGE_KEY, '1')
+    if (
+      WINDOWS_PLATFORM
+      && localStorage.getItem(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY)
+      && !localStorage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY)
+    ) {
+      if (settings.terminalFontSize === 15) {
+        settings.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
+        localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+      }
+      localStorage.setItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1')
     }
     return settings
   } catch {

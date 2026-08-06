@@ -11,7 +11,7 @@ const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consol
 const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
 const windowsPlatform = isWindowsPlatform()
 const DEFAULT_TERMINAL_FONT_FAMILY = windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
-const DEFAULT_TERMINAL_FONT_SIZE = windowsPlatform ? 15 : 13
+const DEFAULT_TERMINAL_FONT_SIZE = 13
 
 interface AppUserSettings {
   terminalFontFamily: string
