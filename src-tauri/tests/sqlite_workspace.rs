@@ -18,6 +18,7 @@ fn session(id: &str, connection_id: &str, name: &str, created_at: &str) -> Works
         summary: "".into(),
         context_summary: "".into(),
         context_summary_last_message_id: "".into(),
+        ai_mode: "chat".into(),
         created_at: created_at.into(),
         updated_at: created_at.into(),
     }
@@ -60,6 +61,7 @@ fn ai_message(
         text: text.into(),
         command: None,
         error: false,
+        payload_json: "".into(),
         created_at: created_at.into(),
     }
 }

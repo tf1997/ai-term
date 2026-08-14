@@ -19,12 +19,12 @@ const MAX_HISTORY_COMMANDS: usize = 80;
 const MAX_CONVERSATION_MESSAGES: usize = 16;
 const MAX_CONVERSATION_CHARS: usize = 8_000;
 const MAX_CONVERSATION_MESSAGE_CHARS: usize = 3_000;
-const MAX_CONVERSATION_SUMMARY_CHARS: usize = 2_000;
+pub(crate) const MAX_CONVERSATION_SUMMARY_CHARS: usize = 2_000;
 const MAX_COMPACT_SOURCE_MESSAGE_CHARS: usize = 1_500;
 const MAX_COMPACT_SOURCE_TOTAL_CHARS: usize = 12_000;
 const MAX_KEY_LINES: usize = 36;
-const AI_TERM_CLIENT_NAME: &str = "ai-term";
-const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const AI_TERM_CLIENT_NAME: &str = "ai-term";
+pub(crate) const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AI_TERM_USER_AGENT: &str = concat!("ai-term/", env!("CARGO_PKG_VERSION"));
 
 pub type AiCancelToken = Arc<AtomicBool>;
@@ -119,12 +119,12 @@ pub struct AiConversationCompactResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ContextBundle {
-    terminal: String,
-    history: Vec<String>,
-    key_points: Vec<String>,
-    compressed: bool,
-    chars: usize,
+pub(crate) struct ContextBundle {
+    pub(crate) terminal: String,
+    pub(crate) history: Vec<String>,
+    pub(crate) key_points: Vec<String>,
+    pub(crate) compressed: bool,
+    pub(crate) chars: usize,
 }
 
 pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse> {
@@ -439,7 +439,7 @@ fn validate_script_title_request(request: &AiScriptTitleRequest) -> Result<()> {
     Ok(())
 }
 
-fn chat_completions_endpoint(base_url: &str) -> String {
+pub(crate) fn chat_completions_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.ends_with("/chat/completions") {
         trimmed.to_string()
@@ -448,7 +448,10 @@ fn chat_completions_endpoint(base_url: &str) -> String {
     }
 }
 
-fn build_context_bundle(terminal_snapshot: &str, command_history: &[String]) -> ContextBundle {
+pub(crate) fn build_context_bundle(
+    terminal_snapshot: &str,
+    command_history: &[String],
+) -> ContextBundle {
     let history = compress_history(command_history);
     let key_points = extract_key_context(terminal_snapshot, &history);
     let history_chars = history
@@ -531,7 +534,9 @@ fn compress_history(command_history: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn conversation_messages_for_payload(messages: &[AiConversationTurn]) -> Vec<AiConversationTurn> {
+pub(crate) fn conversation_messages_for_payload(
+    messages: &[AiConversationTurn],
+) -> Vec<AiConversationTurn> {
     let mut remaining_chars = MAX_CONVERSATION_CHARS;
     let mut selected = Vec::new();
 
@@ -561,14 +566,14 @@ fn conversation_messages_for_payload(messages: &[AiConversationTurn]) -> Vec<AiC
     selected
 }
 
-fn conversation_context_chars(messages: &[AiConversationTurn]) -> usize {
+pub(crate) fn conversation_context_chars(messages: &[AiConversationTurn]) -> usize {
     messages
         .iter()
         .map(|message| message.content.chars().count())
         .sum()
 }
 
-fn conversation_context_was_compressed(
+pub(crate) fn conversation_context_was_compressed(
     source: &[AiConversationTurn],
     selected: &[AiConversationTurn],
 ) -> bool {
@@ -681,7 +686,7 @@ fn push_unique_limited(points: &mut Vec<String>, value: String) {
     points.push(value);
 }
 
-fn build_user_context_prompt(question: &str, context: &ContextBundle) -> String {
+pub(crate) fn build_user_context_prompt(question: &str, context: &ContextBundle) -> String {
     [
         format!("用户问题：{}", question.trim()),
         format!(
@@ -758,7 +763,7 @@ fn build_script_title_prompt(request: &AiScriptTitleRequest) -> String {
     .join("\n\n")
 }
 
-fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
     let chars = value.chars().collect::<Vec<_>>();
     if chars.len() <= max_chars {
         return value.to_string();
@@ -772,7 +777,7 @@ fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
 /// Building a client per request re-initializes TLS and discards the connection
 /// pool every call. A single lazily-built client keeps connections warm; the
 /// long overall deadline is applied per-request via `RequestBuilder::timeout`.
-fn ai_http_client() -> Result<&'static reqwest::Client> {
+pub(crate) fn ai_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client);
@@ -904,7 +909,7 @@ where
     Ok(answer)
 }
 
-fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
+pub(crate) fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
     cancel_token
         .map(|token| token.load(Ordering::SeqCst))
         .unwrap_or(false)
@@ -935,7 +940,7 @@ fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {
     Ok(deltas)
 }
 
-fn extract_stream_delta(payload: &Value) -> Option<String> {
+pub(crate) fn extract_stream_delta(payload: &Value) -> Option<String> {
     for pointer in [
         "/choices/0/delta/content",
         "/choices/0/text",
@@ -957,7 +962,7 @@ fn extract_stream_delta(payload: &Value) -> Option<String> {
     None
 }
 
-fn extract_chat_answer(raw: &str) -> Result<String> {
+pub(crate) fn extract_chat_answer(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         bail!("模型返回为空");
@@ -990,7 +995,7 @@ fn extract_chat_answer(raw: &str) -> Result<String> {
     Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| trimmed.to_string()))
 }
 
-fn parse_model_error(raw: &str) -> String {
+pub(crate) fn parse_model_error(raw: &str) -> String {
     if raw.trim().is_empty() {
         return "\u{6a21}\u{578b}\u{672a}\u{8fd4}\u{56de}\u{9519}\u{8bef}\u{6b63}\u{6587}".into();
     }
@@ -1038,7 +1043,7 @@ fn is_client_restricted_error(message: &str) -> bool {
     lower.contains("channel:client_restricted") || lower.contains("client_restricted")
 }
 
-fn reject_html_response(raw: &str, endpoint: &str) -> Result<()> {
+pub(crate) fn reject_html_response(raw: &str, endpoint: &str) -> Result<()> {
     let trimmed = raw.trim_start();
     let lower = trimmed.chars().take(512).collect::<String>().to_lowercase();
     let looks_like_html = lower.starts_with("<!doctype html")

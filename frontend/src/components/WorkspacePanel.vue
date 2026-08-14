@@ -10,6 +10,7 @@ import type {
   TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
+import type { AgentCommandHandle, AiPanelMode } from '../types/agent'
 import AiPanel from './AiPanel.vue'
 import CommandHistoryPanel from './CommandHistoryPanel.vue'
 import FileTransferPanel from './FileTransferPanel.vue'
@@ -39,6 +40,10 @@ defineProps<{
   aiMessages: AiMessage[]
   aiContextStatus?: AiContextStatus
   scriptRecording: ScriptRecording
+  agentAvailabilityCheck?: () => string
+  agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
+  agentAllowlistPatterns?: string[]
+  agentBuiltinReadonlyEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +55,8 @@ const emit = defineEmits<{
   deleteWorkspaceSession: [sessionId: string]
   updateWorkspaceSessionTitle: [connectionId: string, sessionId: string, title: string]
   updateWorkspaceSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
+  setWorkspaceSessionMode: [sessionId: string, mode: AiPanelMode]
+  allowAgentPattern: [pattern: string, sourceCommand: string]
   appendAiMessage: [message: AiMessage]
   updateAiMessage: [message: AiMessage]
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
@@ -155,12 +162,18 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :command-history="commandHistory"
       :messages="aiMessages"
       :context-status="aiContextStatus"
+      :agent-availability-check="agentAvailabilityCheck"
+      :agent-command-runner="agentCommandRunner"
+      :agent-allowlist-patterns="agentAllowlistPatterns"
+      :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
       @select-session="emit('selectWorkspaceSession', $event)"
       @create-session="emit('createWorkspaceSession')"
       @rename-session="(sessionId, name) => emit('renameWorkspaceSession', sessionId, name)"
       @delete-session="emit('deleteWorkspaceSession', $event)"
       @update-session-title="(connectionId, sessionId, title) => emit('updateWorkspaceSessionTitle', connectionId, sessionId, title)"
       @update-session-context-summary="(sessionId, summary, lastMessageId) => emit('updateWorkspaceSessionContextSummary', sessionId, summary, lastMessageId)"
+      @set-session-mode="(sessionId: string, mode: AiPanelMode) => emit('setWorkspaceSessionMode', sessionId, mode)"
+      @allow-agent-pattern="(pattern: string, sourceCommand: string) => emit('allowAgentPattern', pattern, sourceCommand)"
       @append-message="emit('appendAiMessage', $event)"
       @update-message="emit('updateAiMessage', $event)"
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"

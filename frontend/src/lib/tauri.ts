@@ -1,6 +1,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/tauri'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
+import type { AgentAllowlistEntry, AiAgentTurnRequest, AiAgentTurnResponse } from '../types/agent'
 import type { AiMessage, CommandHistoryEntry, UpdateScript, WorkspaceSession } from '../types/workspace'
 
 export interface TerminalDataEvent {
@@ -222,6 +223,27 @@ export function chatWithAiProvider(request: AiChatRequest) {
 
 export function chatWithAiProviderStream(requestId: string, request: AiChatRequest) {
   return invoke<AiChatResponse>('chat_with_ai_provider_stream', { requestId, request })
+}
+
+/** Agent 模式:单轮模型调用(文本走 ai-chat 流事件,tool_calls 随返回值)。 */
+export function aiAgentTurnStream(requestId: string, request: AiAgentTurnRequest) {
+  return invoke<AiAgentTurnResponse>('ai_agent_turn_stream', { requestId, request })
+}
+
+export function listAgentCommandAllowlist() {
+  return invoke<AgentAllowlistEntry[]>('list_agent_command_allowlist')
+}
+
+export function saveAgentCommandAllowlistEntry(pattern: string, sourceCommand: string) {
+  return invoke<void>('save_agent_command_allowlist_entry', { pattern, sourceCommand })
+}
+
+export function deleteAgentCommandAllowlistEntry(pattern: string) {
+  return invoke<boolean>('delete_agent_command_allowlist_entry', { pattern })
+}
+
+export function touchAgentCommandAllowlistEntry(pattern: string) {
+  return invoke<void>('touch_agent_command_allowlist_entry', { pattern })
 }
 
 export function compressAiConversation(request: AiConversationCompactRequest) {

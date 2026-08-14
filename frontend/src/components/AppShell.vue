@@ -19,20 +19,24 @@ import type {
   WorkspaceSession
 } from '../types/workspace'
 import {
+  deleteAgentCommandAllowlistEntry,
   deleteAiProviderConfig,
   deleteConnectionProfile,
   deleteWorkspaceSession,
+  listAgentCommandAllowlist,
   listAiProviderConfigs,
   listAiConversationMessages,
   listCommandHistory,
   listConnectionProfiles,
   listWorkspaceSessions,
+  saveAgentCommandAllowlistEntry,
   saveAiConversationMessage,
   saveAiProviderConfig,
   saveCommandHistoryRecord,
   saveConnectionProfile,
   saveWorkspaceSession
 } from '../lib/tauri'
+import type { AgentAllowlistEntry, AgentCommandHandle, AiPanelMode } from '../types/agent'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import ConnectionSidebar from './ConnectionSidebar.vue'
 import ContextMenu from './ContextMenu.vue'
@@ -67,11 +71,14 @@ const defaultUserSettings: AppUserSettings = {
   terminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   terminalTheme: 'midnight',
-  defaultShell: 'system'
+  defaultShell: 'system',
+  agentAutoExecReadonly: false
 }
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
+  agentCaptureSupported: () => boolean
+  runCommandAndCapture: (command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   fillCommand: (command: string) => boolean
   pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'
   terminalInputSyncState: () => TerminalInputSyncState
@@ -96,6 +103,8 @@ interface AppUserSettings {
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
+  /** Agent 模式:自动执行内置只读命令集的开关(默认关)。 */
+  agentAutoExecReadonly: boolean
 }
 
 interface AppToast {
@@ -1419,6 +1428,77 @@ async function updateWorkspaceSessionContextSummary(sessionId: string, summary: 
   }
 }
 
+async function setWorkspaceSessionMode(sessionId: string, mode: AiPanelMode) {
+  const session = workspaceSessionById(sessionId)
+  if (!session || (session.aiMode ?? 'chat') === mode) return
+  const updated = { ...session, aiMode: mode }
+  replaceWorkspaceSession(updated)
+  if (isDraftWorkspaceSession(sessionId)) return
+  try {
+    await saveWorkspaceSession(updated)
+  } catch (error) {
+    console.error('failed to persist AI session mode', error)
+  }
+}
+
+const agentAllowlist = ref<AgentAllowlistEntry[]>([])
+
+async function loadAgentAllowlist() {
+  try {
+    agentAllowlist.value = await listAgentCommandAllowlist()
+  } catch (error) {
+    console.error('failed to load agent command allowlist', error)
+  }
+}
+
+async function allowAgentPattern(pattern: string, sourceCommand: string) {
+  try {
+    await saveAgentCommandAllowlistEntry(pattern, sourceCommand)
+    await loadAgentAllowlist()
+    showToast('success', '已加入允许列表', `以后将自动执行:${pattern}`)
+  } catch (error) {
+    showToast('error', '允许列表保存失败', formatError(error))
+  }
+}
+
+async function removeAgentAllowlistPattern(pattern: string) {
+  try {
+    await deleteAgentCommandAllowlistEntry(pattern)
+    await loadAgentAllowlist()
+  } catch (error) {
+    showToast('error', '允许列表删除失败', formatError(error))
+  }
+}
+
+/** Agent 执行入口:任务开始时绑定的 terminalId 在整个任务期间不变(文档 6.6)。 */
+function agentCommandRunner(terminalId: string, command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
+  const pane = terminalRefs.value[terminalId]
+  if (!pane) {
+    return {
+      result: Promise.resolve({
+        status: 'dispatch-failed' as const,
+        output: '',
+        durationMs: 0,
+        truncated: false,
+        failureReason: '任务绑定的终端已关闭或不可用'
+      }),
+      peekOutput: () => '',
+      cancel: () => {}
+    }
+  }
+  return pane.runCommandAndCapture(command, options)
+}
+
+/** Agent 模式可用性检查:返回空串表示可用,否则为不可用原因。 */
+function agentAvailabilityCheck(): string {
+  const pane = terminalRefs.value[activeTerminalId.value]
+  if (!pane) return '当前终端不可用'
+  if (!pane.agentCaptureSupported()) {
+    return '当前终端未启用 shell integration 语义标记(本地 zsh/bash 自动注入;远端需 shell 自行上报 OSC 133),Agent 无法感知命令完成,暂不可用'
+  }
+  return ''
+}
+
 function isAutoWorkspaceSessionName(name: string) {
   return ['untitled', '无标题', '默认会话', '本地默认会话', '当前会话'].includes(name.trim().toLowerCase())
 }
@@ -2153,6 +2233,7 @@ onMounted(() => {
   void loadAiConfig()
   void ensureActiveAiSession(LOCAL_CONNECTION_ID)
   void loadCommandHistoryForConnection(LOCAL_CONNECTION_ID)
+  void loadAgentAllowlist()
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
   themeToggleButton.value?.addEventListener('pointerdown', handleThemeTogglePointerDown, true)
@@ -2390,6 +2471,10 @@ onBeforeUnmount(() => {
       :ai-messages="activeAiMessages"
       :ai-context-status="activeAiContextStatus"
       :script-recording="activeScriptRecording"
+      :agent-availability-check="agentAvailabilityCheck"
+      :agent-command-runner="agentCommandRunner"
+      :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
+      :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
       @close="rightCollapsed = true"
       @select-workspace-session="selectWorkspaceSession"
       @create-workspace-session="createWorkspaceSessionForActiveConnection"
@@ -2397,6 +2482,8 @@ onBeforeUnmount(() => {
       @delete-workspace-session="deleteWorkspaceSessionForActiveConnection"
       @update-workspace-session-title="updateWorkspaceSessionTitle"
       @update-workspace-session-context-summary="updateWorkspaceSessionContextSummary"
+      @set-workspace-session-mode="setWorkspaceSessionMode"
+      @allow-agent-pattern="allowAgentPattern"
       @append-ai-message="appendAiMessageToActiveTerminal"
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"

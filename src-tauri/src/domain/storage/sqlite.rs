@@ -16,7 +16,8 @@ use crate::domain::connection::models::{
     ContextPolicy, FileTransferMode, JumpMode,
 };
 use crate::domain::workspace::{
-    AiConversationMessage, AiMessageRole, CommandHistoryRecord, UpdateScript, WorkspaceSession,
+    AgentCommandAllowlistEntry, AiConversationMessage, AiMessageRole, CommandHistoryRecord,
+    UpdateScript, WorkspaceSession,
 };
 
 pub const SCHEMA: &str = include_str!("schema.sql");
@@ -377,16 +378,18 @@ impl SqliteConfigStore {
               summary,
               context_summary,
               context_summary_last_message_id,
+              ai_mode,
               created_at,
               updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO UPDATE SET
               connection_id = excluded.connection_id,
               name = excluded.name,
               summary = excluded.summary,
               context_summary = excluded.context_summary,
               context_summary_last_message_id = excluded.context_summary_last_message_id,
+              ai_mode = excluded.ai_mode,
               updated_at = excluded.updated_at
             "#,
             params![
@@ -396,6 +399,7 @@ impl SqliteConfigStore {
                 session.summary,
                 session.context_summary,
                 session.context_summary_last_message_id,
+                session.ai_mode,
                 session.created_at,
                 session.updated_at,
             ],
@@ -414,6 +418,7 @@ impl SqliteConfigStore {
               sessions.summary,
               sessions.context_summary,
               sessions.context_summary_last_message_id,
+              sessions.ai_mode,
               sessions.created_at,
               sessions.updated_at
             FROM workspace_sessions AS sessions
@@ -434,8 +439,9 @@ impl SqliteConfigStore {
                 summary: row.get(3)?,
                 context_summary: row.get(4)?,
                 context_summary_last_message_id: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                ai_mode: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })?;
 
@@ -565,9 +571,10 @@ impl SqliteConfigStore {
               text,
               command,
               error,
+              payload_json,
               created_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
               connection_id = excluded.connection_id,
               workspace_session_id = excluded.workspace_session_id,
@@ -576,6 +583,7 @@ impl SqliteConfigStore {
               text = excluded.text,
               command = excluded.command,
               error = excluded.error,
+              payload_json = excluded.payload_json,
               created_at = excluded.created_at
             "#,
             params![
@@ -587,6 +595,7 @@ impl SqliteConfigStore {
                 message.text,
                 normalize_secret(message.command.as_deref()),
                 if message.error { 1 } else { 0 },
+                message.payload_json,
                 message.created_at,
             ],
         )?;
@@ -622,9 +631,9 @@ impl SqliteConfigStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             r#"
-            SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, created_at
+            SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, payload_json, created_at
             FROM (
-              SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, created_at
+              SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, payload_json, created_at
               FROM ai_conversation_messages
               WHERE workspace_session_id = ?1
               ORDER BY created_at DESC, id DESC
@@ -646,7 +655,8 @@ impl SqliteConfigStore {
                 text: row.get(5)?,
                 command: row.get(6)?,
                 error: error != 0,
-                created_at: row.get(8)?,
+                payload_json: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
 
@@ -778,6 +788,78 @@ impl SqliteConfigStore {
         let connection = self.connection()?;
         let deleted = connection.execute("DELETE FROM update_scripts WHERE id = ?1", [id])?;
         Ok(deleted > 0)
+    }
+
+    /// 列出 Agent 命令允许列表(按添加时间升序,同秒时间戳按 pattern 兜底排序)。
+    pub fn list_agent_command_allowlist(&self) -> Result<Vec<AgentCommandAllowlistEntry>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              pattern,
+              source_command,
+              created_at,
+              last_used_at,
+              use_count
+            FROM agent_command_allowlist
+            ORDER BY created_at ASC, pattern ASC
+            "#,
+        )?;
+
+        let rows = statement.query_map([], |row| {
+            Ok(AgentCommandAllowlistEntry {
+                pattern: row.get(0)?,
+                source_command: row.get(1)?,
+                created_at: row.get(2)?,
+                last_used_at: row.get(3)?,
+                use_count: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// 新增允许列表条目;同 pattern 已存在时保持原记录(来源命令与命中统计)不覆盖。
+    pub fn save_agent_command_allowlist_entry(
+        &self,
+        pattern: &str,
+        source_command: &str,
+    ) -> Result<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            r#"
+            INSERT OR IGNORE INTO agent_command_allowlist (pattern, source_command)
+            VALUES (?1, ?2)
+            "#,
+            params![pattern, source_command],
+        )?;
+        Ok(())
+    }
+
+    /// 删除允许列表条目,返回是否确有删除。
+    pub fn delete_agent_command_allowlist_entry(&self, pattern: &str) -> Result<bool> {
+        let connection = self.connection()?;
+        let deleted = connection.execute(
+            "DELETE FROM agent_command_allowlist WHERE pattern = ?1",
+            [pattern],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    /// 记录一次自动执行命中:use_count 加一并刷新 last_used_at;条目不存在时静默成功。
+    pub fn touch_agent_command_allowlist_entry(&self, pattern: &str) -> Result<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            r#"
+            UPDATE agent_command_allowlist
+            SET use_count = use_count + 1,
+                last_used_at = CURRENT_TIMESTAMP
+            WHERE pattern = ?1
+            "#,
+            [pattern],
+        )?;
+        Ok(())
     }
 
     fn prepare_connection_profile_for_storage(
@@ -973,6 +1055,7 @@ impl SqliteConfigStore {
             migrate_ai_conversation_messages(&connection)?;
             migrate_workspace_sessions(&connection)?;
             migrate_update_scripts(&connection)?;
+            migrate_agent_command_allowlist(&connection)?;
             *guard = Some(connection);
         }
         Ok(StoreConnection { guard })
@@ -1025,6 +1108,12 @@ fn migrate_ai_conversation_messages(connection: &Connection) -> Result<()> {
         "workspace_session_id",
         "TEXT NOT NULL DEFAULT 'default'",
     )?;
+    ensure_column(
+        connection,
+        "ai_conversation_messages",
+        "payload_json",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     Ok(())
 }
 
@@ -1040,6 +1129,12 @@ fn migrate_workspace_sessions(connection: &Connection) -> Result<()> {
         "workspace_sessions",
         "context_summary_last_message_id",
         "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        connection,
+        "workspace_sessions",
+        "ai_mode",
+        "TEXT NOT NULL DEFAULT 'chat'",
     )?;
     Ok(())
 }
@@ -1061,6 +1156,22 @@ fn migrate_update_scripts(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_update_scripts_connection_updated
           ON update_scripts(connection_id, updated_at);
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Agent「总是允许」命令允许列表(见 docs/ai-agent-mode-development.md 第 7 节)。
+fn migrate_agent_command_allowlist(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_command_allowlist (
+          pattern TEXT PRIMARY KEY NOT NULL,
+          source_command TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_used_at TEXT,
+          use_count INTEGER NOT NULL DEFAULT 0
+        );
         "#,
     )?;
     Ok(())
@@ -1135,6 +1246,7 @@ pub fn schema_contains_required_tables() -> bool {
         "command_history",
         "ai_conversation_messages",
         "update_scripts",
+        "agent_command_allowlist",
     ];
 
     required.iter().all(|table| SCHEMA.contains(table))

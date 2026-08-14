@@ -18,6 +18,8 @@ interface AppUserSettings {
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
+  /** Agent 模式:自动执行内置只读命令集的开关(与 AppShell 的定义保持一致)。 */
+  agentAutoExecReadonly: boolean
 }
 
 const props = defineProps<{

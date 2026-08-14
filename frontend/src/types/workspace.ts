@@ -1,3 +1,5 @@
+import type { AgentStep } from './agent'
+
 export interface WorkspaceSession {
   id: string
   /** Connection active when the global AI conversation was created. */
@@ -8,6 +10,8 @@ export interface WorkspaceSession {
   contextSummary?: string
   /** Id of the last conversation message covered by contextSummary. */
   contextSummaryLastMessageId?: string
+  /** AI 面板模式(普通对话 / Agent),会话级持久化;缺省视为 chat。 */
+  aiMode?: 'chat' | 'agent'
   createdAt: string
   updatedAt: string
 }
@@ -90,6 +94,13 @@ export interface AiMessage {
   command?: string
   error?: boolean
   streaming?: boolean
+  /** 产生该消息的模式;缺省视为 chat。 */
+  mode?: 'chat' | 'agent'
+  /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */
+  agentSteps?: AgentStep[]
+  agentStatus?: 'running' | 'done' | 'stopped' | 'error'
+  /** Agent 载荷序列化(与后端 payload_json 列对应)。 */
+  payloadJson?: string
   createdAt: string
 }
 

@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS workspace_sessions (
   summary TEXT NOT NULL DEFAULT '',
   context_summary TEXT NOT NULL DEFAULT '',
   context_summary_last_message_id TEXT NOT NULL DEFAULT '',
+  ai_mode TEXT NOT NULL DEFAULT 'chat',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS ai_conversation_messages (
   text TEXT NOT NULL,
   command TEXT,
   error INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -119,3 +121,11 @@ CREATE INDEX IF NOT EXISTS idx_update_scripts_connection_updated
 
 CREATE INDEX IF NOT EXISTS idx_update_scripts_updated
   ON update_scripts(updated_at);
+
+CREATE TABLE IF NOT EXISTS agent_command_allowlist (
+  pattern TEXT PRIMARY KEY NOT NULL,
+  source_command TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at TEXT,
+  use_count INTEGER NOT NULL DEFAULT 0
+);

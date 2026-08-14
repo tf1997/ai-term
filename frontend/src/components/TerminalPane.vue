@@ -30,6 +30,7 @@ import type {
 } from '../types/workspace'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { attachShellIntegration, type AttachedShellIntegration } from '../lib/shellIntegration'
+import type { AgentCommandHandle, AgentCommandResult } from '../types/agent'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
@@ -2456,6 +2457,98 @@ function executeCommand(command: string) {
   return false
 }
 
+/** Agent 模式可用性:需要 shell integration 语义标记才能感知命令完成。 */
+function agentCaptureSupported() {
+  return Boolean(shellIntegrationAttachment?.tracker.sawMarkers)
+}
+
+function normalizeForCommandMatch(command: string) {
+  return command.replace(/\s+/g, ' ').trim()
+}
+
+const AGENT_CAPTURE_DEFAULT_MAX_CHARS = 4000
+
+function agentDispatchFailure(reason: string): AgentCommandHandle {
+  const result: AgentCommandResult = {
+    status: 'dispatch-failed',
+    output: '',
+    durationMs: 0,
+    truncated: false,
+    failureReason: reason
+  }
+  return { result: Promise.resolve(result), peekOutput: () => '', cancel: () => {} }
+}
+
+/**
+ * Agent 派发命令并捕获输出与退出码(文档 6.2)。
+ * 超时决策在循环层;cancel 只放弃等待,不终止命令本身。
+ */
+function runCommandAndCapture(command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
+  const value = command.trim()
+  if (!value) return agentDispatchFailure('命令为空')
+  const tracker = shellIntegrationAttachment?.tracker
+  if (!tracker?.sawMarkers) {
+    return agentDispatchFailure('当前终端未启用 shell integration 语义标记,Agent 无法感知命令完成')
+  }
+  const readiness = commandExecutionReadiness()
+  if (readiness !== 'ready') {
+    const reasonMap: Record<string, string> = {
+      'line-busy': '当前命令行已有输入或补全内容',
+      'shell-busy': 'Shell 尚未返回可执行提示符',
+      unavailable: '终端不可用或连接已断开'
+    }
+    return agentDispatchFailure(reasonMap[readiness] ?? `终端未就绪(${readiness})`)
+  }
+
+  const dispatchedAt = Date.now()
+  let settled = false
+  let resolveResult!: (result: AgentCommandResult) => void
+  const result = new Promise<AgentCommandResult>((resolve) => {
+    resolveResult = resolve
+  })
+  const armed = tracker.armCommandCapture(
+    options?.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS,
+    (capture) => {
+      if (settled) return
+      settled = true
+      // 捕获到的命令与派发不一致 = 用户手动输入串扰;空文本视为未知,不判串扰
+      const captured = normalizeForCommandMatch(capture.command)
+      const mismatch = captured !== '' && captured !== normalizeForCommandMatch(value)
+      resolveResult({
+        status: 'completed',
+        output: capture.output,
+        exitCode: capture.exitCode,
+        durationMs: Math.max(0, capture.finishedAt - capture.startedAt),
+        truncated: capture.truncated,
+        commandMismatch: mismatch || undefined
+      })
+    }
+  )
+
+  if (!executeCommand(value)) {
+    armed.dispose()
+    settled = true
+    return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
+  }
+
+  return {
+    result,
+    peekOutput: () => (settled ? '' : armed.peekOutput()),
+    cancel: () => {
+      if (settled) return
+      settled = true
+      const partial = armed.peekOutput()
+      armed.dispose()
+      resolveResult({
+        status: 'cancelled',
+        output: partial,
+        durationMs: Date.now() - dispatchedAt,
+        truncated: false
+      })
+    }
+  }
+}
+
 function forwardInteractiveTerminalInput(data: string, synchronize = true) {
   if (!data || !terminalInputDestinationAvailable()) return false
   const beforeState = terminalInputSyncState()
@@ -2608,6 +2701,7 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
+  agentCaptureSupported,
   clearTerminal,
   commandExecutionReadiness,
   disconnectFromButton,
@@ -2616,6 +2710,7 @@ defineExpose({
   focusTerminal,
   pinQuickCommand,
   restartLocalTerminal,
+  runCommandAndCapture,
   terminalInputSyncState,
   writeTerminalInput,
   writeSyncedTerminalInput

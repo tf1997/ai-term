@@ -1,0 +1,1066 @@
+//! Agent 模式的模型协议层：payload 构造、轮次校验、流式 tool_calls 解析。
+//! 设计见 docs/ai-agent-mode-development.md 第 5 节；HTTP/SSE 基础设施复用 chat 模块。
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::domain::ai::chat::{
+    ai_http_client, build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
+    conversation_context_chars, conversation_context_was_compressed,
+    conversation_messages_for_payload, extract_chat_answer, extract_stream_delta, is_cancelled,
+    parse_model_error, reject_html_response, truncate_for_prompt, AiCancelToken,
+    AiConversationRole, AiConversationTurn, ContextBundle, AI_TERM_CLIENT_NAME,
+    AI_TERM_CLIENT_VERSION, MAX_CONVERSATION_SUMMARY_CHARS,
+};
+use crate::domain::connection::models::AiProviderConfig;
+use crate::domain::text::Utf8StreamDecoder;
+
+/// 任务轮次的字符总量上限；超限直接报错，轮次压缩由前端负责（文档第 8 节）。
+const MAX_AGENT_TURN_CHARS: usize = 24_000;
+/// 缺失工具结果时自动补发的 tool 消息内容（文档 5.3）。
+const SKIPPED_TOOL_RESULT_CONTENT: &str = r#"{"status":"skipped"}"#;
+/// 网关疑似不支持 function calling 时前置的提示（文档 5.7）。
+const TOOLS_UNSUPPORTED_HINT: &str =
+    "当前模型或网关可能不支持工具调用(Agent 模式),请更换模型或切回普通对话。";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAgentTurnRequest {
+    pub config: AiProviderConfig,
+    pub api_key: String,
+    /// 用户任务描述（整个任务期间不变）。
+    pub goal: String,
+    /// 本任务内已发生的轮次，按序。
+    pub turns: Vec<AiAgentTurn>,
+    pub terminal_snapshot: String,
+    pub command_history: Vec<String>,
+    /// 会话内普通对话历史与压缩摘要，作为背景（复用 chat 的结构）。
+    #[serde(default)]
+    pub conversation_messages: Vec<AiConversationTurn>,
+    #[serde(default)]
+    pub conversation_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AiAgentTurn {
+    /// 模型上一轮输出：文本 + 工具调用。
+    Assistant {
+        text: String,
+        tool_calls: Vec<AiToolCall>,
+    },
+    /// 某个工具调用的结果（执行输出 / 跳过 / 超时说明）。
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolCall {
+    pub id: String,
+    pub name: String,
+    /// 原样透传的 JSON 字符串，前端负责解析 command/reason。
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAgentTurnResponse {
+    pub text: String,
+    /// 空数组 = 模型认为任务完成。
+    pub tool_calls: Vec<AiToolCall>,
+    pub context_compressed: bool,
+    pub context_chars: usize,
+}
+
+pub async fn agent_turn_with_provider_stream<F>(
+    request: AiAgentTurnRequest,
+    on_delta: F,
+    cancel_token: Option<&AiCancelToken>,
+) -> Result<AiAgentTurnResponse>
+where
+    F: FnMut(String) + Send,
+{
+    validate_agent_turn_request(&request)?;
+    let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
+    let conversation = conversation_messages_for_payload(&request.conversation_messages);
+    let summary_chars = conversation_summary_chars(&request);
+    let endpoint = chat_completions_endpoint(&request.config.base_url);
+    let payload = build_agent_payload(&request, &context, &conversation, true)?;
+
+    let (text, tool_calls) =
+        send_agent_stream_request(&endpoint, &request.api_key, payload, on_delta, cancel_token)
+            .await?;
+
+    Ok(AiAgentTurnResponse {
+        text,
+        tool_calls,
+        context_compressed: context.compressed
+            || summary_chars > 0
+            || conversation_context_was_compressed(&request.conversation_messages, &conversation),
+        context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
+    })
+}
+
+fn validate_agent_turn_request(request: &AiAgentTurnRequest) -> Result<()> {
+    if request.config.base_url.trim().is_empty() {
+        bail!("请先配置 AI Base URL");
+    }
+    if request.config.model.trim().is_empty() {
+        bail!("请先配置 AI Model");
+    }
+    if request.api_key.trim().is_empty() {
+        bail!("请在 AI 配置中填写 API Key 并保存");
+    }
+    if request.goal.trim().is_empty() {
+        bail!("任务目标不能为空");
+    }
+    let turn_chars = agent_turn_chars(&request.turns);
+    if turn_chars > MAX_AGENT_TURN_CHARS {
+        bail!(
+            "任务轮次过长：共 {turn_chars} 字符，超出上限 {MAX_AGENT_TURN_CHARS} 字符，请压缩早期轮次后重试"
+        );
+    }
+    Ok(())
+}
+
+fn agent_turn_chars(turns: &[AiAgentTurn]) -> usize {
+    turns
+        .iter()
+        .map(|turn| match turn {
+            AiAgentTurn::Assistant { text, tool_calls } => {
+                text.chars().count()
+                    + tool_calls
+                        .iter()
+                        .map(|call| call.arguments.chars().count())
+                        .sum::<usize>()
+            }
+            AiAgentTurn::ToolResult { content, .. } => content.chars().count(),
+        })
+        .sum()
+}
+
+fn build_agent_payload(
+    request: &AiAgentTurnRequest,
+    context: &ContextBundle,
+    conversation: &[AiConversationTurn],
+    stream: bool,
+) -> Result<Value> {
+    let mut system_content = build_agent_system_prompt(&request.config.system_prompt);
+    if let Some(summary) = normalized_conversation_summary(request) {
+        system_content.push_str(
+            "\n\n【历史对话摘要】以下是本会话更早对话的压缩摘要，仅作背景参考；当前终端内容与最新消息优先：\n",
+        );
+        system_content.push_str(&summary);
+    }
+
+    let mut messages = vec![json!({
+        "role": "system",
+        "content": system_content
+    })];
+    messages.extend(conversation.iter().map(|message| {
+        json!({
+            "role": match &message.role {
+                AiConversationRole::User => "user",
+                AiConversationRole::Assistant => "assistant",
+            },
+            "content": &message.content,
+        })
+    }));
+    messages.push(json!({
+        "role": "user",
+        "content": build_user_context_prompt(&request.goal, context)
+    }));
+    append_turn_messages(&mut messages, &request.turns)?;
+
+    Ok(json!({
+        "model": request.config.model,
+        "messages": messages,
+        "tools": [run_command_tool_definition()],
+        "tool_choice": "auto",
+        "parallel_tool_calls": false,
+        "temperature": 0.2,
+        "stream": stream
+    }))
+}
+
+fn build_agent_system_prompt(custom_prompt: &str) -> String {
+    [
+        custom_prompt.trim(),
+        "你是 AI Term 的终端操作 Agent,通过 run_command 工具在用户当前终端执行命令来完成用户任务。",
+        "规则:",
+        "1. 一次只调用一次 run_command,提出一条命令;根据返回的输出和退出码决定下一步。",
+        "2. 优先只读检查命令;任何有破坏性的操作(删除、覆盖、重启、服务变更)之前,必须先用只读命令确认目标存在且正确,并在 reason 里说明依据。",
+        "3. 命令必须完整可直接执行,不使用交互式编辑器(vim/nano)和分页器(如 less;用 cat/head/tail 替代),长输出主动加过滤或行数限制。",
+        "4. 用户可能跳过你的命令,工具结果会标注 skipped;此时换一种方式或询问用户,不要原样重发。",
+        "5. 任务完成或无法继续时,不再调用工具,直接输出结论:做了什么、结果如何、遗留什么。",
+        "6. 始终以最新工具结果和终端内容为准,不要臆造未验证的状态。",
+    ]
+    .iter()
+    .map(|item| item.trim())
+    .filter(|item| !item.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn run_command_tool_definition() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "run_command",
+            "description": "在用户当前终端执行一条 shell 命令并返回输出与退出码。命令会展示给用户审批后才执行。一次只提出一条命令;优先只读检查;危险操作必须先用只读命令确认目标。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "完整的单条 shell 命令" },
+                    "reason": { "type": "string", "description": "为什么执行这条命令(一句话,展示给用户)" }
+                },
+                "required": ["command"]
+            }
+        }
+    })
+}
+
+fn normalized_conversation_summary(request: &AiAgentTurnRequest) -> Option<String> {
+    let summary = request.conversation_summary.as_deref()?.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    Some(truncate_for_prompt(summary, MAX_CONVERSATION_SUMMARY_CHARS))
+}
+
+fn conversation_summary_chars(request: &AiAgentTurnRequest) -> usize {
+    normalized_conversation_summary(request)
+        .map(|summary| summary.chars().count())
+        .unwrap_or(0)
+}
+
+/// 按 OpenAI 协议展开任务轮次：每个 tool 消息必须紧跟在包含对应
+/// tool_call_id 的 assistant 消息之后；缺失结果的 tool_call 自动补一条
+/// skipped，防止个别网关直接 400；无前置 tool_call 的结果视为非法轮次。
+fn append_turn_messages(messages: &mut Vec<Value>, turns: &[AiAgentTurn]) -> Result<()> {
+    let mut pending_tool_call_ids: Vec<String> = Vec::new();
+
+    for turn in turns {
+        match turn {
+            AiAgentTurn::Assistant { text, tool_calls } => {
+                flush_pending_tool_results(messages, &mut pending_tool_call_ids);
+                let mut message = json!({
+                    "role": "assistant",
+                    "content": if text.trim().is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(text.clone())
+                    },
+                });
+                if !tool_calls.is_empty() {
+                    message["tool_calls"] = Value::Array(
+                        tool_calls
+                            .iter()
+                            .map(|call| {
+                                json!({
+                                    "id": call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.name,
+                                        "arguments": call.arguments,
+                                    }
+                                })
+                            })
+                            .collect(),
+                    );
+                }
+                messages.push(message);
+                pending_tool_call_ids = tool_calls.iter().map(|call| call.id.clone()).collect();
+            }
+            AiAgentTurn::ToolResult {
+                tool_call_id,
+                content,
+            } => {
+                let Some(position) = pending_tool_call_ids
+                    .iter()
+                    .position(|pending| pending == tool_call_id)
+                else {
+                    bail!("任务轮次不合法：工具结果 {tool_call_id} 没有对应的前置 tool_call");
+                };
+                pending_tool_call_ids.remove(position);
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                }));
+            }
+        }
+    }
+
+    flush_pending_tool_results(messages, &mut pending_tool_call_ids);
+    Ok(())
+}
+
+fn flush_pending_tool_results(messages: &mut Vec<Value>, pending_tool_call_ids: &mut Vec<String>) {
+    for tool_call_id in pending_tool_call_ids.drain(..) {
+        messages.push(json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": SKIPPED_TOOL_RESULT_CONTENT,
+        }));
+    }
+}
+
+/// 流循环结构与 chat 的 send_openai_compatible_stream_request 一致：
+/// 文本增量经 on_delta 外发，工具调用增量按 index 累积，
+/// 全程无 SSE 增量时走非流式兜底。
+async fn send_agent_stream_request<F>(
+    endpoint: &str,
+    api_key: &str,
+    payload: Value,
+    mut on_delta: F,
+    cancel_token: Option<&AiCancelToken>,
+) -> Result<(String, Vec<AiToolCall>)>
+where
+    F: FnMut(String) + Send,
+{
+    let response = ai_http_client()?
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .header("X-Client-Name", AI_TERM_CLIENT_NAME)
+        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
+        .bearer_auth(api_key.trim())
+        .body(payload.to_string())
+        .timeout(Duration::from_secs(90))
+        .send()
+        .await
+        .with_context(|| format!("AI 流式网络请求失败：{endpoint}"))?;
+
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let raw = response.text().await.unwrap_or_default();
+        bail!(
+            "模型请求失败：HTTP {status}\n{}",
+            agent_model_error_detail(&raw)
+        );
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut decoder = Utf8StreamDecoder::default();
+    let mut raw = String::new();
+    let mut event_buffer = String::new();
+    let mut text = String::new();
+    let mut accumulator: BTreeMap<u64, AiToolCall> = BTreeMap::new();
+    let mut saw_sse_delta = false;
+
+    while let Some(chunk) = stream.next().await {
+        if is_cancelled(cancel_token) {
+            return Ok((text, finalize_tool_calls(accumulator)));
+        }
+        let chunk = chunk.context("failed to read AI stream chunk")?;
+        let chunk_text = decoder.push(&chunk);
+        if chunk_text.is_empty() {
+            continue;
+        }
+        // raw 仅在整个流没有任何 SSE 增量时作为非流式兜底使用，
+        // 一旦确认处于流式模式就停止累积完整响应副本。
+        if !saw_sse_delta {
+            raw.push_str(&chunk_text);
+        }
+        event_buffer.push_str(&chunk_text);
+
+        while let Some(index) = event_buffer.find("\n\n") {
+            let event = event_buffer[..index].to_string();
+            event_buffer.drain(..index + 2);
+            for delta in parse_agent_sse_event(&event, &mut accumulator)? {
+                if is_cancelled(cancel_token) {
+                    return Ok((text, finalize_tool_calls(accumulator)));
+                }
+                saw_sse_delta = true;
+                text.push_str(&delta);
+                on_delta(delta);
+            }
+            saw_sse_delta = saw_sse_delta || !accumulator.is_empty();
+        }
+    }
+
+    if !event_buffer.trim().is_empty() {
+        for delta in parse_agent_sse_event(&event_buffer, &mut accumulator)? {
+            if is_cancelled(cancel_token) {
+                return Ok((text, finalize_tool_calls(accumulator)));
+            }
+            saw_sse_delta = true;
+            text.push_str(&delta);
+            on_delta(delta);
+        }
+        saw_sse_delta = saw_sse_delta || !accumulator.is_empty();
+    }
+
+    if saw_sse_delta {
+        return Ok((text, finalize_tool_calls(accumulator)));
+    }
+
+    reject_html_response(&raw, endpoint)?;
+    let (text, tool_calls) = extract_agent_completion(&raw)?;
+    if !text.is_empty() {
+        on_delta(text.clone());
+    }
+    Ok((text, tool_calls))
+}
+
+/// 解析一个 SSE 事件：返回文本增量，工具调用增量累积进 accumulator。
+fn parse_agent_sse_event(
+    event: &str,
+    accumulator: &mut BTreeMap<u64, AiToolCall>,
+) -> Result<Vec<String>> {
+    let mut deltas = Vec::new();
+
+    for line in event.lines().map(str::trim) {
+        if !line.starts_with("data:") {
+            continue;
+        }
+        let data = line.trim_start_matches("data:").trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+
+        let payload = serde_json::from_str::<Value>(data)
+            .with_context(|| format!("模型流式返回不是合法 JSON：{data}"))?;
+        if let Some(error) = payload.pointer("/error/message").and_then(Value::as_str) {
+            bail!("模型流式返回错误：{error}");
+        }
+        if let Some(delta) = extract_stream_delta(&payload) {
+            deltas.push(delta);
+        }
+        accumulate_tool_call_deltas(accumulator, &payload);
+    }
+
+    Ok(deltas)
+}
+
+/// 按 index 累积工具调用增量：id/name 取首个非空值，arguments 逐片拼接。
+/// 兼容分片下发（标准）与单个 delta 携带完整调用两类网关行为。
+fn accumulate_tool_call_deltas(accumulator: &mut BTreeMap<u64, AiToolCall>, payload: &Value) {
+    let Some(deltas) = payload
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    for (position, delta) in deltas.iter().enumerate() {
+        let index = delta
+            .get("index")
+            .and_then(Value::as_u64)
+            .unwrap_or(position as u64);
+        let call = accumulator.entry(index).or_insert_with(empty_tool_call);
+        if call.id.is_empty() {
+            if let Some(id) = delta
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+            {
+                call.id = id.to_string();
+            }
+        }
+        if call.name.is_empty() {
+            if let Some(name) = delta
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+            {
+                call.name = name.to_string();
+            }
+        }
+        if let Some(arguments) = delta.pointer("/function/arguments") {
+            call.arguments
+                .push_str(&tool_call_arguments_text(arguments));
+        }
+    }
+}
+
+fn empty_tool_call() -> AiToolCall {
+    AiToolCall {
+        id: String::new(),
+        name: String::new(),
+        arguments: String::new(),
+    }
+}
+
+/// 个别网关把 function.arguments 返回为 JSON 对象而非字符串，统一归一化为字符串。
+fn tool_call_arguments_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => String::new(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// 累积表非空即输出 tool_calls，不依赖 finish_reason（部分网关不回传）。
+fn finalize_tool_calls(accumulator: BTreeMap<u64, AiToolCall>) -> Vec<AiToolCall> {
+    accumulator
+        .into_values()
+        .filter(|call| !call.id.is_empty() || !call.name.is_empty() || !call.arguments.is_empty())
+        .collect()
+}
+
+/// 非流式兜底：整体 JSON 里取 choices/0/message/content 为 text、
+/// choices/0/message/tool_calls 为工具调用；没有工具调用时按普通文本
+/// 回答处理，复用 chat 的提取逻辑与错误文案。
+fn extract_agent_completion(raw: &str) -> Result<(String, Vec<AiToolCall>)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("模型返回为空");
+    }
+
+    let payload = serde_json::from_str::<Value>(trimmed).ok();
+    let tool_calls = payload
+        .as_ref()
+        .and_then(|payload| payload.pointer("/choices/0/message/tool_calls"))
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .map(parse_message_tool_call)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if tool_calls.is_empty() {
+        return Ok((extract_chat_answer(trimmed)?, Vec::new()));
+    }
+
+    let text = payload
+        .as_ref()
+        .and_then(|payload| payload.pointer("/choices/0/message/content"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+
+    Ok((text, tool_calls))
+}
+
+fn parse_message_tool_call(value: &Value) -> AiToolCall {
+    AiToolCall {
+        id: value
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        name: value
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        arguments: value
+            .pointer("/function/arguments")
+            .map(tool_call_arguments_text)
+            .unwrap_or_default(),
+    }
+}
+
+/// 错误正文提及 tool/function 关键字时，前置切换建议（文档 5.7）。
+fn agent_model_error_detail(raw: &str) -> String {
+    let detail = parse_model_error(raw);
+    if error_mentions_tool_support(&detail) {
+        return format!("{TOOLS_UNSUPPORTED_HINT}\n{detail}");
+    }
+    detail
+}
+
+fn error_mentions_tool_support(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("tool") || lower.contains("function")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn agent_test_config() -> AiProviderConfig {
+        AiProviderConfig {
+            id: "config-1".into(),
+            provider: crate::domain::connection::models::AiProviderType::OpenAiCompatible,
+            base_url: "https://provider.example/v1".into(),
+            model: "test-model".into(),
+            api_key_ref: String::new(),
+            api_key: None,
+            context_policy: crate::domain::connection::models::ContextPolicy::SelectedOutputOnly,
+            system_prompt: String::new(),
+            risk_policy: String::new(),
+        }
+    }
+
+    fn agent_request(turns: Vec<AiAgentTurn>) -> AiAgentTurnRequest {
+        AiAgentTurnRequest {
+            config: agent_test_config(),
+            api_key: "key".into(),
+            goal: "排查磁盘占用".into(),
+            turns,
+            terminal_snapshot: String::new(),
+            command_history: Vec::new(),
+            conversation_messages: Vec::new(),
+            conversation_summary: None,
+        }
+    }
+
+    fn tool_call(id: &str, arguments: &str) -> AiToolCall {
+        AiToolCall {
+            id: id.into(),
+            name: "run_command".into(),
+            arguments: arguments.into(),
+        }
+    }
+
+    fn build_test_payload(request: &AiAgentTurnRequest) -> Result<Value> {
+        let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
+        let conversation = conversation_messages_for_payload(&request.conversation_messages);
+        build_agent_payload(request, &context, &conversation, true)
+    }
+
+    fn apply_events(events: &[&str]) -> (String, BTreeMap<u64, AiToolCall>) {
+        let mut accumulator = BTreeMap::new();
+        let mut text = String::new();
+        for event in events {
+            for delta in parse_agent_sse_event(event, &mut accumulator).unwrap() {
+                text.push_str(&delta);
+            }
+        }
+        (text, accumulator)
+    }
+
+    #[test]
+    fn payload_includes_tool_definition_and_disables_parallel_calls() {
+        let request = agent_request(Vec::new());
+        let payload = build_test_payload(&request).unwrap();
+
+        assert_eq!(
+            payload
+                .pointer("/tools/0/function/name")
+                .and_then(Value::as_str),
+            Some("run_command")
+        );
+        assert_eq!(
+            payload.pointer("/tool_choice").and_then(Value::as_str),
+            Some("auto")
+        );
+        assert_eq!(
+            payload
+                .pointer("/parallel_tool_calls")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            payload.pointer("/stream").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let system = payload
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(system.contains("终端操作 Agent"));
+        let user = payload
+            .pointer("/messages/1/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(user.contains("排查磁盘占用"));
+    }
+
+    #[test]
+    fn payload_expands_turns_in_protocol_order() {
+        let request = agent_request(vec![
+            AiAgentTurn::Assistant {
+                text: "先看磁盘使用".into(),
+                tool_calls: vec![tool_call("call-1", r#"{"command":"df -h"}"#)],
+            },
+            AiAgentTurn::ToolResult {
+                tool_call_id: "call-1".into(),
+                content: r#"{"exitCode":0,"output":"/dev/disk1 90%"}"#.into(),
+            },
+            AiAgentTurn::Assistant {
+                text: String::new(),
+                tool_calls: vec![tool_call("call-2", r#"{"command":"du -sh /var/*"}"#)],
+            },
+            AiAgentTurn::ToolResult {
+                tool_call_id: "call-2".into(),
+                content: r#"{"exitCode":0,"output":"2G /var/log"}"#.into(),
+            },
+        ]);
+        let payload = build_test_payload(&request).unwrap();
+        let messages = payload
+            .pointer("/messages")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        let roles = messages
+            .iter()
+            .map(|message| message.get("role").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            vec!["system", "user", "assistant", "tool", "assistant", "tool"]
+        );
+        assert_eq!(
+            messages[2].get("content").and_then(Value::as_str),
+            Some("先看磁盘使用")
+        );
+        assert_eq!(
+            messages[2]
+                .pointer("/tool_calls/0/id")
+                .and_then(Value::as_str),
+            Some("call-1")
+        );
+        assert_eq!(
+            messages[2]
+                .pointer("/tool_calls/0/type")
+                .and_then(Value::as_str),
+            Some("function")
+        );
+        assert_eq!(
+            messages[2]
+                .pointer("/tool_calls/0/function/arguments")
+                .and_then(Value::as_str),
+            Some(r#"{"command":"df -h"}"#)
+        );
+        assert_eq!(
+            messages[3].get("tool_call_id").and_then(Value::as_str),
+            Some("call-1")
+        );
+        // text 为空的 assistant 轮次 content 必须为 null。
+        assert!(messages[4].get("content").unwrap().is_null());
+        assert_eq!(
+            messages[5].get("tool_call_id").and_then(Value::as_str),
+            Some("call-2")
+        );
+    }
+
+    #[test]
+    fn payload_fills_missing_tool_results_as_skipped() {
+        let request = agent_request(vec![
+            AiAgentTurn::Assistant {
+                text: String::new(),
+                tool_calls: vec![
+                    tool_call("call-1", r#"{"command":"df -h"}"#),
+                    tool_call("call-2", r#"{"command":"free -h"}"#),
+                ],
+            },
+            AiAgentTurn::ToolResult {
+                tool_call_id: "call-2".into(),
+                content: r#"{"exitCode":0,"output":"ok"}"#.into(),
+            },
+            AiAgentTurn::Assistant {
+                text: "继续".into(),
+                tool_calls: vec![tool_call("call-3", r#"{"command":"uptime"}"#)],
+            },
+        ]);
+        let payload = build_test_payload(&request).unwrap();
+        let messages = payload
+            .pointer("/messages")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        // assistant(双调用) → 实际结果(call-2) → 自动补 call-1 → assistant → 末尾补 call-3。
+        assert_eq!(
+            messages[3].get("tool_call_id").and_then(Value::as_str),
+            Some("call-2")
+        );
+        assert_eq!(
+            messages[4].get("tool_call_id").and_then(Value::as_str),
+            Some("call-1")
+        );
+        assert_eq!(
+            messages[4].get("content").and_then(Value::as_str),
+            Some(SKIPPED_TOOL_RESULT_CONTENT)
+        );
+        assert_eq!(
+            messages[5].get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert_eq!(
+            messages[6].get("tool_call_id").and_then(Value::as_str),
+            Some("call-3")
+        );
+        assert_eq!(
+            messages[6].get("content").and_then(Value::as_str),
+            Some(SKIPPED_TOOL_RESULT_CONTENT)
+        );
+        assert_eq!(messages.len(), 7);
+    }
+
+    #[test]
+    fn rejects_tool_result_without_matching_tool_call() {
+        let request = agent_request(vec![AiAgentTurn::ToolResult {
+            tool_call_id: "call-x".into(),
+            content: "{}".into(),
+        }]);
+        let error = build_test_payload(&request).unwrap_err().to_string();
+        assert!(error.contains("没有对应的前置 tool_call"));
+    }
+
+    #[test]
+    fn payload_injects_custom_prompt_and_conversation_summary() {
+        let mut request = agent_request(Vec::new());
+        request.config.system_prompt = "自定义提示词".into();
+        request.conversation_summary = Some("早期对话：已在 web-1 上排查过 nginx 502。".into());
+        let payload = build_test_payload(&request).unwrap();
+
+        let system = payload
+            .pointer("/messages/0/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(system.starts_with("自定义提示词"));
+        assert!(system.contains("终端操作 Agent"));
+        assert!(system.contains("【历史对话摘要】"));
+        assert!(system.contains("nginx 502"));
+    }
+
+    #[test]
+    fn payload_places_conversation_background_before_goal() {
+        let mut request = agent_request(Vec::new());
+        request.conversation_messages = vec![
+            AiConversationTurn {
+                role: AiConversationRole::User,
+                content: "之前问过 nginx 502".into(),
+            },
+            AiConversationTurn {
+                role: AiConversationRole::Assistant,
+                content: "给过 tail 命令".into(),
+            },
+        ];
+        let payload = build_test_payload(&request).unwrap();
+        let messages = payload
+            .pointer("/messages")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert_eq!(
+            messages[1].get("role").and_then(Value::as_str),
+            Some("user")
+        );
+        assert_eq!(
+            messages[1].get("content").and_then(Value::as_str),
+            Some("之前问过 nginx 502")
+        );
+        assert_eq!(
+            messages[2].get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert!(messages[3]
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("排查磁盘占用"));
+    }
+
+    #[test]
+    fn accumulates_streamed_tool_call_argument_fragments() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"comm"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"df -h\"}"}}]}}]}"#,
+            "data: [DONE]",
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].arguments, r#"{"command":"df -h"}"#);
+    }
+
+    #[test]
+    fn orders_tool_calls_by_stream_index() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call-b","function":{"name":"run_command","arguments":"{\"command\":\"free -h\"}"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"run_command","arguments":"{\"command\":\"df -h\"}"}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(
+            calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call-a", "call-b"]
+        );
+    }
+
+    #[test]
+    fn accepts_single_delta_complete_tool_call() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"run_command","arguments":"{\"command\":\"uptime\"}"}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].arguments, r#"{"command":"uptime"}"#);
+    }
+
+    #[test]
+    fn parses_mixed_text_and_tool_calls_without_finish_reason() {
+        let (text, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"content":"我先看"}}]}"#,
+            r#"data: {"choices":[{"delta":{"content":"磁盘。"}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"command\":\"df -h\"}"}}]}}]}"#,
+        ]);
+
+        assert_eq!(text, "我先看磁盘。");
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "run_command");
+    }
+
+    #[test]
+    fn surfaces_stream_error_events() {
+        let mut accumulator = BTreeMap::new();
+        let error =
+            parse_agent_sse_event(r#"data: {"error":{"message":"boom"}}"#, &mut accumulator)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("模型流式返回错误：boom"));
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_non_stream_response() {
+        let raw = r#"{"choices":[{"message":{"content":"看下磁盘","tool_calls":[{"id":"call-1","type":"function","function":{"name":"run_command","arguments":"{\"command\":\"df -h\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+        let (text, calls) = extract_agent_completion(raw).unwrap();
+
+        assert_eq!(text, "看下磁盘");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].arguments, r#"{"command":"df -h"}"#);
+    }
+
+    #[test]
+    fn normalizes_object_arguments_in_non_stream_response() {
+        let raw = r#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","function":{"name":"run_command","arguments":{"command":"df -h"}}}]}}]}"#;
+        let (text, calls) = extract_agent_completion(raw).unwrap();
+
+        assert_eq!(text, "");
+        assert_eq!(calls.len(), 1);
+        let parsed = serde_json::from_str::<Value>(&calls[0].arguments).unwrap();
+        assert_eq!(
+            parsed.pointer("/command").and_then(Value::as_str),
+            Some("df -h")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_chat_answer_when_no_tool_calls() {
+        let raw = r#"{"choices":[{"message":{"content":"任务完成：磁盘已清理"}}]}"#;
+        let (text, calls) = extract_agent_completion(raw).unwrap();
+
+        assert_eq!(text, "任务完成：磁盘已清理");
+        assert!(calls.is_empty());
+        assert!(extract_agent_completion("   ").is_err());
+    }
+
+    #[test]
+    fn rejects_overlong_task_turns() {
+        let request = agent_request(vec![AiAgentTurn::ToolResult {
+            tool_call_id: "call-1".into(),
+            content: "x".repeat(MAX_AGENT_TURN_CHARS + 1),
+        }]);
+        let error = validate_agent_turn_request(&request)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("任务轮次过长"));
+
+        let within_budget = agent_request(vec![AiAgentTurn::Assistant {
+            text: "x".repeat(MAX_AGENT_TURN_CHARS),
+            tool_calls: Vec::new(),
+        }]);
+        assert!(validate_agent_turn_request(&within_budget).is_ok());
+    }
+
+    #[test]
+    fn validates_agent_turn_request_fields() {
+        let mut request = agent_request(Vec::new());
+        request.config.base_url = "  ".into();
+        let error = validate_agent_turn_request(&request)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Base URL"));
+
+        let mut request = agent_request(Vec::new());
+        request.config.model = String::new();
+        let error = validate_agent_turn_request(&request)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Model"));
+
+        let mut request = agent_request(Vec::new());
+        request.api_key = " ".into();
+        let error = validate_agent_turn_request(&request)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("API Key"));
+
+        let mut request = agent_request(Vec::new());
+        request.goal = "\n".into();
+        let error = validate_agent_turn_request(&request)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("任务目标不能为空"));
+    }
+
+    #[test]
+    fn prepends_tools_unsupported_hint_for_tool_related_errors() {
+        let raw = r#"{"error":{"message":"Unknown parameter: 'tools' is not supported"}}"#;
+        let detail = agent_model_error_detail(raw);
+        assert!(detail.starts_with(TOOLS_UNSUPPORTED_HINT));
+        assert!(detail.contains("Unknown parameter"));
+
+        let upper = r#"{"error":{"message":"FUNCTION calling disabled"}}"#;
+        assert!(agent_model_error_detail(upper).starts_with(TOOLS_UNSUPPORTED_HINT));
+
+        let unrelated = r#"{"error":{"message":"bad key"}}"#;
+        assert_eq!(agent_model_error_detail(unrelated), "bad key");
+    }
+
+    #[test]
+    fn serializes_agent_turns_with_camel_case_tags() {
+        let assistant = AiAgentTurn::Assistant {
+            text: "查看磁盘".into(),
+            tool_calls: vec![tool_call("call-1", r#"{"command":"df -h"}"#)],
+        };
+        let value = serde_json::to_value(&assistant).unwrap();
+        assert_eq!(value.get("kind").and_then(Value::as_str), Some("assistant"));
+        assert_eq!(
+            value.pointer("/toolCalls/0/id").and_then(Value::as_str),
+            Some("call-1")
+        );
+
+        let result = AiAgentTurn::ToolResult {
+            tool_call_id: "call-1".into(),
+            content: SKIPPED_TOOL_RESULT_CONTENT.into(),
+        };
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            value.get("kind").and_then(Value::as_str),
+            Some("toolResult")
+        );
+        assert_eq!(
+            value.get("toolCallId").and_then(Value::as_str),
+            Some("call-1")
+        );
+
+        for turn in [assistant, result] {
+            let roundtrip =
+                serde_json::from_str::<AiAgentTurn>(&serde_json::to_string(&turn).unwrap())
+                    .unwrap();
+            assert_eq!(roundtrip, turn);
+        }
+    }
+}

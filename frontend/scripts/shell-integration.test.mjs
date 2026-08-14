@@ -193,3 +193,206 @@ test('osc7 records cwd without consuming the sequence', () => {
   assert.equal(tracker.handleOsc7('file://my-host/Users/dev/project'), false)
   assert.equal(tracker.cwd, '/Users/dev/project')
 })
+
+// ---- armCommandCapture:命令输出捕获(agent 模式地基) ----
+
+function makeCaptureHost() {
+  const state = { rows: [''], wrapped: [], cursorRow: 0, cursorCol: 0, now: 1000 }
+  const host = {
+    registerMarker: () => ({
+      line: state.cursorRow,
+      isDisposed: false,
+      dispose() {
+        this.isDisposed = true
+      }
+    }),
+    cursorRow: () => state.cursorRow,
+    cursorColumn: () => state.cursorCol,
+    rowText: (row, endColumn) => {
+      const text = state.rows[row] ?? ''
+      const sliced = endColumn === undefined ? text : text.slice(0, endColumn)
+      return sliced.replace(/\s+$/, '')
+    },
+    rowIsWrapped: (row) => Boolean(state.wrapped[row]),
+    rowCount: () => state.rows.length,
+    now: () => state.now
+  }
+  return { host, state }
+}
+
+/** A/B/633;E 后把光标移到输出起始行再触发 C(真实 shell 的回车回显已换行)。 */
+function beginCapturedCommand(tracker, state, command) {
+  state.rows[0] = `$ ${command}`
+  state.cursorRow = 0
+  tracker.handleOsc133('A')
+  state.cursorCol = 2
+  tracker.handleOsc133('B')
+  state.cursorCol = 2 + command.length
+  tracker.handleOsc633(`E;${base64(command)};base64`)
+  state.cursorRow = 1
+  state.cursorCol = 0
+  tracker.handleOsc133('C')
+}
+
+test('capture collects output rows between C and D', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'df -h')
+  state.rows.push('Filesystem  Size  Used', '/dev/disk1  500G  200G')
+  state.cursorRow = 3
+  state.cursorCol = 0
+  state.now = 2500
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results.length, 1)
+  assert.equal(results[0].command, 'df -h')
+  assert.equal(results[0].exitCode, 0)
+  assert.equal(results[0].output, 'Filesystem  Size  Used\n/dev/disk1  500G  200G')
+  assert.equal(results[0].truncated, false)
+  assert.equal(results[0].markerLost, false)
+})
+
+test('capture includes cursor row when output lacks trailing newline', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'printf no-newline')
+  state.rows.push('no-newline')
+  state.cursorRow = 1
+  state.cursorCol = 10
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results[0].output, 'no-newline')
+})
+
+test('capture yields empty output for silent command', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'true')
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results[0].output, '')
+  assert.equal(results[0].exitCode, 0)
+})
+
+test('capture joins wrapped output rows without newline', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'echo long')
+  state.rows.push('aaaa', 'bbbb', 'next-line')
+  state.wrapped = [false, false, true, false]
+  state.cursorRow = 4
+  state.cursorCol = 0
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results[0].output, 'aaaabbbb\nnext-line')
+})
+
+test('capture truncates long output keeping head and tail', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(120, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'cat big')
+  state.rows.push('A'.repeat(90), 'B'.repeat(90))
+  state.cursorRow = 3
+  state.cursorCol = 0
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results[0].truncated, true)
+  assert.ok(results[0].output.includes('已截断命令输出'))
+  assert.ok(results[0].output.startsWith('A'))
+  assert.ok(results[0].output.endsWith('B'))
+})
+
+test('capture falls back to tail when start marker is lost', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  let issuedMarker
+  const originalRegister = host.registerMarker
+  host.registerMarker = () => {
+    issuedMarker = originalRegister()
+    return issuedMarker
+  }
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  beginCapturedCommand(tracker, state, 'cat huge')
+  state.rows.push('tail-line-1', 'tail-line-2')
+  state.cursorRow = 3
+  state.cursorCol = 0
+  issuedMarker.dispose()
+  tracker.handleOsc133('D;0')
+
+  assert.equal(results[0].markerLost, true)
+  assert.equal(results[0].truncated, true)
+  assert.ok(results[0].output.includes('tail-line-2'))
+  assert.ok(results[0].output.includes('仅保留末尾'))
+})
+
+test('peekOutput reads partial output during execution and empty before C', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const armed = tracker.armCommandCapture(4000, () => {})
+
+  assert.equal(armed.peekOutput(), '')
+  beginCapturedCommand(tracker, state, 'ping host')
+  state.rows.push('reply 1', 'reply 2')
+  state.cursorRow = 2
+  state.cursorCol = 7
+  assert.equal(armed.peekOutput(), 'reply 1\nreply 2')
+})
+
+test('disposed capture does not fire and re-arm replaces previous', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const first = []
+  const second = []
+  const armed = tracker.armCommandCapture(4000, (result) => first.push(result))
+  armed.dispose()
+  tracker.armCommandCapture(4000, (result) => second.push(result))
+
+  beginCapturedCommand(tracker, state, 'ls')
+  state.rows.push('file-a')
+  state.cursorRow = 2
+  state.cursorCol = 0
+  tracker.handleOsc133('D;0')
+
+  assert.equal(first.length, 0)
+  assert.equal(second.length, 1)
+  assert.equal(second[0].output, 'file-a')
+})
+
+test('bare enter does not consume an armed capture', () => {
+  const { host, state } = makeCaptureHost()
+  const tracker = new ShellIntegrationTracker(host, {})
+  const results = []
+  tracker.armCommandCapture(4000, (result) => results.push(result))
+
+  state.rows[0] = '$ '
+  tracker.handleOsc133('A')
+  state.cursorCol = 2
+  tracker.handleOsc133('B')
+  tracker.handleOsc133('D;0')
+  assert.equal(results.length, 0)
+
+  beginCapturedCommand(tracker, state, 'uptime')
+  state.rows.push('up 3 days')
+  state.cursorRow = 2
+  state.cursorCol = 0
+  tracker.handleOsc133('D;0')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].command, 'uptime')
+})
