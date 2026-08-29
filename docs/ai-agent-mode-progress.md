@@ -15,7 +15,16 @@
 | `cd frontend && npm run test:scripts` | 64 / 64 |
 | `cd frontend && npm run test:ui` | passed |
 
-工作区状态:阶段 1 主体已提交于 `ae4ccba feat: add agent mode`;之后的命令层、UI、样式、「总是允许」修复与本轮阶段 1.5 均**未提交**。
+工作区状态:全部改动已提交,工作区干净。分支 `feature/agent-mode` 上的四个提交:
+
+| 提交 | 内容 |
+| --- | --- |
+| `ae4ccba feat: add agent mode` | 阶段 1 主体(协议层、存储迁移、循环编排、判定器、捕获原语) |
+| `0cee83c feat(agent): add agent turn command, step cards and allowlist settings` | 阶段 1 收尾:命令层、模式选择器与步骤卡片、设置中心 Agent 区块、样式;含「总是允许」多段命令修复与 `AgentStepCard.vue` 组件化 |
+| `bfe6091 feat(agent): raise turn budget and auto-run readonly commands by default` | 阶段 1.5 ①–④(提示词、预算与压缩、步数上限、只读默认自动执行) |
+| `95ace56 docs(agent): record autonomous exploration changes and acceptance list` | 本文档与设计文档同步 |
+
+每个代码提交都单独跑过完整检查:`0cee83c` 为 cargo 162 / 前端 63 / tsc 0 / ui-check 通过,`bfe6091` 为上表基线。尚未 push。
 
 ## 1.5 本轮完成:自主探索能力(设计文档 10.2)
 
@@ -105,7 +114,7 @@
 
 ## 6. 注意事项
 
-1. **本轮未提交任何 git commit**(按既有约定待用户指示)。
+1. 改动已按语义分三个提交落地(见 §1),**尚未 push**。`.claude/settings.json` 与 `.DS_Store` 刻意未入库:前者含本机绝对路径与会话累积的临时授权,属 `.claude/settings.local.json` 范畴。
 2. `AgentCommandHandle.cancel` 只放弃等待、不 kill 命令;超时逻辑在 agentLoop 侧。
 3. 命令不匹配检测中,捕获命令为空串视为"未知",不判串扰(无 633;E 的远端 shell 兜底)。
 4. agent 消息的 `mode/agentSteps/agentStatus` 是运行时字段,仅 `payloadJson` 落库,靠 §3 的 hydrate 还原。
