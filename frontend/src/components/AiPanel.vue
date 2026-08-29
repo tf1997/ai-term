@@ -8,10 +8,21 @@ import type {
   TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
-import { cancelTask, chatWithAiProviderStream, compressAiConversation, generateAiSessionTitle, onAiChatStream } from '../lib/tauri'
+import { aiAgentTurnStream, cancelTask, chatWithAiProviderStream, compressAiConversation, generateAiSessionTitle, onAiChatStream, touchAgentCommandAllowlistEntry } from '../lib/tauri'
 import { parseMessageParts, type MessagePart } from '../lib/aiMarkdown'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
+import { runAgentTask, type AgentLoopDeps } from '../lib/agentLoop'
+import { classifyForAutoExec } from '../lib/agentAutoApprove'
+import type {
+  AgentApprovalDecision,
+  AgentCommandHandle,
+  AgentRunState,
+  AgentStep,
+  AgentStepProposal,
+  AgentTimeoutDecision,
+  AiPanelMode
+} from '../types/agent'
 import {
   analyzeScriptRisks,
   buildScriptRiskPreviewLines,
@@ -19,6 +30,7 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import AiMarkdownMessage from './AiMarkdownMessage.vue'
+import AgentStepCard from './AgentStepCard.vue'
 import UiIcon from './UiIcon.vue'
 
 
@@ -49,6 +61,10 @@ const props = defineProps<{
   commandHistory: CommandHistoryEntry[]
   messages: AiMessage[]
   contextStatus?: AiContextStatus
+  agentAvailabilityCheck?: () => string
+  agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
+  agentAllowlistPatterns?: string[]
+  agentBuiltinReadonlyEnabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -62,6 +78,8 @@ const emit = defineEmits<{
   deleteSession: [sessionId: string]
   updateSessionTitle: [connectionId: string, sessionId: string, title: string]
   updateSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
+  setSessionMode: [sessionId: string, mode: AiPanelMode]
+  allowAgentPattern: [pattern: string, sourceCommand: string]
   aiError: [detail: string]
 }>()
 
@@ -93,6 +111,16 @@ const aiCommandExecutionNoticeTitle = ref('')
 let aiCommandNoticeTimer: number | undefined
 let answerTimer: number | undefined
 
+// Agent 模式运行态
+const agentRun = ref<AgentRunState | null>(null)
+const agentRunMessageId = ref('')
+const agentStreamText = ref('')
+const agentModeNotice = ref('')
+const agentHighRiskArmed = ref(false)
+const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
+const agentPendingTimeout = ref<{ step: AgentStep; waitedMs: number; resolve: (decision: AgentTimeoutDecision) => void } | null>(null)
+let agentStopHandle: (() => void) | null = null
+
 const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
 const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
@@ -115,15 +143,22 @@ const hasUsableConfig = computed(() => {
 })
 const canSendMessage = computed(() => hasUsableConfig.value && Boolean(props.workspaceSessionId))
 
-const composerPlaceholder = computed(() => {
-  if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
-  if (hasUsableConfig.value) return '输入问题'
-  return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
-})
-
-
 const activeSession = computed(() => {
   return props.workspaceSessions.find((session) => session.id === props.workspaceSessionId)
+})
+
+const panelMode = computed<AiPanelMode>(() => (activeSession.value?.aiMode === 'agent' ? 'agent' : 'chat'))
+const agentRunActive = computed(() => {
+  const status = agentRun.value?.status
+  return status === 'calling-model' || status === 'awaiting-approval' || status === 'executing' || status === 'awaiting-user'
+})
+const composerBusy = computed(() => isAsking.value || agentRunActive.value)
+
+const composerPlaceholder = computed(() => {
+  if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
+  if (!hasUsableConfig.value) return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
+  if (panelMode.value === 'agent') return '描述任务目标,Agent 将提出命令并按审批执行'
+  return '输入问题'
 })
 
 const activeSessionTitle = computed(() => formatSessionDisplayTitle(activeSession.value?.name))
@@ -244,6 +279,7 @@ function conversationContextParts(sessionId: string) {
 async function sendMessage() {
   const text = askText.value.trim()
   if (!text || !canSendMessage.value) return
+  if (panelMode.value === 'agent') return
   const requestTerminalId = props.terminalId
   const requestConnectionId = props.connectionId
   const requestWorkspaceSessionId = props.workspaceSessionId
@@ -419,12 +455,245 @@ function stopCurrentAnswer() {
   isAsking.value = false
 }
 
+function selectPanelMode(mode: AiPanelMode) {
+  if (mode === panelMode.value || composerBusy.value || !props.workspaceSessionId) return
+  agentModeNotice.value = mode === 'agent' ? (props.agentAvailabilityCheck?.() ?? '') : ''
+  emit('setSessionMode', props.workspaceSessionId, mode)
+}
+
+function composerPrimaryAction() {
+  if (agentRunActive.value) return stopAgentRun()
+  if (isAsking.value) return stopCurrentAnswer()
+  if (panelMode.value === 'agent') return void startAgentTask()
+  return void sendMessage()
+}
+
+function stopAgentRun() {
+  agentStopHandle?.()
+}
+
+function agentStatusFromRun(state: AgentRunState): 'running' | 'done' | 'stopped' | 'error' {
+  if (state.status === 'done') return 'done'
+  if (state.status === 'stopped') return 'stopped'
+  if (state.status === 'error') return 'error'
+  return 'running'
+}
+
+function proposalHasHighRisk(proposal: AgentStepProposal) {
+  return proposal.risks.some((risk) => risk.severity === 'high')
+}
+
+function resolveAgentApproval(decision: AgentApprovalDecision) {
+  const pending = agentPendingApproval.value
+  if (!pending) return
+  // 高风险命令的执行按钮需要点两次(6.4)
+  if (decision === 'execute' && proposalHasHighRisk(pending.proposal) && !agentHighRiskArmed.value) {
+    agentHighRiskArmed.value = true
+    return
+  }
+  agentPendingApproval.value = null
+  agentHighRiskArmed.value = false
+  pending.resolve(decision)
+}
+
+function resolveAgentTimeout(decision: AgentTimeoutDecision) {
+  const pending = agentPendingTimeout.value
+  if (!pending) return
+  agentPendingTimeout.value = null
+  pending.resolve(decision)
+}
+
+function isAwaitingApprovalStep(message: AiMessage, step: AgentStep) {
+  return message.id === agentRunMessageId.value && agentPendingApproval.value?.proposal.id === step.id
+}
+
+function isAwaitingTimeoutStep(message: AiMessage, step: AgentStep) {
+  return message.id === agentRunMessageId.value && agentPendingTimeout.value?.step.id === step.id
+}
+
+const AGENT_RUN_STATUS_LABELS: Record<NonNullable<AiMessage['agentStatus']>, string> = {
+  running: '任务执行中',
+  done: '任务完成',
+  stopped: '任务已停止',
+  error: '任务出错'
+}
+
+function agentRunStatusLabel(message: AiMessage) {
+  return message.agentStatus ? AGENT_RUN_STATUS_LABELS[message.agentStatus] : ''
+}
+
+function messageHasAgentBody(message: AiMessage) {
+  if (message.mode !== 'agent') return false
+  if (message.agentSteps?.length) return true
+  return message.id === agentRunMessageId.value && Boolean(agentStreamText.value)
+}
+
+/** Agent 任务的最大命令输出捕获量(回传模型前的截断上限)。 */
+const AGENT_OUTPUT_MAX_CHARS = 4000
+
+async function startAgentTask() {
+  const text = askText.value.trim()
+  if (!text || !canSendMessage.value || composerBusy.value) return
+  const availability = props.agentAvailabilityCheck?.() ?? ''
+  if (availability) {
+    agentModeNotice.value = availability
+    return
+  }
+  const runner = props.agentCommandRunner
+  if (!runner) {
+    agentModeNotice.value = 'Agent 执行通道未接入,请更新应用或切回对话模式'
+    return
+  }
+  agentModeNotice.value = ''
+
+  const requestConnectionId = props.connectionId
+  const requestWorkspaceSessionId = props.workspaceSessionId
+  // 任务-终端绑定:执行目标锁定为任务开始时的活动终端(文档 6.6)
+  const boundTerminalId = props.terminalId
+  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  const selectedContext = selectedTerminalContext.value
+  const goal = buildQuestionWithSelectedTerminalText(text, selectedContext)
+  const userMessageText = selectedContext
+    ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
+    : text
+
+  emit('appendMessage', createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'user', userMessageText))
+  const assistantMessage: AiMessage = {
+    ...createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'assistant', '', '', false, true),
+    mode: 'agent',
+    agentSteps: [],
+    agentStatus: 'running'
+  }
+  emit('appendMessage', assistantMessage)
+  askText.value = ''
+  isAsking.value = true
+  agentRun.value = null
+  agentRunMessageId.value = assistantMessage.id
+  agentStreamText.value = ''
+  currentAssistantMessageId.value = assistantMessage.id
+  startAnswerTimer()
+
+  function syncAgentRunToMessage(state: AgentRunState) {
+    const status = agentStatusFromRun(state)
+    const terminal = status !== 'running'
+    emit('updateMessage', {
+      ...assistantMessage,
+      mode: 'agent',
+      text: state.finalText || (status === 'error' && state.error ? `任务出错：${state.error}` : ''),
+      agentSteps: state.steps,
+      agentStatus: status,
+      error: status === 'error',
+      streaming: !terminal,
+      payloadJson: terminal
+        ? JSON.stringify({ mode: 'agent', agentSteps: state.steps, agentStatus: status })
+        : undefined
+    })
+  }
+
+  const deps: AgentLoopDeps = {
+    callModel: async (turns, signal) => {
+      const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${boundTerminalId}-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      agentStreamText.value = ''
+      let unlisten: (() => void) | undefined
+      let cancelRequested = false
+      // stop() 只翻转 signal.cancelled,由这里把取消传导给后端流式请求
+      const cancelWatch = window.setInterval(() => {
+        if (signal.cancelled && !cancelRequested) {
+          cancelRequested = true
+          void cancelTask(requestId).catch(() => {})
+        }
+      }, 120)
+      try {
+        unlisten = await onAiChatStream(requestId, (event) => {
+          if (event.kind === 'chunk' && !signal.cancelled) {
+            agentStreamText.value += event.delta
+          }
+        })
+        const { summary: conversationSummary, unsummarized } = conversationContextParts(requestWorkspaceSessionId)
+        const conversationMessages = unsummarized
+          .slice(-MAX_AI_CONVERSATION_MESSAGES)
+          .map((message) => ({ role: message.role, content: message.text }))
+        return await aiAgentTurnStream(requestId, {
+          config: props.config,
+          apiKey,
+          goal,
+          turns,
+          terminalSnapshot: props.terminalSnapshot,
+          commandHistory: aiCommandHistory(),
+          conversationMessages,
+          conversationSummary
+        })
+      } finally {
+        window.clearInterval(cancelWatch)
+        unlisten?.()
+      }
+    },
+    startCommand: (command) => runner(boundTerminalId, command, { maxOutputChars: AGENT_OUTPUT_MAX_CHARS }),
+    classifyStep: (command) => {
+      const risks = analyzeScriptRisks(command)
+      const sensitive = isSensitiveCommand(command)
+      const autoExec = classifyForAutoExec(command, {
+        userPatterns: props.agentAllowlistPatterns ?? [],
+        includeBuiltin: props.agentBuiltinReadonlyEnabled ?? false
+      })
+      // 命中计数只在真正会自动执行时记录(镜像循环的判定顺序:风险/敏感门在前)
+      if (autoExec.eligible && autoExec.matched && !sensitive && risks.length === 0) {
+        void touchAgentCommandAllowlistEntry(autoExec.matched).catch(() => {})
+      }
+      return { risks, sensitive, autoExec }
+    },
+    requestApproval: (proposal) =>
+      new Promise<AgentApprovalDecision>((resolve) => {
+        agentHighRiskArmed.value = false
+        agentPendingApproval.value = { proposal, resolve }
+        scrollMessagesToLatest()
+      }),
+    requestTimeoutDecision: (step, waitedMs) =>
+      new Promise<AgentTimeoutDecision>((resolve) => {
+        agentPendingTimeout.value = { step, waitedMs, resolve }
+        scrollMessagesToLatest()
+      }),
+    onAllowPattern: (pattern, sourceCommand) => {
+      emit('allowAgentPattern', pattern, sourceCommand)
+    },
+    onStateChange: (state) => {
+      agentRun.value = state
+      if (state.status !== 'awaiting-approval') agentPendingApproval.value = null
+      if (state.status !== 'awaiting-user') agentPendingTimeout.value = null
+      syncAgentRunToMessage(state)
+    }
+  }
+
+  const { done, stop } = runAgentTask(goal, deps, {})
+  agentStopHandle = stop
+  try {
+    const finalState = await done
+    agentRun.value = finalState
+    syncAgentRunToMessage(finalState)
+    if (finalState.status === 'error' && finalState.error) emit('aiError', finalState.error)
+    if (finalState.status === 'done' && finalState.finalText) {
+      maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, text, finalState.finalText, props.terminalSnapshot, aiCommandHistory())
+    }
+  } finally {
+    agentStopHandle = null
+    agentPendingApproval.value = null
+    agentPendingTimeout.value = null
+    agentStreamText.value = ''
+    agentRunMessageId.value = ''
+    finishAnswerTimer(assistantMessage.id)
+    if (currentAssistantMessageId.value === assistantMessage.id) currentAssistantMessageId.value = ''
+    isAsking.value = false
+  }
+}
+
 function handleComposerKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter') return
   if (event.isComposing) return
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault()
-    void sendMessage()
+    if (composerBusy.value) return
+    if (panelMode.value === 'agent') void startAgentTask()
+    else void sendMessage()
   }
 }
 
@@ -1068,16 +1337,38 @@ watch(
           <span v-if="message.error" class="message-error-badge">请求失败</span>
         </div>
         <div class="message-body">
-          <div v-if="message.streaming && !message.text" class="thinking-row">
+          <div v-if="message.streaming && !message.text && !messageHasAgentBody(message)" class="thinking-row">
             <span />
             <span />
             <span />
             正在回复，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
+          <div v-if="message.mode === 'agent' && (message.agentSteps?.length || message.agentStatus)" class="agent-steps">
+            <div v-if="message.agentStatus && message.agentStatus !== 'running'" class="agent-run-status" :class="message.agentStatus">
+              {{ agentRunStatusLabel(message) }}
+            </div>
+            <AgentStepCard
+              v-for="step in message.agentSteps ?? []"
+              :key="step.id"
+              :step="step"
+              :awaiting-approval="isAwaitingApprovalStep(message, step)"
+              :awaiting-timeout="isAwaitingTimeoutStep(message, step)"
+              :proposal="agentPendingApproval?.proposal"
+              :timeout-waited-ms="agentPendingTimeout?.waitedMs"
+              :high-risk-armed="agentHighRiskArmed"
+              @execute="resolveAgentApproval('execute')"
+              @execute-and-allow="resolveAgentApproval('execute-and-allow')"
+              @skip="resolveAgentApproval('skip')"
+              @stop="resolveAgentApproval('stop')"
+              @wait="resolveAgentTimeout('wait')"
+              @timeout-stop="resolveAgentTimeout('stop')"
+            />
+            <div v-if="message.id === agentRunMessageId && agentStreamText" class="agent-stream-text">{{ agentStreamText }}</div>
+          </div>
           <AiMarkdownMessage
             v-if="message.text"
             :content="message.text"
-            :interactive-commands="message.role === 'assistant' && !message.error"
+            :interactive-commands="message.role === 'assistant' && !message.error && message.mode !== 'agent'"
             @execute-command="executeGeneratedCommand($event, message)"
           />
         </div>
@@ -1095,6 +1386,7 @@ watch(
         <strong>选中终端内容</strong>
         <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ formatCharacterCount(selectedTerminalContext.text.length) }}</span>
       </div>
+      <div v-if="panelMode === 'agent' && agentModeNotice" class="agent-mode-notice">{{ agentModeNotice }}</div>
       <textarea
         ref="composerInput"
         v-model="askText"
@@ -1106,14 +1398,34 @@ watch(
         @focus="historyOpen = false"
         @keydown="handleComposerKeydown"
       />
+      <div class="ai-mode-switch" role="tablist" aria-label="AI 模式">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="panelMode === 'chat'"
+          :class="{ active: panelMode === 'chat' }"
+          :disabled="composerBusy"
+          title="普通对话:AI 回答问题并给出可点击执行的命令"
+          @click="selectPanelMode('chat')"
+        >对话</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="panelMode === 'agent'"
+          :class="{ active: panelMode === 'agent' }"
+          :disabled="composerBusy"
+          title="Agent:AI 循环提出命令,经审批在当前终端执行并观察结果"
+          @click="selectPanelMode('agent')"
+        >Agent</button>
+      </div>
       <button
         class="icon-button"
-        :title="isAsking ? '停止回答' : 'Ctrl+Enter / ⌘+Enter 发送'"
-        :aria-label="isAsking ? '停止回答' : '发送'"
-        :disabled="!isAsking && !canSendMessage"
-        @click="isAsking ? stopCurrentAnswer() : sendMessage()"
+        :title="composerBusy ? (agentRunActive ? '停止任务' : '停止回答') : 'Ctrl+Enter / ⌘+Enter 发送'"
+        :aria-label="composerBusy ? '停止' : '发送'"
+        :disabled="!composerBusy && !canSendMessage"
+        @click="composerPrimaryAction()"
       >
-        <UiIcon v-if="isAsking" name="stop" /><UiIcon v-else name="arrow-right" />
+        <UiIcon v-if="composerBusy" name="stop" /><UiIcon v-else name="arrow-right" />
       </button>
     </div>
   </section>

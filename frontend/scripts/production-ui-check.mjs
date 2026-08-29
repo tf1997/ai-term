@@ -3249,4 +3249,34 @@ assert(
     styles.includes('grid-template-rows: auto minmax(0, 1fr) auto auto;'),
   'Right workspace empty states, SFTP browser-preview feedback, and quick-command modal chrome must be polished across dark and light themes.'
 )
+const agentStepCard = read('src/components/AgentStepCard.vue')
+const agentAutoApprove = read('src/lib/agentAutoApprove.ts')
+assert(
+  /\.agent-step-output\s*\{[^}]*white-space:\s*pre;/.test(styles) &&
+    !/\.agent-step-output\s*\{[^}]*white-space:\s*pre-wrap;/.test(styles) &&
+    !/\.agent-step-output\s*\{[^}]*word-break:/.test(styles) &&
+    /\.agent-step-output\s*\{[^}]*overflow:\s*auto;/.test(styles) &&
+    /\.agent-step-command,\n\.agent-step-output\s*\{[^}]*min-width:\s*0;/.test(styles) &&
+    styles.includes('.agent-step-meta') &&
+    styles.includes('.agent-step-empty-output') &&
+    agentStepCard.includes('hasRun') &&
+    agentStepCard.includes('durationLabel'),
+  'Agent step output must keep raw column alignment (white-space: pre + own scroll container, never wrapped), and step cards must separate exit code/duration metadata from status chips.'
+)
+assert(
+  /\.agent-action\s*\{[^}]*text-overflow:\s*ellipsis;/.test(styles) &&
+    /\.agent-action\s*\{[^}]*min-width:\s*0;/.test(styles) &&
+    /\.agent-step-actions\s*\{[^}]*flex-wrap:\s*wrap;/.test(styles) &&
+    /\.markdown-content li\s*\{[^}]*min-width:\s*0;/.test(styles) &&
+    /\.agent-step-reason\s*\{[^}]*overflow-wrap:\s*anywhere;/.test(styles) &&
+    agentStepCard.includes('allowTitle') &&
+    aiPanel.includes('AgentStepCard'),
+  'Agent approval actions must wrap and elide long allowlist patterns instead of overflowing the panel, and long text must stay inside message bounds.'
+)
+assert(
+  agentAutoApprove.includes('suggestedPatterns') &&
+    !/suggestedPattern\b(?!s)/.test(agentAutoApprove.replace(/suggestPatternForCommand|suggestFromSegments?/g, '')) &&
+    /for \(const pattern of suggestedPatterns\)/.test(read('src/lib/agentLoop.ts')),
+  'Always-allow must cover every uncovered command segment: the classifier reports all needed patterns and the loop persists each one.'
+)
 console.log('production-ui-check passed')

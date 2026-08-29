@@ -249,7 +249,7 @@ export function runAgentTask(
   /** 人工审批;返回 undefined 表示任务已在等待期间收尾(stop 或异常)。 */
   const requestManualApproval = async (
     step: AgentStep,
-    suggestedPattern: string | undefined
+    suggestedPatterns: string[] | undefined
   ): Promise<AgentApprovalDecision | undefined> => {
     setStatus('awaiting-approval')
     const proposal: AgentStepProposal = {
@@ -258,7 +258,7 @@ export function runAgentTask(
       reason: step.reason,
       risks: structuredClone(step.risks),
       sensitive: step.sensitive,
-      suggestedPattern
+      suggestedPatterns: suggestedPatterns?.length ? [...suggestedPatterns] : undefined
     }
     const outcome = await raceWithStop(deps.requestApproval(proposal))
     if (outcome.kind === 'stopped') {
@@ -408,7 +408,7 @@ export function runAgentTask(
     notify()
 
     let decision: AgentApprovalDecision
-    let suggestedPattern: string | undefined
+    let suggestedPatterns: string[] = []
     if (classification.sensitive || classification.risks.length > 0) {
       // 硬门槛在前(6.4):敏感或有风险必须人工审批,且不提供「总是允许」
       const manual = await requestManualApproval(step, undefined)
@@ -420,8 +420,8 @@ export function runAgentTask(
       notify()
       decision = 'execute'
     } else {
-      suggestedPattern = classification.autoExec.suggestedPattern
-      const manual = await requestManualApproval(step, suggestedPattern)
+      suggestedPatterns = classification.autoExec.suggestedPatterns
+      const manual = await requestManualApproval(step, suggestedPatterns)
       if (manual === undefined) return 'ended'
       decision = manual
     }
@@ -442,16 +442,19 @@ export function runAgentTask(
       })
       return 'continue'
     }
-    if (decision === 'execute-and-allow' && suggestedPattern) {
-      // 先落地允许列表再执行,保证「总是允许」点击即持久化
-      const allowOutcome = await raceWithStop(Promise.resolve(deps.onAllowPattern(suggestedPattern, step.command)))
-      if (allowOutcome.kind === 'stopped') {
-        finishStopped()
-        return 'ended'
-      }
-      if (allowOutcome.kind === 'error') {
-        finishError(`写入允许列表失败:${errorMessage(allowOutcome.error)}`)
-        return 'ended'
+    if (decision === 'execute-and-allow' && suggestedPatterns.length) {
+      // 先落地允许列表再执行,保证「总是允许」点击即持久化。
+      // 多段命令需要补齐每一段,只写第一段会导致下次仍然要人工审批。
+      for (const pattern of suggestedPatterns) {
+        const allowOutcome = await raceWithStop(Promise.resolve(deps.onAllowPattern(pattern, step.command)))
+        if (allowOutcome.kind === 'stopped') {
+          finishStopped()
+          return 'ended'
+        }
+        if (allowOutcome.kind === 'error') {
+          finishError(`写入允许列表失败:${errorMessage(allowOutcome.error)}`)
+          return 'ended'
+        }
       }
     }
 

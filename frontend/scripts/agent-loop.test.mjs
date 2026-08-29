@@ -43,7 +43,7 @@ function makeDeps(overrides = {}) {
   const deps = {
     callModel: async () => turnResponse('', []),
     startCommand: () => makeSimpleHandle(),
-    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: false, suggestedPattern: 'noop' } }),
+    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: false, suggestedPatterns: ['noop'] } }),
     requestApproval: async () => 'execute',
     requestTimeoutDecision: async () => 'stop',
     onAllowPattern: () => {},
@@ -160,7 +160,7 @@ test('自动执行:eligible 时不调用审批且步骤标注 autoApproved', asy
   ])
   const { deps, states } = makeDeps({
     callModel,
-    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: true, matched: 'ls', suggestedPattern: 'ls' } }),
+    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: true, matched: 'ls', suggestedPatterns: [] } }),
     requestApproval: async () => {
       approvalCalls += 1
       return 'execute'
@@ -185,7 +185,7 @@ test('execute-and-allow:onAllowPattern 先收到 pattern 与来源命令再执�
   ])
   const { deps } = makeDeps({
     callModel,
-    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: false, suggestedPattern: 'git status' } }),
+    classifyStep: () => ({ risks: [], sensitive: false, autoExec: { eligible: false, suggestedPatterns: ['git status'] } }),
     requestApproval: async (proposal) => {
       proposals.push(proposal)
       return 'execute-and-allow'
@@ -202,10 +202,38 @@ test('execute-and-allow:onAllowPattern 先收到 pattern 与来源命令再执�
   const state = await runAgentTask('测试', deps).done
 
   assert.equal(state.status, 'done')
-  assert.equal(proposals[0].suggestedPattern, 'git status')
+  assert.deepEqual(proposals[0].suggestedPatterns, ['git status'])
   assert.deepEqual(allowed, [['git status', 'git status --porcelain']])
   assert.deepEqual(events, ['allow', 'start'], '允许列表先落地,命令后派发')
   assert.equal(state.steps[0].status, 'completed')
+})
+
+test('execute-and-allow:多段命令的每个 pattern 都要落地', async () => {
+  // 回归:只写第一段会让「总是允许」下次依旧要人工审批
+  const allowed = []
+  const { callModel } = scriptedModel([
+    turnResponse('采样', [toolCall('c1', "memory_pressure | printf 'x'")]),
+    turnResponse('完成', [])
+  ])
+  const { deps } = makeDeps({
+    callModel,
+    classifyStep: () => ({
+      risks: [],
+      sensitive: false,
+      autoExec: { eligible: false, suggestedPatterns: ['memory_pressure', 'printf'] }
+    }),
+    requestApproval: async () => 'execute-and-allow',
+    onAllowPattern: (pattern, sourceCommand) => {
+      allowed.push([pattern, sourceCommand])
+    }
+  })
+  const state = await runAgentTask('测试', deps).done
+
+  assert.equal(state.status, 'done')
+  assert.deepEqual(allowed, [
+    ['memory_pressure', "memory_pressure | printf 'x'"],
+    ['printf', "memory_pressure | printf 'x'"]
+  ])
 })
 
 test('敏感命令:即使 eligible 也必须人工审批且不提供总是允许', async () => {
@@ -216,7 +244,7 @@ test('敏感命令:即使 eligible 也必须人工审批且不提供总是允许
   ])
   const { deps, states } = makeDeps({
     callModel,
-    classifyStep: () => ({ risks: [], sensitive: true, autoExec: { eligible: true, matched: 'cat', suggestedPattern: 'cat' } }),
+    classifyStep: () => ({ risks: [], sensitive: true, autoExec: { eligible: true, matched: 'cat', suggestedPatterns: [] } }),
     requestApproval: async (proposal) => {
       proposals.push(proposal)
       return 'execute'
@@ -226,7 +254,7 @@ test('敏感命令:即使 eligible 也必须人工审批且不提供总是允许
 
   assert.equal(state.status, 'done')
   assert.equal(proposals.length, 1)
-  assert.equal(proposals[0].suggestedPattern, undefined)
+  assert.equal(proposals[0].suggestedPatterns, undefined)
   assert.equal(proposals[0].sensitive, true)
   assert.notEqual(state.steps[0].autoApproved, true)
   assert.ok(states.some((snapshot) => snapshot.status === 'awaiting-approval'))

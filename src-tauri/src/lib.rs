@@ -15,20 +15,22 @@ pub fn run() {
     use tauri::Manager;
 
     use app::commands::{
-        cancel_task, chat_with_ai_provider, chat_with_ai_provider_stream, compress_ai_conversation,
-        connect_local_terminal, connect_profile, delete_ai_provider_config,
-        delete_connection_profile, delete_update_script, delete_workspace_session,
-        disconnect_terminal, forget_ai_term_known_host, generate_ai_script_title,
-        generate_ai_session_title, get_ai_provider_config, get_update_script,
+        ai_agent_turn_stream, cancel_task, chat_with_ai_provider, chat_with_ai_provider_stream,
+        compress_ai_conversation, connect_local_terminal, connect_profile,
+        delete_agent_command_allowlist_entry, delete_ai_provider_config, delete_connection_profile,
+        delete_update_script, delete_workspace_session, disconnect_terminal,
+        forget_ai_term_known_host, generate_ai_script_title, generate_ai_session_title,
+        get_ai_provider_config, get_update_script, list_agent_command_allowlist,
         list_ai_conversation_messages, list_ai_provider_configs, list_command_history,
         list_connection_profiles, list_update_scripts, list_workspace_sessions,
         local_home_directory, local_list_directory, local_list_roots, local_open_path,
-        probe_bastion_servers, save_ai_conversation_message, save_ai_provider_config,
-        save_command_history_record, save_connection_profile, save_update_script,
-        save_workspace_session, sftp_create_directory, sftp_delete_path, sftp_download_file,
-        sftp_download_path, sftp_list_directory, sftp_probe, sftp_read_text_file,
-        sftp_save_text_file, sftp_upload_file, sftp_upload_path, terminal_resize,
-        terminal_session_active, terminal_write,
+        probe_bastion_servers, save_agent_command_allowlist_entry, save_ai_conversation_message,
+        save_ai_provider_config, save_command_history_record, save_connection_profile,
+        save_update_script, save_workspace_session, sftp_create_directory, sftp_delete_path,
+        sftp_download_file, sftp_download_path, sftp_list_directory, sftp_probe,
+        sftp_read_text_file, sftp_save_text_file, sftp_upload_file, sftp_upload_path,
+        terminal_resize, terminal_session_active, terminal_write,
+        touch_agent_command_allowlist_entry,
     };
     use app::state::AppState;
     use domain::storage::sqlite::{default_database_path, SqliteConfigStore};
@@ -46,12 +48,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ai_agent_turn_stream,
             cancel_task,
             chat_with_ai_provider,
             chat_with_ai_provider_stream,
             compress_ai_conversation,
             connect_local_terminal,
             connect_profile,
+            delete_agent_command_allowlist_entry,
             delete_ai_provider_config,
             delete_connection_profile,
             delete_update_script,
@@ -62,6 +66,7 @@ pub fn run() {
             generate_ai_session_title,
             get_ai_provider_config,
             get_update_script,
+            list_agent_command_allowlist,
             list_ai_conversation_messages,
             list_ai_provider_configs,
             list_command_history,
@@ -73,6 +78,7 @@ pub fn run() {
             local_list_directory,
             local_open_path,
             probe_bastion_servers,
+            save_agent_command_allowlist_entry,
             save_ai_conversation_message,
             save_ai_provider_config,
             save_command_history_record,
@@ -91,7 +97,8 @@ pub fn run() {
             sftp_upload_path,
             terminal_write,
             terminal_resize,
-            terminal_session_active
+            terminal_session_active,
+            touch_agent_command_allowlist_entry
         ])
         .run(tauri::generate_context!())
         .expect("failed to run ai-term");

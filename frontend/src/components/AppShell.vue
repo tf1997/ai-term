@@ -1470,6 +1470,16 @@ async function removeAgentAllowlistPattern(pattern: string) {
   }
 }
 
+async function clearAgentAllowlist() {
+  try {
+    await Promise.all(agentAllowlist.value.map((entry) => deleteAgentCommandAllowlistEntry(entry.pattern)))
+    await loadAgentAllowlist()
+    showToast('success', '允许列表已清空', 'Agent 命令将恢复人工审批')
+  } catch (error) {
+    showToast('error', '允许列表清空失败', formatError(error))
+  }
+}
+
 /** Agent 执行入口:任务开始时绑定的 terminalId 在整个任务期间不变(文档 6.6)。 */
 function agentCommandRunner(terminalId: string, command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
   const pane = terminalRefs.value[terminalId]
@@ -2144,7 +2154,7 @@ async function loadAiSessionState(workspaceSessionId: string) {
     return
   }
   try {
-    const messages = await listAiConversationMessages(workspaceSessionId)
+    const messages = (await listAiConversationMessages(workspaceSessionId)).map(hydrateAiMessagePayload)
     const localMessages = aiMessagesBySession.value[workspaceSessionId] ?? []
     const persistedIds = new Set(messages.map((message) => message.id))
     aiMessagesBySession.value = {
@@ -2156,6 +2166,26 @@ async function loadAiSessionState(workspaceSessionId: string) {
     delete nextLoaded[workspaceSessionId]
     loadedAiSessions.value = nextLoaded
     console.error('failed to load AI conversation', error)
+  }
+}
+
+/** 把持久化的 payloadJson 还原为 agent 运行时字段;解析失败按纯文本消息降级。 */
+function hydrateAiMessagePayload(message: AiMessage): AiMessage {
+  const raw = message.payloadJson?.trim()
+  if (!raw) return message
+  try {
+    const payload = JSON.parse(raw) as Partial<Pick<AiMessage, 'mode' | 'agentSteps' | 'agentStatus'>>
+    if (payload.mode !== 'agent') return message
+    return {
+      ...message,
+      mode: 'agent',
+      agentSteps: Array.isArray(payload.agentSteps) ? payload.agentSteps : [],
+      agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
+        ? payload.agentStatus
+        : 'done'
+    }
+  } catch {
+    return message
   }
 }
 
@@ -2404,12 +2434,16 @@ onBeforeUnmount(() => {
       :save-state="aiConfigSaveState"
       :save-error="aiConfigSaveError"
       :settings="appSettings"
+      :agent-allowlist="agentAllowlist"
       @select-ai-config="selectAiConfig"
       @create-ai-config="createAiConfig"
       @edit-ai-config="editAiConfig"
       @delete-ai-config="deleteSelectedAiConfig"
       @open-menu="openAiConfigContextMenu"
       @close-ai-config="closeAiConfigEditor"
+      @delete-agent-pattern="removeAgentAllowlistPattern"
+      @add-agent-pattern="(pattern: string) => allowAgentPattern(pattern, '')"
+      @clear-agent-patterns="clearAgentAllowlist"
       @save-ai-config="saveAiConfig"
       @update-settings="updateUserSettings"
     />

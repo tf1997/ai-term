@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../types/profile'
+import type { AgentAllowlistEntry } from '../types/agent'
+import { BUILTIN_READONLY_COMMANDS, validateAllowlistPattern } from '../lib/agentAutoApprove'
 import { isWindowsPlatform } from '../utils/platform'
 import AiConfigPanel from './AiConfigPanel.vue'
 import UiIcon from './UiIcon.vue'
 
-type SettingsSection = 'ai' | 'terminal'
+type SettingsSection = 'ai' | 'terminal' | 'agent'
 type TerminalTheme = 'midnight' | 'matrix' | 'light'
 const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
@@ -31,6 +33,7 @@ const props = defineProps<{
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   saveError: string
   settings: AppUserSettings
+  agentAllowlist: AgentAllowlistEntry[]
 }>()
 
 const emit = defineEmits<{
@@ -42,6 +45,9 @@ const emit = defineEmits<{
   closeAiConfig: []
   saveAiConfig: [config: AiProviderConfig, apiKey: string]
   updateSettings: [settings: AppUserSettings]
+  deleteAgentPattern: [pattern: string]
+  addAgentPattern: [pattern: string]
+  clearAgentPatterns: []
 }>()
 
 const activeSection = ref<SettingsSection>('ai')
@@ -50,14 +56,15 @@ const draft = reactive<AppUserSettings>({ ...props.settings })
 
 const settingsGroups: Array<{
   key: SettingsSection
-  icon: 'ai' | 'terminal'
+  icon: 'ai' | 'terminal' | 'shield'
   title: string
   description: string
   status: string
   ready: boolean
 }> = [
   { key: 'ai', icon: 'ai', title: 'AI 配置', description: '模型、API 地址和密钥', status: '已接入', ready: true },
-  { key: 'terminal', icon: 'terminal', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true }
+  { key: 'terminal', icon: 'terminal', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true },
+  { key: 'agent', icon: 'shield', title: 'Agent 模式', description: '自动执行策略与命令允许列表', status: '已接入', ready: true }
 ]
 
 const sortedAiConfigs = computed(() => {
@@ -130,6 +137,32 @@ function resetTerminalAppearance() {
   draft.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
   saveSettings()
 }
+
+// ---- Agent 模式设置 ----
+
+const manualPattern = ref('')
+const manualPatternError = ref('')
+
+const builtinPatterns = computed(() => BUILTIN_READONLY_COMMANDS.map((entry) => entry.pattern))
+
+function addManualPattern() {
+  const value = manualPattern.value.trim()
+  const checked = validateAllowlistPattern(value)
+  if (!checked.ok) {
+    manualPatternError.value = checked.reason ?? '无效的命令前缀'
+    return
+  }
+  manualPatternError.value = ''
+  manualPattern.value = ''
+  emit('addAgentPattern', value)
+}
+
+function agentEntryMeta(entry: AgentAllowlistEntry) {
+  const source = entry.sourceCommand?.trim() ? `来源 ${entry.sourceCommand.trim()}` : '手动添加'
+  const usage = entry.useCount > 0 ? ` · 命中 ${entry.useCount} 次` : ''
+  const created = entry.createdAt ? ` · ${entry.createdAt.slice(0, 10)}` : ''
+  return `${source}${usage}${created}`
+}
 </script>
 
 <template>
@@ -200,6 +233,67 @@ function resetTerminalAppearance() {
         <div class="settings-actions">
           <button class="text-button" type="button" @click="resetTerminalAppearance">恢复默认</button>
           <button class="text-button primary-action" type="button" @click="saveSettings">保存设置</button>
+        </div>
+      </section>
+      <section v-else-if="activeSection === 'agent'" class="settings-section settings-controls agent-settings-panel" aria-label="Agent 模式设置">
+        <div class="settings-section-head">
+          <strong>Agent 自动执行</strong>
+          <span>风险与敏感命令永远人工审批</span>
+        </div>
+        <label class="settings-field agent-toggle-field">
+          <span class="agent-toggle-row">
+            <input v-model="draft.agentAutoExecReadonly" type="checkbox" @change="saveSettings" />
+            自动执行只读检查命令
+          </span>
+          <small>开启后,内置只读命令集中的命令无需确认直接执行;执行过程仍在终端可见并记入步骤卡片。</small>
+        </label>
+        <div class="agent-builtin-block">
+          <div class="settings-section-head">
+            <strong>内置只读命令集</strong>
+            <span>{{ builtinPatterns.length }} 条 · 随上方开关整体启停</span>
+          </div>
+          <div class="agent-pattern-chips">
+            <span v-for="pattern in builtinPatterns" :key="pattern" class="chip">{{ pattern }}</span>
+          </div>
+          <small class="agent-builtin-note">带危险参数时不放行(如 tail -f、find -delete、git branch -D);sudo、重定向写文件、命令替换一律人工。</small>
+        </div>
+        <div class="agent-allowlist-block">
+          <div class="settings-section-head">
+            <strong>总是允许列表</strong>
+            <button
+              v-if="agentAllowlist.length"
+              class="text-button"
+              type="button"
+              @click="emit('clearAgentPatterns')"
+            >清空</button>
+          </div>
+          <p v-if="!agentAllowlist.length" class="settings-empty">暂无条目。在 Agent 审批卡片点击「总是允许」,或在下方手动添加命令前缀。</p>
+          <ul v-else class="agent-allowlist-entries">
+            <li v-for="entry in agentAllowlist" :key="entry.pattern">
+              <code>{{ entry.pattern }}</code>
+              <span class="agent-entry-meta">{{ agentEntryMeta(entry) }}</span>
+              <button
+                class="icon-button danger"
+                type="button"
+                :title="`删除 ${entry.pattern}`"
+                :aria-label="`删除 ${entry.pattern}`"
+                @click="emit('deleteAgentPattern', entry.pattern)"
+              >
+                <UiIcon name="trash" />
+              </button>
+            </li>
+          </ul>
+          <div class="agent-manual-add">
+            <input
+              v-model="manualPattern"
+              type="text"
+              placeholder="如 git status 或 docker logs"
+              aria-label="手动添加允许的命令前缀"
+              @keydown.enter.prevent="addManualPattern"
+            />
+            <button class="text-button primary-action" type="button" @click="addManualPattern">添加</button>
+          </div>
+          <p v-if="manualPatternError" class="agent-manual-error">{{ manualPatternError }}</p>
         </div>
       </section>
       <section v-else class="settings-section settings-ai-list" aria-label="AI 配置列表">

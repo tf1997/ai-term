@@ -10,7 +10,8 @@ use crate::domain::connection::models::{AiProviderConfig, ConnectionProfile};
 use crate::domain::storage::sqlite::SqliteConfigStore;
 use crate::domain::terminal::ssh::TerminalSession;
 use crate::domain::workspace::{
-    AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
+    AgentCommandAllowlistEntry, AiConversationMessage, CommandHistoryRecord, UpdateScript,
+    WorkspaceSession,
 };
 pub struct SessionRecord {
     pub id: String,
@@ -222,6 +223,43 @@ impl AppState {
         let workspace_session_id = workspace_session_id.to_string();
         run_store_task(store, move |store| {
             store.list_ai_conversation_messages(&workspace_session_id)
+        })
+        .await
+    }
+
+    pub async fn list_agent_command_allowlist(&self) -> Result<Vec<AgentCommandAllowlistEntry>> {
+        let store = self.store("agent allowlist")?;
+        run_store_task(store, |store| store.list_agent_command_allowlist()).await
+    }
+
+    pub async fn save_agent_command_allowlist_entry(
+        &self,
+        pattern: &str,
+        source_command: &str,
+    ) -> Result<()> {
+        let store = self.store("agent allowlist")?;
+        let pattern = pattern.to_string();
+        let source_command = source_command.to_string();
+        run_store_task(store, move |store| {
+            store.save_agent_command_allowlist_entry(&pattern, &source_command)
+        })
+        .await
+    }
+
+    pub async fn delete_agent_command_allowlist_entry(&self, pattern: &str) -> Result<bool> {
+        let store = self.store("agent allowlist")?;
+        let pattern = pattern.to_string();
+        run_store_task(store, move |store| {
+            store.delete_agent_command_allowlist_entry(&pattern)
+        })
+        .await
+    }
+
+    pub async fn touch_agent_command_allowlist_entry(&self, pattern: &str) -> Result<()> {
+        let store = self.store("agent allowlist")?;
+        let pattern = pattern.to_string();
+        run_store_task(store, move |store| {
+            store.touch_agent_command_allowlist_entry(&pattern)
         })
         .await
     }

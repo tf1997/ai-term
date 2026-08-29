@@ -10,6 +10,9 @@ use crate::app::events::{
     TerminalClosedEvent, TerminalDataEvent,
 };
 use crate::app::state::AppState;
+use crate::domain::ai::agent::{
+    agent_turn_with_provider_stream, AiAgentTurnRequest, AiAgentTurnResponse,
+};
 use crate::domain::ai::chat::{
     chat_with_provider, chat_with_provider_stream, compress_conversation_context,
     generate_script_title, generate_session_title, AiChatRequest, AiChatResponse,
@@ -37,7 +40,8 @@ use crate::domain::terminal::shell_integration::ensure_integration_scripts;
 use crate::domain::terminal::ssh::{remove_ai_term_known_host, spawn_ssh_terminal};
 use crate::domain::text::Utf8StreamDecoder;
 use crate::domain::workspace::{
-    AiConversationMessage, CommandHistoryRecord, UpdateScript, WorkspaceSession,
+    AgentCommandAllowlistEntry, AiConversationMessage, CommandHistoryRecord, UpdateScript,
+    WorkspaceSession,
 };
 
 const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
@@ -544,6 +548,119 @@ pub async fn chat_with_ai_provider_stream(
             Err(message)
         }
     }
+}
+
+#[tauri::command]
+pub async fn ai_agent_turn_stream(
+    request_id: String,
+    request: AiAgentTurnRequest,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AiAgentTurnResponse, String> {
+    let event_name = ai_chat_stream_event_name(&request_id);
+    let chunk_request_id = request_id.clone();
+    let chunk_app = app.clone();
+    let chunk_event_name = event_name.clone();
+    let cancel_token = state.register_task(request_id.clone()).await;
+
+    let result = agent_turn_with_provider_stream(
+        request,
+        move |delta| {
+            let _ = chunk_app.emit_all(
+                &chunk_event_name,
+                AiChatStreamEvent {
+                    request_id: chunk_request_id.clone(),
+                    kind: AiChatStreamEventKind::Chunk,
+                    delta,
+                    error: None,
+                    context_compressed: None,
+                    context_chars: None,
+                    history_count: None,
+                },
+            );
+        },
+        Some(&cancel_token),
+    )
+    .await;
+    state.finish_task(&request_id).await;
+
+    match result {
+        Ok(response) => {
+            let _ = app.emit_all(
+                &event_name,
+                AiChatStreamEvent {
+                    request_id,
+                    kind: AiChatStreamEventKind::Done,
+                    delta: String::new(),
+                    error: None,
+                    context_compressed: Some(response.context_compressed),
+                    context_chars: Some(response.context_chars),
+                    history_count: None,
+                },
+            );
+            Ok(response)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let _ = app.emit_all(
+                &event_name,
+                AiChatStreamEvent {
+                    request_id,
+                    kind: AiChatStreamEventKind::Error,
+                    delta: String::new(),
+                    error: Some(message.clone()),
+                    context_compressed: None,
+                    context_chars: None,
+                    history_count: None,
+                },
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_agent_command_allowlist(
+    state: State<'_, AppState>,
+) -> Result<Vec<AgentCommandAllowlistEntry>, String> {
+    state
+        .list_agent_command_allowlist()
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn save_agent_command_allowlist_entry(
+    pattern: String,
+    source_command: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .save_agent_command_allowlist_entry(&pattern, &source_command)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_agent_command_allowlist_entry(
+    pattern: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    state
+        .delete_agent_command_allowlist_entry(&pattern)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn touch_agent_command_allowlist_entry(
+    pattern: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .touch_agent_command_allowlist_entry(&pattern)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

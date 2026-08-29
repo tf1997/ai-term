@@ -107,8 +107,11 @@ export interface AgentStepProposal {
   reason: string
   risks: ScriptRiskMatch[]
   sensitive: boolean
-  /** 「总是允许」按钮的建议 pattern;仅无风险命中且非敏感时提供。 */
-  suggestedPattern?: string
+  /**
+   * 「总是允许」需要补充的全部 pattern(多段命令会列出每个未覆盖段);
+   * 仅无风险命中且非敏感时提供,为空/缺省表示不展示该按钮。
+   */
+  suggestedPatterns?: string[]
 }
 
 /** classifyForAutoExec 的判定结果。 */
@@ -116,8 +119,11 @@ export interface AgentAutoExecClassification {
   eligible: boolean
   /** 命中的允许来源(内置条目或用户 pattern)。 */
   matched?: string
-  /** 「总是允许」按钮应使用的 token 前缀 pattern。 */
-  suggestedPattern: string
+  /**
+   * 让该命令可自动执行仍需补充的 token 前缀 pattern(已覆盖的段不列出)。
+   * 空数组 = 无法通过允许列表放行(一票否决),不应展示「总是允许」。
+   */
+  suggestedPatterns: string[]
 }
 
 /** 允许列表条目(与 agent_command_allowlist 表对应)。 */

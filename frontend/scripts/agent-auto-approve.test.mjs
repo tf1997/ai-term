@@ -18,7 +18,7 @@ test('单命令命中内置只读集', () => {
   const df = classify('df -h')
   assert.equal(df.eligible, true)
   assert.equal(df.matched, 'df')
-  assert.equal(df.suggestedPattern, 'df')
+  assert.deepEqual(df.suggestedPatterns, [], '已放行的命令无需补充 pattern')
 
   const ls = classify('ls -la /var')
   assert.equal(ls.eligible, true)
@@ -236,9 +236,37 @@ test('suggestPatternForCommand', () => {
   assert.equal(suggestPatternForCommand(''), '')
   assert.equal(suggestPatternForCommand('   '), '')
 
-  // classify 返回的 suggestedPattern 与之一致,否决时也给建议
-  assert.equal(classify('tail -f x').suggestedPattern, 'tail')
-  assert.equal(classify('docker logs -f c1').suggestedPattern, 'docker logs')
+  // 条目级禁用参数导致的否决:pattern 补进来也放行不了,故不给建议
+  assert.deepEqual(classify('tail -f x').suggestedPatterns, ['tail'])
+  assert.deepEqual(classify('docker logs -f c1').suggestedPatterns, ['docker logs'])
+})
+
+test('suggestedPatterns 覆盖多段命令的每一段', () => {
+  // 回归:只建议第一段会让「总是允许」点了也不生效
+  const piped = classify("memory_pressure | tail -n 8; printf 'x'")
+  assert.equal(piped.eligible, false)
+  assert.deepEqual(piped.suggestedPatterns, ['memory_pressure', 'printf'], 'tail 已被内置集覆盖,不再列出')
+
+  // 补齐全部建议后应当放行
+  const allowed = classifyForAutoExec("memory_pressure | tail -n 8; printf 'x'", {
+    userPatterns: piped.suggestedPatterns,
+    includeBuiltin: true
+  })
+  assert.equal(allowed.eligible, true)
+  assert.deepEqual(allowed.suggestedPatterns, [])
+
+  // 去重:同一命令重复出现只列一次
+  assert.deepEqual(classify('foo | foo').suggestedPatterns, ['foo'])
+
+  // 一票否决的命令无法靠允许列表放行,不给任何建议(UI 据此隐藏按钮)
+  assert.deepEqual(classify('sudo cat /etc/shadow').suggestedPatterns, [])
+  assert.deepEqual(classify('ls > out.txt').suggestedPatterns, [])
+  assert.deepEqual(classify('echo $(whoami)').suggestedPatterns, [])
+  assert.deepEqual(classify('cat "unclosed').suggestedPatterns, [])
+
+  // 关闭内置集时,原本被内置覆盖的段也要列进来
+  const noBuiltin = classifyForAutoExec('ps aux | grep nginx', { userPatterns: [], includeBuiltin: false })
+  assert.deepEqual(noBuiltin.suggestedPatterns, ['ps', 'grep'])
 })
 
 test('validateAllowlistPattern 正反例', () => {

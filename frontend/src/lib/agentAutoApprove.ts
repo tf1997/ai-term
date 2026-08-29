@@ -440,7 +440,12 @@ function matchBuiltinEntry(tokens: string[]): string | null {
 function suggestFromSegments(segments: string[][]): string {
   const first = segments[0]
   if (!first) return ''
-  const { tokens } = stripWrappers(first)
+  return suggestFromSegment(first)
+}
+
+/** 单段的建议 pattern:子命令型工具取两 token,其余取首 token。 */
+function suggestFromSegment(segment: string[]): string {
+  const { tokens } = stripWrappers(segment)
   if (!tokens.length) return ''
   if (SUBCOMMAND_TOOLS.has(tokens[0]) && tokens.length >= 2) return `${tokens[0]} ${tokens[1]}`
   return tokens[0]
@@ -448,15 +453,19 @@ function suggestFromSegments(segments: string[][]): string {
 
 /**
  * 自动执行判定:每段独立通过(允许来源命中且未触发任何一票否决)才 eligible。
- * matched 返回第一段命中的来源 pattern;suggestedPattern 始终取第一段的建议值。
+ * matched 返回第一段命中的来源 pattern。
+ *
+ * suggestedPatterns 是「总是允许」的依据:列出让该命令可自动执行**仍需补充**的
+ * 全部 pattern(已被现有来源覆盖的段不再列出)。空数组表示该命令无法通过允许
+ * 列表放行(命中一票否决),此时不应展示「总是允许」——否则用户加了 pattern
+ * 却依旧要人工审批。
  */
 export function classifyForAutoExec(
   command: string,
   sources: { userPatterns: string[]; includeBuiltin: boolean }
 ): AgentAutoExecClassification {
   const scan = scanCommand(command)
-  const suggestedPattern = suggestFromSegments(scan.segments)
-  const rejected: AgentAutoExecClassification = { eligible: false, suggestedPattern }
+  const rejected: AgentAutoExecClassification = { eligible: false, suggestedPatterns: [] }
 
   // 不可靠结构与全局一票否决:未闭合引号 / heredoc / 写重定向 / 命令替换类。
   if (scan.unclosedQuote || scan.heredoc) return rejected
@@ -465,6 +474,8 @@ export function classifyForAutoExec(
 
   const userPatterns = sources.userPatterns.map((pattern) => pattern.trim()).filter(Boolean)
   let firstMatched: string | undefined
+  // 未被现有来源覆盖的段:这些才是「总是允许」需要补充的 pattern
+  const missing: string[] = []
 
   for (const segment of scan.segments) {
     const { tokens, dangerousEnv } = stripWrappers(segment)
@@ -476,10 +487,18 @@ export function classifyForAutoExec(
     // 用户 pattern 优先:显式授权,不附加条目级规则。
     const matched = matchUserPattern(tokens, userPatterns)
       ?? (sources.includeBuiltin ? matchBuiltinEntry(tokens) : null)
-    if (!matched) return rejected
-    if (firstMatched === undefined) firstMatched = matched
+    if (matched) {
+      if (firstMatched === undefined) firstMatched = matched
+      continue
+    }
+    const suggestion = suggestFromSegment(segment)
+    // 段无法归纳出 pattern 时,整条命令就没法靠允许列表放行。
+    if (!suggestion) return rejected
+    if (!missing.includes(suggestion)) missing.push(suggestion)
   }
-  return { eligible: true, matched: firstMatched, suggestedPattern }
+
+  if (missing.length) return { eligible: false, suggestedPatterns: missing }
+  return { eligible: true, matched: firstMatched, suggestedPatterns: [] }
 }
 
 /** 「总是允许」按钮的建议 pattern;多段命令简化为始终取第一段。 */
