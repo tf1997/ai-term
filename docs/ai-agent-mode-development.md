@@ -316,23 +316,37 @@ arguments JSON 解析失败:该 tool call 以 `{"status":"invalid_arguments","er
 **自动执行判定**由新模块 `lib/agentAutoApprove.ts` 实现(纯函数,可单测):
 
 ```ts
-classifyForAutoExec(command: string, userAllowlist: string[]):
-  { eligible: boolean; matched?: string; suggestedPattern: string }
+classifyForAutoExec(
+  command: string,
+  sources: { userPatterns: string[]; includeBuiltin: boolean }
+): AgentAutoExecClassification
 ```
 
-命令先按既有 bash 词法规则(复用 `scriptExecution.ts` 的引号/heredoc 感知扫描)拆分为管道段与 `;` / `&&` / `||` 链式段,**每一段独立通过**才可自动执行。单段判定:
+命令按引号感知的词法规则拆分为管道段与 `;` / `&&` / `||` / 后台 `&` 链式段(`agentAutoApprove.ts` 内自包含实现——`scriptExecution.ts` 的扫描面向注释剥离,不产出 token 边界与重定向信息,复用反而耦合),**每一段独立通过**才可自动执行。单段判定:
 
-- **匹配来源**:内置只读命令集 ∪ 用户允许列表。
-- **匹配粒度**:默认首 token;子命令型工具(`git`、`docker`、`kubectl`、`systemctl`、`ip`、`journalctl` 等)取两 token——「总是允许」允许的是 `git status`,而不是整个 `git`。
-- **包装剥离**:前缀环境变量赋值(`FOO=bar cmd`)剥离后取 token;`timeout <n> cmd` 视为透明包装,判定内层命令。
+- **匹配来源**:内置只读命令集(`includeBuiltin` 为真时)∪ 用户允许列表。
+- **匹配粒度**:默认首 token;子命令型工具(`git`、`docker`、`kubectl`、`systemctl`、`ip`、`journalctl` 等)取两 token——「总是允许」允许的是 `git status`,而不是整个 `git`。条目按 token 前缀匹配:条目全部 token 与命令段前缀一致即命中。
+- **包装剥离**:前缀环境变量赋值(`FOO=bar cmd`)剥离后取 token;`timeout <n> cmd` 与 `command cmd` 视为透明包装,判定内层命令。
 - **一票否决**(任一命中即需人工,允许列表无效):
   - `sudo` 前缀;
-  - 输出重定向 `>` / `>>`(`>/dev/null`、`2>&1` 除外);
-  - 命令替换 `$(...)` / 反引号;
-  - 条目声明的禁用参数(如 `tail -f`、`find -delete/-exec`、`journalctl --vacuum*`);
+  - 输出重定向 `>` / `>>`(`>/dev/null`、`2>&1`、`2>/dev/null` 除外);
+  - 命令替换 `$(...)` / 反引号,及进程替换 `<(...)` / `>(...)`;
+  - 可改变实际执行代码的环境变量前缀(`PATH=`、`LD_PRELOAD=`、`DYLD_*` 等);
+  - 交互式历史展开(`ls !!`);
+  - 条目声明的禁用参数与后继 token 白名单(见下);
   - 无法可靠解析的结构(未闭合引号、heredoc)。
 
-**内置只读命令集**(设置开关「自动执行只读检查命令」,默认关):`ls cat head tail grep rg find stat file wc du df free uptime w who whoami id uname hostname date printenv which type ps pgrep ss lsof`,及两 token 条目 `systemctl status` / `systemctl is-active`、`journalctl`(禁 `--vacuum*`)、`docker ps|images|logs|inspect`、`kubectl get|describe|logs|top`、`git status|log|diff|show|branch`、`ip addr|route|link`(限 show 语义)。列表以数据文件维护,禁用参数随条目声明。分页/常驻类命令(`less`、`top`、`watch`、`tail -f`)即使只读也不进内置集(会挂住循环,交给超时兜底不如直接不放行)。
+**内置只读命令集**(设置开关「自动执行只读检查命令」,默认关):以 `lib/agentAutoApprove.ts` 的 `BUILTIN_READONLY_COMMANDS` 为准(43 条,设置中心完整枚举展示)。单 token:`ls cat head stat file wc du df free uptime w who whoami id uname hostname date printenv env which type ps pgrep ss lsof grep rg`;两 token:`systemctl status|is-active|list-units|list-timers`、`docker ps|images|inspect|logs`、`kubectl get|describe|top|logs`、`git status|log|diff|show|branch`、`ip addr|route|link`;及带禁用参数的 `tail`、`find`、`journalctl`。
+
+每个条目可声明禁用参数与后继 token 白名单,实现比早期草案更严:
+
+- 常驻/跟随:`tail -f/-F`、`docker logs -f`、`kubectl logs -f`、`journalctl -f/--follow`
+- 破坏性子命令:`find -delete/-exec/-execdir/-ok/-okdir/-fls/-fprint/-fprint0/-fprintf`、`git branch -d/-D/-m/-M/-c/-C/--delete/--move/--copy/--set-upstream-to`(并拒绝裸参数,`git branch <名>` 是建分支)、`journalctl --vacuum*/--rotate/--flush`、`ss -K/--kill`、`date -s/--set`
+- 可执行任意命令的入口:`env` 与 `hostname` 限纯选项(`env rm -rf /` 会执行 rm;裸参数的 hostname 是设主机名)、`rg --pre`(逐文件执行外部命令)
+- 写文件:`git log/diff/show --output`
+- `ip addr|route|link` 用后继 token 白名单限 `show|list|ls|get`,挡住 `ip addr add`
+
+分页/常驻类命令(`less`、`more`、`top`、`watch`)与有网络副作用的 `curl`/`wget` 即使只读也不进内置集(会挂住循环,交给超时兜底不如直接不放行)。
 
 **用户允许列表(「总是允许」,Claude Code 式权限记录)**:待审批卡片在命令**无风险命中且非敏感**时,额外提供「总是允许 `<suggestedPattern>`」按钮;点击即把该 pattern 写入允许列表并执行当前步骤。点击本身就是显式授权,不设额外开关;每次执行仍重新走完整判定顺序,因此列表条目不可能放行日后新增风险规则命中的命令。
 
@@ -448,13 +462,33 @@ interface AiMessage {
 7. 不支持 tools 的网关得到明确报错与切换建议。
 8. 自动执行:开启内置只读集后 `df -h` 类命令自动执行且卡片带标注;点击「总是允许 `docker logs`」后,后续 `docker logs` 步骤自动执行且重启应用仍生效;设置中心能看到该条目的来源命令与命中统计,删除后恢复人工审批;`cat a > b`、`sudo cat x`、含 `$( )` 的命令均不自动执行;`rm -rf` 仍需二次确认。
 
-### 10.2 阶段 2:无标记兜底与体验强化
+### 10.2 阶段 1.5:自主探索能力(①–④ 已实施,⑤ 待评估)
 
-- 无标记终端哨兵兜底:agent 命令包装为 `<cmd>; printf '\n__AI_TERM_RC_<nonce>__:%d\n' $?`,在输出流中按 nonce 行匹配退出码,输出取派发点到哨兵行之间的累积文本;命令回显行剔除。仅 POSIX shell;PowerShell/cmd 另行设计。
+阶段 1 跑通后的实测结论:Agent 往往只执行一条命令就给结论,不具备 Claude Code 那样的连续自主探索。诊断出五处成因,均非循环机制缺陷,而是提示词与预算参数把它按成了"一问一答"。用户已确认自主档位为 **「只读自动 + 写操作审批」**:只读检查命令连续自动执行,写入/风险/敏感命令仍逐条人工审批——探索顺畅,同时守住产品的"执行可审查"底线。
+
+| # | 成因 | 现状 | 方案 |
+| --- | --- | --- | --- |
+| 1 | 提示词无"持续推进"指令 | `build_agent_system_prompt` 规则 1「一次只调用一次」+ 规则 5「任务完成…直接输出结论」,全篇无验证/取证要求 | 重写为"工作方式":自主推进、不停在第一个看似合理的结果、能用命令查到的不要问用户��证据不足时继续查;保留全部安全条款,并说明只读命令会自动执行、危险命令会停下等审批 |
+| 2 | **上下文预算过小(最硬的伤)** | 轮次预算 24k 字符,单命令输出上限 4k → **6 条命令即撑满**,`compressAgentTurns` 开始把早期 toolResult 整体替换为「输出已省略」,只保护最近 3 轮;后端超限直接 bail | 后端 `MAX_AGENT_TURN_CHARS` 24k → 80k;前端 `DEFAULT_MAX_TURN_CHARS` 24k → 72k(低于后端,保证前端先压缩而非后端报错);`PROTECTED_RECENT_TURNS` 3 → 6;压缩策略改为保留退出码 + 输出尾部片段,而非整体丢弃 |
+| 3 | 步数上限过低 | `DEFAULT_STEP_LIMIT = 10`,到顶即 `stopped` 且无续跑入口 | 提升到 25;到达上限的收尾文案明确提示可继续下一轮任务 |
+| 4 | 默认每条命令都要人工审批 | `agentAutoExecReadonly` 默认 `false`,连 `ls`/`ps` 都要点一次「执行」——这是"只会执行一个命令"的直接体感来源 | 默认改为 `true`(内置只读集生效)。既有用户的本地设置无该字段,合并时自动取新默认值 |
+| 5 | 无计划跟踪 | 单一 `run_command` 工具,长任务容易丢方向 | 新增 `update_plan` 工具(steps + current),运行态存入 `AgentRunState`,在步骤卡片上方渲染紧凑清单。**优先级最低**,1–4 落地并验证后再评估 |
+
+实施顺序:1 → 2 → 3 → 4(行为杠杆由大到小,每步可独立验证),5 视效果决定是否需要。
+
+风险与回归关注点:
+
+- 预算放大后单次请求 token 显著上升,需在实测中确认成本与网关上限(部分网关对单请求有硬上限,超限报错文案已有 5.7 兜底)。
+- 自动执行默认开启后,首次使用的用户会看到命令自动跑起来;设置中心 Agent 区块已完整枚举内置只读集,开关可一键关闭。
+- 提示词改动需回归:危险命令仍先做只读确认、skipped 后不原样重发。
+
+### 10.3 阶段 2:无标记兜底与体验强化
+
+- 无标记终端哨兵兜底:agent 命令包装为 `<cmd>; printf '\n__AI_TERM_RC_<nonce>__:%d\n' $?`,在输出流中按 nonce 行匹配退出码,输出取派发点到哨兵行之间的累积文本;命令回显行剔除。仅 POSIX shell;PowerShell/cmd 另行设计。**这是 Agent 模式能否用于远端 SSH 的前提**——当前仅本地 zsh/bash 自动注入 OSC 133。
 - 超时体验:卡片倒计时、"继续等待"重置、疑似交互等待的启发提示(输出静默且无 D)。
 - 每任务步数上限、超时进入设置;允许列表支持按连接维度细分(可选)。
 
-### 10.3 阶段 3:工具扩展
+### 10.4 阶段 3:工具扩展
 
 - `read_file` / `list_directory`(走 SFTP 通道,只读,受同一审批策略)。
 - `write_file` 带 diff 预览审批。
