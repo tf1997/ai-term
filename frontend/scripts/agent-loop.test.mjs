@@ -392,14 +392,18 @@ test('commandMismatch:按串扰处理,任务 stopped 并带说明', async () => 
   assert.ok(state.error && state.error.includes('串扰'))
 })
 
-test('轮次压缩:最旧 toolResult 被替换为省略占位,最近 3 轮保留', () => {
-  const bigOutput = 'x'.repeat(500)
+test('轮次压缩:最旧 toolResult 保留退出码与输出尾部,最近 6 轮保留', () => {
+  const bigOutput = 'x'.repeat(500) + 'TAIL-MARKER'
   const turns = [
     { kind: 'assistant', text: 'a'.repeat(300), toolCalls: [{ id: 't1', name: 'run_command', arguments: '{}' }] },
     { kind: 'toolResult', toolCallId: 't1', content: JSON.stringify({ exitCode: 0, durationMs: 9, truncated: false, output: bigOutput }) },
     { kind: 'toolResult', toolCallId: 't2', content: 'y'.repeat(400) },
+    // 以下 6 轮受 PROTECTED_RECENT_TURNS 保护
     { kind: 'assistant', text: 'b'.repeat(300), toolCalls: [] },
     { kind: 'toolResult', toolCallId: 't3', content: 'z'.repeat(300) },
+    { kind: 'assistant', text: 'c'.repeat(300), toolCalls: [] },
+    { kind: 'toolResult', toolCallId: 't4', content: 'w'.repeat(300) },
+    { kind: 'assistant', text: 'd'.repeat(300), toolCalls: [] },
     { kind: 'assistant', text: '最新总结', toolCalls: [] }
   ]
   const snapshot = structuredClone(turns)
@@ -408,9 +412,16 @@ test('轮次压缩:最旧 toolResult 被替换为省略占位,最近 3 轮保留
   assert.deepEqual(turns, snapshot, '入参不被修改')
   assert.equal(compressed[0].text.length, 200, 'Assistant 文本截到 200 字符')
   assert.deepEqual(compressed[0].toolCalls, snapshot[0].toolCalls)
-  assert.deepEqual(JSON.parse(compressed[1].content), { exitCode: 0, note: '输出已省略' }, '尽力解析出 exitCode')
-  assert.deepEqual(JSON.parse(compressed[2].content), { note: '输出已省略' }, '解析不到 exitCode 则仅保留说明')
-  assert.deepEqual(compressed.slice(3), snapshot.slice(3), '最近 3 轮原样保留')
+
+  // 探索型任务依赖证据链:退出码与输出尾部必须留下,不能整体丢弃
+  const kept = JSON.parse(compressed[1].content)
+  assert.equal(kept.exitCode, 0, '解析出 exitCode')
+  assert.equal(kept.note, '仅保留输出尾部')
+  assert.equal(kept.output.length, 300, '尾部保留 300 字符')
+  assert.ok(kept.output.endsWith('TAIL-MARKER'), '保留的是尾部而非头部')
+
+  assert.deepEqual(JSON.parse(compressed[2].content), { note: '输出已省略' }, '非 JSON 结果退化为仅保留说明')
+  assert.deepEqual(compressed.slice(3), snapshot.slice(3), '最近 6 轮原样保留')
 })
 
 test('轮次压缩:未超限原样返回,降到限内即停止', () => {
@@ -423,7 +434,24 @@ test('轮次压缩:未超限原样返回,降到限内即停止', () => {
   ]
   assert.equal(compressAgentTurns(turns, 10_000), turns, '未超限返回原数组')
 
-  const compressed = compressAgentTurns(turns, 400)
+  // 6 轮以内全部受保护,压缩不生效;超过保护窗口才会压缩最旧轮次
+  const longTurns = [
+    { kind: 'toolResult', toolCallId: 'a', content: 'x'.repeat(300) },
+    { kind: 'toolResult', toolCallId: 'b', content: 'y'.repeat(300) },
+    ...turns
+  ]
+  const compressed = compressAgentTurns(longTurns, 400)
   assert.deepEqual(JSON.parse(compressed[0].content), { note: '输出已省略' })
   assert.equal(compressed[1].content, 'y'.repeat(300), '已降到限内,后续轮次不再压缩')
+})
+
+test('轮次压缩:短输出不会因压缩而膨胀', () => {
+  // 防膨胀保护:占位比原文还长时保持原样,短输出因此完整留存
+  const original = JSON.stringify({ exitCode: 1, output: 'permission denied' })
+  const turns = [
+    { kind: 'toolResult', toolCallId: 'a', content: original },
+    ...Array.from({ length: 6 }, () => ({ kind: 'assistant', text: 'p'.repeat(200), toolCalls: [] }))
+  ]
+  const compressed = compressAgentTurns(turns, 100)
+  assert.equal(compressed[0].content, original, '压缩占位更长时保持原样')
 })

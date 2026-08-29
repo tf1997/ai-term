@@ -41,14 +41,18 @@ export interface AgentLoopOptions {
   maxTurnChars?: number
 }
 
-const DEFAULT_STEP_LIMIT = 10
+const DEFAULT_STEP_LIMIT = 25
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
-const DEFAULT_MAX_TURN_CHARS = 24_000
-/** 压缩时最近保留的完整轮次数(文档 8)。 */
-const PROTECTED_RECENT_TURNS = 3
+/** 低于后端 MAX_AGENT_TURN_CHARS(80k),保证前端先压缩而不是后端拒绝(文档 10.2)。 */
+const DEFAULT_MAX_TURN_CHARS = 72_000
+/** 压缩时最近保留的完整轮次数(文档 8);探索任务依赖较长证据链。 */
+const PROTECTED_RECENT_TURNS = 6
 /** 压缩时 Assistant 文本保留的字符数。 */
 const COMPRESSED_ASSISTANT_TEXT_CHARS = 200
+/** 压缩后仍保留的命令输出尾部字符数:报错通常在尾部,整体丢弃会让模型失忆。 */
+const COMPRESSED_OUTPUT_TAIL_CHARS = 300
 const OMITTED_OUTPUT_NOTE = '输出已省略'
+const TRUNCATED_OUTPUT_NOTE = '仅保留输出尾部'
 
 /** 轮次的预算占用:text + content + arguments(文档 8 的口径)。 */
 function turnChars(turn: AiAgentTurn): number {
@@ -58,24 +62,42 @@ function turnChars(turn: AiAgentTurn): number {
   return turn.content.length
 }
 
-/** 从原 content 尽力解析 exitCode;解析不到则只保留省略说明。 */
+/**
+ * 压缩单条工具结果:尽力保留退出码与输出尾部(报错多在尾部),
+ * 整体丢弃会让模型忘记前面查到了什么,探索型任务尤其致命。
+ */
 function compressToolResultContent(content: string): string {
   let exitCode: number | undefined
+  let output: string | undefined
   try {
     const parsed: unknown = JSON.parse(content)
-    if (parsed && typeof parsed === 'object' && typeof (parsed as { exitCode?: unknown }).exitCode === 'number') {
-      exitCode = (parsed as { exitCode: number }).exitCode
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as { exitCode?: unknown; output?: unknown }
+      if (typeof record.exitCode === 'number') exitCode = record.exitCode
+      if (typeof record.output === 'string') output = record.output
     }
   } catch {
     // 原 content 不是 JSON:退化为仅保留省略说明
   }
-  if (exitCode === undefined) return JSON.stringify({ note: OMITTED_OUTPUT_NOTE })
-  return JSON.stringify({ exitCode, note: OMITTED_OUTPUT_NOTE })
+
+  const tail = output && output.length > COMPRESSED_OUTPUT_TAIL_CHARS
+    ? output.slice(output.length - COMPRESSED_OUTPUT_TAIL_CHARS)
+    : output
+  const payload: Record<string, unknown> = {}
+  if (exitCode !== undefined) payload.exitCode = exitCode
+  if (tail) {
+    payload.output = tail
+    payload.note = tail === output ? OMITTED_OUTPUT_NOTE : TRUNCATED_OUTPUT_NOTE
+  } else {
+    payload.note = OMITTED_OUTPUT_NOTE
+  }
+  return JSON.stringify(payload)
 }
 
 /**
  * 轮次预算压缩(文档 8):总字符超过 maxTurnChars 时从最早轮次开始压缩,
- * ToolResult.content 替换为省略占位,Assistant.text 截断;最近 3 个轮次保持原样。
+ * ToolResult.content 保留退出码与输出尾部,Assistant.text 截断;
+ * 最近 PROTECTED_RECENT_TURNS 个轮次保持原样。
  * 不修改入参,返回新数组(未超限时原样返回)。
  */
 export function compressAgentTurns(turns: AiAgentTurn[], maxTurnChars: number): AiAgentTurn[] {
@@ -189,7 +211,7 @@ export function runAgentTask(
 
   const finishStepLimit = () => {
     finishRun(() => {
-      const note = `已达到 ${stepLimit} 步上限,任务未确认完成`
+      const note = `已达到 ${stepLimit} 步上限,任务未确认完成;可在下一条消息里让 Agent 接着排查`
       state.finalText = state.finalText ? `${state.finalText}\n${note}` : note
       state.status = 'stopped'
     })

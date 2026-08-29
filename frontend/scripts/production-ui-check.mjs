@@ -3279,4 +3279,19 @@ assert(
     /for \(const pattern of suggestedPatterns\)/.test(read('src/lib/agentLoop.ts')),
   'Always-allow must cover every uncovered command segment: the classifier reports all needed patterns and the loop persists each one.'
 )
+const agentLoop = read('src/lib/agentLoop.ts')
+const agentBackend = readFileSync(resolve(root, '../src-tauri/src/domain/ai/agent.rs'), 'utf8')
+const frontendTurnBudget = Number(/DEFAULT_MAX_TURN_CHARS = ([\d_]+)/.exec(agentLoop)?.[1].replace(/_/g, ''))
+const backendTurnBudget = Number(/MAX_AGENT_TURN_CHARS: usize = ([\d_]+)/.exec(agentBackend)?.[1].replace(/_/g, ''))
+assert(
+  Number.isFinite(frontendTurnBudget) &&
+    Number.isFinite(backendTurnBudget) &&
+    frontendTurnBudget < backendTurnBudget &&
+    Number(/const PROTECTED_RECENT_TURNS = (\d+)/.exec(agentLoop)?.[1]) >= 6 &&
+    Number(/const DEFAULT_STEP_LIMIT = (\d+)/.exec(agentLoop)?.[1]) >= 25 &&
+    agentLoop.includes('COMPRESSED_OUTPUT_TAIL_CHARS') &&
+    /agentAutoExecReadonly: true/.test(appShell) &&
+    agentBackend.includes('自主推进'),
+  'Agent exploration budget contract: the frontend must compress below the backend turn limit, keep a wide protected window and output tails, auto-run read-only commands by default, and ship the self-directed system prompt.'
+)
 console.log('production-ui-check passed')

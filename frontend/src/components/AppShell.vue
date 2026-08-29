@@ -72,7 +72,8 @@ const defaultUserSettings: AppUserSettings = {
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   terminalTheme: 'midnight',
   defaultShell: 'system',
-  agentAutoExecReadonly: false
+  // 只读检查命令自动执行,Agent 才能连续取证;写入/风险/敏感命令仍逐条审批(文档 10.2)
+  agentAutoExecReadonly: true
 }
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
