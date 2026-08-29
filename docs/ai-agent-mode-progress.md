@@ -4,18 +4,20 @@
 
 ## 1. 一句话状态
 
-**阶段 1 + 阶段 1.5(自主探索能力)均已实施完毕,自动化验证全绿;等待用户在真实网关上做一次统一验收。**
+**阶段 1 + 阶段 1.5(自主探索能力)+ 阶段 2 哨兵兜底均已实施完毕,自动化验证全绿;等待用户在真实网关与真实远端上做一次统一验收。**
+
+哨兵兜底落地后,**Agent 模式不再局限于本地 zsh/bash**:任意 POSIX shell 的远端 SSH 会话,探针通过即自动可用。
 
 自动化基线(本轮末实测):
 
 | 检查 | 结果 |
 | --- | --- |
-| `cd src-tauri && cargo test` | 162 passed / 0 failed |
+| `cd src-tauri && cargo test` | 162 passed / 0 failed(本轮零 Rust 改动) |
 | `cd frontend && npx vue-tsc --noEmit` | exit 0,零错误 |
-| `cd frontend && npm run test:scripts` | 64 / 64 |
+| `cd frontend && npm run test:scripts` | 82 / 82(64 → 82,+18 哨兵用例) |
 | `cd frontend && npm run test:ui` | passed |
 
-工作区状态:全部改动已提交,工作区干净。分支 `feature/agent-mode` 上的四个提交:
+工作区状态:全部改动已提交。分支 `feature/agent-mode` 上的主要提交(连同两条文档提交共 7 个,均未 push):
 
 | 提交 | 内容 |
 | --- | --- |
@@ -23,10 +25,31 @@
 | `0cee83c feat(agent): add agent turn command, step cards and allowlist settings` | 阶段 1 收尾:命令层、模式选择器与步骤卡片、设置中心 Agent 区块、样式;含「总是允许」多段命令修复与 `AgentStepCard.vue` 组件化 |
 | `bfe6091 feat(agent): raise turn budget and auto-run readonly commands by default` | 阶段 1.5 ①–④(提示词、预算与压缩、步数上限、只读默认自动执行) |
 | `95ace56 docs(agent): record autonomous exploration changes and acceptance list` | 本文档与设计文档同步 |
+| `aff5bb7 feat(agent): capture remote command output via printf sentinel fallback` | 阶段 2 哨兵兜底(见 §1.4);零 Rust 改动 |
 
-每个代码提交都单独跑过完整检查:`0cee83c` 为 cargo 162 / 前端 63 / tsc 0 / ui-check 通过,`bfe6091` 为上表基线。尚未 push。
+每个代码提交都单独跑过完整检查:`0cee83c` 为 cargo 162 / 前端 63 / tsc 0 / ui-check 通过,`bfe6091` 为 64 基线,`aff5bb7` 为上表 82 基线。
 
-## 1.5 本轮完成:自主探索能力(设计文档 10.2)
+## 1.4 本轮完成:哨兵兜底,远端 SSH 可用(设计文档 10.3.1)
+
+此前 `runCommandAndCapture` 开头即 `if (!tracker?.sawMarkers) return agentDispatchFailure(...)`,而 OSC 133 标记只在本地 shell 启动时由 `apply_shell_integration` 通过 `ZDOTDIR` / `--init-file` 注入 —— SSH 启动的是 `ssh` 而非 shell,远端拿不到注入。**作为 SSH 终端产品,Agent 模式此前在主场景里用不了。**
+
+本轮实施哨兵包装兜底(机制与设计取舍见设计文档 10.3.1),**零 Rust 改动,纯前端**:
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| ① | 哨兵捕获模块:`wrapCommandWithSentinel` / `createSentinelScanner`(`waiting-begin → collecting → done` 状态机、跨 chunk carry、ANSI 剥离、CRLF 归一、裸 `\r` 进度条按行重置、有界收集与头部丢弃降级) | 新增 `lib/agentSentinelCapture.ts` |
+| ② | 结构安全守卫 `isSuffixSafeForSentinel`,复用既有引号感知扫描器;`CommandScan` 补 `trailingOperator` 标志 | `lib/agentAutoApprove.ts` |
+| ③ | 扫描器 sink 挂在**既有** `onTerminalData` 回调(全部 PTY/SSH 输出进入 JS 的唯一咽喉点)—— 复用订阅,因此不存在"订阅晚于派发"的丢数据窗口 | `TerminalPane.vue` `attachTerminalEvents` |
+| ④ | `runCommandAndCapture` 拆为 `captureWithMarkers`(原 OSC 133 语义,含 `commandMismatch`)与 `captureWithSentinel`(不设 mismatch);首次走哨兵时惰性触发探针 | `TerminalPane.vue` |
+| ⑤ | 能力探针 `ensureAgentCapture()`:`(exit 7)` 往返验证,8s 超时,按 sessionId 缓存,探测中会话切换即失效 | `TerminalPane.vue` |
+| ⑥ | `executeCommand` 增加 `historyCommand` 替身参数 —— 派发包装命令、历史记干净命令 | `TerminalPane.vue` |
+| ⑦ | 可用性文案改写:不再断言"远端不可用";切到 Agent 模式时异步探测并回填提示,`startAgentTask` 再兜一次 | `AppShell.vue` / `AiPanel.vue` / `WorkspacePanel.vue` |
+
+**两条捕获路径产出同一个 `AgentCommandHandle`**,因此 `agentLoop.ts`、`AiPanel.vue`、`AgentStepCard.vue` 的循环与 UI 逻辑一行未改。
+
+新增 `scripts/agent-sentinel-capture.test.mjs`(18 例):回显不误匹配、`history`/`ps` 撞见自身、跨 chunk 切分(begin 与 end 各一)、逐字符投喂、ANSI/OSC + CRLF、输出不以换行结尾、退出码 0/1/7/127/130、裸 `\r` 进度条、截断与 `peekOutput`、`dispose`、探针命令、守卫接受/拒绝用例。`production-ui-check` 新增两组断言锁死核心契约(nonce 走 `%s`、退出码限数字、sink 接在咽喉点、守卫在位、历史记干净命令、可用性走异步探针);**10 条断言逐条做过变异验证,确认非空转**。
+
+## 1.5 阶段 1.5 完成:自主探索能力(设计文档 10.2)
 
 针对"Agent 只执行一条命令就收尾、不像 Claude Code 那样自主探索"的实测问题,按已确认的自主档位 **「只读自动 + 写操作审批」** 实施了 ①–④;⑤`update_plan` 工具按原计划留待效果验证后再评估。
 
@@ -41,7 +64,7 @@
 
 新增/更新测试:轮次压缩改测"保留退出码与尾部标记 TAIL-MARKER、最近 6 轮原样",新增"短输出不会因压缩而膨胀"(验证防膨胀保护);63 → 64。
 
-## 2. 上一轮完成:UI 修复与「总是允许」缺陷
+## 2. 阶段 1 收尾:UI 修复与「总是允许」缺陷
 
 | 项 | 问题与修复 |
 | --- | --- |
@@ -70,15 +93,15 @@
 
 后端:`domain/ai/agent.rs`(协议层,18 单测)、`chat.rs`(仅 pub(crate) 可见性)、`domain/workspace/mod.rs` + `storage/schema.sql` + `storage/sqlite.rs`(两列迁移 + 允许列表表与 CRUD)、`app/state.rs` + `app/commands.rs` + `lib.rs`(命令层)、`tests/agent_storage.rs`。
 
-前端:`types/agent.ts`(新)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,16 测试)、`lib/agentAutoApprove.ts`(新,18 测试/171 断言)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture`/`agentCaptureSupported`)、`AiPanel.vue`、`AppShell.vue`、`WorkspacePanel.vue`、`SettingsSidebar.vue`、`styles.css`、`package.json`(测试套件)。
+前端:`types/agent.ts`(新)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,16 测试)、`lib/agentAutoApprove.ts`(新,18 测试/171 断言,含 `isSuffixSafeForSentinel`)、`lib/agentSentinelCapture.ts`(新,18 测试)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture` / `agentCaptureSupported` / `ensureAgentCapture`,两条捕获路径)、`AiPanel.vue`、`AppShell.vue`、`WorkspacePanel.vue`、`SettingsSidebar.vue`、`AgentStepCard.vue`、`styles.css`、`package.json`(测试套件)。
 
 ## 5. 统一验收清单(需真实模型网关)
 
 自动化检查已全绿(见 §1)。以下为需要真实网关的人工验收,分三组。
 
-### 5.1 自主探索能力(本轮新增,优先验)
+### 5.1 自主探索能力(设计文档 10.2)
 
-这一组直接检验阶段 1.5 是否达到目的——判据是"像不像 Claude Code 那样自己往下查"。
+这一组检验阶段 1.5 是否达到目的——判据是"像不像 Claude Code 那样自己往下查"。
 
 | # | 操作 | 期望 | 不达标说明 |
 | --- | --- | --- | --- |
@@ -89,7 +112,22 @@
 | A5 | 同上长任务 | **不出现**"任务轮次过长"错误 | 前后端预算不等式被破坏(前端应先压缩) |
 | A6 | 观察 token 用量/网关账单 | 单轮请求明显变大属预期;若网关报单请求超限,需下调 `MAX_AGENT_TURN_CHARS` / `DEFAULT_MAX_TURN_CHARS`(保持前端 < 后端) | 已知风险,见设计文档 10.2 风险栏 |
 
-### 5.2 安全姿态未被放宽(回归,必验)
+### 5.2 哨兵兜底(本轮新增,**需真机**)
+
+自动化只能验逻辑,这一组必须在真实终端与真实远端上手工过一遍:
+
+| # | 场景 | 期望 | 不符时看哪 |
+| --- | --- | --- | --- |
+| B1 | **本地 zsh(有标记)** | 走原 OSC 133 路径,行为与改动前**完全一致**(核心回归 —— 哨兵不得介入已工作的路径) | `agentCaptureMode()` 是否误判;确认未派发 `printf` 包装 |
+| B2 | SSH 到 Linux bash/sh | 探针通过,Agent 可用,多步任务闭环,退出码正确 | 看终端里探针那行的实际回显与返回 |
+| B3 | SSH 到装了 starship 的远端 | 仍走标记路径,不启用哨兵 | `sawMarkers` 判定 |
+| B4 | SSH 到 fish shell | 探针失败,给出明确不可用文案,**不误派发** | 探针超时/退出码非 7 的分支 |
+| B5 | 远端长输出(`cat` 大文件) | 截断生效,标记仍被识别,不吞结束标记 | `COLLECT_LIMIT_FACTOR` 与头部丢弃降级 |
+| B6 | 捕获期间用户手敲命令 | 不污染捕获结果(结束标记只由我们那行产生) | — |
+| B7 | 命令历史 | 记录的是**干净命令**,不是包装后的长命令 | `historyCommand` 替身参数 |
+| B8 | 远端跑 `docker pull` 一类带进度条的命令 | 输出不被每一帧刷屏塞满(裸 `\r` 按行重置) | `appendCollected` |
+
+### 5.3 安全姿态未被放宽(回归,必验)
 
 放开自主性后**必须确认这些仍然拦得住**:
 
@@ -99,7 +137,7 @@
 4. 破坏性操作前 Agent 仍先用只读命令确认目标(提示词第 5 条)
 5. 命令被跳过后 Agent 换思路,不原样重发(提示词第 7 条)
 
-### 5.3 阶段 1 基础功能(设计文档 10.1)
+### 5.4 阶段 1 基础功能(设计文档 10.1)
 
 1. 模式切换与会话级持久化(切到 Agent、重开应用仍是 Agent)
 2. 审批执行闭环:模型提命令 → 卡片 → 执行 → 输出与退出码回传 → 下一步
@@ -116,10 +154,27 @@
 
 1. 改动已按语义分三个提交落地(见 §1),**尚未 push**。`.claude/settings.json` 与 `.DS_Store` 刻意未入库:前者含本机绝对路径与会话累积的临时授权,属 `.claude/settings.local.json` 范畴。
 2. `AgentCommandHandle.cancel` 只放弃等待、不 kill 命令;超时逻辑在 agentLoop 侧。
-3. 命令不匹配检测中,捕获命令为空串视为"未知",不判串扰(无 633;E 的远端 shell 兜底)。
+3. 命令不匹配检测中,捕获命令为空串视为"未知",不判串扰(无 633;E 的远端 shell 兜底)。**哨兵路径不做此检测**:结束标记只可能由我们派发的那一行产生,用户手敲的命令伪造不了。
 4. agent 消息的 `mode/agentSteps/agentStatus` 是运行时字段,仅 `payloadJson` 落库,靠 §3 的 hydrate 还原。
-5. Agent 模式要求终端有 shell integration 语义标记(`sawMarkers`),否则 `agentAvailabilityCheck` 返回提示且不允许发起任务——本地 zsh/bash 自动注入,**远端 SSH 需 shell 自行上报 OSC 133**,哨兵兜底属设计文档 10.3 阶段 2。
+5. Agent 模式的捕获走两条路径:有 OSC 133 语义标记(`sawMarkers`,本地 zsh/bash 自动注入)时走原路径;否则由 `ensureAgentCapture()` 探针决定是否启用哨兵兜底(见 §1.4)。两者都不可用时 `agentAvailabilityCheck` / `agentAvailabilityConfirm` 给出提示且不允许发起任务。
 6. Rust 侧依赖 serde 的 `rename_all_fields`(≥1.0.186),勿降级。
 7. **前后端轮次预算是一对约束**:前端 `DEFAULT_MAX_TURN_CHARS`(72k)必须小于后端 `MAX_AGENT_TURN_CHARS`(80k),否则长任务会由后端 bail 报错而非前端压缩。改动任一侧都要同步另一侧,`production-ui-check` 有断言把关。
 8. `agentAutoExecReadonly` 默认已改为 `true`。若本地 `localStorage` 里存过旧设置(值为 `false`),合并时会沿用旧值——验收 A2 不通过时先查设置中心开关。
 9. 阶段 1.5 的 ⑤`update_plan` 工具**未实施**,按计划等 ①–④ 效果验证后再评估是否需要。
+10. **哨兵包装会让终端里回显的命令变长**(`printf …; <原命令>; printf …`),与步骤卡片上展示的干净命令不一致。这是哨兵方案的固有代价,用户看到的仍是真实执行的内容。仅在无 OSC 133 标记时发生。
+
+## 7. 未办事项
+
+按优先级排列。
+
+| # | 事项 | 说明 |
+| --- | --- | --- |
+| 1 | **哨兵兜底真机验收(§5.2 B1–B8)** | 自动化只覆盖逻辑,真实远端行为必须手工过一遍。**B1 本地 zsh 回归最关键**——哨兵不得干扰已工作的 OSC 133 路径 |
+| 2 | **统一验收(§5.1 / 5.3 / 5.4)** | 需真实模型网关,自阶段 1 起就未做过 |
+| 3 | push 分支 `feature/agent-mode` | 7 个提交均未 push |
+| 4 | 阶段 1.5 ⑤ `update_plan` 工具 | 按计划等 ①–④ 效果验证后再评估是否需要 |
+| 5 | 设计文档 10.3 剩余项 | 超时体验(卡片倒计时、"继续等待"重置、疑似交互等待启发提示)、每任务步数上限与超时进设置、允许列表按连接维度细分 |
+| 6 | PowerShell / cmd 捕获方案 | 哨兵探针会正确报不可用,但这两类远端目前仍无 Agent 能力 |
+| 7 | 设计文档 10.4 阶段 3 | `read_file` / `list_directory`(走 SFTP,只读)、`write_file` 带 diff 预览、"沉淀为脚本"、SSH 远端 integration 注入 |
+| 8 | 陈旧注释 | `AppShell.vue` `AppUserSettings.agentAutoExecReadonly` 与 `SettingsSidebar.vue` 的注释仍写"默认关",实际已是 `true` |
+| 9 | `.DS_Store` 未入 `.gitignore` | 一直以未跟踪状态留在仓库根,未扩大改动范围去处理 |
