@@ -62,6 +62,8 @@ const props = defineProps<{
   messages: AiMessage[]
   contextStatus?: AiContextStatus
   agentAvailabilityCheck?: () => string
+  /** 异步确认(无标记终端会跑哨兵探针);返回空串表示可用。 */
+  agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
@@ -459,6 +461,15 @@ function selectPanelMode(mode: AiPanelMode) {
   if (mode === panelMode.value || composerBusy.value || !props.workspaceSessionId) return
   agentModeNotice.value = mode === 'agent' ? (props.agentAvailabilityCheck?.() ?? '') : ''
   emit('setSessionMode', props.workspaceSessionId, mode)
+  // 无语义标记的终端要跑一次哨兵探针才能给出结论;结果回来再更新提示
+  if (mode === 'agent' && !agentModeNotice.value && props.agentAvailabilityConfirm) {
+    const confirmedFor = props.workspaceSessionId
+    void props.agentAvailabilityConfirm().then((notice) => {
+      if (panelMode.value === 'agent' && props.workspaceSessionId === confirmedFor) {
+        agentModeNotice.value = notice
+      }
+    })
+  }
 }
 
 function composerPrimaryAction() {
@@ -537,6 +548,12 @@ async function startAgentTask() {
   const availability = props.agentAvailabilityCheck?.() ?? ''
   if (availability) {
     agentModeNotice.value = availability
+    return
+  }
+  // 首次在无标记终端发起任务时,探针在此处兜底(切换模式时可能还没跑完)
+  const confirmed = (await props.agentAvailabilityConfirm?.()) ?? ''
+  if (confirmed) {
+    agentModeNotice.value = confirmed
     return
   }
   const runner = props.agentCommandRunner

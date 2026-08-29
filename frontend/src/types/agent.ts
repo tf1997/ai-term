@@ -57,6 +57,12 @@ export interface AgentCommandHandle {
   cancel(): void
 }
 
+/**
+ * 命令捕获方式。`markers` 为 OSC 133 语义标记;`sentinel` 为无标记终端(远端 SSH)
+ * 的 printf 哨兵兜底(文档 10.3);`unsupported` 表示两者都不可用。
+ */
+export type AgentCaptureMode = 'markers' | 'sentinel' | 'unsupported'
+
 export type AgentStepStatus =
   | 'pending'
   | 'running'

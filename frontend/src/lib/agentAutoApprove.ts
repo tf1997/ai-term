@@ -149,6 +149,11 @@ interface CommandScan {
   substitutionVeto: boolean
   unclosedQuote: boolean
   heredoc: boolean
+  /**
+   * 命令以分隔符/续行符结尾(后台 &、悬空 | && ||、行尾反斜杠),末尾无实际内容。
+   * 结尾 `;` 与换行不算——它们可以安全追加。哨兵包装用它判断能否追加 `; printf`。
+   */
+  trailingOperator: boolean
 }
 
 function isWordBoundary(ch: string | undefined): boolean {
@@ -184,8 +189,11 @@ function scanCommand(command: string): CommandScan {
   let redirectVeto = false
   let substitutionVeto = false
   let heredoc = false
+  /** 最近一个未被实际内容跟随的分隔符;null 表示末尾有内容。 */
+  let danglingSeparator: string | null = null
 
   const appendChar = (ch: string, quoted: boolean) => {
+    danglingSeparator = null
     if (word === null) {
       word = ch
       wordIsBareDigits = !quoted && /^[0-9]$/.test(ch)
@@ -196,6 +204,7 @@ function scanCommand(command: string): CommandScan {
   }
   /** 进入引号即视为开始一个词(空引号 '' 也是一个空参数)。 */
   const openQuotedWord = () => {
+    danglingSeparator = null
     if (word === null) word = ''
     wordIsBareDigits = false
   }
@@ -271,7 +280,7 @@ function scanCommand(command: string): CommandScan {
     // —— 常规(无引号)状态 ——
     if (ch === '\\') {
       // 行续接(\ + 换行)与行尾反斜杠直接跳过;其余为字符转义,取字面字符。
-      if (next === '\n' || next === undefined) { index += 2; continue }
+      if (next === '\n' || next === undefined) { danglingSeparator = '\\'; index += 2; continue }
       appendChar(next, true)
       index += 2
       continue
@@ -283,10 +292,11 @@ function scanCommand(command: string): CommandScan {
     if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = null; quote = 'backtick'; index += 1; continue }
     if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; index += 1; continue }
     if (ch === ' ' || ch === '\t') { finishWord(); index += 1; continue }
-    if (ch === '\n' || ch === ';') { finishSegment(); index += 1; continue }
+    if (ch === '\n' || ch === ';') { finishSegment(); danglingSeparator = ';'; index += 1; continue }
     if (ch === '|') {
       // |、||、|& 均按段分隔(|& 等价 2>&1 |,无文件写入)。
       finishSegment()
+      danglingSeparator = '|'
       index += next === '|' || next === '&' ? 2 : 1
       continue
     }
@@ -300,6 +310,7 @@ function scanCommand(command: string): CommandScan {
       }
       // && 与后台 & 均按段分隔,后台的每个部分同样逐段判定。
       finishSegment()
+      danglingSeparator = '&'
       index += next === '&' ? 2 : 1
       continue
     }
@@ -358,7 +369,14 @@ function scanCommand(command: string): CommandScan {
 
   const unclosedQuote = quote !== null
   finishSegment()
-  return { segments, redirectVeto, substitutionVeto, unclosedQuote, heredoc }
+  return {
+    segments,
+    redirectVeto,
+    substitutionVeto,
+    unclosedQuote,
+    heredoc,
+    trailingOperator: danglingSeparator !== null && danglingSeparator !== ';'
+  }
 }
 
 /**
@@ -504,6 +522,22 @@ export function classifyForAutoExec(
 /** 「总是允许」按钮的建议 pattern;多段命令简化为始终取第一段。 */
 export function suggestPatternForCommand(command: string): string {
   return suggestFromSegments(scanCommand(command).segments)
+}
+
+/**
+ * 命令能否安全追加 `; printf …`(哨兵包装的前提,文档 10.3)。
+ * 与自动执行判定无关:这里只关心追加后语法是否仍然成立,不涉及风险。
+ */
+export function isSuffixSafeForSentinel(command: string): { ok: boolean; reason?: string } {
+  const value = command.trim()
+  if (!value) return { ok: false, reason: '命令为空' }
+  const scan = scanCommand(value)
+  if (scan.unclosedQuote) return { ok: false, reason: '命令含未闭合的引号' }
+  if (scan.heredoc) return { ok: false, reason: '命令含 heredoc(<<),无法在同一行追加哨兵标记' }
+  if (scan.trailingOperator) {
+    return { ok: false, reason: '命令以 &、|、&& 或续行反斜杠结尾,无法在其后追加哨兵标记' }
+  }
+  return { ok: true }
 }
 
 /** 手动添加允许列表 pattern 时禁止出现的字符(重定向、管道、命令替换、引号、换行)。 */

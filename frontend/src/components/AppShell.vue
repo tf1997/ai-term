@@ -36,7 +36,7 @@ import {
   saveConnectionProfile,
   saveWorkspaceSession
 } from '../lib/tauri'
-import type { AgentAllowlistEntry, AgentCommandHandle, AiPanelMode } from '../types/agent'
+import type { AgentAllowlistEntry, AgentCaptureMode, AgentCommandHandle, AiPanelMode } from '../types/agent'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import ConnectionSidebar from './ConnectionSidebar.vue'
 import ContextMenu from './ContextMenu.vue'
@@ -79,6 +79,7 @@ type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
   agentCaptureSupported: () => boolean
+  ensureAgentCapture: () => Promise<AgentCaptureMode>
   runCommandAndCapture: (command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   fillCommand: (command: string) => boolean
   pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'
@@ -1500,12 +1501,26 @@ function agentCommandRunner(terminalId: string, command: string, options?: { max
   return pane.runCommandAndCapture(command, options)
 }
 
-/** Agent 模式可用性检查:返回空串表示可用,否则为不可用原因。 */
+/** Agent 模式可用性快检(同步):返回空串表示可用,否则为不可用原因。 */
 function agentAvailabilityCheck(): string {
   const pane = terminalRefs.value[activeTerminalId.value]
   if (!pane) return '当前终端不可用'
   if (!pane.agentCaptureSupported()) {
-    return '当前终端未启用 shell integration 语义标记(本地 zsh/bash 自动注入;远端需 shell 自行上报 OSC 133),Agent 无法感知命令完成,暂不可用'
+    return '当前终端的 shell 不支持命令捕获(既无 shell integration 语义标记,也不支持 POSIX printf 哨兵),Agent 暂不可用'
+  }
+  return ''
+}
+
+/**
+ * 可用性确认(异步):无语义标记的终端会跑一次哨兵探针。
+ * 返回空串表示可用,否则为不可用原因。
+ */
+async function agentAvailabilityConfirm(): Promise<string> {
+  const pane = terminalRefs.value[activeTerminalId.value]
+  if (!pane) return '当前终端不可用'
+  const mode = await pane.ensureAgentCapture()
+  if (mode === 'unsupported') {
+    return '当前终端的 shell 不支持哨兵捕获(需 POSIX printf 与 $?),Agent 暂不可用;远端为 fish/PowerShell/cmd 时会出现这种情况'
   }
   return ''
 }
@@ -2507,6 +2522,7 @@ onBeforeUnmount(() => {
       :ai-context-status="activeAiContextStatus"
       :script-recording="activeScriptRecording"
       :agent-availability-check="agentAvailabilityCheck"
+      :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"

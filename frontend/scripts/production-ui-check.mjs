@@ -3294,4 +3294,26 @@ assert(
     agentBackend.includes('自主推进'),
   'Agent exploration budget contract: the frontend must compress below the backend turn limit, keep a wide protected window and output tails, auto-run read-only commands by default, and ship the self-directed system prompt.'
 )
+
+const sentinelCapture = read('src/lib/agentSentinelCapture.ts')
+assert(
+  // 核心安全性质:nonce 走 %s 参数,组装后的标记不出现在命令文本里,回显无从误匹配
+  /printf '\\\\n\$\{MARKER_PREFIX\}%s__\\\\n' \$\{nonce\}B/.test(sentinelCapture) &&
+    /E__:\(-\?\\\\d\+\)/.test(sentinelCapture) &&
+    sentinelCapture.includes('SENTINEL_PROBE_EXIT_CODE') &&
+    terminalPane.includes('captureWithSentinel') &&
+    terminalPane.includes('sentinelSink?.(event.data)') &&
+    terminalPane.includes('isSuffixSafeForSentinel') &&
+    // 哨兵派发的是包装命令,历史必须记干净命令
+    /recordCommand\(recorded\)/.test(terminalPane) &&
+    agentAutoApprove.includes('trailingOperator'),
+  'Sentinel capture contract: the assembled marker must never appear literally in the dispatched command (nonce passed as a %s argument, exit code matched as digits), the scanner must be fed from the terminal data chokepoint behind a suffix-safety guard, and command history must record the unwrapped command.'
+)
+assert(
+  // 兜底存在后,可用性文案不得再断言"远端不可用"
+  !/远端需 shell 自行上报 OSC 133/.test(appShell) &&
+    appShell.includes('agentAvailabilityConfirm') &&
+    terminalPane.includes('ensureAgentCapture'),
+  'Agent availability must go through the async sentinel probe instead of claiming remote shells are unsupported outright.'
+)
 console.log('production-ui-check passed')

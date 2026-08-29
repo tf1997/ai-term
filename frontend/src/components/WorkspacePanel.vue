@@ -41,6 +41,7 @@ defineProps<{
   aiContextStatus?: AiContextStatus
   scriptRecording: ScriptRecording
   agentAvailabilityCheck?: () => string
+  agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
@@ -163,6 +164,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :messages="aiMessages"
       :context-status="aiContextStatus"
       :agent-availability-check="agentAvailabilityCheck"
+      :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlistPatterns"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"

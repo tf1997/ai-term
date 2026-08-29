@@ -30,7 +30,16 @@ import type {
 } from '../types/workspace'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { attachShellIntegration, type AttachedShellIntegration } from '../lib/shellIntegration'
-import type { AgentCommandHandle, AgentCommandResult } from '../types/agent'
+import {
+  buildSentinelProbeCommand,
+  createSentinelNonce,
+  createSentinelScanner,
+  wrapCommandWithSentinel,
+  SENTINEL_PROBE_EXIT_CODE,
+  type SentinelScanner
+} from '../lib/agentSentinelCapture'
+import { isSuffixSafeForSentinel } from '../lib/agentAutoApprove'
+import type { AgentCaptureMode, AgentCommandHandle, AgentCommandResult } from '../types/agent'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
 import UiIcon from './UiIcon.vue'
@@ -2107,6 +2116,8 @@ async function attachTerminalEvents(activeSessionId = sessionId) {
     if (event.sessionId === activeSessionId && sessionId === activeSessionId) {
       writeTerminalView(event.data)
       appendTerminalOutput(event.data)
+      // 哨兵捕获挂在既有订阅上:布防即赋值,因此不存在"订阅晚于派发"的丢数据窗口
+      sentinelSink?.(event.data)
     }
   })
   if (sessionId !== activeSessionId) {
@@ -2425,9 +2436,14 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
   return true
 }
 
-function executeCommand(command: string) {
+/**
+ * 派发一条命令到终端。`historyCommand` 用于哨兵路径:派发的是包装后的长命令,
+ * 但命令历史与事件应记录用户/模型看到的干净命令;传空串则不记历史(探针)。
+ */
+function executeCommand(command: string, options?: { historyCommand?: string }) {
   const value = command.trim()
   if (!value) return false
+  const recorded = options?.historyCommand ?? value
   if (terminalBackendInputReady()) {
     if (!terminalLineReadyForAppInput()) return false
     closeCompletion()
@@ -2436,7 +2452,7 @@ function executeCommand(command: string) {
       source: 'command',
       // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
       onWritten: () => {
-        if (!integrationCaptures) recordCommand(value)
+        if (!integrationCaptures) recordCommand(recorded)
       }
     })
     if (!accepted) return false
@@ -2450,23 +2466,45 @@ function executeCommand(command: string) {
     const previewLine = `${value}\r\n`
     writeTerminalView(previewLine, true)
     appendTerminalOutput(previewLine)
-    recordCommand(value)
+    recordCommand(recorded)
     resetTrackedTerminalInput('shell')
     return true
   }
   return false
 }
 
-/** Agent 模式可用性:需要 shell integration 语义标记才能感知命令完成。 */
+/** 哨兵扫描器的数据出口;仅在布防期间非空,由 attachTerminalEvents 的回调喂入。 */
+let sentinelSink: ((chunk: string) => void) | undefined
+/** 按会话缓存的哨兵探针结论;会话变更(重连)即失效。 */
+let sentinelProbe: { sessionId: string; supported: boolean } | undefined
+let sentinelProbeInFlight: Promise<boolean> | undefined
+
+const AGENT_CAPTURE_DEFAULT_MAX_CHARS = 4000
+const SENTINEL_PROBE_TIMEOUT_MS = 8_000
+
+/**
+ * 当前终端的命令捕获方式(同步)。未探测的无标记终端乐观返回 sentinel,
+ * 真正的结论由 ensureAgentCapture 的探针给出。
+ */
+function agentCaptureMode(): AgentCaptureMode {
+  if (shellIntegrationAttachment?.tracker.sawMarkers) return 'markers'
+  if (sentinelProbe?.sessionId === sessionId && !sentinelProbe.supported) return 'unsupported'
+  return 'sentinel'
+}
+
+/** 哨兵探针是否已对当前会话给出结论。 */
+function agentCaptureProbed() {
+  return agentCaptureMode() === 'markers' || sentinelProbe?.sessionId === sessionId
+}
+
+/** Agent 模式可用性:有语义标记,或哨兵兜底未被探针否定。 */
 function agentCaptureSupported() {
-  return Boolean(shellIntegrationAttachment?.tracker.sawMarkers)
+  return agentCaptureMode() !== 'unsupported'
 }
 
 function normalizeForCommandMatch(command: string) {
   return command.replace(/\s+/g, ' ').trim()
 }
-
-const AGENT_CAPTURE_DEFAULT_MAX_CHARS = 4000
 
 function agentDispatchFailure(reason: string): AgentCommandHandle {
   const result: AgentCommandResult = {
@@ -2479,53 +2517,44 @@ function agentDispatchFailure(reason: string): AgentCommandHandle {
   return { result: Promise.resolve(result), peekOutput: () => '', cancel: () => {} }
 }
 
-/**
- * Agent 派发命令并捕获输出与退出码(文档 6.2)。
- * 超时决策在循环层;cancel 只放弃等待,不终止命令本身。
- */
-function runCommandAndCapture(command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
-  const value = command.trim()
-  if (!value) return agentDispatchFailure('命令为空')
-  const tracker = shellIntegrationAttachment?.tracker
-  if (!tracker?.sawMarkers) {
-    return agentDispatchFailure('当前终端未启用 shell integration 语义标记,Agent 无法感知命令完成')
-  }
+function agentReadinessFailure(): string {
   const readiness = commandExecutionReadiness()
-  if (readiness !== 'ready') {
-    const reasonMap: Record<string, string> = {
-      'line-busy': '当前命令行已有输入或补全内容',
-      'shell-busy': 'Shell 尚未返回可执行提示符',
-      unavailable: '终端不可用或连接已断开'
-    }
-    return agentDispatchFailure(reasonMap[readiness] ?? `终端未就绪(${readiness})`)
+  if (readiness === 'ready') return ''
+  const reasonMap: Record<string, string> = {
+    'line-busy': '当前命令行已有输入或补全内容',
+    'shell-busy': 'Shell 尚未返回可执行提示符',
+    unavailable: '终端不可用或连接已断开'
   }
+  return reasonMap[readiness] ?? `终端未就绪(${readiness})`
+}
 
+/** OSC 133 路径:布防 tracker,由语义标记划定输出区间(文档 6.2)。 */
+function captureWithMarkers(command: string, maxOutputChars: number): AgentCommandHandle {
+  const tracker = shellIntegrationAttachment?.tracker
+  if (!tracker) return agentDispatchFailure('终端未启用 shell integration')
   const dispatchedAt = Date.now()
   let settled = false
   let resolveResult!: (result: AgentCommandResult) => void
   const result = new Promise<AgentCommandResult>((resolve) => {
     resolveResult = resolve
   })
-  const armed = tracker.armCommandCapture(
-    options?.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS,
-    (capture) => {
-      if (settled) return
-      settled = true
-      // 捕获到的命令与派发不一致 = 用户手动输入串扰;空文本视为未知,不判串扰
-      const captured = normalizeForCommandMatch(capture.command)
-      const mismatch = captured !== '' && captured !== normalizeForCommandMatch(value)
-      resolveResult({
-        status: 'completed',
-        output: capture.output,
-        exitCode: capture.exitCode,
-        durationMs: Math.max(0, capture.finishedAt - capture.startedAt),
-        truncated: capture.truncated,
-        commandMismatch: mismatch || undefined
-      })
-    }
-  )
+  const armed = tracker.armCommandCapture(maxOutputChars, (capture) => {
+    if (settled) return
+    settled = true
+    // 捕获到的命令与派发不一致 = 用户手动输入串扰;空文本视为未知,不判串扰
+    const captured = normalizeForCommandMatch(capture.command)
+    const mismatch = captured !== '' && captured !== normalizeForCommandMatch(command)
+    resolveResult({
+      status: 'completed',
+      output: capture.output,
+      exitCode: capture.exitCode,
+      durationMs: Math.max(0, capture.finishedAt - capture.startedAt),
+      truncated: capture.truncated,
+      commandMismatch: mismatch || undefined
+    })
+  })
 
-  if (!executeCommand(value)) {
+  if (!executeCommand(command)) {
     armed.dispose()
     settled = true
     return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
@@ -2547,6 +2576,157 @@ function runCommandAndCapture(command: string, options?: { maxOutputChars?: numb
       })
     }
   }
+}
+
+/**
+ * 哨兵路径(文档 10.3):把命令包成 printf 标记对,扫描输出流恢复区间与退出码。
+ * 结束标记只可能由我们派发的那一行产生,因此不需要 OSC 路径的串扰校验。
+ */
+function captureWithSentinel(
+  command: string,
+  maxOutputChars: number,
+  options?: { skipHistory?: boolean }
+): AgentCommandHandle {
+  const safety = isSuffixSafeForSentinel(command)
+  if (!safety.ok) {
+    return agentDispatchFailure(`${safety.reason};该终端无 shell integration 标记,需改写为可追加哨兵的单条命令`)
+  }
+
+  const nonce = createSentinelNonce()
+  const wrapped = wrapCommandWithSentinel(command, nonce)
+  const dispatchedAt = Date.now()
+  let settled = false
+  let scanner: SentinelScanner | undefined
+  let resolveResult!: (result: AgentCommandResult) => void
+  const result = new Promise<AgentCommandResult>((resolve) => {
+    resolveResult = resolve
+  })
+
+  const detach = () => {
+    if (sentinelSink === feed) sentinelSink = undefined
+    scanner?.dispose()
+    scanner = undefined
+  }
+
+  scanner = createSentinelScanner({
+    nonce,
+    maxOutputChars,
+    onFinished: (capture) => {
+      if (settled) return
+      settled = true
+      detach()
+      resolveResult({
+        status: 'completed',
+        output: capture.output,
+        exitCode: capture.exitCode,
+        durationMs: Date.now() - dispatchedAt,
+        truncated: capture.truncated
+      })
+    }
+  })
+  function feed(chunk: string) {
+    scanner?.push(chunk)
+  }
+
+  sentinelSink = feed
+  if (!executeCommand(wrapped, { historyCommand: options?.skipHistory ? '' : command })) {
+    settled = true
+    detach()
+    return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
+  }
+
+  return {
+    result,
+    peekOutput: () => (settled ? '' : (scanner?.peekOutput() ?? '')),
+    cancel: () => {
+      if (settled) return
+      settled = true
+      const partial = scanner?.peekOutput() ?? ''
+      detach()
+      resolveResult({
+        status: 'cancelled',
+        output: partial,
+        durationMs: Date.now() - dispatchedAt,
+        truncated: false
+      })
+    }
+  }
+}
+
+/**
+ * 无标记终端的能力探针:跑一条 `(exit 7)` 的哨兵命令,验证 printf 可用、
+ * `$?` 语义正确、标记能原样往返。fish / PowerShell / cmd 会自然失败,
+ * 因此不需要猜 shell 方言。结论按会话缓存。
+ */
+async function ensureAgentCapture(): Promise<AgentCaptureMode> {
+  const mode = agentCaptureMode()
+  if (mode === 'markers' || mode === 'unsupported') return mode
+  if (sentinelProbe?.sessionId === sessionId) return sentinelProbe.supported ? 'sentinel' : 'unsupported'
+  if (sentinelProbeInFlight) return (await sentinelProbeInFlight) ? 'sentinel' : 'unsupported'
+  if (agentReadinessFailure()) return 'sentinel'
+
+  const probedSessionId = sessionId
+  const nonce = createSentinelNonce()
+  const probe = captureWithSentinel(buildSentinelProbeCommand(nonce), 256, { skipHistory: true })
+  sentinelProbeInFlight = (async () => {
+    const timer = window.setTimeout(() => probe.cancel(), SENTINEL_PROBE_TIMEOUT_MS)
+    try {
+      const outcome = await probe.result
+      return outcome.status === 'completed' && outcome.exitCode === SENTINEL_PROBE_EXIT_CODE
+    } finally {
+      window.clearTimeout(timer)
+    }
+  })()
+
+  let supported = false
+  try {
+    supported = await sentinelProbeInFlight
+  } finally {
+    sentinelProbeInFlight = undefined
+  }
+  // 探针期间会话被切换/重连时结论作废
+  if (probedSessionId !== sessionId) return agentCaptureMode()
+  sentinelProbe = { sessionId: probedSessionId, supported }
+  return supported ? 'sentinel' : 'unsupported'
+}
+
+/**
+ * Agent 派发命令并捕获输出与退出码(文档 6.2 / 10.3)。
+ * 超时决策在循环层;cancel 只放弃等待,不终止命令本身。
+ */
+function runCommandAndCapture(command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
+  const value = command.trim()
+  if (!value) return agentDispatchFailure('命令为空')
+  const readinessFailure = agentReadinessFailure()
+  if (readinessFailure) return agentDispatchFailure(readinessFailure)
+
+  const maxOutputChars = options?.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS
+  const mode = agentCaptureMode()
+  if (mode === 'markers') return captureWithMarkers(value, maxOutputChars)
+  if (mode === 'unsupported') {
+    return agentDispatchFailure('当前终端既无 shell integration 语义标记,也不支持哨兵捕获,Agent 无法感知命令完成')
+  }
+  if (!agentCaptureProbed()) {
+    // 未探测就派发有误判风险:先探针,再走正常路径
+    return {
+      result: (async () => {
+        const probed = await ensureAgentCapture()
+        if (probed === 'unsupported') {
+          return {
+            status: 'dispatch-failed' as const,
+            output: '',
+            durationMs: 0,
+            truncated: false,
+            failureReason: '当前终端的 shell 不支持哨兵捕获(需 POSIX printf 与 $?),Agent 暂不可用'
+          }
+        }
+        return runCommandAndCapture(value, options).result
+      })(),
+      peekOutput: () => '',
+      cancel: () => {}
+    }
+  }
+  return captureWithSentinel(value, maxOutputChars)
 }
 
 function forwardInteractiveTerminalInput(data: string, synchronize = true) {
@@ -2705,6 +2885,7 @@ defineExpose({
   clearTerminal,
   commandExecutionReadiness,
   disconnectFromButton,
+  ensureAgentCapture,
   executeCommand,
   fillCommand,
   focusTerminal,
