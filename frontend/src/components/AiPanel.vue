@@ -21,6 +21,7 @@ import type {
   AgentStep,
   AgentStepProposal,
   AgentTimeoutDecision,
+  AgentTimeoutInfo,
   AiPanelMode
 } from '../types/agent'
 import {
@@ -67,6 +68,10 @@ const props = defineProps<{
   agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
+  /** 每个任务的最大步数(设置项);未传时用 agentLoop 的默认值。 */
+  agentStepLimit?: number
+  /** 单条命令等待多久后询问用户(设置项);未传时用 agentLoop 的默认值。 */
+  agentCommandTimeoutMs?: number
 }>()
 
 const emit = defineEmits<{
@@ -120,7 +125,10 @@ const agentStreamText = ref('')
 const agentModeNotice = ref('')
 const agentHighRiskArmed = ref(false)
 const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
-const agentPendingTimeout = ref<{ step: AgentStep; waitedMs: number; resolve: (decision: AgentTimeoutDecision) => void } | null>(null)
+const agentPendingTimeout = ref<{ step: AgentStep; info: AgentTimeoutInfo; resolve: (decision: AgentTimeoutDecision) => void } | null>(null)
+/** 秒级时钟,仅在任务运行期间跳动,驱动步骤卡片的倒计时。 */
+const agentNowMs = ref(Date.now())
+let agentClockTimer: number | undefined
 let agentStopHandle: (() => void) | null = null
 
 const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
@@ -155,6 +163,29 @@ const agentRunActive = computed(() => {
   return status === 'calling-model' || status === 'awaiting-approval' || status === 'executing' || status === 'awaiting-user'
 })
 const composerBusy = computed(() => isAsking.value || agentRunActive.value)
+
+// 倒计时时钟:只在任务运行期间跳动,空闲时不留定时器
+watch(agentRunActive, (active) => {
+  if (active) {
+    if (agentClockTimer !== undefined) return
+    agentNowMs.value = Date.now()
+    agentClockTimer = window.setInterval(() => {
+      agentNowMs.value = Date.now()
+    }, 1000)
+    return
+  }
+  if (agentClockTimer !== undefined) {
+    window.clearInterval(agentClockTimer)
+    agentClockTimer = undefined
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (agentClockTimer !== undefined) {
+    window.clearInterval(agentClockTimer)
+    agentClockTimer = undefined
+  }
+})
 
 const composerPlaceholder = computed(() => {
   if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
@@ -665,9 +696,9 @@ async function startAgentTask() {
         agentPendingApproval.value = { proposal, resolve }
         scrollMessagesToLatest()
       }),
-    requestTimeoutDecision: (step, waitedMs) =>
+    requestTimeoutDecision: (step, info) =>
       new Promise<AgentTimeoutDecision>((resolve) => {
-        agentPendingTimeout.value = { step, waitedMs, resolve }
+        agentPendingTimeout.value = { step, info, resolve }
         scrollMessagesToLatest()
       }),
     onAllowPattern: (pattern, sourceCommand) => {
@@ -681,7 +712,11 @@ async function startAgentTask() {
     }
   }
 
-  const { done, stop } = runAgentTask(goal, deps, {})
+  // 步数上限与命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
+  const { done, stop } = runAgentTask(goal, deps, {
+    stepLimit: props.agentStepLimit,
+    commandTimeoutMs: props.agentCommandTimeoutMs
+  })
   agentStopHandle = stop
   try {
     const finalState = await done
@@ -1371,7 +1406,8 @@ watch(
               :awaiting-approval="isAwaitingApprovalStep(message, step)"
               :awaiting-timeout="isAwaitingTimeoutStep(message, step)"
               :proposal="agentPendingApproval?.proposal"
-              :timeout-waited-ms="agentPendingTimeout?.waitedMs"
+              :timeout-info="agentPendingTimeout?.info"
+              :now-ms="agentNowMs"
               :high-risk-armed="agentHighRiskArmed"
               @execute="resolveAgentApproval('execute')"
               @execute-and-allow="resolveAgentApproval('execute-and-allow')"

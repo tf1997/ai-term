@@ -12887,6 +12887,18 @@ button.script-readiness-status:hover {
 .agent-step-duration {
   color: #6b7b93;
 }
+.agent-step-countdown {
+  color: #e0bb85;
+}
+.agent-timeout-partial {
+  flex: 1 0 100%;
+  max-height: 132px;
+}
+.agent-budget-block {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
 .agent-step-reason {
   margin: 0;
   min-width: 0;
@@ -13218,6 +13230,10 @@ button.script-readiness-status:hover {
 .app-shell.theme-light .agent-step-exit.failed,
 .theme-light .agent-step-exit.failed {
   color: #b42318;
+}
+.app-shell.theme-light .agent-step-countdown,
+.theme-light .agent-step-countdown {
+  color: #9a6a15;
 }
 .app-shell.theme-light .agent-step-duration,
 .theme-light .agent-step-duration,

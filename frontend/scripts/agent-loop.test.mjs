@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { compressAgentTurns, runAgentTask } from '../src/lib/agentLoop.ts'
+import {
+  compressAgentTurns,
+  describeTimeoutHint,
+  looksLikeInteractivePrompt,
+  runAgentTask
+} from '../src/lib/agentLoop.ts'
 
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -338,8 +343,8 @@ test('超时后选择继续等待:命令完成后任务继续', async () => {
   const { deps, states } = makeDeps({
     callModel,
     startCommand: () => pendingHandle,
-    requestTimeoutDecision: async (step, waitedMs) => {
-      waited.push([step.id, step.status, waitedMs])
+    requestTimeoutDecision: async (step, info) => {
+      waited.push([step.id, step.status, info.waitedMs])
       setTimeout(() => resolveResult(completedResult({ output: '慢结果', durationMs: 30 })), 0)
       return 'wait'
     }
@@ -455,3 +460,249 @@ test('轮次压缩:短输出不会因压缩而膨胀', () => {
   const compressed = compressAgentTurns(turns, 100)
   assert.equal(compressed[0].content, original, '压缩占位更长时保持原样')
 })
+
+// —— 超时体验(文档 10.3.2):倒计时字段、静默采样、启发提示 ——
+
+/** 结果长期挂起的句柄,用于逼出超时分支;peekOutput 可注入。 */
+function makePendingHandle(peekOutput = () => '') {
+  let resolveResult
+  const handle = {
+    result: new Promise((resolve) => {
+      resolveResult = resolve
+    }),
+    peekOutput,
+    cancelCalls: 0,
+    cancel() {
+      handle.cancelCalls += 1
+    },
+    finish(result) {
+      resolveResult(completedResult(result))
+    }
+  }
+  return handle
+}
+
+test('deadlineAt:派发即置位、完成后清除、不进入终态快照', async () => {
+  const { callModel } = scriptedModel([
+    turnResponse('执行', [toolCall('c1', 'ls')]),
+    turnResponse('完成', [])
+  ])
+  const { deps, states } = makeDeps({ callModel })
+  const before = Date.now()
+  const state = await runAgentTask('测试', deps, { commandTimeoutMs: 30_000 }).done
+  const after = Date.now()
+
+  // 运行中的快照必须带 deadlineAt,否则卡片无从渲染倒计时
+  const running = states.filter((snapshot) => snapshot.steps[0]?.status === 'running')
+  assert.ok(running.length > 0, '存在 running 快照')
+  const armed = running.find((snapshot) => snapshot.steps[0].deadlineAt !== undefined)
+  assert.ok(armed, 'running 期间置了 deadlineAt')
+  assert.ok(
+    armed.steps[0].deadlineAt >= before + 30_000 && armed.steps[0].deadlineAt <= after + 30_000,
+    'deadlineAt = 派发时刻 + commandTimeoutMs'
+  )
+
+  // 结算即清除:该字段是运行态,不能随 payloadJson 落库(否则历史消息会残留倒计时)
+  assert.equal(state.steps[0].status, 'completed')
+  assert.equal(state.steps[0].deadlineAt, undefined, '完成后 deadlineAt 被清除')
+})
+
+test('deadlineAt:「继续等待」把下次询问时刻推后(倒计时复位)', async () => {
+  const deadlines = []
+  const handle = makePendingHandle()
+  const { callModel } = scriptedModel([
+    turnResponse('慢命令', [toolCall('c1', 'sleep 999')])
+  ])
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step) => {
+      deadlines.push(step.deadlineAt)
+      return deadlines.length === 1 ? 'wait' : 'stop'
+    }
+  })
+  const state = await runAgentTask('测试', deps, { commandTimeoutMs: 20, outputSampleIntervalMs: 5 }).done
+
+  assert.equal(deadlines.length, 2, '两次超时询问')
+  assert.ok(deadlines[0] !== undefined && deadlines[1] !== undefined)
+  assert.ok(deadlines[1] > deadlines[0], '「继续等待」后 deadlineAt 被推后,倒计时复位')
+  assert.ok(deadlines[1] - deadlines[0] >= 20, '推后幅度至少一个超时周期')
+  // 超时选停止后同样清除,不留残余倒计时
+  assert.equal(state.steps[0].deadlineAt, undefined)
+  assert.equal(state.steps[0].status, 'timeout')
+})
+
+test('超时判据:输出仍在增长时 outputGrowing 为真,文案说"持续输出"', async () => {
+  let peeks = 0
+  // 每次采样都更长:超时那一刻的采样即视为刚刚增长
+  const handle = makePendingHandle(() => 'x'.repeat(++peeks * 10))
+  const { callModel } = scriptedModel([
+    turnResponse('长输出', [toolCall('c1', 'ping example.com')])
+  ])
+  let seen
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step, info) => {
+      seen = info
+      return 'stop'
+    }
+  })
+  // 采样周期远大于超时:排除 setInterval 参与,判据只由派发基线与超时采样决定
+  await runAgentTask('测试', deps, { commandTimeoutMs: 20, outputSampleIntervalMs: 500 }).done
+
+  assert.equal(seen.outputGrowing, true)
+  assert.equal(seen.likelyInteractive, false, '仍在输出时不判为等待输入')
+  assert.ok(seen.hint.includes('仍在持续输出'), `文案应指向持续输出:${seen.hint}`)
+  assert.ok(seen.waitedMs >= 20)
+})
+
+test('超时判据:静默的旧输出不算增长,尾部像提示符时命中 likelyInteractive', async () => {
+  // 派发前就存在的输出保持不变——基线采样保证它不会在超时那一刻被误判成刚刚增长
+  const handle = makePendingHandle(() => 'Enter passphrase for key: ')
+  const { callModel } = scriptedModel([
+    turnResponse('登录', [toolCall('c1', 'ssh host')])
+  ])
+  let seen
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step, info) => {
+      seen = info
+      return 'stop'
+    }
+  })
+  await runAgentTask('测试', deps, { commandTimeoutMs: 60, outputSampleIntervalMs: 5 }).done
+
+  assert.equal(seen.outputGrowing, false, '长度未变即视为静默')
+  assert.equal(seen.likelyInteractive, true)
+  assert.ok(seen.silentMs >= 60, '静默时长从派发基线起算')
+  assert.ok(seen.hint.includes('等待你的输入'))
+  assert.ok(seen.hint.includes('不会终止终端里的命令'), '需附停止语义说明')
+})
+
+test('超时判据:静默且尾部不像提示符时给出"可能卡住"文案', async () => {
+  const handle = makePendingHandle(() => 'building...\n')
+  const { callModel } = scriptedModel([
+    turnResponse('构建', [toolCall('c1', 'make')])
+  ])
+  let seen
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step, info) => {
+      seen = info
+      return 'stop'
+    }
+  })
+  await runAgentTask('测试', deps, { commandTimeoutMs: 60, outputSampleIntervalMs: 5 }).done
+
+  assert.equal(seen.outputGrowing, false)
+  assert.equal(seen.likelyInteractive, false, '以换行结尾不判为等待输入')
+  assert.ok(seen.hint.includes('可能仍在运行或已卡住'))
+  assert.ok(seen.hint.includes('不会终止终端里的命令'))
+})
+
+test('超时后停止:已捕获的部分输出保留在步骤上,只取尾部', async () => {
+  const long = `${'a'.repeat(400)}TAIL${'b'.repeat(300)}`
+  const handle = makePendingHandle(() => long)
+  const { callModel } = scriptedModel([
+    turnResponse('慢命令', [toolCall('c1', 'sleep 999')])
+  ])
+  let seen
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step, info) => {
+      seen = info
+      return 'stop'
+    }
+  })
+  const state = await runAgentTask('测试', deps, { commandTimeoutMs: 20, outputSampleIntervalMs: 5 }).done
+
+  assert.equal(seen.partialOutput.length, 500, '超时提示只带尾部 500 字符')
+  assert.ok(seen.partialOutput.endsWith('b'.repeat(300)), '保留的是尾部')
+  // 回归:此前超时步骤的卡片上只剩一条命令,已捕获的内容白白丢掉
+  assert.equal(state.steps[0].status, 'timeout')
+  assert.equal(state.steps[0].output, seen.partialOutput)
+  assert.equal(handle.cancelCalls, 1, '放弃等待但不终止命令')
+})
+
+test('peekOutput 抛错按"无新输出"处理,不中断循环', async () => {
+  const handle = makePendingHandle(() => {
+    throw new Error('捕获侧炸了')
+  })
+  const { callModel } = scriptedModel([
+    turnResponse('慢命令', [toolCall('c1', 'sleep 999')])
+  ])
+  let seen
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => handle,
+    requestTimeoutDecision: async (step, info) => {
+      seen = info
+      return 'stop'
+    }
+  })
+  const state = await runAgentTask('测试', deps, { commandTimeoutMs: 40, outputSampleIntervalMs: 5 }).done
+
+  assert.equal(state.status, 'stopped', '异常不应把任务打成 error')
+  assert.equal(state.steps[0].status, 'timeout')
+  assert.equal(seen.partialOutput, '')
+  assert.equal(seen.outputGrowing, false)
+  assert.equal(seen.likelyInteractive, false)
+})
+
+test('looksLikeInteractivePrompt:命中密码/确认/以提示符收尾的行', () => {
+  for (const output of [
+    'Password:',
+    "root's password: ",
+    'Enter passphrase for key:',
+    '请输入密码：',
+    'Overwrite existing file? [y/N]',
+    'Continue? [Y/n]:',
+    'Are you sure (yes/no)?',
+    'Continue installation?',
+    'sqlite> ',
+    'Enter value:'
+  ]) {
+    assert.equal(looksLikeInteractivePrompt(output), true, `应命中:${JSON.stringify(output)}`)
+  }
+})
+
+test('looksLikeInteractivePrompt:以换行结尾或普通输出不命中', () => {
+  for (const output of [
+    '',
+    'total 48\n',
+    // 关键前提:正常输出会换行,提示符停在行内不换行
+    'Password:\n',
+    'Overwrite? [y/N]\n  ',
+    'drwxr-xr-x  5 me staff 160 Aug 30 10:00 src',
+    'building the project',
+    '\n'
+  ]) {
+    assert.equal(looksLikeInteractivePrompt(output), false, `不应命中:${JSON.stringify(output)}`)
+  }
+})
+
+test('describeTimeoutHint:三个分支各自成文,停止语义只附在需要处', () => {
+  const base = { waitedMs: 120_000, silentMs: 90_000, partialOutput: '', outputGrowing: false, likelyInteractive: false }
+  const semantics = '不会终止终端里的命令'
+
+  const growing = describeTimeoutHint({ ...base, outputGrowing: true })
+  assert.ok(growing.includes('已运行 120s'), '等待时长按秒取整')
+  assert.ok(growing.includes('仍在持续输出'))
+  assert.ok(!growing.includes(semantics), '仍在输出时无需解释停止语义')
+
+  const interactive = describeTimeoutHint({ ...base, likelyInteractive: true })
+  assert.ok(interactive.includes('最近 90s 无新输出'))
+  assert.ok(interactive.includes('等待你的输入'))
+  assert.ok(interactive.includes('继续等待不会重启命令'))
+  assert.ok(interactive.includes(semantics))
+
+  const stuck = describeTimeoutHint(base)
+  assert.ok(stuck.includes('最近 90s 无新输出'))
+  assert.ok(stuck.includes('可能仍在运行或已卡住'))
+  assert.ok(stuck.includes(semantics))
+})
+

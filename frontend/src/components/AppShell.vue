@@ -67,13 +67,22 @@ const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, mon
 const WINDOWS_PLATFORM = isWindowsPlatform()
 const DEFAULT_TERMINAL_FONT_FAMILY = WINDOWS_PLATFORM ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
 const DEFAULT_TERMINAL_FONT_SIZE = 13
+// Agent 任务预算(文档 9):步数上限防死循环,超时只是"要不要继续等"的询问点
+const DEFAULT_AGENT_STEP_LIMIT = 25
+const MIN_AGENT_STEP_LIMIT = 1
+const MAX_AGENT_STEP_LIMIT = 25
+const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
+const MIN_AGENT_COMMAND_TIMEOUT_SEC = 15
+const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
 const defaultUserSettings: AppUserSettings = {
   terminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
   terminalTheme: 'midnight',
   defaultShell: 'system',
   // 只读检查命令自动执行,Agent 才能连续取证;写入/风险/敏感命令仍逐条审批(文档 10.2)
-  agentAutoExecReadonly: true
+  agentAutoExecReadonly: true,
+  agentStepLimit: DEFAULT_AGENT_STEP_LIMIT,
+  agentCommandTimeoutSec: DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
 }
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
@@ -105,8 +114,12 @@ interface AppUserSettings {
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
-  /** Agent 模式:自动执行内置只读命令集的开关(默认关)。 */
+  /** Agent 模式:自动执行内置只读命令集的开关(默认开,见文档 10.2 ④)。 */
   agentAutoExecReadonly: boolean
+  /** Agent 模式:每个任务的最大步数(1–25)。 */
+  agentStepLimit: number
+  /** Agent 模式:单条命令等待多久后询问用户(15–600 秒)。 */
+  agentCommandTimeoutSec: number
 }
 
 interface AppToast {
@@ -962,6 +975,20 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Agent 步数上限:非法值回落默认,并夹在 1–25(文档 9)。 */
+function clampAgentStepLimit(value: unknown): number {
+  const parsed = Math.round(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_STEP_LIMIT
+  return Math.max(MIN_AGENT_STEP_LIMIT, Math.min(MAX_AGENT_STEP_LIMIT, parsed))
+}
+
+/** Agent 命令超时(秒):非法值回落默认,并夹在 15–600。 */
+function clampAgentCommandTimeoutSec(value: unknown): number {
+  const parsed = Math.round(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
+  return Math.max(MIN_AGENT_COMMAND_TIMEOUT_SEC, Math.min(MAX_AGENT_COMMAND_TIMEOUT_SEC, parsed))
+}
+
 function loadUserSettings(): AppUserSettings {
   try {
     const raw = localStorage.getItem(USER_SETTINGS_STORAGE_KEY)
@@ -983,6 +1010,8 @@ function loadUserSettings(): AppUserSettings {
       ...parsed,
       terminalFontFamily,
       terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
+      agentStepLimit: clampAgentStepLimit(parsed.agentStepLimit),
+      agentCommandTimeoutSec: clampAgentCommandTimeoutSec(parsed.agentCommandTimeoutSec),
       terminalTheme: 'midnight'
     }
     if (
@@ -1098,7 +1127,12 @@ function handleThemeTogglePointerDown(event: Event) {
 }
 
 function updateUserSettings(settings: AppUserSettings) {
-  appSettings.value = { ...settings }
+  // 面板已夹取一次,这里再夹一次:appSettings 是 Agent 预算的唯一来源
+  appSettings.value = {
+    ...settings,
+    agentStepLimit: clampAgentStepLimit(settings.agentStepLimit),
+    agentCommandTimeoutSec: clampAgentCommandTimeoutSec(settings.agentCommandTimeoutSec)
+  }
   showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
 }
 
@@ -2526,6 +2560,8 @@ onBeforeUnmount(() => {
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
+      :agent-step-limit="appSettings.agentStepLimit"
+      :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
       @close="rightCollapsed = true"
       @select-workspace-session="selectWorkspaceSession"
       @create-workspace-session="createWorkspaceSessionForActiveConnection"

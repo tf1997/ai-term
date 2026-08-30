@@ -7,6 +7,7 @@ import type {
   AgentStep,
   AgentStepProposal,
   AgentTimeoutDecision,
+  AgentTimeoutInfo,
   AiAgentTurn,
   AiAgentTurnResponse,
   AiToolCall
@@ -27,8 +28,8 @@ export interface AgentLoopDeps {
   classifyStep(command: string): { risks: ScriptRiskMatch[]; sensitive: boolean; autoExec: AgentAutoExecClassification }
   /** 人工审批;stop() 后未决的审批结果作废。 */
   requestApproval(proposal: AgentStepProposal): Promise<AgentApprovalDecision>
-  /** 命令超时后的用户决策:继续等待或停止任务。 */
-  requestTimeoutDecision(step: AgentStep, waitedMs: number): Promise<AgentTimeoutDecision>
+  /** 命令超时后的用户决策:继续等待或停止任务;info 给出静默/交互等待的判断依据。 */
+  requestTimeoutDecision(step: AgentStep, info: AgentTimeoutInfo): Promise<AgentTimeoutDecision>
   /** 「总是允许」:把 pattern 写入允许列表(先落地再执行)。 */
   onAllowPattern(pattern: string, sourceCommand: string): void | Promise<void>
   /** 每次状态变化的快照回调;收到的是结构化克隆,可安全渲染/暂存。 */
@@ -39,10 +40,16 @@ export interface AgentLoopOptions {
   stepLimit?: number
   commandTimeoutMs?: number
   maxTurnChars?: number
+  /** 执行期间轮询 peekOutput 的周期,用于判断输出是否静默。 */
+  outputSampleIntervalMs?: number
 }
 
 const DEFAULT_STEP_LIMIT = 25
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
+/** 采样只比对字符串长度,周期可以密一些而不影响性能。 */
+const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2_000
+/** 超时提示里展示的部分输出尾部长度。 */
+const TIMEOUT_PARTIAL_OUTPUT_CHARS = 500
 /** 低于后端 MAX_AGENT_TURN_CHARS(80k),保证前端先压缩而不是后端拒绝(文档 10.2)。 */
 const DEFAULT_MAX_TURN_CHARS = 72_000
 /** 压缩时最近保留的完整轮次数(文档 8);探索任务依赖较长证据链。 */
@@ -123,6 +130,46 @@ export function compressAgentTurns(turns: AiAgentTurn[], maxTurnChars: number): 
   return compressed
 }
 
+/** 交互提示符常见形态:密码、确认、以及以问句/冒号收尾的等待行。 */
+const INTERACTIVE_PROMPT_PATTERNS = [
+  /(password|passphrase|密码|口令)\s*[:：]$/i,
+  /\[\s*[yn]\s*\/\s*[yn]\s*\]\s*[:：?？]?$/i,
+  /\(\s*(?:yes|y)\s*\/\s*(?:no|n)\s*\)[^)]*[:：?？]?$/i
+]
+
+/**
+ * 判断已捕获输出的尾部是否像"正在等待用户输入"(文档 10.3 的启发提示)。
+ * 前提是输出不以换行结尾——提示符停在行内不换行,正常输出则会换行。
+ */
+export function looksLikeInteractivePrompt(output: string): boolean {
+  if (!output || /\n\s*$/.test(output)) return false
+  const lastLine = output.split('\n').pop()?.trimEnd() ?? ''
+  if (!lastLine) return false
+  if (INTERACTIVE_PROMPT_PATTERNS.some((pattern) => pattern.test(lastLine))) return true
+  // 兜底:停在冒号/问号/提示箭头且没有换行,多半在等输入
+  return /[:：?？>]$/.test(lastLine)
+}
+
+function seconds(ms: number): number {
+  return Math.max(0, Math.round(ms / 1000))
+}
+
+/** 停止语义的固定说明(文档 9):继续等待不重启命令,停止也不 kill 命令。 */
+const TIMEOUT_SEMANTICS_NOTE = '继续等待不会重启命令；停止只放弃等待，不会终止终端里的命令。'
+
+/** 把超时现场翻译成一句面向用户的解释,三种情形分开说。 */
+export function describeTimeoutHint(info: Omit<AgentTimeoutInfo, 'hint'>): string {
+  const waited = seconds(info.waitedMs)
+  if (info.outputGrowing) {
+    return `已运行 ${waited}s，命令仍在持续输出，可继续等待。`
+  }
+  const silent = seconds(info.silentMs)
+  if (info.likelyInteractive) {
+    return `已运行 ${waited}s，最近 ${silent}s 无新输出，末尾像是在等待你的输入。可切到终端手动响应后点「继续等待」，或停止任务。${TIMEOUT_SEMANTICS_NOTE}`
+  }
+  return `已运行 ${waited}s，最近 ${silent}s 无新输出，命令可能仍在运行或已卡住。${TIMEOUT_SEMANTICS_NOTE}`
+}
+
 type RaceOutcome<T> =
   | { kind: 'value'; value: T }
   | { kind: 'error'; error: unknown }
@@ -154,8 +201,9 @@ export function runAgentTask(
   const stepLimit = options.stepLimit ?? DEFAULT_STEP_LIMIT
   const commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   const maxTurnChars = options.maxTurnChars ?? DEFAULT_MAX_TURN_CHARS
+  const outputSampleIntervalMs = options.outputSampleIntervalMs ?? DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS
 
-  const state: AgentRunState = { status: 'calling-model', steps: [], finalText: '', stepLimit }
+  const state: AgentRunState = { status: 'calling-model', steps: [], finalText: '', stepLimit, commandTimeoutMs }
   let turns: AiAgentTurn[] = []
   let stepsTaken = 0
   let parseFailureStreak = 0
@@ -316,46 +364,94 @@ export function runAgentTask(
     const handle = startOutcome.value
     activeHandle = handle
 
+    // 输出静默采样(文档 10.3):只比对 peekOutput 的长度,超时时据此说明卡在哪。
+    // 派发瞬间先取一次基线,否则"静默的旧输出"会在超时那一刻被误判成刚刚增长。
+    let lastOutputLength = -1
+    let lastOutputAt = Date.now()
+    const sampleOutput = (): string => {
+      let partial = ''
+      try {
+        partial = handle.peekOutput()
+      } catch {
+        // 捕获侧异常不应中断循环:按"无新输出"处理
+        return ''
+      }
+      if (partial.length !== lastOutputLength) {
+        lastOutputLength = partial.length
+        lastOutputAt = Date.now()
+      }
+      return partial
+    }
+    sampleOutput()
+    const sampler = setInterval(sampleOutput, outputSampleIntervalMs)
+
+    step.deadlineAt = Date.now() + commandTimeoutMs
+    notify()
+
     try {
       let waitedMs = 0
       while (true) {
         const outcome = await raceCommandResult(handle)
         if (outcome.kind === 'stopped') {
           // stop() 已 cancel 句柄;命令仍留在终端,由用户接管
+          step.deadlineAt = undefined
           finishStopped()
           return 'ended'
         }
         if (outcome.kind === 'error') {
           step.status = 'failed'
+          step.deadlineAt = undefined
           finishError(`等待命令结果异常:${errorMessage(outcome.error)}`)
           return 'ended'
         }
         if (outcome.kind === 'timeout') {
           waitedMs += commandTimeoutMs
+          const partial = sampleOutput()
+          const partialOutput = partial.length > TIMEOUT_PARTIAL_OUTPUT_CHARS
+            ? partial.slice(partial.length - TIMEOUT_PARTIAL_OUTPUT_CHARS)
+            : partial
+          const silentMs = Date.now() - lastOutputAt
+          const outputGrowing = silentMs <= outputSampleIntervalMs
+          const facts = {
+            waitedMs,
+            silentMs,
+            partialOutput,
+            outputGrowing,
+            likelyInteractive: !outputGrowing && looksLikeInteractivePrompt(partialOutput)
+          }
+          const info: AgentTimeoutInfo = { ...facts, hint: describeTimeoutHint(facts) }
           setStatus('awaiting-user')
-          const decision = await raceWithStop(deps.requestTimeoutDecision(structuredClone(step), waitedMs))
+          const decision = await raceWithStop(deps.requestTimeoutDecision(structuredClone(step), info))
           if (decision.kind === 'stopped') {
+            step.deadlineAt = undefined
             finishStopped()
             return 'ended'
           }
           if (decision.kind === 'error') {
+            step.deadlineAt = undefined
             finishError(`超时决策异常:${errorMessage(decision.error)}`)
             return 'ended'
           }
           if (decision.value === 'wait') {
-            // 继续等待:回到 executing 并重新计时
+            // 继续等待:回到 executing 并重新计时(倒计时随 deadlineAt 一起复位)
+            step.deadlineAt = Date.now() + commandTimeoutMs
             setStatus('executing')
+            notify()
             continue
           }
           // 用户选择停止:放弃等待(不终止命令),任务收尾为 stopped
           handle.cancel()
           step.status = 'timeout'
+          step.deadlineAt = undefined
+          // 已捕获的部分输出留在卡片上,否则超时步骤只剩一条命令
+          if (!step.output && partialOutput) step.output = partialOutput
           notify()
           finishStopped()
           return 'ended'
         }
 
         const result = outcome.result
+        step.deadlineAt = undefined
         if (result.status === 'cancelled') {
           // cancel 由 stop() 主导,按 stopped 收尾
           finishStopped()
@@ -395,6 +491,7 @@ export function runAgentTask(
         return 'continue'
       }
     } finally {
+      clearInterval(sampler)
       activeHandle = undefined
     }
   }

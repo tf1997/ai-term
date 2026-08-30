@@ -45,6 +45,8 @@ defineProps<{
   agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
+  agentStepLimit?: number
+  agentCommandTimeoutMs?: number
 }>()
 
 const emit = defineEmits<{
@@ -168,6 +170,8 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlistPatterns"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
+      :agent-step-limit="agentStepLimit"
+      :agent-command-timeout-ms="agentCommandTimeoutMs"
       @select-session="emit('selectWorkspaceSession', $event)"
       @create-session="emit('createWorkspaceSession')"
       @rename-session="(sessionId, name) => emit('renameWorkspaceSession', sessionId, name)"

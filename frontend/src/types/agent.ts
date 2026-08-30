@@ -83,6 +83,11 @@ export interface AgentStep {
   output?: string
   exitCode?: number
   durationMs?: number
+  /**
+   * 下一次超时询问的时刻(epoch ms),供卡片倒计时;「继续等待」会把它推后。
+   * 仅 running 期间有值,步骤结算时清除,因此不会进入持久化 payload。
+   */
+  deadlineAt?: number
 }
 
 export type AgentRunStatus =
@@ -99,6 +104,8 @@ export interface AgentRunState {
   steps: AgentStep[]
   finalText: string
   stepLimit: number
+  /** 单条命令等待多久后询问用户(与 deadlineAt 配合显示倒计时)。 */
+  commandTimeoutMs: number
   error?: string
 }
 
@@ -106,6 +113,25 @@ export type AgentApprovalDecision = 'execute' | 'execute-and-allow' | 'skip' | '
 
 /** 超时后的用户决策:继续等待或停止任务。 */
 export type AgentTimeoutDecision = 'wait' | 'stop'
+
+/**
+ * 命令超时时的现场判断(文档 10.3):循环侧按 peekOutput 的增长情况给出依据,
+ * 供卡片解释"为什么停在这里"而不是只报一个等待时长。
+ */
+export interface AgentTimeoutInfo {
+  /** 本步骤累计等待时长(含此前的「继续等待」)。 */
+  waitedMs: number
+  /** 距最后一次观察到输出增长的时长;从未见输出时即为派发至今。 */
+  silentMs: number
+  /** 已捕获输出的尾部片段,供用户判断卡在哪。 */
+  partialOutput: string
+  /** 最近一个采样周期内仍有新输出。 */
+  outputGrowing: boolean
+  /** 输出静默且尾部形似输入提示符(密码、[y/N] 等)。 */
+  likelyInteractive: boolean
+  /** 面向用户的启发说明。 */
+  hint: string
+}
 
 export interface AgentStepProposal {
   id: string

@@ -3316,4 +3316,44 @@ assert(
     terminalPane.includes('ensureAgentCapture'),
   'Agent availability must go through the async sentinel probe instead of claiming remote shells are unsupported outright.'
 )
+assert(
+  // 倒计时:卡片只呈现,时钟由 AiPanel 的单个 ticker 经 nowMs 注入
+  agentStepCard.includes('props.step.deadlineAt') &&
+    agentStepCard.includes('props.nowMs') &&
+    agentStepCard.includes('即将询问') &&
+    !/set(Interval|Timeout)/.test(agentStepCard) &&
+    aiPanel.includes(':now-ms="agentNowMs"') &&
+    /watch\(agentRunActive/.test(aiPanel) &&
+    /agentClockTimer = window\.setInterval/.test(aiPanel) &&
+    /onBeforeUnmount\(\(\) => \{\s*if \(agentClockTimer !== undefined\)/.test(aiPanel) &&
+    // 超时块要给出依据与已捕获的部分输出,而不是一句固定文案
+    agentStepCard.includes("props.timeoutInfo?.hint") &&
+    agentStepCard.includes('agent-timeout-partial') &&
+    styles.includes('.agent-step-countdown') &&
+    styles.includes('.theme-light .agent-step-countdown') &&
+    styles.includes('.agent-timeout-partial') &&
+    // deadlineAt 是运行态字段:结算即清除,且 payload 只在终态写入,历史消息不会残留倒计时
+    /step\.deadlineAt = undefined/.test(agentLoop) &&
+    /payloadJson: terminal\s*\?\s*JSON\.stringify/.test(aiPanel),
+  'Agent timeout UX contract: the step card must render the countdown from deadlineAt + an injected nowMs (single AiPanel ticker, never its own timer) and show the timeout hint with the captured partial output, while deadlineAt stays a runtime-only field.'
+)
+assert(
+  // 超时依据来自执行期对 peekOutput 的静默采样(两条捕获路径早就提供,此前从未消费)
+  /handle\.peekOutput\(\)/.test(agentLoop) &&
+    /setInterval\(sampleOutput, outputSampleIntervalMs\)/.test(agentLoop) &&
+    agentLoop.includes('looksLikeInteractivePrompt') &&
+    agentLoop.includes('describeTimeoutHint') &&
+    // 任务预算来自设置中心:空 options 会让设置项形同虚设
+    !/runAgentTask\(goal, deps, \{\}\)/.test(aiPanel) &&
+    /stepLimit: props\.agentStepLimit/.test(aiPanel) &&
+    /commandTimeoutMs: props\.agentCommandTimeoutMs/.test(aiPanel) &&
+    workspacePanel.includes(':agent-step-limit="agentStepLimit"') &&
+    // 三处夹取:旧配置/脏数据、输入框、唯一来源兜底
+    (appShell.match(/clampAgentStepLimit\(/g) ?? []).length >= 3 &&
+    (appShell.match(/clampAgentCommandTimeoutSec\(/g) ?? []).length >= 3 &&
+    /clampNumber\(draft\.agentStepLimit/.test(settingsSidebar) &&
+    /clampNumber\(\s*draft\.agentCommandTimeoutSec/.test(settingsSidebar) &&
+    styles.includes('.agent-budget-block'),
+  'Agent task budget contract: the loop must derive its timeout hint from sampled peekOutput, and the step limit / command timeout must flow from settings into runAgentTask, clamped at every entry point.'
+)
 console.log('production-ui-check passed')

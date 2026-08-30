@@ -14,14 +14,25 @@ const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrai
 const windowsPlatform = isWindowsPlatform()
 const DEFAULT_TERMINAL_FONT_FAMILY = windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
 const DEFAULT_TERMINAL_FONT_SIZE = 13
+// Agent 任务预算(与 AppShell 的取值范围保持一致)
+const DEFAULT_AGENT_STEP_LIMIT = 25
+const MIN_AGENT_STEP_LIMIT = 1
+const MAX_AGENT_STEP_LIMIT = 25
+const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
+const MIN_AGENT_COMMAND_TIMEOUT_SEC = 15
+const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
 
 interface AppUserSettings {
   terminalFontFamily: string
   terminalFontSize: number
   terminalTheme: TerminalTheme
   defaultShell: string
-  /** Agent 模式:自动执行内置只读命令集的开关(与 AppShell 的定义保持一致)。 */
+  /** Agent 模式:自动执行内置只读命令集的开关(默认开,与 AppShell 的定义保持一致)。 */
   agentAutoExecReadonly: boolean
+  /** Agent 模式:每个任务的最大步数(1–25)。 */
+  agentStepLimit: number
+  /** Agent 模式:单条命令等待多久后询问用户(15–600 秒)。 */
+  agentCommandTimeoutSec: number
 }
 
 const props = defineProps<{
@@ -122,13 +133,26 @@ function closeAiConfig() {
   emit('closeAiConfig')
 }
 
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = Math.round(Number(value))
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.max(min, Math.min(max, parsed))
+}
+
 function saveSettings() {
   emit('updateSettings', {
     ...draft,
     terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || DEFAULT_TERMINAL_FONT_SIZE)),
     terminalFontFamily: draft.terminalFontFamily.trim() || DEFAULT_TERMINAL_FONT_FAMILY,
     terminalTheme: 'midnight',
-    defaultShell: draft.defaultShell.trim() || 'system'
+    defaultShell: draft.defaultShell.trim() || 'system',
+    agentStepLimit: clampNumber(draft.agentStepLimit, MIN_AGENT_STEP_LIMIT, MAX_AGENT_STEP_LIMIT, DEFAULT_AGENT_STEP_LIMIT),
+    agentCommandTimeoutSec: clampNumber(
+      draft.agentCommandTimeoutSec,
+      MIN_AGENT_COMMAND_TIMEOUT_SEC,
+      MAX_AGENT_COMMAND_TIMEOUT_SEC,
+      DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
+    )
   })
 }
 
@@ -247,6 +271,36 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
           </span>
           <small>开启后,内置只读命令集中的命令无需确认直接执行;执行过程仍在终端可见并记入步骤卡片。</small>
         </label>
+        <div class="agent-budget-block">
+          <div class="settings-section-head">
+            <strong>任务预算</strong>
+            <span>防死循环与长时间挂起</span>
+          </div>
+          <label class="settings-field inline">
+            <span>每任务步数上限</span>
+            <input
+              v-model.number="draft.agentStepLimit"
+              type="number"
+              :min="MIN_AGENT_STEP_LIMIT"
+              :max="MAX_AGENT_STEP_LIMIT"
+              aria-label="每个 Agent 任务的最大步数"
+              @change="saveSettings"
+            />
+          </label>
+          <small>到达上限任务收尾,可在下一条消息里让 Agent 接着排查。</small>
+          <label class="settings-field inline">
+            <span>命令超时(秒)</span>
+            <input
+              v-model.number="draft.agentCommandTimeoutSec"
+              type="number"
+              :min="MIN_AGENT_COMMAND_TIMEOUT_SEC"
+              :max="MAX_AGENT_COMMAND_TIMEOUT_SEC"
+              aria-label="单条命令等待多久后询问是否继续等待"
+              @change="saveSettings"
+            />
+          </label>
+          <small>只是"要不要继续等"的询问点:超时不会终止终端里的命令,可选择继续等待并重新计时。</small>
+        </div>
         <div class="agent-builtin-block">
           <div class="settings-section-head">
             <strong>内置只读命令集</strong>
