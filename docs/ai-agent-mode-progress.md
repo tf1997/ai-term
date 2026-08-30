@@ -1,39 +1,81 @@
 # AI Agent 模式开发进度(交接文档)
 
-更新:2026-08-29。配套设计文档:[ai-agent-mode-development.md](./ai-agent-mode-development.md)(下称"设计文档"),节号均指该文档。
+更新:2026-08-30。配套设计文档:[ai-agent-mode-development.md](./ai-agent-mode-development.md)(下称"设计文档"),节号均指该文档。
 
 ## 1. 一句话状态
 
-**阶段 1 + 阶段 1.5(自主探索能力)+ 阶段 2 哨兵兜底均已实施完毕,自动化验证全绿;等待用户在真实网关与真实远端上做一次统一验收。**
+**阶段 1 + 阶段 1.5(自主探索能力)+ 阶段 2(哨兵兜底、超时体验、任务预算设置)代码与自动化验证均已落地。剩下的全部是需要真机 / 真实模型网关的人工验收。**
 
 哨兵兜底落地后,**Agent 模式不再局限于本地 zsh/bash**:任意 POSIX shell 的远端 SSH 会话,探针通过即自动可用。
 
-自动化基线(本轮末实测):
+自动化基线(**本轮末四项全部重跑**):
 
 | 检查 | 结果 |
 | --- | --- |
-| `cd src-tauri && cargo test` | 162 passed / 0 failed(本轮零 Rust 改动) |
-| `cd frontend && npx vue-tsc --noEmit` | exit 0,零错误 |
-| `cd frontend && npm run test:scripts` | 82 / 82(64 → 82,+18 哨兵用例) |
-| `cd frontend && npm run test:ui` | passed |
+| `cd src-tauri && cargo test` | 162 passed / 0 failed(18 个测试目标;本轮零 Rust 改动) |
+| `cd frontend && npx vue-tsc --noEmit` | exit 0 |
+| `cd frontend && npm run test:scripts` | **92 / 92**(上一轮 82,本轮补 10 例超时行为用例) |
+| `cd frontend && npm run test:ui` | passed(本轮新增 2 组契约断言) |
 
-工作区状态:全部改动已提交。分支 `feature/agent-mode` 上的主要提交(连同两条文档提交共 7 个,均未 push):
+工作区状态:分支 `feature/agent-mode` 上共 8 个提交,**均未 push**:
 
 | 提交 | 内容 |
 | --- | --- |
 | `ae4ccba feat: add agent mode` | 阶段 1 主体(协议层、存储迁移、循环编排、判定器、捕获原语) |
 | `0cee83c feat(agent): add agent turn command, step cards and allowlist settings` | 阶段 1 收尾:命令层、模式选择器与步骤卡片、设置中心 Agent 区块、样式;含「总是允许」多段命令修复与 `AgentStepCard.vue` 组件化 |
 | `bfe6091 feat(agent): raise turn budget and auto-run readonly commands by default` | 阶段 1.5 ①–④(提示词、预算与压缩、步数上限、只读默认自动执行) |
-| `95ace56 docs(agent): record autonomous exploration changes and acceptance list` | 本文档与设计文档同步 |
+| `95ace56 docs(agent): record autonomous exploration changes and acceptance list` | 文档与设计文档同步 |
 | `aff5bb7 feat(agent): capture remote command output via printf sentinel fallback` | 阶段 2 哨兵兜底(见 §1.4);零 Rust 改动 |
+| `01e7640 docs(agent): record sentinel fallback design, acceptance matrix and open items` | 文档同步 |
+| `feat(agent): add step countdown, timeout heuristics and task budget settings` | 阶段 2 超时体验与任务预算设置 + 配套自动化(见 §1.3);零 Rust 改动 |
+| `docs(agent): close the automation backlog for the timeout UX round` | 本文档同步 |
 
-每个代码提交都单独跑过完整检查:`0cee83c` 为 cargo 162 / 前端 63 / tsc 0 / ui-check 通过,`bfe6091` 为 64 基线,`aff5bb7` 为上表 82 基线。
+每个代码提交都单独跑过完整检查:`0cee83c` 为 cargo 162 / 前端 63 / tsc 0 / ui-check 通过,`bfe6091` 为 64 基线,`aff5bb7` 为 82 基线,本轮为 92 基线。
 
-## 1.4 本轮完成:哨兵兜底,远端 SSH 可用(设计文档 10.3.1)
+## 1.3 超时体验与任务预算设置(设计文档 10.3.2)
+
+阶段 2 的剩余体验项。**纯前端,零 Rust 改动**,也未触碰哨兵/OSC 133 两条捕获路径本身(只是开始消费它们早就提供的 `peekOutput()`),因此对已工作的本地 zsh 路径无回归面。
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| ① | `AgentStep.deadlineAt`(下次询问时刻)、`AgentRunState.commandTimeoutMs`、新类型 `AgentTimeoutInfo` | `types/agent.ts` |
+| ② | 执行期按 `outputSampleIntervalMs`(默认 2s)轮询 `peekOutput()` 长度记录静默时长;派发瞬间先采基线,超时时再采一次 | `lib/agentLoop.ts` `executeStep` |
+| ③ | 导出纯函数 `looksLikeInteractivePrompt` / `describeTimeoutHint`,三分支文案(仍在输出 / 疑似等待输入 / 可能卡住)+ 停止语义说明 | `lib/agentLoop.ts` |
+| ④ | `requestTimeoutDecision(step, waitedMs)` → `(step, info)`;超时选停止时把 `partialOutput` 写进 `step.output` | `lib/agentLoop.ts`、`AiPanel.vue` |
+| ⑤ | `deadlineAt` 派发即置、「继续等待」推后并 `notify()`、步骤结算时清除(因此不进 `payloadJson`) | `lib/agentLoop.ts` |
+| ⑥ | 卡片倒计时(`剩余 Xs` / `即将询问`)、超时块改渲染 `hint` 与部分输出;时钟由 AiPanel 的单个 1s ticker 经 `nowMs` 注入 | `AgentStepCard.vue`、`AiPanel.vue` |
+| ⑦ | `agentStepLimit`(1–25/默认 25)、`agentCommandTimeoutSec`(15–600/默认 120)进 `AppUserSettings`,三处夹取;设置中心新增「任务预算」块;`AppShell → WorkspacePanel → AiPanel` 透传并传入 `runAgentTask` options(此前是 `{}`) | `AppShell.vue`、`SettingsSidebar.vue`、`WorkspacePanel.vue`、`AiPanel.vue` |
+| ⑧ | 样式 `.agent-step-countdown` / `.agent-timeout-partial` / `.agent-budget-block`(`.theme-light` 只覆盖 countdown 的颜色,另两条是纯几何,按文件既有约定不重复) | `styles.css` |
+
+顺手订正了 `AppShell.vue` / `SettingsSidebar.vue` 里"`agentAutoExecReadonly` 默认关"的陈旧注释(改的正是这两行所在的接口)。
+
+### 1.3.1 配套自动化(补齐上一轮的遗留)
+
+`agent-loop.test.mjs` 82 → **92**,新增 10 例覆盖本轮全部新行为:
+
+| 用例 | 锁住的行为 |
+| --- | --- |
+| `deadlineAt` 派发即置位、完成后清除 | 置位值落在 `[派发时刻 + timeout]` 区间;终态清除,保证不随 `payloadJson` 落库 |
+| `deadlineAt`「继续等待」推后 | 两次超时询问拿到的 `deadlineAt` 严格递增且相差 ≥ 一个超时周期 —— 倒计时复位的可观测证据 |
+| `outputGrowing` 为真 | 采样周期远大于超时,判据只由派发基线与超时采样决定;文案走「仍在持续输出」且不附停止语义 |
+| 静默旧输出 + `likelyInteractive` | **基线采样的回归**:派发前就存在的输出不得在超时那一刻被误判成刚刚增长 |
+| 静默且非提示符 | 走「可能仍在运行或已卡住」分支并附停止语义 |
+| 超时停止保留部分输出 | `step.output` 等于尾部 500 字符,且 `handle.cancel()` 恰好一次(放弃等待不终止命令) |
+| `peekOutput` 抛错 | 按"无新输出"处理,任务收尾为 `stopped` 而非 `error` |
+| `looksLikeInteractivePrompt` 正例 10 条 | 密码/口令(中英)、`[y/N]`、`(yes/no)`、以 `:` `?` `>` 收尾 |
+| `looksLikeInteractivePrompt` 反例 7 条 | 以换行结尾、空串、普通输出 |
+| `describeTimeoutHint` 三分支 | 各自成文;停止语义只附在后两个分支 |
+
+`production-ui-check.mjs` 新增 2 组断言(共 28 个 conjunct):卡片必须从 `deadlineAt` + 注入的 `nowMs` 渲染倒计时且**自身不持定时器**、超时块渲染 `hint` 与部分输出、`payloadJson` 只在终态写入;循环的超时依据必须来自 `peekOutput` 采样;`AiPanel` 不得以空 options 调 `runAgentTask`,两个预算字段三处夹取齐备。
+
+**变异验证**:两个套件逐条做过变异验证,确认非空转 —— ui-check 的 28 个 conjunct 与 loop 测试的 8 处行为变异全部被捕获。唯一未被捕获的是 `looksLikeInteractivePrompt` 里 `/\n\s*$/` 前置守卫的移除,经推导确认这是**等价变异**而非覆盖缺口:守卫为真时,`split('\n').pop()` 取到的必然是纯空白,随后的 `if (!lastLine) return false` 会给出同样结果。该守卫保留下来是为了表达"提示符停在行内不换行"这一前提。
+
+
+## 1.4 哨兵兜底,远端 SSH 可用(设计文档 10.3.1)
 
 此前 `runCommandAndCapture` 开头即 `if (!tracker?.sawMarkers) return agentDispatchFailure(...)`,而 OSC 133 标记只在本地 shell 启动时由 `apply_shell_integration` 通过 `ZDOTDIR` / `--init-file` 注入 —— SSH 启动的是 `ssh` 而非 shell,远端拿不到注入。**作为 SSH 终端产品,Agent 模式此前在主场景里用不了。**
 
-本轮实施哨兵包装兜底(机制与设计取舍见设计文档 10.3.1),**零 Rust 改动,纯前端**:
+本轮之前的一轮实施了哨兵包装兜底(机制与设计取舍见设计文档 10.3.1),**零 Rust 改动,纯前端**:
 
 | # | 改动 | 位置 |
 | --- | --- | --- |
@@ -93,7 +135,7 @@
 
 后端:`domain/ai/agent.rs`(协议层,18 单测)、`chat.rs`(仅 pub(crate) 可见性)、`domain/workspace/mod.rs` + `storage/schema.sql` + `storage/sqlite.rs`(两列迁移 + 允许列表表与 CRUD)、`app/state.rs` + `app/commands.rs` + `lib.rs`(命令层)、`tests/agent_storage.rs`。
 
-前端:`types/agent.ts`(新)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,16 测试)、`lib/agentAutoApprove.ts`(新,18 测试/171 断言,含 `isSuffixSafeForSentinel`)、`lib/agentSentinelCapture.ts`(新,18 测试)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture` / `agentCaptureSupported` / `ensureAgentCapture`,两条捕获路径)、`AiPanel.vue`、`AppShell.vue`、`WorkspacePanel.vue`、`SettingsSidebar.vue`、`AgentStepCard.vue`、`styles.css`、`package.json`(测试套件)。
+前端:`types/agent.ts`(新;含 `AgentTimeoutInfo`、`AgentStep.deadlineAt`)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,**28 测试**;含输出静默采样与 `looksLikeInteractivePrompt` / `describeTimeoutHint`)、`lib/agentAutoApprove.ts`(新,18 测试/171 断言,含 `isSuffixSafeForSentinel`)、`lib/agentSentinelCapture.ts`(新,18 测试)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture` / `agentCaptureSupported` / `ensureAgentCapture`,两条捕获路径)、`AiPanel.vue`(含 1s 倒计时 ticker)、`AppShell.vue`(含 Agent 预算设置与夹取)、`WorkspacePanel.vue`、`SettingsSidebar.vue`(含「任务预算」块)、`AgentStepCard.vue`(含倒计时与超时启发提示)、`styles.css`、`package.json`(测试套件)。
 
 ## 5. 统一验收清单(需真实模型网关)
 
@@ -112,7 +154,7 @@
 | A5 | 同上长任务 | **不出现**"任务轮次过长"错误 | 前后端预算不等式被破坏(前端应先压缩) |
 | A6 | 观察 token 用量/网关账单 | 单轮请求明显变大属预期;若网关报单请求超限,需下调 `MAX_AGENT_TURN_CHARS` / `DEFAULT_MAX_TURN_CHARS`(保持前端 < 后端) | 已知风险,见设计文档 10.2 风险栏 |
 
-### 5.2 哨兵兜底(本轮新增,**需真机**)
+### 5.2 哨兵兜底(**需真机**)
 
 自动化只能验逻辑,这一组必须在真实终端与真实远端上手工过一遍:
 
@@ -150,31 +192,48 @@
 
 **回归重点**:普通对话模式行为应与改动前完全一致(发送、停止、命令点击执行、会话标题、上下文压缩)。
 
+### 5.5 超时体验与任务预算(设计文档 10.3.2)
+
+循环侧逻辑已被 §1.3.1 的 10 例单测覆盖;下表是**只能手工验**的界面表现部分:
+
+| # | 操作 | 期望 |
+| --- | --- | --- |
+| C1 | Agent 模式跑 `sleep 200`(需人工审批放行) | 步骤卡片右侧出现倒计时并每秒递减;归零前显示「即将询问」 |
+| C2 | 等到超时块出现 | 文案给出依据:「已运行 Xs,最近 Ys 无新输出,命令可能仍在运行或已卡住」+ 停止语义说明 |
+| C3 | 点「继续等待」 | 倒计时**复位到满**(这是"重置计时"的可见化),任务继续等待 |
+| C4 | 跑一条持续输出的命令(如远端 `ping`)等到超时 | 文案应是「命令仍在持续输出」,而不是「无新输出」 |
+| C5 | 跑一条会问确认的命令(尾部停在 `[y/N]` / `Password:`) | 文案应命中「末尾像是在等待你的输入」,并提示可切到终端手动响应 |
+| C6 | 超时后点「停止」 | 步骤卡片保留已捕获的部分输出(此前只剩一条命令) |
+| C7 | 设置中心把超时改成 20s、步数改成 3 | 新任务按新值生效(20s 就询问、3 步收尾);填 0 或超范围会被夹取回合法区间 |
+| C8 | 任务结束后重开应用 | 步骤时间线正常还原,且**不含** `deadlineAt` 残留(该字段不入库) |
+
 ## 6. 注意事项
 
-1. 改动已按语义分三个提交落地(见 §1),**尚未 push**。`.claude/settings.json` 与 `.DS_Store` 刻意未入库:前者含本机绝对路径与会话累积的临时授权,属 `.claude/settings.local.json` 范畴。
+1. 改动已按语义分多个提交落地(见 §1),**尚未 push**。`.claude/settings.json` 与 `.DS_Store` 刻意未入库:前者含本机绝对路径与会话累积的临时授权,属 `.claude/settings.local.json` 范畴。
 2. `AgentCommandHandle.cancel` 只放弃等待、不 kill 命令;超时逻辑在 agentLoop 侧。
 3. 命令不匹配检测中,捕获命令为空串视为"未知",不判串扰(无 633;E 的远端 shell 兜底)。**哨兵路径不做此检测**:结束标记只可能由我们派发的那一行产生,用户手敲的命令伪造不了。
 4. agent 消息的 `mode/agentSteps/agentStatus` 是运行时字段,仅 `payloadJson` 落库,靠 §3 的 hydrate 还原。
 5. Agent 模式的捕获走两条路径:有 OSC 133 语义标记(`sawMarkers`,本地 zsh/bash 自动注入)时走原路径;否则由 `ensureAgentCapture()` 探针决定是否启用哨兵兜底(见 §1.4)。两者都不可用时 `agentAvailabilityCheck` / `agentAvailabilityConfirm` 给出提示且不允许发起任务。
 6. Rust 侧依赖 serde 的 `rename_all_fields`(≥1.0.186),勿降级。
 7. **前后端轮次预算是一对约束**:前端 `DEFAULT_MAX_TURN_CHARS`(72k)必须小于后端 `MAX_AGENT_TURN_CHARS`(80k),否则长任务会由后端 bail 报错而非前端压缩。改动任一侧都要同步另一侧,`production-ui-check` 有断言把关。
-8. `agentAutoExecReadonly` 默认已改为 `true`。若本地 `localStorage` 里存过旧设置(值为 `false`),合并时会沿用旧值——验收 A2 不通过时先查设置中心开关。
+8. `agentAutoExecReadonly` 默认已改为 `true`。若本地 `localStorage` 里存过旧设置(值为 `false`),合并时会沿用旧值——验收 A2 不通过时先查设置中心开关。同理,本轮新增的 `agentStepLimit` / `agentCommandTimeoutSec` 对老配置缺失,`loadUserSettings` 会补默认值并夹取。
 9. 阶段 1.5 的 ⑤`update_plan` 工具**未实施**,按计划等 ①–④ 效果验证后再评估是否需要。
 10. **哨兵包装会让终端里回显的命令变长**(`printf …; <原命令>; printf …`),与步骤卡片上展示的干净命令不一致。这是哨兵方案的固有代价,用户看到的仍是真实执行的内容。仅在无 OSC 133 标记时发生。
+11. `AgentStep.deadlineAt` 是**运行态字段**:步骤结算时清除,不进 `payloadJson`,因此历史消息还原后不会出现残留倒计时。
+12. 超时静默判断依赖 `AgentCommandHandle.peekOutput()`,采样只比对字符串长度;`peekOutput` 抛错时按"无新输出"处理,不中断循环。
+13. `looksLikeInteractivePrompt` 里的 `/\n\s*$/` 前置守卫在行为上被后续的"末行为空即返回 false"覆盖(等价代码),保留是为了表达"提示符停在行内不换行"这一前提 —— 变异测试会把它报成未捕获,属预期。
 
 ## 7. 未办事项
 
-按优先级排列。
+按优先级排列。**自动化已无欠账**,剩余全部是人工验收与后续阶段。
 
 | # | 事项 | 说明 |
 | --- | --- | --- |
 | 1 | **哨兵兜底真机验收(§5.2 B1–B8)** | 自动化只覆盖逻辑,真实远端行为必须手工过一遍。**B1 本地 zsh 回归最关键**——哨兵不得干扰已工作的 OSC 133 路径 |
-| 2 | **统一验收(§5.1 / 5.3 / 5.4)** | 需真实模型网关,自阶段 1 起就未做过 |
-| 3 | push 分支 `feature/agent-mode` | 7 个提交均未 push |
+| 2 | **统一验收(§5.1 / 5.3 / 5.4 / 5.5)** | 需真实模型网关,自阶段 1 起就未做过 |
+| 3 | push 分支 `feature/agent-mode` | 8 个提交均未 push |
 | 4 | 阶段 1.5 ⑤ `update_plan` 工具 | 按计划等 ①–④ 效果验证后再评估是否需要 |
-| 5 | 设计文档 10.3 剩余项 | 超时体验(卡片倒计时、"继续等待"重置、疑似交互等待启发提示)、每任务步数上限与超时进设置、允许列表按连接维度细分 |
+| 5 | 设计文档 10.3 剩余项 | 只剩「允许列表按连接维度细分」(标注为可选) |
 | 6 | PowerShell / cmd 捕获方案 | 哨兵探针会正确报不可用,但这两类远端目前仍无 Agent 能力 |
 | 7 | 设计文档 10.4 阶段 3 | `read_file` / `list_directory`(走 SFTP,只读)、`write_file` 带 diff 预览、"沉淀为脚本"、SSH 远端 integration 注入 |
-| 8 | 陈旧注释 | `AppShell.vue` `AppUserSettings.agentAutoExecReadonly` 与 `SettingsSidebar.vue` 的注释仍写"默认关",实际已是 `true` |
-| 9 | `.DS_Store` 未入 `.gitignore` | 一直以未跟踪状态留在仓库根,未扩大改动范围去处理 |
+| 8 | `.DS_Store` 未入 `.gitignore` | 一直以未跟踪状态留在仓库根,未扩大改动范围去处理 |

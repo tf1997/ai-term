@@ -485,8 +485,9 @@ interface AiMessage {
 ### 10.3 阶段 2:无标记兜底与体验强化
 
 - ~~无标记终端哨兵兜底~~ **已实施**(见下 10.3.1)。这是 Agent 模式能否用于远端 SSH 的前提 —— 此前仅本地 zsh/bash 自动注入 OSC 133,远端 SSH 基本用不上 Agent。
-- 超时体验:卡片倒计时、"继续等待"重置、疑似交互等待的启发提示(输出静默且无 D)。
-- 每任务步数上限、超时进入设置;允许列表支持按连接维度细分(可选)。
+- ~~超时体验:卡片倒计时、"继续等待"重置、疑似交互等待的启发提示(输出静默且无 D)~~ **已实施**(见下 10.3.2)。
+- ~~每任务步数上限、超时进入设置~~ **已实施**(见下 10.3.2)。
+- 允许列表支持按连接维度细分(可选,未做)。
 
 #### 10.3.1 哨兵兜底(已实施)
 
@@ -512,6 +513,28 @@ printf '\n__AI_TERM_%s__\n' <nonce>B; <原命令>; printf '\n__AI_TERM_%s__:%d\n
 - 终端极窄(< ~25 列)时标记行可能被换行截断。
 - PowerShell / cmd 需另行设计(探针会正确报不可用)。
 - 终端里回显的是包装后的长命令,与步骤卡片上的干净命令不一致 —— 哨兵方案的固有代价。用户看到的仍是真实执行的内容,只是更长。
+
+#### 10.3.2 超时体验与任务预算设置(已实施)
+
+**倒计时与"继续等待"重置**:循环侧为运行中的步骤维护 `AgentStep.deadlineAt`(下一次超时询问的时刻),派发时置为 `now + commandTimeoutMs`,用户选「继续等待」时重新置为 `now + commandTimeoutMs` 并 `notify()` —— 计时重置这件事此前只发生在 `setTimeout` 里,界面上看不出来,现在直接体现为倒计时归位。步骤结算(completed / timeout / failed / stopped)时清除该字段,因此不会进入持久化的 `payloadJson`。
+
+时钟由 `AiPanel` 统一驱动:一个 1 秒 ticker 只在 `agentRunActive` 期间跳动,经 `nowMs` prop 注入每张卡片。卡片不持有定时器,维持既有的"只呈现、不持状态"分工。
+
+**超时启发提示**:此前超时块只有一句固定文案"可能在等待输入",没有依据;两条捕获路径早就实现了 `AgentCommandHandle.peekOutput()`,但循环从未消费。现在执行期间按 `outputSampleIntervalMs`(默认 2s)轮询 `peekOutput()` 的**长度**,记录最后一次增长的时刻;派发瞬间先采一次基线,否则"静默的旧输出"会在超时那一刻被误判成刚刚增长。超时时再采一次,组装 `AgentTimeoutInfo` 交给卡片:
+
+| 字段 | 含义 |
+| --- | --- |
+| `waitedMs` / `silentMs` | 累计等待时长 / 距最后一次输出增长的时长 |
+| `outputGrowing` | `silentMs <= outputSampleIntervalMs`,即命令仍在产出 |
+| `likelyInteractive` | 静默 **且** `looksLikeInteractivePrompt(尾部)` 命中 |
+| `partialOutput` | 已捕获输出的尾部 500 字符,直接展示在超时块里 |
+| `hint` | 由 `describeTimeoutHint` 生成的一句解释 |
+
+`looksLikeInteractivePrompt` 的前提是**输出不以换行结尾**(提示符停在行内不换行,正常输出会换行),在此之上匹配密码/口令、`[y/N]`、`(yes/no)`,并兜底接受以 `:` `?` `>` 收尾的最后一行。三种文案分别对应"仍在输出""疑似等待输入""可能卡住",后两者都附带停止语义说明(继续等待不重启命令、停止不 kill 命令),与 9 的约定一致。
+
+用户在超时后选择停止时,`partialOutput` 写入 `step.output` —— 此前超时步骤的卡片上只剩一条命令,已捕获的内容白白丢掉。
+
+**任务预算进设置**:`agentStepLimit`(1–25,默认 25)与 `agentCommandTimeoutSec`(15–600,默认 120)进入 `AppUserSettings`,设置中心 Agent 区块新增「任务预算」块。取值在三处夹取:`loadUserSettings`(旧配置/脏数据)、`SettingsSidebar.saveSettings`(输入框)、`AppShell.updateUserSettings`(唯一来源兜底)。`AppShell → WorkspacePanel → AiPanel` 逐层透传,`AiPanel` 传入 `runAgentTask` 的 options(此前是空对象,`agentLoop` 的默认值仍作为未配置时的回落)。
 
 ### 10.4 阶段 3:工具扩展
 
