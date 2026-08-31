@@ -247,6 +247,7 @@ let terminalOutputSequence = 0
 const COMMAND_EXECUTION_RETRY_DELAYS_MS = [0, 100, 250, 500, 1_000]
 let sessionTabResizeObserver: ResizeObserver | null = null
 let workspaceSessionListLoadPromise: Promise<void> | null = null
+const aiMessagePersistenceQueues = new Map<string, Promise<void>>()
 const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
@@ -2080,6 +2081,22 @@ async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
     showToast('error', '\u8fde\u63a5\u5237\u65b0\u5931\u8d25', formatError(error))
   }
 }
+function queueAiMessagePersistence(message: AiMessage) {
+  const key = message.workspaceSessionId
+  const previous = aiMessagePersistenceQueues.get(key) ?? Promise.resolve()
+  const task = previous
+    .catch(() => undefined)
+    .then(() => persistWorkspaceSessionForMessage(message))
+  aiMessagePersistenceQueues.set(key, task)
+  void task
+    .catch((error) => {
+      console.error('failed to save AI conversation message', message.id, error)
+    })
+    .finally(() => {
+      if (aiMessagePersistenceQueues.get(key) === task) aiMessagePersistenceQueues.delete(key)
+    })
+}
+
 function appendAiMessageToActiveTerminal(message: AiMessage) {
   const key = message.workspaceSessionId
   aiMessagesBySession.value = {
@@ -2087,11 +2104,7 @@ function appendAiMessageToActiveTerminal(message: AiMessage) {
     [key]: [...(aiMessagesBySession.value[key] ?? []), message].slice(-300)
   }
   if (message.streaming) return
-  void persistWorkspaceSessionForMessage(message)
-    .then(() => saveAiConversationMessage(message))
-    .catch((error) => {
-      console.error('failed to save AI conversation message', error)
-    })
+  queueAiMessagePersistence(message)
 }
 
 function updateAiMessage(message: AiMessage) {
@@ -2102,11 +2115,7 @@ function updateAiMessage(message: AiMessage) {
     [key]: messages.map((item) => (item.id === message.id ? message : item))
   }
   if (message.streaming) return
-  void persistWorkspaceSessionForMessage(message)
-    .then(() => saveAiConversationMessage(message))
-    .catch((error) => {
-      console.error('failed to save AI conversation message', error)
-    })
+  queueAiMessagePersistence(message)
 }
 
 function setAiContextForTerminal(_connectionId: string, workspaceSessionId: string, status: AiContextStatus) {
@@ -2120,6 +2129,9 @@ function setAiContextForTerminal(_connectionId: string, workspaceSessionId: stri
 async function persistWorkspaceSessionForMessage(message: AiMessage) {
   const title = message.role === 'user' ? workspaceSessionTitleFromText(message.text) : undefined
   const session = await ensurePersistedWorkspaceSession(message.connectionId, message.workspaceSessionId, title)
+  // Persist the conversation body before secondary session metadata. If the
+  // app is closed immediately after a reply, the latest turn is still durable.
+  await saveAiConversationMessage(message)
   const updated = { ...session, updatedAt: message.createdAt || nowText() }
   upsertWorkspaceSession(updated)
   await saveWorkspaceSession(updated)

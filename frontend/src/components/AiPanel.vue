@@ -31,6 +31,7 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import AiMarkdownMessage from './AiMarkdownMessage.vue'
+import AiErrorNotice from './AiErrorNotice.vue'
 import AgentStepCard from './AgentStepCard.vue'
 import UiIcon from './UiIcon.vue'
 
@@ -109,6 +110,7 @@ const renamingSession = ref<WorkspaceSession | null>(null)
 const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
+const pendingAgentRiskReview = ref(false)
 const aiRiskExplanation = ref('')
 const aiRiskExplanationError = ref('')
 const aiRiskExplanationLoading = ref(false)
@@ -135,15 +137,19 @@ const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommand
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
 const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
 const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
+const pendingAgentSensitive = computed(() => Boolean(agentPendingApproval.value?.proposal.sensitive))
 const pendingAiCommandCrossConnection = computed(() => {
   return executionTargetsDifferFromSource(pendingAiCommandSourceConnectionId.value)
 })
+const agentRiskReviewOpen = computed(() => pendingAgentRiskReview.value && Boolean(agentPendingApproval.value))
 const pendingAiCommandDialogTitle = computed(() => {
+  if (agentRiskReviewOpen.value) return '确认 Agent 风险命令'
   if (pendingAiCommandCrossConnection.value && pendingAiCommandRisks.value.length) return '确认跨连接风险命令'
   if (pendingAiCommandCrossConnection.value) return '确认跨连接执行'
   return '检测到风险命令'
 })
 const pendingAiCommandDialogDescription = computed(() => {
+  if (agentRiskReviewOpen.value) return 'Agent 提议执行以下命令，请检查风险和目标后再继续。'
   if (pendingAiCommandCrossConnection.value) return '命令生成时的连接与当前执行目标不同，请核对来源和目标。'
   return '执行前请确认命中的命令行'
 })
@@ -296,11 +302,19 @@ function inferCommand(question: string, terminalSnapshot = props.terminalSnapsho
  * by the stored AI summary vs. turns that still ship verbatim. If the anchor
  * message no longer exists (cleared or pruned), everything counts as
  * unsummarized and the summary still rides along as extra context.
+ *
+ * `beforeMessageId` cuts the history short right before that message, so a
+ * re-run of an existing turn sees the same history the first attempt saw
+ * instead of feeding the model its own question twice.
  */
-function conversationContextParts(sessionId: string) {
-  const eligible = props.messages.filter(
+function conversationContextParts(sessionId: string, beforeMessageId = '') {
+  let eligible = props.messages.filter(
     (message) => !message.streaming && !message.error && message.text.trim()
   )
+  if (beforeMessageId) {
+    const cutoff = eligible.findIndex((message) => message.id === beforeMessageId)
+    if (cutoff >= 0) eligible = eligible.slice(0, cutoff)
+  }
   const session = props.workspaceSessions.find((item) => item.id === sessionId)
   const summary = session?.contextSummary?.trim() || ''
   const lastId = session?.contextSummaryLastMessageId || ''
@@ -316,20 +330,41 @@ async function sendMessage() {
   const requestTerminalId = props.terminalId
   const requestConnectionId = props.connectionId
   const requestWorkspaceSessionId = props.workspaceSessionId
-  const terminalSnapshot = props.terminalSnapshot
-  const commandHistory = aiCommandHistory()
-  const { summary: conversationSummary, unsummarized } = conversationContextParts(requestWorkspaceSessionId)
-  const conversationMessages = unsummarized
-    .slice(-MAX_AI_CONVERSATION_MESSAGES)
-    .map((message) => ({ role: message.role, content: message.text }))
   const selectedContext = selectedTerminalContext.value
   const userMessageText = selectedContext
     ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
     : text
-  emit('appendMessage', createMessage(requestConnectionId, requestWorkspaceSessionId, requestTerminalId, 'user', userMessageText))
+  const userMessage = createMessage(requestConnectionId, requestWorkspaceSessionId, requestTerminalId, 'user', userMessageText)
+  emit('appendMessage', userMessage)
   const assistantMessage = createMessage(requestConnectionId, requestWorkspaceSessionId, requestTerminalId, 'assistant', '', '', false, true)
   emit('appendMessage', assistantMessage)
   askText.value = ''
+  await runChatTurn(assistantMessage, text, selectedContext, userMessage.id)
+}
+
+/**
+ * Runs one chat request against an assistant message that already exists in the
+ * transcript. Both the first attempt and an in-place retry go through here, so
+ * a retry reuses the same bubble instead of appending a duplicate question.
+ */
+async function runChatTurn(
+  assistantMessage: AiMessage,
+  question: string,
+  selectedContext: TerminalSelectionEvent | undefined,
+  historyCutoffMessageId: string
+) {
+  const requestConnectionId = assistantMessage.connectionId
+  const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
+  const requestTerminalId = assistantMessage.terminalId
+  const terminalSnapshot = props.terminalSnapshot
+  const commandHistory = aiCommandHistory()
+  const { summary: conversationSummary, unsummarized } = conversationContextParts(
+    requestWorkspaceSessionId,
+    historyCutoffMessageId
+  )
+  const conversationMessages = unsummarized
+    .slice(-MAX_AI_CONVERSATION_MESSAGES)
+    .map((message) => ({ role: message.role, content: message.text }))
   isAsking.value = true
   stopRequested.value = false
   let streamedAnswer = ''
@@ -379,9 +414,10 @@ async function sendMessage() {
         if (stopRequested.value) return
         cancelStreamFlush()
         notifyAiError(event.error)
+        // 正文只放原始报错,结构化呈现交给 AiErrorNotice
         emit('updateMessage', {
           ...assistantMessage,
-          text: `模型流式调用失败。\n\n错误详情：${event.error}`,
+          text: event.error,
           command: '',
           error: true,
           streaming: false
@@ -390,7 +426,7 @@ async function sendMessage() {
     })
     const response = await callConfiguredModelStream(
       requestId,
-      buildQuestionWithSelectedTerminalText(text, selectedContext),
+      buildQuestionWithSelectedTerminalText(question, selectedContext),
       terminalSnapshot,
       commandHistory,
       conversationMessages,
@@ -409,20 +445,20 @@ async function sendMessage() {
       ...assistantMessage,
       text: answer,
       command,
+      error: false,
       streaming: false
     })
-    maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, text, answer, terminalSnapshot, commandHistory)
+    maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, question, answer, terminalSnapshot, commandHistory)
     maybeCompactConversation(requestWorkspaceSessionId)
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
     cancelStreamFlush()
     const detail = formatAiError(error)
     notifyAiError(detail)
-    const command = inferCommand(text, terminalSnapshot, commandHistory)
     emit('updateMessage', {
       ...assistantMessage,
-      text: `模型调用失败，未执行任何远程请求结果。\n\n错误详情：${detail}\n\n可临时参考本地建议：${command}`,
-      command,
+      text: detail,
+      command: inferCommand(question, terminalSnapshot, commandHistory),
       error: true,
       streaming: false
     })
@@ -525,11 +561,11 @@ function proposalHasHighRisk(proposal: AgentStepProposal) {
   return proposal.risks.some((risk) => risk.severity === 'high')
 }
 
-function resolveAgentApproval(decision: AgentApprovalDecision) {
+function resolveAgentApproval(decision: AgentApprovalDecision, riskReviewed = false) {
   const pending = agentPendingApproval.value
   if (!pending) return
-  // 高风险命令的执行按钮需要点两次(6.4)
-  if (decision === 'execute' && proposalHasHighRisk(pending.proposal) && !agentHighRiskArmed.value) {
+  // 兼容未走风险弹窗的旧入口;弹窗确认会显式传入 riskReviewed。
+  if (decision === 'execute' && proposalHasHighRisk(pending.proposal) && !riskReviewed && !agentHighRiskArmed.value) {
     agentHighRiskArmed.value = true
     return
   }
@@ -573,23 +609,26 @@ function messageHasAgentBody(message: AiMessage) {
 /** Agent 任务的最大命令输出捕获量(回传模型前的截断上限)。 */
 const AGENT_OUTPUT_MAX_CHARS = 4000
 
+/**
+ * Agent 发起前的通道预检。返回空串表示可以开跑,否则是要显示在编辑器上方的提示。
+ * 首次发起与原地重试共用,避免重试绕过终端可用性判定。
+ */
+async function ensureAgentReady() {
+  const availability = props.agentAvailabilityCheck?.() ?? ''
+  if (availability) return availability
+  // 首次在无标记终端发起任务时,探针在此处兜底(切换模式时可能还没跑完)
+  const confirmed = (await props.agentAvailabilityConfirm?.()) ?? ''
+  if (confirmed) return confirmed
+  if (!props.agentCommandRunner) return 'Agent 执行通道未接入,请更新应用或切回对话模式'
+  return ''
+}
+
 async function startAgentTask() {
   const text = askText.value.trim()
   if (!text || !canSendMessage.value || composerBusy.value) return
-  const availability = props.agentAvailabilityCheck?.() ?? ''
-  if (availability) {
-    agentModeNotice.value = availability
-    return
-  }
-  // 首次在无标记终端发起任务时,探针在此处兜底(切换模式时可能还没跑完)
-  const confirmed = (await props.agentAvailabilityConfirm?.()) ?? ''
-  if (confirmed) {
-    agentModeNotice.value = confirmed
-    return
-  }
-  const runner = props.agentCommandRunner
-  if (!runner) {
-    agentModeNotice.value = 'Agent 执行通道未接入,请更新应用或切回对话模式'
+  const blocked = await ensureAgentReady()
+  if (blocked) {
+    agentModeNotice.value = blocked
     return
   }
   agentModeNotice.value = ''
@@ -598,14 +637,13 @@ async function startAgentTask() {
   const requestWorkspaceSessionId = props.workspaceSessionId
   // 任务-终端绑定:执行目标锁定为任务开始时的活动终端(文档 6.6)
   const boundTerminalId = props.terminalId
-  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
   const selectedContext = selectedTerminalContext.value
-  const goal = buildQuestionWithSelectedTerminalText(text, selectedContext)
   const userMessageText = selectedContext
     ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
     : text
 
-  emit('appendMessage', createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'user', userMessageText))
+  const userMessage = createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'user', userMessageText)
+  emit('appendMessage', userMessage)
   const assistantMessage: AiMessage = {
     ...createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'assistant', '', '', false, true),
     mode: 'agent',
@@ -614,6 +652,31 @@ async function startAgentTask() {
   }
   emit('appendMessage', assistantMessage)
   askText.value = ''
+  await runAgentTurn(assistantMessage, text, selectedContext, userMessage.id)
+}
+
+/**
+ * Runs one agent task against an assistant message that already exists in the
+ * transcript. Shared by the first attempt and by an in-place retry.
+ */
+async function runAgentTurn(
+  assistantMessage: AiMessage,
+  rawGoal: string,
+  selectedContext: TerminalSelectionEvent | undefined,
+  historyCutoffMessageId: string
+) {
+  const runner = props.agentCommandRunner
+  if (!runner) {
+    agentModeNotice.value = 'Agent 执行通道未接入,请更新应用或切回对话模式'
+    return
+  }
+  const requestConnectionId = assistantMessage.connectionId
+  const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
+  const boundTerminalId = assistantMessage.terminalId
+  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  const goal = buildQuestionWithSelectedTerminalText(rawGoal, selectedContext)
+  const text = rawGoal
+
   isAsking.value = true
   agentRun.value = null
   agentRunMessageId.value = assistantMessage.id
@@ -624,13 +687,15 @@ async function startAgentTask() {
   function syncAgentRunToMessage(state: AgentRunState) {
     const status = agentStatusFromRun(state)
     const terminal = status !== 'running'
+    const failed = status === 'error'
     emit('updateMessage', {
       ...assistantMessage,
       mode: 'agent',
-      text: state.finalText || (status === 'error' && state.error ? `任务出错：${state.error}` : ''),
+      // 失败时正文只放原始报错,结构化呈现交给 AiErrorNotice
+      text: failed ? state.error || '任务出错' : state.finalText,
       agentSteps: state.steps,
       agentStatus: status,
-      error: status === 'error',
+      error: failed,
       streaming: !terminal,
       payloadJson: terminal
         ? JSON.stringify({ mode: 'agent', agentSteps: state.steps, agentStatus: status })
@@ -657,7 +722,10 @@ async function startAgentTask() {
             agentStreamText.value += event.delta
           }
         })
-        const { summary: conversationSummary, unsummarized } = conversationContextParts(requestWorkspaceSessionId)
+        const { summary: conversationSummary, unsummarized } = conversationContextParts(
+          requestWorkspaceSessionId,
+          historyCutoffMessageId
+        )
         const conversationMessages = unsummarized
           .slice(-MAX_AI_CONVERSATION_MESSAGES)
           .map((message) => ({ role: message.role, content: message.text }))
@@ -706,7 +774,10 @@ async function startAgentTask() {
     },
     onStateChange: (state) => {
       agentRun.value = state
-      if (state.status !== 'awaiting-approval') agentPendingApproval.value = null
+      if (state.status !== 'awaiting-approval') {
+        agentPendingApproval.value = null
+        if (pendingAgentRiskReview.value) closeAiCommandRiskConfirm()
+      }
       if (state.status !== 'awaiting-user') agentPendingTimeout.value = null
       syncAgentRunToMessage(state)
     }
@@ -736,6 +807,75 @@ async function startAgentTask() {
     if (currentAssistantMessageId.value === assistantMessage.id) currentAssistantMessageId.value = ''
     isAsking.value = false
   }
+}
+
+/** 用户消息里附带的选中范围备注,重试时要剥掉才能拿回原始提问。 */
+const SELECTED_CONTEXT_NOTE = /\n\n选中终端内容：[^\n]*（已加入上下文）$/
+
+/** 找到某条助手消息对应的提问(它上面最近的一条用户消息)。 */
+function pairedUserMessage(message: AiMessage) {
+  const index = props.messages.findIndex((item) => item.id === message.id)
+  if (index < 0) return undefined
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const candidate = props.messages[cursor]
+    if (candidate.role === 'user' && candidate.text.trim()) return candidate
+  }
+  return undefined
+}
+
+/** 重试按钮不可用时的原因;返回空串表示可以重试。 */
+function retryBlockedReason(message: AiMessage) {
+  if (!message.error) return '这条消息没有失败'
+  if (composerBusy.value) return '当前还有请求在进行,稍后再试'
+  if (!canSendMessage.value) return '当前没有可用的 AI 配置'
+  if (message.workspaceSessionId !== props.workspaceSessionId) return '该消息不属于当前会话'
+  if (message.connectionId !== props.connectionId) return '已切换到其它连接,请切回原连接后重试'
+  if (!pairedUserMessage(message)) return '找不到对应的提问,无法重试'
+  return ''
+}
+
+function canRetryMessage(message: AiMessage) {
+  return retryBlockedReason(message) === ''
+}
+
+/**
+ * 原地重试:复用同一条助手消息重新发起请求,成功后直接替换掉错误卡片,
+ * 不会在对话里追加一条重复的提问。
+ */
+async function retryMessage(message: AiMessage) {
+  if (!canRetryMessage(message)) return
+  const userMessage = pairedUserMessage(message)
+  if (!userMessage) return
+  const question = userMessage.text.replace(SELECTED_CONTEXT_NOTE, '').trim()
+  if (!question) return
+  const agentMode = message.mode === 'agent'
+  if (agentMode) {
+    const blocked = await ensureAgentReady()
+    if (blocked) {
+      agentModeNotice.value = blocked
+      return
+    }
+    agentModeNotice.value = ''
+  }
+
+  // 先把消息打回进行中:streaming 的更新只改内存不落库,重试的终态会覆盖原来的错误行
+  const pending: AiMessage = {
+    ...message,
+    text: '',
+    command: '',
+    error: false,
+    streaming: true,
+    agentSteps: agentMode ? [] : undefined,
+    agentStatus: agentMode ? 'running' : undefined,
+    payloadJson: undefined
+  }
+  emit('updateMessage', pending)
+  scrollMessagesToLatest()
+
+  // 选中内容是实时的:仍然选中就沿用,已经取消则本次不带终端片段
+  const selectedContext = selectedTerminalContext.value
+  if (agentMode) await runAgentTurn(pending, question, selectedContext, userMessage.id)
+  else await runChatTurn(pending, question, selectedContext, userMessage.id)
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -996,9 +1136,37 @@ function executeGeneratedCommand(command: string, message?: AiMessage) {
   emit('executeCommand', value)
   showAiCommandNotice('已安全发送', `未检测到风险命令，已发送到${props.executionTargetLabel}。`)
 }
+
+function openAgentRiskReview() {
+  const pending = agentPendingApproval.value
+  if (!pending || (!pending.proposal.risks.length && !pending.proposal.sensitive)) return
+  pendingAgentRiskReview.value = true
+  pendingAiCommandExecution.value = pending.proposal.command
+  pendingAiCommandSourceConnectionId.value = props.messages.find((message) => message.id === agentRunMessageId.value)?.connectionId || props.connectionId
+  clearAiRiskExplanation()
+  clearAiCommandNotice()
+}
+
+function skipAgentRiskReview() {
+  if (!agentRiskReviewOpen.value) return
+  resolveAgentApproval('skip')
+  closeAiCommandRiskConfirm()
+}
+
+function stopAgentRiskReview() {
+  if (!agentRiskReviewOpen.value) return
+  resolveAgentApproval('stop')
+  closeAiCommandRiskConfirm()
+}
+
 function confirmPendingAiCommandExecution() {
   const command = pendingAiCommandExecution.value.trim()
   if (!command) return
+  if (agentRiskReviewOpen.value) {
+    resolveAgentApproval('execute', true)
+    closeAiCommandRiskConfirm()
+    return
+  }
   emit('executeCommand', command)
   showAiCommandNotice('已确认发送', `已确认来源、风险与目标，命令已发送到${props.executionTargetLabel}。`)
   closeAiCommandRiskConfirm()
@@ -1025,6 +1193,7 @@ function clearAiCommandNotice() {
 function closeAiCommandRiskConfirm() {
   pendingAiCommandExecution.value = ''
   pendingAiCommandSourceConnectionId.value = ''
+  pendingAgentRiskReview.value = false
   clearAiRiskExplanation()
 }
 function toggleHistory() {
@@ -1271,7 +1440,7 @@ watch(
       </form>
     </div>
     <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
-      <section class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingAiCommandDialogTitle">
+      <section class="modal script-risk-modal" :class="{ 'agent-risk-modal': agentRiskReviewOpen }" role="dialog" aria-modal="true" :aria-label="pendingAiCommandDialogTitle">
         <div class="modal-head">
           <div>
             <strong>{{ pendingAiCommandDialogTitle }}</strong>
@@ -1280,7 +1449,7 @@ watch(
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
-          <div v-if="pendingAiCommandCrossConnection" class="script-risk-ai" role="note" aria-label="命令来源与当前目标">
+          <div v-if="pendingAiCommandCrossConnection && !agentRiskReviewOpen" class="script-risk-ai" role="note" aria-label="命令来源与当前目标">
             <div>
               <strong>命令来源：{{ connectionLabel(pendingAiCommandSourceConnectionId) }}</strong>
               <span :title="executionTargetTitle">当前目标：{{ executionTargetLabel }}</span>
@@ -1297,7 +1466,11 @@ watch(
               <small>{{ risk.message }}</small>
             </span>
           </div>
-          <div v-if="pendingAiCommandRisks.length" class="script-risk-ai">
+          <div v-if="agentRiskReviewOpen && pendingAgentSensitive" class="script-risk-sensitive" role="note">
+            <UiIcon name="shield" size="14" />
+            <span>该命令包含敏感操作或数据，请确认命令中没有不应暴露或执行的内容。</span>
+          </div>
+          <div v-if="pendingAiCommandRisks.length || (agentRiskReviewOpen && pendingAgentSensitive)" class="script-risk-ai">
             <div>
               <strong>不确定原因？</strong>
               <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
@@ -1342,8 +1515,12 @@ watch(
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint" :title="executionTargetTitle">确认后发送到：{{ executionTargetLabel }}</span>
+          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? '确认后继续 Agent 任务，并在当前终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
           <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
+          <template v-if="agentRiskReviewOpen">
+            <button class="text-button" type="button" @click="skipAgentRiskReview">跳过命令</button>
+            <button class="text-button danger" type="button" @click="stopAgentRiskReview">停止任务</button>
+          </template>
           <button class="text-button danger" type="button" @click="confirmPendingAiCommandExecution">确认执行</button>
         </div>
       </section>
@@ -1385,8 +1562,10 @@ watch(
               <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
             </strong>
           </span>
-          <span class="chip message-source" :title="`生成上下文：${messageSourceLabel(message)}`">来源 · {{ messageSourceLabel(message) }}</span>
-          <span v-if="message.error" class="message-error-badge">请求失败</span>
+          <span class="message-meta">
+            <span class="chip message-source" :title="`生成上下文：${messageSourceLabel(message)}`">来源 · {{ messageSourceLabel(message) }}</span>
+            <span v-if="message.error" class="message-error-badge">请求失败</span>
+          </span>
         </div>
         <div class="message-body">
           <div v-if="message.streaming && !message.text && !messageHasAgentBody(message)" class="thinking-row">
@@ -1396,7 +1575,11 @@ watch(
             正在回复，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
           <div v-if="message.mode === 'agent' && (message.agentSteps?.length || message.agentStatus)" class="agent-steps">
-            <div v-if="message.agentStatus && message.agentStatus !== 'running'" class="agent-run-status" :class="message.agentStatus">
+            <div
+              v-if="message.agentStatus && message.agentStatus !== 'running' && !message.error && !message.agentSteps?.length"
+              class="agent-run-status"
+              :class="message.agentStatus"
+            >
               {{ agentRunStatusLabel(message) }}
             </div>
             <AgentStepCard
@@ -1410,6 +1593,7 @@ watch(
               :now-ms="agentNowMs"
               :high-risk-armed="agentHighRiskArmed"
               @execute="resolveAgentApproval('execute')"
+              @review-risk="openAgentRiskReview"
               @execute-and-allow="resolveAgentApproval('execute-and-allow')"
               @skip="resolveAgentApproval('skip')"
               @stop="resolveAgentApproval('stop')"
@@ -1418,10 +1602,19 @@ watch(
             />
             <div v-if="message.id === agentRunMessageId && agentStreamText" class="agent-stream-text">{{ agentStreamText }}</div>
           </div>
+          <AiErrorNotice
+            v-if="message.error"
+            :detail="message.text"
+            :suggested-command="message.mode === 'agent' ? '' : message.command || ''"
+            :can-retry="canRetryMessage(message)"
+            :retry-disabled-reason="retryBlockedReason(message)"
+            @retry="retryMessage(message)"
+            @execute-command="executeGeneratedCommand($event, message)"
+          />
           <AiMarkdownMessage
-            v-if="message.text"
+            v-else-if="message.text"
             :content="message.text"
-            :interactive-commands="message.role === 'assistant' && !message.error && message.mode !== 'agent'"
+            :interactive-commands="message.role === 'assistant' && message.mode !== 'agent'"
             @execute-command="executeGeneratedCommand($event, message)"
           />
         </div>

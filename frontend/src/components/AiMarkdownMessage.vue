@@ -136,11 +136,18 @@ onBeforeUnmount(() => {
         v-html="renderMarkdown(part.content)"
       />
       <div v-else-if="isPlainTextResult(part)" class="ai-result-block">
-        <span class="ai-result-label">{{ resultLabel(part) }}</span>
-        <code>{{ part.content.trim() }}</code>
-        <button class="icon-button" type="button" :title="copied ? '已复制' : '复制结果'" :aria-label="copied ? '已复制' : '复制结果'" @click="copyText(part.content)">
-          <UiIcon name="copy" size="14" />
-        </button>
+        <div class="ai-result-head">
+          <span class="ai-result-label">{{ resultLabel(part) }}</span>
+        </div>
+        <div class="agent-step-code-block ai-result-output-block">
+          <div class="agent-step-code-head">
+            <span>输出</span>
+            <button class="icon-button ai-result-copy" type="button" :title="copied ? '已复制' : '复制结果'" :aria-label="copied ? '已复制' : '复制结果'" @click="copyText(part.content)">
+              <UiIcon name="copy" size="14" />
+            </button>
+          </div>
+          <pre class="ai-result-value"><code>{{ part.content.trim() }}</code></pre>
+        </div>
       </div>
       <div v-else-if="part.type === 'code'" class="code-block ai-code-block" :class="{ 'has-command': shellCommandForPart(part) }">
         <div class="code-head ai-code-head">

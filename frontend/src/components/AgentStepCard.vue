@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentStep, AgentStepProposal, AgentTimeoutInfo } from '../types/agent'
 import type { ScriptRiskMatch } from '../lib/scriptRisk'
+import UiIcon from './UiIcon.vue'
 
 // Agent 单步卡片:展示命令、理由、风险与执行结果,并在等待审批/超时决策时提供操作。
 // 只负责呈现与事件外发,审批状态由 AiPanel 持有(见 docs/ai-agent-mode-development.md 6.4)。
@@ -25,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   execute: []
+  reviewRisk: []
   executeAndAllow: []
   skip: []
   stop: []
@@ -46,6 +48,7 @@ const statusLabel = computed(() => STATUS_LABELS[props.step.status] ?? props.ste
 const riskLabels = computed(() => [...new Set(props.step.risks.map((risk: ScriptRiskMatch) => risk.label))])
 
 const hasHighRisk = computed(() => props.step.risks.some((risk) => risk.severity === 'high'))
+const hasRisk = computed(() => hasHighRisk.value || props.step.risks.length > 0 || props.step.sensitive)
 
 /** 已产生执行结果,可展示输出区(含"无输出"占位)。 */
 const hasRun = computed(() =>
@@ -59,8 +62,7 @@ const durationLabel = computed(() => {
 })
 
 const executeLabel = computed(() => {
-  if (!hasHighRisk.value) return '执行'
-  return props.highRiskArmed ? '确认执行' : '执行'
+  return hasRisk.value ? '查看风险' : '执行'
 })
 
 const allowPatterns = computed(() => props.proposal?.suggestedPatterns ?? [])
@@ -95,6 +97,133 @@ const countdownLabel = computed(() => {
 const timeoutHint = computed(() => props.timeoutInfo?.hint ?? '')
 
 const timeoutPartialOutput = computed(() => props.timeoutInfo?.partialOutput ?? '')
+
+type ScrollTarget = 'command' | 'output' | 'preview'
+type ScrollMetrics = { overflow: boolean; thumbWidth: number; thumbOffset: number }
+
+const commandScroll = ref<HTMLElement | null>(null)
+const outputScroll = ref<HTMLElement | null>(null)
+const previewScroll = ref<HTMLElement | null>(null)
+const commandScrollbar = ref<HTMLElement | null>(null)
+const outputScrollbar = ref<HTMLElement | null>(null)
+const previewScrollbar = ref<HTMLElement | null>(null)
+const scrollMetrics = ref<Record<ScrollTarget, ScrollMetrics>>({
+  command: { overflow: false, thumbWidth: 100, thumbOffset: 0 },
+  output: { overflow: false, thumbWidth: 100, thumbOffset: 0 },
+  preview: { overflow: false, thumbWidth: 100, thumbOffset: 0 }
+})
+let scrollResizeObserver: ResizeObserver | undefined
+let stopScrollbarDrag: (() => void) | undefined
+
+function scrollElement(target: ScrollTarget) {
+  if (target === 'command') return commandScroll.value
+  if (target === 'output') return outputScroll.value
+  return previewScroll.value
+}
+
+function scrollbarElement(target: ScrollTarget) {
+  if (target === 'command') return commandScrollbar.value
+  if (target === 'output') return outputScrollbar.value
+  return previewScrollbar.value
+}
+
+function updateScrollMetrics(target: ScrollTarget) {
+  const element = scrollElement(target)
+  const track = scrollbarElement(target)
+  if (!element || !track) return
+  const maxScroll = Math.max(0, element.scrollWidth - element.clientWidth)
+  if (!maxScroll) {
+    scrollMetrics.value = {
+      ...scrollMetrics.value,
+      [target]: { overflow: false, thumbWidth: 100, thumbOffset: 0 }
+    }
+    return
+  }
+  const trackWidth = Math.max(1, track.clientWidth)
+  const thumbWidth = Math.max(12, (element.clientWidth / element.scrollWidth) * trackWidth)
+  const maxThumbOffset = Math.max(0, trackWidth - thumbWidth)
+  scrollMetrics.value = {
+    ...scrollMetrics.value,
+    [target]: {
+      overflow: true,
+      thumbWidth: (thumbWidth / trackWidth) * 100,
+      thumbOffset: maxThumbOffset ? (element.scrollLeft / maxScroll) * (maxThumbOffset / trackWidth) * 100 : 0
+    }
+  }
+}
+
+function updateAllScrollMetrics() {
+  updateScrollMetrics('command')
+  updateScrollMetrics('output')
+  updateScrollMetrics('preview')
+}
+
+function handleScroll(target: ScrollTarget) {
+  updateScrollMetrics(target)
+}
+
+function startScrollbarDrag(target: ScrollTarget, event: PointerEvent) {
+  const element = scrollElement(target)
+  const track = scrollbarElement(target)
+  if (!element || !track || !scrollMetrics.value[target].overflow) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startScrollLeft = element.scrollLeft
+  const trackWidth = Math.max(1, track.clientWidth)
+  const thumbWidth = (scrollMetrics.value[target].thumbWidth / 100) * trackWidth
+  const scrollRange = Math.max(1, element.scrollWidth - element.clientWidth)
+  const thumbRange = Math.max(1, trackWidth - thumbWidth)
+  const move = (moveEvent: PointerEvent) => {
+    element.scrollLeft = startScrollLeft + ((moveEvent.clientX - startX) / thumbRange) * scrollRange
+    updateScrollMetrics(target)
+  }
+  const stop = () => {
+    document.removeEventListener('pointermove', move)
+    document.removeEventListener('pointerup', stop)
+    document.removeEventListener('pointercancel', stop)
+    stopScrollbarDrag = undefined
+  }
+  stopScrollbarDrag?.()
+  stopScrollbarDrag = stop
+  document.addEventListener('pointermove', move)
+  document.addEventListener('pointerup', stop)
+  document.addEventListener('pointercancel', stop)
+}
+
+const previewKind = ref<'command' | 'output' | null>(null)
+const previewTitle = computed(() => previewKind.value === 'output' ? '输出详情' : '命令详情')
+const previewContent = computed(() => {
+  if (previewKind.value === 'output') return props.step.output || '（无输出）'
+  return props.step.command
+})
+
+function openPreview(kind: 'command' | 'output') {
+  previewKind.value = kind
+}
+
+function closePreview() {
+  previewKind.value = null
+}
+
+watch(previewKind, () => {
+  void nextTick(updateAllScrollMetrics)
+})
+
+onMounted(() => {
+  void nextTick(updateAllScrollMetrics)
+  if (typeof ResizeObserver !== 'undefined') {
+    scrollResizeObserver = new ResizeObserver(updateAllScrollMetrics)
+    ;[commandScroll.value, outputScroll.value, previewScroll.value].forEach((element) => {
+      if (element) scrollResizeObserver?.observe(element)
+    })
+  }
+})
+
+onBeforeUnmount(() => {
+  stopScrollbarDrag?.()
+  scrollResizeObserver?.disconnect()
+  scrollResizeObserver = undefined
+})
 </script>
 
 <template>
@@ -113,18 +242,58 @@ const timeoutPartialOutput = computed(() => props.timeoutInfo?.partialOutput ?? 
 
     <p v-if="step.reason" class="agent-step-reason">{{ step.reason }}</p>
 
-    <pre class="agent-step-command"><code>{{ step.command }}</code></pre>
+    <div class="agent-step-code-block agent-step-command-block">
+      <div class="agent-step-code-head">
+        <span>命令</span>
+        <button class="icon-button agent-step-expand" type="button" title="放大查看命令" aria-label="放大查看命令" @click="openPreview('command')">
+          <UiIcon name="maximize" size="13" />
+        </button>
+      </div>
+        <pre ref="commandScroll" class="agent-step-command" @scroll="handleScroll('command')"><code>{{ step.command }}</code></pre>
+        <div
+          ref="commandScrollbar"
+          class="agent-step-scrollbar"
+          :class="{ 'is-hidden': !scrollMetrics.command.overflow }"
+          role="scrollbar"
+          aria-label="命令横向滚动条"
+          aria-orientation="horizontal"
+          :aria-valuenow="Math.round(scrollMetrics.command.thumbOffset)"
+          @pointerdown="startScrollbarDrag('command', $event)"
+        >
+          <span class="agent-step-scrollbar-thumb" :style="{ width: `${scrollMetrics.command.thumbWidth}%`, left: `${scrollMetrics.command.thumbOffset}%` }" />
+        </div>
+    </div>
 
-    <pre v-if="step.output" class="agent-step-output"><code>{{ step.output }}</code></pre>
-    <p v-else-if="hasRun" class="agent-step-empty-output">（无输出）</p>
+    <div v-if="step.output || hasRun" class="agent-step-code-block agent-step-output-block">
+      <div class="agent-step-code-head">
+        <span>输出</span>
+        <button v-if="step.output" class="icon-button agent-step-expand" type="button" title="放大查看输出" aria-label="放大查看输出" @click="openPreview('output')">
+          <UiIcon name="maximize" size="13" />
+        </button>
+      </div>
+      <pre v-if="step.output" ref="outputScroll" class="agent-step-output" @scroll="handleScroll('output')"><code>{{ step.output }}</code></pre>
+      <div
+        v-if="step.output"
+        ref="outputScrollbar"
+        class="agent-step-scrollbar"
+        :class="{ 'is-hidden': !scrollMetrics.output.overflow }"
+        role="scrollbar"
+        aria-label="输出横向滚动条"
+        aria-orientation="horizontal"
+        :aria-valuenow="Math.round(scrollMetrics.output.thumbOffset)"
+        @pointerdown="startScrollbarDrag('output', $event)"
+      >
+        <span class="agent-step-scrollbar-thumb" :style="{ width: `${scrollMetrics.output.thumbWidth}%`, left: `${scrollMetrics.output.thumbOffset}%` }" />
+      </div>
+      <p v-else class="agent-step-empty-output">（无输出）</p>
+    </div>
 
     <div v-if="awaitingApproval" class="agent-step-actions">
-      <p v-if="hasHighRisk && highRiskArmed" class="agent-step-confirm-note">高风险命令，再次点击「确认执行」以继续。</p>
       <button
         type="button"
         class="agent-action primary"
-        :class="{ armed: hasHighRisk && highRiskArmed }"
-        @click="emit('execute')"
+        :class="{ armed: hasHighRisk && highRiskArmed, 'agent-action-risk': hasRisk }"
+        @click="hasRisk ? emit('reviewRisk') : emit('execute')"
       >{{ executeLabel }}</button>
       <button
         v-if="allowPatterns.length"
@@ -142,6 +311,33 @@ const timeoutPartialOutput = computed(() => props.timeoutInfo?.partialOutput ?? 
       <pre v-if="timeoutPartialOutput" class="agent-step-output agent-timeout-partial"><code>{{ timeoutPartialOutput }}</code></pre>
       <button type="button" class="agent-action primary" @click="emit('wait')">继续等待</button>
       <button type="button" class="agent-action danger" @click="emit('timeoutStop')">停止</button>
+    </div>
+
+    <div v-if="previewKind" class="modal-backdrop agent-step-preview-backdrop" role="presentation">
+      <section class="modal agent-step-preview-modal" role="dialog" aria-modal="true" :aria-label="previewTitle">
+        <div class="modal-head">
+          <div>
+            <strong>{{ previewTitle }}</strong>
+            <span>只读查看完整内容</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closePreview">
+            <UiIcon name="close" />
+          </button>
+        </div>
+        <pre ref="previewScroll" class="agent-step-preview-content" @scroll="handleScroll('preview')"><code>{{ previewContent }}</code></pre>
+        <div
+          ref="previewScrollbar"
+          class="agent-step-scrollbar agent-step-preview-scrollbar"
+          :class="{ 'is-hidden': !scrollMetrics.preview.overflow }"
+          role="scrollbar"
+          aria-label="详情横向滚动条"
+          aria-orientation="horizontal"
+          :aria-valuenow="Math.round(scrollMetrics.preview.thumbOffset)"
+          @pointerdown="startScrollbarDrag('preview', $event)"
+        >
+          <span class="agent-step-scrollbar-thumb" :style="{ width: `${scrollMetrics.preview.thumbWidth}%`, left: `${scrollMetrics.preview.thumbOffset}%` }" />
+        </div>
+      </section>
     </div>
   </article>
 </template>

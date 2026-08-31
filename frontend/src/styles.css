@@ -6114,6 +6114,25 @@ code {
 .script-risk-ai-output.error {
   color: #fecdd3;
 }
+
+.script-risk-sensitive {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  border: 1px solid rgba(245, 158, 11, .34);
+  border-radius: 8px;
+  background: rgba(120, 53, 15, .18);
+  color: #fed7aa;
+  padding: 8px 10px;
+  font-size: var(--font-xs);
+  line-height: 1.45;
+}
+
+.script-risk-sensitive .ui-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
 .script-risk-thinking {
   display: inline-flex;
   align-items: center;
@@ -8642,13 +8661,18 @@ code {
 .ai-result-block {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr) 26px;
-  align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid rgba(34, 197, 94, .2);
   border-radius: 8px;
   background: rgba(16, 185, 129, .06);
-  padding: 7px 8px;
+  padding: 8px 9px 9px;
+}
+.ai-result-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .ai-result-label {
   color: #8fd8b5;
@@ -8656,8 +8680,10 @@ code {
   font-weight: 600;
   white-space: nowrap;
 }
-.ai-result-block code {
+.ai-result-value {
   min-width: 0;
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   border: 0;
   background: transparent;
@@ -8666,11 +8692,13 @@ code {
   font-family: var(--font-mono);
   font-size: var(--font-md);
   font-weight: 600;
-  text-overflow: ellipsis;
+  line-height: 1.5;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .ai-result-block .icon-button {
+  flex: 0 0 auto;
   width: 26px;
   height: 26px;
   border-radius: 7px;
@@ -8723,6 +8751,7 @@ code {
   border-color: #bfe9d3;
   color: #087a55;
 }
+
 /* AI panel reading rhythm polish. */
 .assistant-panel {
   background: var(--shell-region-panel);
@@ -10067,6 +10096,10 @@ code {
   --workbench-accent-strong: #58d493;
   --workbench-accent-soft: rgba(53, 183, 121, .11);
   --workbench-blue: #73a7df;
+  --workbench-danger: #df747c;
+  --workbench-danger-strong: #f28b94;
+  --workbench-danger-soft: rgba(223, 116, 124, .1);
+  --workbench-danger-line: rgba(223, 116, 124, .38);
   position: relative;
   grid-template-rows: 46px minmax(0, 1fr);
   background: var(--workbench-bg);
@@ -10089,6 +10122,10 @@ code {
   --workbench-accent-strong: #0b754c;
   --workbench-accent-soft: #e8f6ef;
   --workbench-blue: #416f9f;
+  --workbench-danger: #b42332;
+  --workbench-danger-strong: #a61f2d;
+  --workbench-danger-soft: #fff1f2;
+  --workbench-danger-line: #e9a3aa;
   background: var(--workbench-bg);
 }
 
@@ -10889,50 +10926,42 @@ body.workspace-resizing * {
   background: transparent;
 }
 
+/* Failed turns keep the normal message rhythm; the weight lives in the
+   .ai-error-notice card inside the body instead of a full-width tinted block. */
 .assistant-panel .message.error {
-  border: 1px solid rgba(223, 116, 124, .48);
-  border-radius: 7px;
-  background: rgba(223, 116, 124, .09);
-  padding: 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .assistant-panel .message.error .message-avatar {
-  border-color: rgba(223, 116, 124, .28);
-  background: rgba(223, 116, 124, .14);
-  color: #f28b94;
+  border-color: var(--workbench-danger-line);
+  background: var(--workbench-danger-soft);
+  color: var(--workbench-danger-strong);
 }
 
 .message-error-badge {
-  margin-left: auto;
-  border: 1px solid rgba(223, 116, 124, .36);
+  flex: 0 0 auto;
+  border: 1px solid var(--workbench-danger-line);
   border-radius: 999px;
   padding: 2px 7px;
-  color: #f19aa2;
-  background: rgba(223, 116, 124, .1);
+  color: var(--workbench-danger-strong);
+  background: var(--workbench-danger-soft);
   font-size: 10px;
   font-weight: 600;
   line-height: 1.4;
-}
-
-.app-shell.theme-light .assistant-panel .message.error {
-  border-color: #e9a3aa;
-  background: #fff1f2;
+  white-space: nowrap;
 }
 
 .app-shell.theme-light .assistant-panel .message.error .message-avatar {
   border-color: #f1b8bd;
   background: #ffe0e3;
-  color: #b42332;
-}
-
-.app-shell.theme-light .assistant-panel .message.error .message-body {
-  color: #651923;
 }
 
 .app-shell.theme-light .message-error-badge {
   border-color: #e7a2a9;
   background: #ffe1e4;
-  color: #a61f2d;
 }
 
 .assistant-panel .message-title {
@@ -11392,6 +11421,261 @@ body.workspace-resizing * {
 .assistant-compose.script-compose textarea {
   min-height: 50px;
   max-height: 112px;
+}
+
+/* Error turns use a compact, readable notice instead of browser defaults. */
+.assistant-panel {
+  container-type: inline-size;
+  container-name: assistant-panel;
+}
+
+.assistant-panel .message-title {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+}
+
+.assistant-panel .message-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.assistant-panel .message-source {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 128px;
+  margin-left: 0;
+}
+
+.assistant-panel .message-error-badge {
+  flex: 0 0 auto;
+}
+
+.ai-error-notice {
+  --error-indent: 25px;
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  border: 1px solid rgba(223, 116, 124, .28);
+  border-radius: 8px;
+  background: var(--workbench-danger-soft);
+  color: var(--workbench-text);
+  padding: 11px 12px 10px;
+  box-shadow: none;
+}
+
+.ai-error-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+}
+
+.ai-error-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--workbench-danger-strong);
+}
+
+.ai-error-title {
+  min-width: 0;
+  color: var(--workbench-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ai-error-code {
+  align-self: start;
+  height: 23px;
+  max-width: 100%;
+  border-color: var(--workbench-line);
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-muted);
+  padding-inline: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ai-error-hint {
+  min-width: 0;
+  margin: -1px 0 0 var(--error-indent);
+  color: var(--workbench-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-error-suggestion {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--workbench-danger-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .03);
+  padding: 7px 8px;
+}
+
+.ai-error-suggestion-label {
+  color: var(--workbench-danger-strong);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ai-error-suggestion code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--workbench-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ai-error-suggestion .text-button {
+  height: 26px;
+  padding-inline: 8px;
+}
+
+.ai-error-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 1px;
+}
+
+.ai-error-actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  border-color: var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-text);
+  padding-inline: 9px;
+  font-size: 11px;
+}
+
+.ai-error-actions .text-button:hover:not(:disabled),
+.ai-error-actions .text-button:focus-visible {
+  border-color: var(--workbench-danger-line);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+}
+
+.ai-error-actions .ai-error-retry.primary-action {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent);
+  color: #ffffff;
+}
+
+.ai-error-actions .ai-error-retry.primary-action:hover:not(:disabled),
+.ai-error-actions .ai-error-retry.primary-action:focus-visible {
+  border-color: var(--workbench-accent-strong);
+  background: var(--workbench-accent-strong);
+  color: #ffffff;
+}
+
+.ai-error-actions .ai-error-retry:disabled {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+  opacity: .68;
+}
+
+.ai-error-detail {
+  min-width: 0;
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-text);
+  padding: 8px 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-error-detail code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.app-shell.theme-light .message-error-badge,
+.theme-light .message-error-badge {
+  color: var(--workbench-danger-strong);
+}
+
+.app-shell.theme-light .ai-error-suggestion,
+.theme-light .ai-error-suggestion {
+  background: #fffafb;
+}
+
+.app-shell.theme-light .ai-error-notice,
+.theme-light .ai-error-notice {
+  border-color: #f0d4d8;
+  background: #fffafb;
+  box-shadow: none;
+}
+
+@container assistant-panel (max-width: 430px) {
+  .assistant-panel .message-title {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .assistant-panel .message-meta {
+    justify-content: flex-start;
+    padding-left: 28px;
+  }
+
+  .ai-error-head {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+
+  .ai-error-suggestion {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ai-error-suggestion-label {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .assistant-panel .message-title {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .assistant-panel .message-meta {
+    justify-content: flex-start;
+    padding-left: 28px;
+  }
 }
 
 /* Script workbench final density and readiness pass. */
@@ -12099,8 +12383,8 @@ button.script-readiness-status:hover {
 }
 
 .app-shell.theme-light .assistant-panel .message.ai.error {
-  border-color: #e9a3aa;
-  background: #fff1f2;
+  border-color: transparent;
+  background: transparent;
 }
 
 .app-shell.theme-light .context-summary-button {
@@ -13005,6 +13289,16 @@ button.script-readiness-status:hover {
   background: rgba(91, 111, 255, .22);
   color: #e7ecff;
 }
+.agent-action.primary.agent-action-risk {
+  border-color: rgba(239, 68, 68, .5);
+  background: rgba(127, 29, 29, .2);
+  color: #ffe4e6;
+}
+.agent-action.primary.agent-action-risk:hover {
+  border-color: rgba(239, 68, 68, .72);
+  background: rgba(127, 29, 29, .34);
+  color: #fff1f2;
+}
 .agent-action.primary.armed {
   border-color: rgba(255, 118, 118, .6);
   background: rgba(255, 118, 118, .2);
@@ -13304,4 +13598,468 @@ button.script-readiness-status:hover {
 .app-shell.theme-light .agent-manual-error,
 .theme-light .agent-manual-error {
   color: #b42318;
+}
+
+/* A failed AI turn owns its notice card; the message shell stays transparent. */
+.assistant-panel .message.error,
+.theme-light .assistant-panel .message.error {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+/* Agent command/output blocks share one framing system and explicit labels. */
+.agent-step-code-block {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--workbench-line);
+  border-radius: 7px;
+  background: var(--workbench-terminal);
+}
+
+.agent-step-code-head {
+  min-width: 0;
+  min-height: 25px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--workbench-line-soft);
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-muted);
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-step-code-block .agent-step-command,
+.agent-step-code-block .agent-step-output {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.agent-step-code-block .agent-step-command {
+  padding: 8px 9px 9px;
+}
+
+.agent-step-code-block .agent-step-output {
+  max-height: 220px;
+  padding: 8px 9px 9px;
+}
+
+.agent-step-code-block .agent-step-empty-output {
+  padding: 8px 9px 9px;
+}
+
+.app-shell.theme-light .agent-step-code-block,
+.theme-light .agent-step-code-block {
+  border-color: #dbe3ee;
+  background: #f4f7fc;
+}
+
+.app-shell.theme-light .agent-step-code-head,
+.theme-light .agent-step-code-head {
+  border-bottom-color: #dbe3ee;
+  background: #eef3f7;
+}
+
+.app-shell.theme-light .script-risk-sensitive,
+.theme-light .script-risk-sensitive {
+  border-color: #f1d3a4;
+  background: #fff9ed;
+  color: #8a5a12;
+}
+
+.app-shell.theme-light .agent-action.primary.agent-action-risk,
+.theme-light .agent-action.primary.agent-action-risk {
+  border-color: #eea8b4;
+  background: #fff1f3;
+  color: #9f1239;
+}
+
+.app-shell.theme-light .agent-action.primary.agent-action-risk:hover,
+.theme-light .agent-action.primary.agent-action-risk:hover {
+  border-color: #e78b99;
+  background: #ffe7eb;
+  color: #881337;
+}
+
+/* AI-derived result cards use the same header/content rhythm as Agent steps. */
+.ai-result-block {
+  gap: 0;
+  overflow: hidden;
+  border-color: var(--workbench-line);
+  border-radius: 7px;
+  background: var(--workbench-panel);
+  padding: 0;
+}
+
+.ai-result-head {
+  min-height: 33px;
+  border-bottom: 1px solid var(--workbench-line-soft);
+  background: var(--workbench-panel-strong);
+  padding: 4px 7px 4px 9px;
+}
+
+.ai-result-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid rgba(64, 200, 140, .42);
+  border-radius: 999px;
+  background: rgba(64, 200, 140, .1);
+  color: var(--workbench-accent-strong);
+  padding: 0 8px;
+}
+
+.ai-result-value {
+  max-height: 220px;
+  overflow: auto;
+  background: var(--workbench-terminal);
+  color: var(--workbench-text);
+  padding: 10px;
+  font-size: var(--font-md);
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.ai-result-block .icon-button {
+  width: 28px;
+  height: 28px;
+  border-color: var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel);
+  color: var(--workbench-muted);
+}
+
+.ai-result-block .icon-button:hover:not(:disabled),
+.ai-result-block .icon-button:focus-visible {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-hover);
+  color: var(--workbench-accent-strong);
+}
+
+.app-shell.theme-light .ai-result-block,
+.theme-light .ai-result-block {
+  border-color: #dbe3ee;
+  background: #ffffff;
+}
+
+.app-shell.theme-light .ai-result-head,
+.theme-light .ai-result-head {
+  border-bottom-color: #dbe3ee;
+  background: #eef3f7;
+}
+
+.app-shell.theme-light .ai-result-label,
+.theme-light .ai-result-label {
+  border-color: #a8dcc4;
+  background: #eaf7f0;
+  color: #1c7d55;
+}
+
+.app-shell.theme-light .ai-result-value,
+.theme-light .ai-result-value {
+  background: #f4f7fc;
+  color: #172033;
+}
+
+/* Keep inferred results on the same card rhythm as completed Agent steps. */
+.ai-result-block {
+  gap: 6px;
+  border-color: var(--workbench-line);
+  border-left: 2px solid var(--workbench-accent);
+  border-radius: 7px;
+  background: var(--workbench-panel);
+  padding: 7px 9px 9px;
+}
+
+.ai-result-head {
+  min-height: 0;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0 0 1px;
+}
+
+.ai-result-label {
+  min-height: 0;
+  height: auto;
+  align-self: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--workbench-accent-strong);
+  padding: 0;
+}
+
+.ai-result-output-block {
+  margin: 0;
+}
+
+.ai-result-value {
+  min-width: 0;
+  max-height: 220px;
+  display: block;
+  margin: 0;
+  overflow: auto;
+  background: transparent;
+  color: var(--workbench-text);
+  padding: 8px 9px 9px;
+  font-family: var(--font-mono);
+  font-size: var(--font-md);
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.ai-result-value code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.ai-result-output-block .agent-step-code-head {
+  min-height: 28px;
+  padding-right: 5px;
+}
+
+.ai-result-output-block .ai-result-copy {
+  margin-left: auto;
+}
+
+.app-shell.theme-light .ai-result-block,
+.theme-light .ai-result-block {
+  border-color: #dbe3ee;
+  border-left-color: #4fb98a;
+  background: #ffffff;
+}
+
+.app-shell.theme-light .ai-result-label,
+.theme-light .ai-result-label {
+  border: 0;
+  background: transparent;
+  color: #1c7d55;
+}
+
+.app-shell.theme-light .ai-result-head,
+.theme-light .ai-result-head {
+  border: 0;
+  background: transparent;
+}
+
+.app-shell.theme-light .ai-result-value,
+.theme-light .ai-result-value {
+  color: #172033;
+}
+
+/* Long command/output lines keep their width and expose a bottom scrollbar. */
+.agent-step-code-block .agent-step-command {
+  overflow-x: scroll;
+  overflow-y: hidden;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--workbench-muted) var(--workbench-line-soft);
+  scrollbar-width: thin;
+}
+
+.agent-step-code-block .agent-step-command code {
+  min-width: max-content;
+}
+
+.agent-step-code-block .agent-step-output,
+.ai-result-value {
+  overflow-x: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--workbench-muted) var(--workbench-line-soft);
+  scrollbar-width: thin;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar,
+.ai-result-value::-webkit-scrollbar {
+  -webkit-appearance: none;
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-track,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-track,
+.ai-result-value::-webkit-scrollbar-track {
+  background: var(--workbench-line-soft);
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-thumb,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-thumb,
+.ai-result-value::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--workbench-muted);
+  background-clip: padding-box;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-thumb:hover,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-thumb:hover,
+.ai-result-value::-webkit-scrollbar-thumb:hover {
+  background: var(--workbench-accent);
+  background-clip: padding-box;
+}
+
+.agent-step-code-head .agent-step-expand {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--workbench-muted);
+  padding: 0;
+}
+
+.agent-step-code-head .agent-step-expand:hover:not(:disabled),
+.agent-step-code-head .agent-step-expand:focus-visible {
+  border-color: var(--workbench-line);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+}
+
+.agent-step-preview-backdrop {
+  z-index: 98;
+}
+
+.agent-step-preview-modal {
+  width: min(900px, calc(100vw - 36px));
+  height: min(680px, calc(100vh - 44px));
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+
+.agent-step-preview-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  background: var(--workbench-terminal);
+  color: var(--workbench-text);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.agent-step-preview-content code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.agent-step-preview-content::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 8px;
+  height: 8px;
+}
+
+.agent-step-preview-content::-webkit-scrollbar-track {
+  background: var(--workbench-line-soft);
+}
+
+.agent-step-preview-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--workbench-muted);
+  background-clip: padding-box;
+}
+
+.agent-step-code-block .agent-step-command,
+.agent-step-code-block .agent-step-output,
+.ai-result-value,
+.agent-step-preview-content {
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-shell.theme-light .agent-step-preview-content,
+.theme-light .agent-step-preview-content {
+  background: #f4f7fc;
+  color: #172033;
+}
+
+/* DOM-backed scrollbar stays visible even when the OS uses overlay scrollbars. */
+.agent-step-scrollbar {
+  position: relative;
+  height: 8px;
+  margin: 0 9px 7px;
+  border: 1px solid var(--workbench-line);
+  border-radius: 4px;
+  background: var(--workbench-line-soft);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.agent-step-scrollbar:active {
+  cursor: grabbing;
+}
+
+.agent-step-scrollbar.is-hidden {
+  height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-step-scrollbar-thumb {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  min-width: 24px;
+  border-radius: 3px;
+  background: var(--workbench-muted);
+}
+
+.agent-step-scrollbar:hover .agent-step-scrollbar-thumb,
+.agent-step-scrollbar:active .agent-step-scrollbar-thumb {
+  background: var(--workbench-accent);
+}
+
+.agent-step-preview-modal {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.agent-step-code-block .agent-step-command,
+.agent-step-code-block .agent-step-output,
+.agent-step-preview-content {
+  scrollbar-width: none;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar,
+.agent-step-preview-content::-webkit-scrollbar {
+  display: none;
+}
+
+.app-shell.theme-light .agent-step-scrollbar,
+.theme-light .agent-step-scrollbar {
+  border-color: #dbe3ee;
+  background: #e7edf3;
+}
+
+.app-shell.theme-light .agent-step-scrollbar-thumb,
+.theme-light .agent-step-scrollbar-thumb {
+  background: #94a3b8;
 }
