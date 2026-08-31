@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  SENTINEL_PROBE_COMMAND,
   SENTINEL_PROBE_EXIT_CODE,
-  buildSentinelProbeCommand,
   createSentinelNonce,
   createSentinelScanner,
   sentinelBeginMarker,
@@ -170,8 +170,12 @@ test('nonce 为 8 位十六进制且随机源可注入', () => {
 })
 
 test('探针命令验证 printf、$? 与标记往返', () => {
-  const probe = buildSentinelProbeCommand(NONCE)
-  assert.ok(probe.includes(`(exit ${SENTINEL_PROBE_EXIT_CODE})`))
+  assert.equal(SENTINEL_PROBE_COMMAND, `(exit ${SENTINEL_PROBE_EXIT_CODE})`)
+  // 探针载荷必须是裸命令:导出已包装的命令会被派发路径二次包装,
+  // 外层退出码变成 printf 的 0,正常 shell 也会被判成不支持
+  assert.ok(!SENTINEL_PROBE_COMMAND.includes('__AI_TERM_'), '探针载荷不得自带哨兵标记')
+  const wrapped = wrapCommandWithSentinel(SENTINEL_PROBE_COMMAND, NONCE)
+  assert.equal(wrapped.match(/__AI_TERM_/g).length, 2, '包装后恰好一对标记')
   const { scanner, finished } = makeScanner()
   scanner.push(streamFor(`(exit ${SENTINEL_PROBE_EXIT_CODE})`, '', SENTINEL_PROBE_EXIT_CODE))
   assert.equal(finished[0].exitCode, SENTINEL_PROBE_EXIT_CODE)

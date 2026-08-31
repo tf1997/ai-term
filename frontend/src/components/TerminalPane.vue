@@ -31,10 +31,10 @@ import type {
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { attachShellIntegration, type AttachedShellIntegration } from '../lib/shellIntegration'
 import {
-  buildSentinelProbeCommand,
   createSentinelNonce,
   createSentinelScanner,
   wrapCommandWithSentinel,
+  SENTINEL_PROBE_COMMAND,
   SENTINEL_PROBE_EXIT_CODE,
   type SentinelScanner
 } from '../lib/agentSentinelCapture'
@@ -2666,8 +2666,8 @@ async function ensureAgentCapture(): Promise<AgentCaptureMode> {
   if (agentReadinessFailure()) return 'sentinel'
 
   const probedSessionId = sessionId
-  const nonce = createSentinelNonce()
-  const probe = captureWithSentinel(buildSentinelProbeCommand(nonce), 256, { skipHistory: true })
+  // 派发裸载荷:包装与 nonce 由 captureWithSentinel 独占,重复包装会读到 printf 的退出码
+  const probe = captureWithSentinel(SENTINEL_PROBE_COMMAND, 256, { skipHistory: true })
   sentinelProbeInFlight = (async () => {
     const timer = window.setTimeout(() => probe.cancel(), SENTINEL_PROBE_TIMEOUT_MS)
     try {

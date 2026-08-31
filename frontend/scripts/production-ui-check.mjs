@@ -3313,8 +3313,11 @@ assert(
   // 兜底存在后,可用性文案不得再断言"远端不可用"
   !/远端需 shell 自行上报 OSC 133/.test(appShell) &&
     appShell.includes('agentAvailabilityConfirm') &&
-    terminalPane.includes('ensureAgentCapture'),
-  'Agent availability must go through the async sentinel probe instead of claiming remote shells are unsupported outright.'
+    terminalPane.includes('ensureAgentCapture') &&
+    // 探针派发的必须是裸载荷:传已包装的命令会被二次包装,外层读到 printf 的 0 而非 7
+    /export const SENTINEL_PROBE_COMMAND = `\(exit \$\{SENTINEL_PROBE_EXIT_CODE\}\)`/.test(sentinelCapture) &&
+    /captureWithSentinel\(SENTINEL_PROBE_COMMAND, /.test(terminalPane),
+  'Agent availability must go through the async sentinel probe instead of claiming remote shells are unsupported outright, and the probe must dispatch the bare payload so the wrapper is applied exactly once.'
 )
 assert(
   // 倒计时:卡片只呈现,时钟由 AiPanel 的单个 ticker 经 nowMs 注入

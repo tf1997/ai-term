@@ -70,10 +70,14 @@ export function wrapCommandWithSentinel(command: string, nonce: string): string 
   return `${begin}; ${value}; ${end}`
 }
 
-/** 能力探针:`(exit 7)` 是 POSIX 子 shell,无输出、无副作用。 */
-export function buildSentinelProbeCommand(nonce: string): string {
-  return wrapCommandWithSentinel(`(exit ${SENTINEL_PROBE_EXIT_CODE})`, nonce)
-}
+/**
+ * 能力探针的裸命令:`(exit 7)` 是 POSIX 子 shell,无输出、无副作用。
+ * 只给载荷、不给包装:nonce 与包装由派发路径(captureWithSentinel)独占持有。
+ * 这里若导出"已包装好的探针命令",派发时会被二次包装成
+ * `printf A_B; printf B_B; (exit 7); printf B_E $?; printf A_E $?`,
+ * 外层标记读到的是内层 printf 的退出码 0 而非 7,任何正常 shell 都会被判成不支持。
+ */
+export const SENTINEL_PROBE_COMMAND = `(exit ${SENTINEL_PROBE_EXIT_CODE})`
 
 /** 剥离 ANSI 转义并把 CRLF 归一为 LF;裸 \r 留待收集时按"回到行首"处理。 */
 function normalizeChunk(chunk: string): string {
