@@ -1,5 +1,7 @@
 # AI Agent 模式开发文档
 
+> 当前实现状态（2026-08-31）：阶段 1、阶段 1.5 和阶段 2 已完成；敏感路径安全门、风险确认弹窗、命令/输出放大查看、横向滚动和设置侧栏响应式布局已落地。阶段 3 文件工具仍未开始，真实模型网关与远端终端验收仍待执行。
+
 ## 1. 背景
 
 AI Term 当前的 AI 助手是单轮问答式的:模型基于终端快照、命令历史和会话上下文生成回答,可执行命令以代码块形式呈现,由用户逐条点击执行(`extractPrimaryShellCommand` / `executeGeneratedCommand`,`frontend/src/components/AiPanel.vue`)。模型无法感知命令的执行结果,多步排障任务需要用户在"执行 → 复制输出 → 追问"之间手工搬运。
@@ -20,7 +22,7 @@ Agent 模式的目标是打通这个闭环:模型通过 tool call 提出命令,�
 
 - AI 面板 composer 提供模式选择(普通对话 / Agent),模式为会话级属性并持久化;同一会话内两种模式的消息共享历史。
 - Agent 模式下,一次用户输入即一个任务:模型循环提出 `run_command`,每步以步骤卡片呈现命令、理由、风险标记,经用户执行/跳过后把输出与退出码回传模型,直到模型不再请求工具(任务完成)、达到步数上限或被用户停止。
-- 通过只读判定的命令可自动执行(见 6.4):来源为内置只读命令集(设置开关,默认关)与用户在审批卡片上逐条「总是允许」累积的允许列表;风险与敏感命令始终人工审批。
+- 通过只读判定的命令可自动执行(见 6.4):来源为内置只读命令集(设置开关,默认开)与用户在审批卡片上逐条「总是允许」累积的允许列表;风险与敏感命令始终人工审批。
 - 命令始终在用户当前终端可见地执行(不开隐藏 shell),与产品"执行可审查、用户可控"原则一致。
 - 停止按钮随时可中断:中断模型请求(复用取消令牌)且不再派发后续命令;已发出的命令不强行终止,由用户接管。
 - 普通对话模式行为与现状完全一致。
@@ -287,7 +289,7 @@ interface AgentRunState {
   status: 'calling-model' | 'awaiting-approval' | 'executing' | 'awaiting-user' | 'done' | 'stopped' | 'error'
   steps: AgentStep[]
   finalText: string
-  stepLimit: number              // 默认 10
+  stepLimit: number              // 默认 25
 }
 ```
 
@@ -306,7 +308,7 @@ arguments JSON 解析失败:该 tool call 以 `{"status":"invalid_arguments","er
 每个 `run_command` 依次过四道判定,顺序固定——硬门槛在前,允许列表永远越不过风险门:
 
 ```
-1. isSensitiveCommand 命中 ────▶ 人工审批(不提供「总是允许」按钮)
+1. isSensitiveCommand 或敏感路径命中 ─▶ 人工审批(不提供「总是允许」按钮)
 2. analyzeScriptRisks 高风险 ──▶ 人工审批 + 二次确认
 3. analyzeScriptRisks 中风险 ──▶ 人工审批
 4. 自动执行判定通过 ───────────▶ 自动执行,卡片标注「自动执行 · 只读/已允许」
@@ -336,7 +338,7 @@ classifyForAutoExec(
   - 条目声明的禁用参数与后继 token 白名单(见下);
   - 无法可靠解析的结构(未闭合引号、heredoc)。
 
-**内置只读命令集**(设置开关「自动执行只读检查命令」,默认关):以 `lib/agentAutoApprove.ts` 的 `BUILTIN_READONLY_COMMANDS` 为准(43 条,设置中心完整枚举展示)。单 token:`ls cat head stat file wc du df free uptime w who whoami id uname hostname date printenv env which type ps pgrep ss lsof grep rg`;两 token:`systemctl status|is-active|list-units|list-timers`、`docker ps|images|inspect|logs`、`kubectl get|describe|top|logs`、`git status|log|diff|show|branch`、`ip addr|route|link`;及带禁用参数的 `tail`、`find`、`journalctl`。
+**内置只读命令集**(设置开关「自动执行只读检查命令」,默认开):以 `lib/agentAutoApprove.ts` 的 `BUILTIN_READONLY_COMMANDS` 为准(43 条,设置中心完整枚举展示)。单 token:`ls cat head stat file wc du df free uptime w who whoami id uname hostname date printenv env which type ps pgrep ss lsof grep rg`;两 token:`systemctl status|is-active|list-units|list-timers`、`docker ps|images|inspect|logs`、`kubectl get|describe|top|logs`、`git status|log|diff|show|branch`、`ip addr|route|link`;及带禁用参数的 `tail`、`find`、`journalctl`。命令参数还会经过 `pathPrivacy.ts` 的敏感路径门。
 
 每个条目可声明禁用参数与后继 token 白名单,实现比早期草案更严:
 
@@ -352,7 +354,7 @@ classifyForAutoExec(
 
 - **条目语义**:token 前缀模式——条目的全部 token 与命令的前缀 token 完全一致即命中(`git status` 命中 `git status --porcelain`,不命中 `git stash`),等价于 Claude Code 的 `Bash(git status:*)`。按钮建议值取首 token 或子命令工具的两 token;手动添加时允许更长前缀(如 `systemctl status nginx`)。
 - **记录**:每条记录来源命令(点击「总是允许」时的完整命令)、添加时间、命中次数与最近命中时间,持久化到 SQLite(见 7)。
-- **查看与管理**(设置中心 Agent 区块,对标 Claude Code 的 `/permissions`):
+- **查看与管理**(设置中心 Agent 区块,对标 Claude Code 的 `/permissions`;入口为“设置 → Agent 模式 → 总是允许列表”):
   - 允许列表:逐条展示 pattern、来源、统计;可删除单条、清空全部;
   - 手动添加:输入框 + 同源校验(拒绝 `sudo` 前缀、含重定向/命令替换等一票否决结构的 pattern);
   - 内置只读集:完整枚举展示(只读,不可编辑),随开关整体启停——用户能确切看到"开了这个开关到底会自动执行什么"。
@@ -360,7 +362,7 @@ classifyForAutoExec(
 
 **可见性与刹车**:自动执行的步骤卡片完整保留(命令/输出/退出码)并带标注;composer 区域显示自动执行状态 chip;停止按钮语义不变;步数上限继续兜底连锁自动执行。
 
-**人工审批细节**:卡片按钮为 [执行] [总是允许 `<pattern>`](符合条件时)[跳过] [停止任务];高风险(`severity === 'high'` 命中)时执行按钮带二次确认态,复用现有 AI 风险解释入口。命令不可编辑(保持模型请求与执行一致;用户想改就跳过并在下一条消息里说明)。停止:置取消令牌(复用 `cancelTask`)、拒绝待审批步骤、循环收尾为 `stopped`。
+**人工审批细节**:卡片按钮为 [执行] [总是允许 `<pattern>`](符合条件时)[跳过] [停止任务];风险或敏感命令显示“查看风险”,打开风险确认弹窗后可逐行查看、调用 AI 分析,再选择确认执行/跳过/停止。命令不可编辑(保持模型请求与执行一致;用户想改就跳过并在下一条消息里说明)。停止:置取消令牌(复用 `cancelTask`)、拒绝待审批步骤、循环收尾为 `stopped`。
 
 ### 6.5 消息模型与渲染
 
@@ -375,7 +377,7 @@ interface AiMessage {
 }
 ```
 
-- 渲染:assistant 消息体内按序渲染步骤卡片(状态图标、命令、风险 chips、可折叠输出尾部、退出码与耗时),最后是 finalText 的 Markdown(复用 `AiMarkdownMessage`)。
+- 渲染:assistant 消息体内按序渲染步骤卡片(状态、命令、风险 chips、可放大查看的命令/输出、横向滚动、退出码与耗时),最后是 finalText 的 Markdown(复用 `AiMarkdownMessage`)。普通 AI 结果卡片复用同一容器节奏,复制按钮位于输出栏。
 - 运行中的实时更新沿用现有 `updateMessage` 事件流(节流策略参考 chat 的 80ms 合并)。
 - `text` 字段始终写入最终总结(运行中为空),保证旧版本与压缩逻辑可用。
 - 会话压缩:`compress_conversation_context` 的输入把 agent 消息展开为"文本 + 每步一行(命令/退出码/一句话结果)"的纯文本,不需要后端感知步骤结构。
@@ -398,7 +400,7 @@ interface AiMessage {
 新增表 `agent_command_allowlist(pattern TEXT PRIMARY KEY NOT NULL, source_command TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0)` 及配套 `list / save / delete / touch(命中计数)` Tauri 命令,建表风格参照 `update_scripts` 的 `CREATE TABLE IF NOT EXISTS`;「内置只读集」开关等轻量偏好沿用现有前端设置持久化方式(与主题偏好一致)。
 
 - `AiConversationMessage` 模型、`save/list` 映射、`tauri.ts` 类型同步增改;`payload_json` 为空按纯 chat 消息处理。
-- 敏感命令(`isSensitiveCommand` 命中)的步骤在持久化时把 `output` 置为 `“[敏感命令输出未存储]”`,命令文本保留(与命令历史现行为一致);发送给模型的内容不受影响,但在 reason 卡片上提示用户。
+- 敏感命令(`isSensitiveCommand` 或 `pathPrivacy.ts` 命中)的步骤在持久化时把 `output` 置为 `“[敏感命令输出未存储]”`,命令文本保留(与命令历史现行为一致);发送给模型的内容不受影响,但在 reason 卡片上提示用户。
 - 步骤输出本身已截断(≤4000 字符),单条消息 payload 上限约 10 步 × 4KB,可接受;`prune_ai_conversation_messages` 现有条数上限继续生效。
 
 ## 8. 上下文预算
@@ -416,8 +418,8 @@ interface AiMessage {
 ## 9. 安全与可控性
 
 - **默认普通对话**;Agent 需按会话显式切换。
-- **分级审批**(6.4):敏感/风险命令始终人工(高风险二次确认);自动执行仅限通过只读判定的命令,来源是默认关闭的内置集与用户逐条显式添加的允许列表;判定顺序保证允许列表永远越不过风险门。`sudo`、写重定向、命令替换、不可解析结构一律人工。
-- **步数上限**默认 10(设置项,1–25),防模型死循环。
+- **分级审批**(6.4):敏感/风险命令始终人工(风险确认弹窗 + AI 风险解释);自动执行仅限通过只读判定的命令,来源是默认开启的内置集与用户逐条显式添加的允许列表;判定顺序保证允许列表永远越不过风险门。`sudo`、敏感路径、写重定向、命令替换、不可解析结构一律人工。
+- **步数上限**默认 25(设置项,1–25),防模型死循环。
 - **执行透明**:命令写入用户可见终端,输出留在终端里,与手敲无异;AI 面板只是镜像摘要。
 - **停止语义**:停止只中断"模型继续决策与派发",不 kill 正在跑的命令——终端是用户的,由用户决定 Ctrl+C。文案明确这一点。
 - **禁用面**:交互式命令由系统提示词约束 + 超时兜底;`risk_policy`(`AiProviderConfig`)文本继续拼入系统提示词。
@@ -535,6 +537,13 @@ printf '\n__AI_TERM_%s__\n' <nonce>B; <原命令>; printf '\n__AI_TERM_%s__:%d\n
 用户在超时后选择停止时,`partialOutput` 写入 `step.output` —— 此前超时步骤的卡片上只剩一条命令,已捕获的内容白白丢掉。
 
 **任务预算进设置**:`agentStepLimit`(1–25,默认 25)与 `agentCommandTimeoutSec`(15–600,默认 120)进入 `AppUserSettings`,设置中心 Agent 区块新增「任务预算」块。取值在三处夹取:`loadUserSettings`(旧配置/脏数据)、`SettingsSidebar.saveSettings`(输入框)、`AppShell.updateUserSettings`(唯一来源兜底)。`AppShell → WorkspacePanel → AiPanel` 逐层透传,`AiPanel` 传入 `runAgentTask` 的 options(此前是空对象,`agentLoop` 的默认值仍作为未配置时的回落)。
+
+### 10.3.3 UI 体验强化（已实施）
+
+- Agent 风险/敏感命令统一打开风险确认弹窗,支持逐行风险标记、AI 风险分析以及确认执行、跳过命令、停止任务。
+- 命令和输出区域均提供横向滚动与放大查看;放大弹窗为只读,拖拽选择文本后不会因遮罩层点击误关闭。
+- 普通 AI 结果卡片采用与 Agent 步骤一致的容器节奏,结果标签保持轻量,复制按钮放在输出栏。
+- 设置侧栏改为固定 Tab 导航 + 独立滚动内容;窄宽自动切换图标 Tab,Agent 允许列表位于“设置 → Agent 模式 → 总是允许列表”,浅色主题补齐可见性。
 
 ### 10.4 阶段 3:工具扩展
 

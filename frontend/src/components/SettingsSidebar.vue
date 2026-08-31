@@ -68,14 +68,15 @@ const draft = reactive<AppUserSettings>({ ...props.settings })
 const settingsGroups: Array<{
   key: SettingsSection
   icon: 'ai' | 'terminal' | 'shield'
+  shortTitle: string
   title: string
   description: string
   status: string
   ready: boolean
 }> = [
-  { key: 'ai', icon: 'ai', title: 'AI 配置', description: '模型、API 地址和密钥', status: '已接入', ready: true },
-  { key: 'terminal', icon: 'terminal', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true },
-  { key: 'agent', icon: 'shield', title: 'Agent 模式', description: '自动执行策略与命令允许列表', status: '已接入', ready: true }
+  { key: 'ai', icon: 'ai', shortTitle: 'AI', title: 'AI 配置', description: '模型、API 地址和密钥', status: '已接入', ready: true },
+  { key: 'terminal', icon: 'terminal', shortTitle: '终端', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true },
+  { key: 'agent', icon: 'shield', shortTitle: 'Agent', title: 'Agent 模式', description: '自动执行策略与命令允许列表', status: '已接入', ready: true }
 ]
 
 const sortedAiConfigs = computed(() => {
@@ -193,27 +194,31 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
   <aside class="sidebar settings-sidebar">
     <div class="section-head">
       <span class="section-title">设置</span>
-      <button class="primary" type="button" title="新建 AI 配置" aria-label="新建 AI 配置" @click="requestCreateAiConfig">
+      <button class="primary settings-new-config" type="button" title="新建 AI 配置" aria-label="新建 AI 配置" @click="requestCreateAiConfig">
         <UiIcon name="plus" />
         <span>AI 配置</span>
       </button>
     </div>
 
     <div class="settings-list settings-center">
-      <section class="settings-hub" aria-label="设置分类">
+      <section class="settings-hub" role="tablist" aria-label="设置分类">
         <button
           v-for="group in settingsGroups"
           :key="group.key"
-          class="settings-option"
+          class="settings-option settings-tab"
           :class="{ active: activeSection === group.key }"
           type="button"
+          role="tab"
+          :aria-selected="activeSection === group.key"
+          :aria-label="group.title"
+          :title="group.description"
           @click="activeSection = group.key"
         >
           <span class="settings-option-icon">
             <UiIcon :name="group.icon" />
           </span>
           <span class="settings-option-copy">
-            <strong>{{ group.title }}</strong>
+            <strong>{{ group.shortTitle }}</strong>
             <span>{{ group.description }}</span>
           </span>
           <span class="settings-option-status" :class="{ ready: group.ready }">{{ group.status }}</span>

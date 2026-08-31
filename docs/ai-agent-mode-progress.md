@@ -2,11 +2,11 @@
 
 更新:2026-08-31。配套设计文档:[ai-agent-mode-development.md](./ai-agent-mode-development.md)(下称"设计文档"),节号均指该文档。
 
-> **接手先看两件事**:§1.6 有一个**未修复的安全缺口**(敏感文件读取会被自动执行,开箱即中);§8 是已批准的下一步方案,其第 0 步正是该缺口的修复。
+> **接手先看两件事**:§1.6 记录了已修复的敏感路径安全缺口;§8 是阶段 3 的后续方案,其第 0 步已完成。
 
 ## 1. 一句话状态
 
-**阶段 1 + 阶段 1.5 + 阶段 2 的代码与自动化验证均已落地,自动化无欠账。剩余工作分两类:一个已定位未修复的安全缺口(§1.6),以及全部需真机 / 真实模型网关的人工验收(§5)。阶段 3 方案已批准但未动工(§8)。**
+**阶段 1 + 阶段 1.5 + 阶段 2 的代码与自动化验证均已落地,敏感路径安全门也已补齐。剩余工作主要是需真机 / 真实模型网关的人工验收(§5),以及阶段 3 工具扩展(§8)。**
 
 哨兵兜底落地后,**Agent 模式不再局限于本地 zsh/bash**:任意 POSIX shell 的远端 SSH 会话,探针通过即自动可用。
 
@@ -108,9 +108,9 @@
 
 新增/更新测试:轮次压缩改测"保留退出码与尾部标记 TAIL-MARKER、最近 6 轮原样",新增"短输出不会因压缩而膨胀"(验证防膨胀保护);63 → 64。
 
-## 1.6 ⚠️ 未修复缺陷:敏感文件读取会被自动执行(规划阶段 3 时实测发现)
+## 1.6 历史 P0 缺陷:敏感文件读取自动执行(已修复)
 
-**`cat ~/.ssh/id_rsa` 今天会被自动执行、不经审批,输出送模型并落库。** 尚未修复,方案已定(见 §8 第 0 步)。
+历史上 `cat ~/.ssh/id_rsa` 会被自动执行、不经审批,输出送模型并落库。现已通过 `pathPrivacy.ts` 修复:命令参数命中敏感路径时强制人工审批,敏感步骤输出持久化为占位文本。
 
 成因是三个模块各自都没覆盖"读什么文件"这件事:
 
@@ -126,10 +126,11 @@
 
 - 设计文档 §9「敏感/风险命令始终人工」
 - 设计文档 §7「敏感命令的步骤在持久化时把 `output` 置为『[敏感命令输出未存储]』」—— `isSensitiveCommand` 不命中,于是私钥内容**会原样进 `payloadJson`**
-- 本文档 §5.3 验收第 3 条 —— **今天跑必然不通过**
+- 本文档 §5.3 验收第 3 条 —— 已具备实现,仍需真实终端手工回归
 
 影响面不限于 `.ssh`:`.env`、`.aws/credentials`、`.kube/config`、`.netrc` 同理。注意这是**阶段 1.5 放开自动执行时就存在的缺口**,与超时体验那一轮无关;阶段 3 的 `read_file` 会放大它(那是个"读任意文件"的工具),所以定为该阶段的前置。
 
+当前实现已补齐 `pathPrivacy.ts`、命令参数隐私扫描、敏感输出持久化脱敏和对应单测;这项不再是未办事项,仍需在真实终端完成手工回归。
 
 
 | 项 | 问题与修复 |
@@ -137,11 +138,20 @@
 | **「总是允许」失效(功能 bug)** | 判定器要求**每一段**都被覆盖,按钮却只建议**第一段**。`memory_pressure \| tail -n 8; printf …` 点了「总是允许 memory_pressure」后 `printf` 段仍未覆盖 → 下次照旧弹审批。改:`classifyForAutoExec` 返回 `suggestedPatterns[]`(列出仍需补充的全部 pattern,已覆盖的段不列),循环侧 `execute-and-allow` 逐个落库;一票否决的命令返回空数组 → **按钮不再显示**(此前会显示一个点了也无效的按钮) |
 | 命令输出被裁 | 输出块原用 `pre-wrap`+`word-break`,`df -h` 类表格折行即毁列对齐,再被 `.message{overflow:hidden}` 裁掉。改为 `white-space: pre` + 自带滚动容器 |
 | markdown 文字越界 | `.markdown-content ul/ol` 是 grid,**grid 子项默认 `min-width: auto`**,含行内代码的长列表项撑破容器被裁。补 `min-width: 0` |
-| 审批按钮溢出 | 窄面板放不下四个按钮。改为可换行;「总是允许」独立收缩 + 省略号(完整清单在 title);高风险二次确认从改按钮文案改为**按钮变红 + 独立提示行** |
+| 审批按钮溢出 | 窄面板放不下四个按钮。改为可换行;「总是允许」独立收缩 + 省略号(完整清单在 title);高风险改为**风险确认弹窗**,支持逐行风险标记和 AI 风险分析 |
 | 步骤卡片信息 | `exit 0` 与状态标签相连 → 收进右对齐的 `.agent-step-meta`,并补上一直采集却未展示的 `durationMs`;新增「（无输出）」占位 |
 | **模块化** | 新建 `components/AgentStepCard.vue`,卡片展示与审批交互整体迁出,AiPanel 只保留编排;5 个展示辅助函数随之内聚 |
 | 回归护栏 | `production-ui-check.mjs` 新增 3 组断言:输出块禁用 `pre-wrap`、按钮必须可换行可省略、「总是允许」必须覆盖所有段。逐条验证非空转 |
-| 新增测试 | `agent-auto-approve` 多段命令建议(直接复现用户上报命令)、`agent-loop` 多 pattern 落库;61 → 63 |
+| 新增测试 | `agent-auto-approve` 多段命令建议(直接复现用户上报命令)、`agent-loop` 多 pattern 落库、`path-privacy` 敏感路径;61 → 63(路径单测另计) |
+
+### 3.1 最近一轮 UI 体验强化（已完成）
+
+| 模块 | 交付 |
+| --- | --- |
+| 风险审批 | Agent 的风险/敏感命令统一进入与普通对话一致的风险确认弹窗,可查看风险行、调用 AI 分析、确认执行/跳过/停止 |
+| 命令与输出 | Agent 命令/输出区增加分区标题、横向滚动和放大查看弹窗;放大弹窗只读,拖拽选中文字不会误关闭 |
+| 结果卡片 | 普通 AI 结果卡片与 Agent 步骤卡统一容器节奏,复制按钮归入输出栏 |
+| 设置侧栏 | 设置分类改为紧凑 Tab;Agent 设置内容独立滚动,窄侧栏自动使用图标 Tab,浅色主题补齐可见性 |
 
 ## 3. 阶段 1 实现明细(命令层 / UI / 设置 / 样式)
 
@@ -149,7 +159,7 @@
 | --- | --- | --- |
 | B3+B5 命令层 | state.rs 四个允许列表包装(照 `save_ai_conversation_message` 模式);commands.rs 新增 `ai_agent_turn_stream`(照 `chat_with_ai_provider_stream` 模板,复用 ai-chat 流事件通道,`history_count: None`)与四个允许列表命令;lib.rs 显式 `use` 列表 + `invoke_handler` 均按字母序注册五项 | ✅ `cargo test` 全绿(84 单测 + 全部集成套件,18 个测试目标 0 failed) |
 | F4 模式选择器 | AiPanel:props/emits 声明(与 WorkspacePanel 既有传参逐字对齐)、`panelMode`/`agentRunActive`/`composerBusy` computed、`selectPanelMode`(运行中禁切、切换即查可用性)、composer 左下分段控件、按模式变化的 placeholder、`composerPrimaryAction` 统一路由发送/停止、Ctrl+Enter 按模式分派、`sendMessage` 加 agent 模式早退保护 | ✅ 代码完成 |
-| F5 任务驱动 + 步骤卡片 | AiPanel `startAgentTask`:任务-终端绑定(`boundTerminalId`)、组装 `AgentLoopDeps` 全部七个回调、每轮独立 requestId 并用 120ms 轮询把 `signal.cancelled` 传导为 `cancelTask`、`classifyStep` 三合一判定并在真正自动执行时 `touchAgentCommandAllowlistEntry`、`syncAgentRunToMessage` 终态写 `payloadJson`、完成时生成会话标题;模板:步骤卡片(状态/自动执行标注/风险 chip/敏感/exit code/理由/命令/输出/审批与超时按钮)、高风险二次确认(`agentHighRiskArmed`)、流式文本、任务状态徽标 | ✅ 代码完成 |
+| F5 任务驱动 + 步骤卡片 | AiPanel `startAgentTask`:任务-终端绑定(`boundTerminalId`)、组装 `AgentLoopDeps` 全部七个回调、每轮独立 requestId 并用 120ms 轮询把 `signal.cancelled` 传导为 `cancelTask`、`classifyStep` 三合一判定并在真正自动执行时 `touchAgentCommandAllowlistEntry`、`syncAgentRunToMessage` 终态写 `payloadJson`、完成时生成会话标题;模板:步骤卡片(状态/自动执行标注/风险 chip/敏感/exit code/理由/命令/输出/审批与超时按钮)、风险确认弹窗、流式文本、任务状态展示 | ✅ 代码完成 |
 | F6 hydrate | AppShell `hydrateAiMessagePayload`:加载会话消息时解析 `payloadJson` 还原 `mode/agentSteps/agentStatus`,非 agent 或解析失败按纯文本降级 | ✅ 代码完成 |
 | F8 设置区块 | SettingsSidebar:新增 `agent` 分区(shield 图标)、`agentAutoExecReadonly` 开关、内置集完整枚举(只读 chips + 危险参数说明)、允许列表表格(pattern/来源/命中统计/删除)、清空、手动添加(经 `validateAllowlistPattern`);AppShell:`agentAllowlist` 传参与 `deleteAgentPattern`/`addAgentPattern`/`clearAgentPatterns` 接线,`clearAgentAllowlist` 实现 | ✅ 代码完成 |
 | 样式 | styles.css 追加约 480 行:`.ai-mode-switch`(对称于发送按钮的左下绝对定位)、`.agent-mode-notice`、`.agent-steps`/`.agent-run-status`/`.agent-step-card` 全套(按 status 变左边框色)、`.agent-action` 按钮组、设置区块样式,并配齐 `.theme-light` 覆盖(遵循文件既有 `.app-shell.theme-light X, .theme-light X` 双选择器约定) | ✅ 代码完成 |
@@ -159,7 +169,7 @@
 
 后端:`domain/ai/agent.rs`(协议层,18 单测)、`chat.rs`(仅 pub(crate) 可见性)、`domain/workspace/mod.rs` + `storage/schema.sql` + `storage/sqlite.rs`(两列迁移 + 允许列表表与 CRUD)、`app/state.rs` + `app/commands.rs` + `lib.rs`(命令层)、`tests/agent_storage.rs`。
 
-前端:`types/agent.ts`(新;含 `AgentTimeoutInfo`、`AgentStep.deadlineAt`)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,**28 测试**;含输出静默采样与 `looksLikeInteractivePrompt` / `describeTimeoutHint`)、`lib/agentAutoApprove.ts`(新,18 测试/171 断言,含 `isSuffixSafeForSentinel`)、`lib/agentSentinelCapture.ts`(新,18 测试)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture` / `agentCaptureSupported` / `ensureAgentCapture`,两条捕获路径)、`AiPanel.vue`(含 1s 倒计时 ticker)、`AppShell.vue`(含 Agent 预算设置与夹取)、`WorkspacePanel.vue`、`SettingsSidebar.vue`(含「任务预算」块)、`AgentStepCard.vue`(含倒计时与超时启发提示)、`styles.css`、`package.json`(测试套件)。
+前端:`types/agent.ts`(新;含 `AgentTimeoutInfo`、`AgentStep.deadlineAt`)、`types/workspace.ts`(扩展)、`lib/agentLoop.ts`(新,**28 测试**;含输出静默采样与 `looksLikeInteractivePrompt` / `describeTimeoutHint`)、`lib/agentAutoApprove.ts`(新,含 `isSuffixSafeForSentinel` 与隐私 token 扫描)、`lib/pathPrivacy.ts`(敏感路径门)、`lib/agentSentinelCapture.ts`(新,18 测试)、`lib/shellIntegration.ts`(`armCommandCapture`,19 测试)、`lib/tauri.ts`(5 个 IPC 包装)、`components/TerminalPane.vue`(`runCommandAndCapture` / `agentCaptureSupported` / `ensureAgentCapture`,两条捕获路径)、`AiPanel.vue`(含风险弹窗、AI 风险解释和 1s 倒计时 ticker)、`AppShell.vue`(含 Agent 预算设置与夹取)、`WorkspacePanel.vue`、`SettingsSidebar.vue`(含任务预算与允许列表管理)、`AgentStepCard.vue`(含放大查看与自绘滚动条)、`styles.css`、`package.json`(测试套件)。
 
 ## 5. 统一验收清单(需真实模型网关)
 
@@ -197,9 +207,9 @@
 
 放开自主性后**必须确认这些仍然拦得住**:
 
-1. `rm -rf` 等高风险命令仍停下等审批,且需二次确认(按钮变红 + 提示行)
+1. `rm -rf` 等高风险命令仍停下等审批,并打开风险确认弹窗
 2. `sudo` 开头、`cat a > b`(写重定向)、含 `$( )` 的命令**不自动执行**,且不显示「总是允许」按钮
-3. 敏感命令(如 `cat ~/.ssh/id_rsa`)始终人工审批,不提供「总是允许」—— **⚠️ 已知不通过,见 §1.6;修复方案见 §8 第 0 步**
+3. 敏感命令(如 `cat ~/.ssh/id_rsa`)始终人工审批,不提供「总是允许」;敏感路径输出不写入持久化 payload
 4. 破坏性操作前 Agent 仍先用只读命令确认目标(提示词第 5 条)
 5. 命令被跳过后 Agent 换思路,不原样重发(提示词第 7 条)
 
@@ -251,9 +261,11 @@
 
 按优先级排列。**自动化已无欠账**,剩余全部是人工验收与后续阶段。
 
+允许命令的管理入口已落在 **设置 → Agent 模式 → 总是允许列表**:支持查看来源与命中统计、手动添加、删除单条和清空全部。该列表是全局执行策略,不按单个会话重复配置。
+
 | # | 事项 | 说明 |
 | --- | --- | --- |
-| 0 | **⚠️ 修复敏感文件读取被自动执行(§1.6)** | 安全缺口,开箱即中,且让验收 §5.3.3 必然失败。方案见 §8 第 0 步,**独立可交付,建议先于一切其它开发落地** |
+| 0 | ~~修复敏感文件读取被自动执行(§1.6)~~ | 已完成:路径敏感度门接入 Agent 判定,敏感输出不落库 |
 | 1 | **哨兵兜底真机验收(§5.2 B1–B8)** | 自动化只覆盖逻辑,真实远端行为必须手工过一遍。**B1 本地 zsh 回归最关键**——哨兵不得干扰已工作的 OSC 133 路径 |
 | 2 | **统一验收(§5.1 / 5.3 / 5.4 / 5.5)** | 需真实模型网关,自阶段 1 起就未做过 |
 | 3 | 阶段 3 第一项 `read_file` / `list_directory` | 方案已批,见 §8;第 0 步是其前置 |
@@ -266,15 +278,15 @@
 
 ## 8. 下一步已批方案:阶段 3 第一项 `read_file` / `list_directory`
 
-用户已选定先做设计文档 §10.4 的第一项(也是 `write_file` 的前置),方案已评审通过。**本次会话只完成规划,未写任何阶段 3 代码。**
+用户已选定先做设计文档 §10.4 的第一项(也是 `write_file` 的前置),方案已评审通过。路径敏感度门这一前置已完成;**阶段 3 工具代码仍未开始。**
 
-### 第 0 步(前置):路径敏感度门 —— 修复 §1.6
+### 第 0 步(前置):路径敏感度门 —— 修复 §1.6（已完成）
 
 新增 `frontend/src/lib/pathPrivacy.ts` 导出纯函数 `isSensitivePath(path)`,匹配私钥与凭据文件:`~/.ssh/id_*`(排除 `.pub`)、`.pem` / `.key` / `.p12` / `.pfx`、`.env` 系列、`.aws/credentials`、`.kube/config`、`.docker/config.json`、`.netrc`、`.npmrc` / `.pypirc`、`shadow` / `sudoers`、浏览器与钥匙串库。
 
 接入两处:`classifyStep`(AiPanel 装配处,从命令 token 里抽路径参数——**复用 `agentAutoApprove.ts` 既有的引号感知分段器 `scanCommand`,不要另写扫描器**),以及文件工具的 `path` 参数。命中即走既有敏感分支:人工审批、无「总是允许」、输出不落库。
 
-**这一步独立可交付可验收**:验收 §5.3.3 由"必然不通过"变为通过。即使阶段 3 后续不做,也应该单独落地。
+**这一步已独立交付并通过路径单测**:验收 §5.3.3 已具备实现,仍需真实终端手工回归。阶段 3 后续可在此基础上继续。
 
 ### 范围边界:bastion 连接不暴露文件工具
 

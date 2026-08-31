@@ -13684,6 +13684,294 @@ button.script-readiness-status:hover {
   color: #881337;
 }
 
+/* Settings has three categories; keep the hub on one stable row. */
+.settings-center > .settings-hub {
+  min-height: 34px;
+  flex: 0 0 34px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.settings-center > .settings-hub .settings-option {
+  min-width: 0;
+  min-height: 34px;
+  overflow: hidden;
+}
+
+.agent-settings-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.agent-settings-panel .settings-section-head {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.agent-settings-panel .settings-section-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-shell.theme-light .agent-settings-panel,
+.theme-light .agent-settings-panel {
+  color: #26313d;
+}
+
+.app-shell.theme-light .agent-settings-panel .settings-field,
+.theme-light .agent-settings-panel .settings-field {
+  color: #344054;
+}
+
+.app-shell.theme-light .agent-settings-panel .settings-field input,
+.app-shell.theme-light .agent-settings-panel .settings-field select,
+.theme-light .agent-settings-panel .settings-field input,
+.theme-light .agent-settings-panel .settings-field select {
+  border-color: #ccd8e6;
+  background: #ffffff;
+  color: #172033;
+}
+
+.app-shell.theme-light .agent-settings-panel .settings-field small,
+.theme-light .agent-settings-panel .settings-field small {
+  color: #69788e;
+}
+
+.app-shell.theme-light .agent-settings-panel .settings-empty,
+.theme-light .agent-settings-panel .settings-empty {
+  border-color: #dbe3ee;
+  background: #fbfcfd;
+  color: #65758b;
+}
+
+/* Settings shell: compact tab rail with an independent scrolling body. */
+.settings-sidebar {
+  container-type: inline-size;
+  container-name: settings-sidebar;
+}
+
+.settings-sidebar .settings-new-config {
+  width: 30px;
+  height: 29px;
+  justify-content: center;
+  padding: 0;
+}
+
+.settings-sidebar .settings-new-config span {
+  display: none;
+}
+
+.settings-sidebar .settings-center {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  overflow: hidden;
+}
+
+.settings-sidebar .settings-center > .settings-hub {
+  min-width: 0;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.settings-sidebar .settings-tab {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--workbench-muted);
+  padding: 0 5px;
+}
+
+.settings-sidebar .settings-tab:hover,
+.settings-sidebar .settings-tab.active {
+  border-color: var(--workbench-line-soft);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+}
+
+.settings-sidebar .settings-tab.active {
+  box-shadow: inset 0 -2px 0 var(--workbench-accent);
+}
+
+.settings-sidebar .settings-tab .settings-option-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  color: currentColor;
+}
+
+.settings-sidebar .settings-tab .settings-option-copy {
+  min-width: 0;
+  display: block;
+}
+
+.settings-sidebar .settings-tab .settings-option-copy strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: currentColor;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-sidebar .settings-tab .settings-option-copy > span,
+.settings-sidebar .settings-tab .settings-option-status {
+  display: none;
+}
+
+.settings-sidebar .settings-center > .settings-section {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-sidebar .settings-center > .settings-controls {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.settings-sidebar .agent-settings-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+@container settings-sidebar (max-width: 280px) {
+  .settings-sidebar .settings-tab {
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .settings-sidebar .settings-tab .settings-option-copy {
+    display: none;
+  }
+
+  .settings-sidebar .settings-tab .settings-option-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.app-shell.theme-light .settings-sidebar .settings-tab,
+.theme-light .settings-sidebar .settings-tab {
+  color: #667085;
+}
+
+.app-shell.theme-light .settings-sidebar .settings-tab:hover,
+.theme-light .settings-sidebar .settings-tab:hover {
+  border-color: #e1e8ed;
+  background: #f7faf8;
+  color: #344054;
+}
+
+.app-shell.theme-light .settings-sidebar .settings-tab.active,
+.theme-light .settings-sidebar .settings-tab.active {
+  border-color: #dcebe3;
+  background: #f0faf5;
+  color: #087a55;
+  box-shadow: inset 0 -2px 0 #12895a;
+}
+
+@container settings-sidebar (max-width: 280px) {
+  .settings-sidebar .agent-settings-panel .settings-section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 3px 8px;
+  }
+
+  .settings-sidebar .agent-settings-panel .settings-section-head > strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .settings-sidebar .agent-settings-panel .settings-section-head > span {
+    grid-column: 1 / -1;
+    min-width: 0;
+    overflow: visible;
+    color: var(--workbench-muted);
+    line-height: 1.4;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .settings-sidebar .agent-settings-panel .settings-section-head > .text-button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+/* Give the long Agent settings page clearer grouping and breathing room. */
+.settings-sidebar .agent-settings-panel {
+  gap: 18px;
+  padding: 12px 0 18px;
+}
+
+.settings-sidebar .agent-settings-panel > .agent-budget-block,
+.settings-sidebar .agent-settings-panel > .agent-builtin-block,
+.settings-sidebar .agent-settings-panel > .agent-allowlist-block {
+  border-top: 1px solid var(--workbench-line-soft);
+  padding-top: 14px;
+}
+
+.settings-sidebar .agent-settings-panel .settings-field {
+  gap: 8px;
+}
+
+.settings-sidebar .agent-settings-panel .settings-field small {
+  line-height: 1.55;
+}
+
+.settings-sidebar .agent-settings-panel .agent-pattern-chips {
+  gap: 7px;
+  row-gap: 9px;
+  max-height: 176px;
+}
+
+.settings-sidebar .agent-settings-panel .agent-allowlist-block {
+  gap: 10px;
+}
+
+.settings-sidebar .agent-settings-panel .agent-allowlist-entries {
+  gap: 8px;
+}
+
+.settings-sidebar .agent-settings-panel .agent-allowlist-entries li {
+  min-height: 58px;
+  gap: 5px 10px;
+  padding: 9px 10px;
+}
+
+.settings-sidebar .agent-settings-panel .agent-entry-meta {
+  line-height: 1.4;
+}
+
+.settings-sidebar .agent-settings-panel .agent-manual-add {
+  gap: 8px;
+}
+
 /* AI-derived result cards use the same header/content rhythm as Agent steps. */
 .ai-result-block {
   gap: 0;

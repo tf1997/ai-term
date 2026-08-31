@@ -379,6 +379,11 @@ function scanCommand(command: string): CommandScan {
   }
 }
 
+/** Exposes the same quote-aware tokenization to privacy checks. */
+export function commandTokensForPrivacy(command: string) {
+  return scanCommand(command).segments.flatMap((segment) => stripWrappers(segment).tokens)
+}
+
 /**
  * 剥离前缀环境变量赋值与 timeout/command 透明包装,返回内层命令 token。
  * 命中危险环境变量(PATH/LD_PRELOAD 等,见 DANGEROUS_ENV_RE)时单独上报。

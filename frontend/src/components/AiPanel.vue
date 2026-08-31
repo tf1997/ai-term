@@ -13,7 +13,7 @@ import { parseMessageParts, type MessagePart } from '../lib/aiMarkdown'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../lib/shellCommand'
 import { runAgentTask, type AgentLoopDeps } from '../lib/agentLoop'
-import { classifyForAutoExec } from '../lib/agentAutoApprove'
+import { classifyForAutoExec, commandTokensForPrivacy } from '../lib/agentAutoApprove'
 import type {
   AgentApprovalDecision,
   AgentCommandHandle,
@@ -30,6 +30,7 @@ import {
   riskLabelsForLine,
   summarizeScriptRisks
 } from '../lib/scriptRisk'
+import { isSensitivePath } from '../lib/pathPrivacy'
 import AiMarkdownMessage from './AiMarkdownMessage.vue'
 import AiErrorNotice from './AiErrorNotice.vue'
 import AgentStepCard from './AgentStepCard.vue'
@@ -137,7 +138,7 @@ const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommand
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
 const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
 const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
-const pendingAgentSensitive = computed(() => Boolean(agentPendingApproval.value?.proposal.sensitive))
+const pendingAiCommandSensitive = computed(() => isSensitiveAgentCommand(pendingAiCommandExecution.value))
 const pendingAiCommandCrossConnection = computed(() => {
   return executionTargetsDifferFromSource(pendingAiCommandSourceConnectionId.value)
 })
@@ -251,6 +252,11 @@ const filteredSessions = computed(() => {
 
 function connectionLabel(connectionId: string) {
   return props.connectionLabels[connectionId] || connectionId || '未知连接'
+}
+
+function isSensitiveAgentCommand(command: string) {
+  return isSensitiveCommand(command)
+    || commandTokensForPrivacy(command).some((token) => isSensitivePath(token))
 }
 
 function messageSourceLabel(message: AiMessage) {
@@ -606,6 +612,13 @@ function messageHasAgentBody(message: AiMessage) {
   return message.id === agentRunMessageId.value && Boolean(agentStreamText.value)
 }
 
+function persistableAgentSteps(steps: AgentStep[]) {
+  return steps.map((step) => {
+    if (!step.sensitive || !step.output) return step
+    return { ...step, output: '[敏感命令输出未存储]' }
+  })
+}
+
 /** Agent 任务的最大命令输出捕获量(回传模型前的截断上限)。 */
 const AGENT_OUTPUT_MAX_CHARS = 4000
 
@@ -698,7 +711,7 @@ async function runAgentTurn(
       error: failed,
       streaming: !terminal,
       payloadJson: terminal
-        ? JSON.stringify({ mode: 'agent', agentSteps: state.steps, agentStatus: status })
+        ? JSON.stringify({ mode: 'agent', agentSteps: persistableAgentSteps(state.steps), agentStatus: status })
         : undefined
     })
   }
@@ -747,7 +760,7 @@ async function runAgentTurn(
     startCommand: (command) => runner(boundTerminalId, command, { maxOutputChars: AGENT_OUTPUT_MAX_CHARS }),
     classifyStep: (command) => {
       const risks = analyzeScriptRisks(command)
-      const sensitive = isSensitiveCommand(command)
+      const sensitive = isSensitiveAgentCommand(command)
       const autoExec = classifyForAutoExec(command, {
         userPatterns: props.agentAllowlistPatterns ?? [],
         includeBuiltin: props.agentBuiltinReadonlyEnabled ?? false
@@ -1126,7 +1139,7 @@ function executeGeneratedCommand(command: string, message?: AiMessage) {
   if (!value) return
   const risks = analyzeScriptRisks(value)
   const sourceConnectionId = message?.connectionId || props.connectionId
-  if (risks.length > 0 || executionTargetsDifferFromSource(sourceConnectionId)) {
+  if (risks.length > 0 || isSensitiveAgentCommand(value) || executionTargetsDifferFromSource(sourceConnectionId)) {
     pendingAiCommandExecution.value = value
     pendingAiCommandSourceConnectionId.value = sourceConnectionId
     clearAiRiskExplanation()
@@ -1466,11 +1479,11 @@ watch(
               <small>{{ risk.message }}</small>
             </span>
           </div>
-          <div v-if="agentRiskReviewOpen && pendingAgentSensitive" class="script-risk-sensitive" role="note">
+          <div v-if="pendingAiCommandSensitive" class="script-risk-sensitive" role="note">
             <UiIcon name="shield" size="14" />
-            <span>该命令包含敏感操作或数据，请确认命令中没有不应暴露或执行的内容。</span>
+            <span>该命令包含敏感路径或数据，请确认命令中没有不应暴露或执行的内容。</span>
           </div>
-          <div v-if="pendingAiCommandRisks.length || (agentRiskReviewOpen && pendingAgentSensitive)" class="script-risk-ai">
+          <div v-if="pendingAiCommandRisks.length || pendingAiCommandSensitive" class="script-risk-ai">
             <div>
               <strong>不确定原因？</strong>
               <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
