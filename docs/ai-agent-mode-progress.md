@@ -1,10 +1,12 @@
 # AI Agent 模式开发进度(交接文档)
 
-更新:2026-08-30。配套设计文档:[ai-agent-mode-development.md](./ai-agent-mode-development.md)(下称"设计文档"),节号均指该文档。
+更新:2026-08-31。配套设计文档:[ai-agent-mode-development.md](./ai-agent-mode-development.md)(下称"设计文档"),节号均指该文档。
+
+> **接手先看两件事**:§1.6 有一个**未修复的安全缺口**(敏感文件读取会被自动执行,开箱即中);§8 是已批准的下一步方案,其第 0 步正是该缺口的修复。
 
 ## 1. 一句话状态
 
-**阶段 1 + 阶段 1.5(自主探索能力)+ 阶段 2(哨兵兜底、超时体验、任务预算设置)代码与自动化验证均已落地。剩下的全部是需要真机 / 真实模型网关的人工验收。**
+**阶段 1 + 阶段 1.5 + 阶段 2 的代码与自动化验证均已落地,自动化无欠账。剩余工作分两类:一个已定位未修复的安全缺口(§1.6),以及全部需真机 / 真实模型网关的人工验收(§5)。阶段 3 方案已批准但未动工(§8)。**
 
 哨兵兜底落地后,**Agent 模式不再局限于本地 zsh/bash**:任意 POSIX shell 的远端 SSH 会话,探针通过即自动可用。
 
@@ -106,7 +108,29 @@
 
 新增/更新测试:轮次压缩改测"保留退出码与尾部标记 TAIL-MARKER、最近 6 轮原样",新增"短输出不会因压缩而膨胀"(验证防膨胀保护);63 → 64。
 
-## 2. 阶段 1 收尾:UI 修复与「总是允许」缺陷
+## 1.6 ⚠️ 未修复缺陷:敏感文件读取会被自动执行(规划阶段 3 时实测发现)
+
+**`cat ~/.ssh/id_rsa` 今天会被自动执行、不经审批,输出送模型并落库。** 尚未修复,方案已定(见 §8 第 0 步)。
+
+成因是三个模块各自都没覆盖"读什么文件"这件事:
+
+| 模块 | 实际覆盖范围 | 对 `cat ~/.ssh/id_rsa` 的判定 |
+| --- | --- | --- |
+| `isSensitiveCommand`(`commandPrivacy.ts`) | 只匹配**命令文本里出现的机密**:`--password=`、`Authorization:`、`TOKEN=`、凭据 URL、私钥 PEM **正文** | `sensitive: false` |
+| `analyzeScriptRisks`(`scriptRisk.ts`) | 只覆盖**破坏性**操作(delete / edit / reboot / upgrade) | `risks: []` |
+| `classifyForAutoExec`(`agentAutoApprove.ts`) | `cat` 在 `BUILTIN_READONLY_COMMANDS` 且无禁用参数 | `eligible: true` |
+
+三项叠加 → 走 6.4 判定顺序的第 4 档"自动执行"。`agentAutoExecReadonly` 自阶段 1.5 起默认 `true`,因此**开箱即中**。
+
+与文档的冲突:
+
+- 设计文档 §9「敏感/风险命令始终人工」
+- 设计文档 §7「敏感命令的步骤在持久化时把 `output` 置为『[敏感命令输出未存储]』」—— `isSensitiveCommand` 不命中,于是私钥内容**会原样进 `payloadJson`**
+- 本文档 §5.3 验收第 3 条 —— **今天跑必然不通过**
+
+影响面不限于 `.ssh`:`.env`、`.aws/credentials`、`.kube/config`、`.netrc` 同理。注意这是**阶段 1.5 放开自动执行时就存在的缺口**,与超时体验那一轮无关;阶段 3 的 `read_file` 会放大它(那是个"读任意文件"的工具),所以定为该阶段的前置。
+
+
 
 | 项 | 问题与修复 |
 | --- | --- |
@@ -175,7 +199,7 @@
 
 1. `rm -rf` 等高风险命令仍停下等审批,且需二次确认(按钮变红 + 提示行)
 2. `sudo` 开头、`cat a > b`(写重定向)、含 `$( )` 的命令**不自动执行**,且不显示「总是允许」按钮
-3. 敏感命令(如 `cat ~/.ssh/id_rsa`)始终人工审批,不提供「总是允许」
+3. 敏感命令(如 `cat ~/.ssh/id_rsa`)始终人工审批,不提供「总是允许」—— **⚠️ 已知不通过,见 §1.6;修复方案见 §8 第 0 步**
 4. 破坏性操作前 Agent 仍先用只读命令确认目标(提示词第 5 条)
 5. 命令被跳过后 Agent 换思路,不原样重发(提示词第 7 条)
 
@@ -229,11 +253,47 @@
 
 | # | 事项 | 说明 |
 | --- | --- | --- |
+| 0 | **⚠️ 修复敏感文件读取被自动执行(§1.6)** | 安全缺口,开箱即中,且让验收 §5.3.3 必然失败。方案见 §8 第 0 步,**独立可交付,建议先于一切其它开发落地** |
 | 1 | **哨兵兜底真机验收(§5.2 B1–B8)** | 自动化只覆盖逻辑,真实远端行为必须手工过一遍。**B1 本地 zsh 回归最关键**——哨兵不得干扰已工作的 OSC 133 路径 |
 | 2 | **统一验收(§5.1 / 5.3 / 5.4 / 5.5)** | 需真实模型网关,自阶段 1 起就未做过 |
-| 3 | push 分支 `feature/agent-mode` | 8 个提交均未 push |
-| 4 | 阶段 1.5 ⑤ `update_plan` 工具 | 按计划等 ①–④ 效果验证后再评估是否需要 |
-| 5 | 设计文档 10.3 剩余项 | 只剩「允许列表按连接维度细分」(标注为可选) |
-| 6 | PowerShell / cmd 捕获方案 | 哨兵探针会正确报不可用,但这两类远端目前仍无 Agent 能力 |
-| 7 | 设计文档 10.4 阶段 3 | `read_file` / `list_directory`(走 SFTP,只读)、`write_file` 带 diff 预览、"沉淀为脚本"、SSH 远端 integration 注入 |
-| 8 | `.DS_Store` 未入 `.gitignore` | 一直以未跟踪状态留在仓库根,未扩大改动范围去处理 |
+| 3 | 阶段 3 第一项 `read_file` / `list_directory` | 方案已批,见 §8;第 0 步是其前置 |
+| 4 | push 分支 `feature/agent-mode` | 9 个提交均未 push |
+| 5 | 阶段 1.5 ⑤ `update_plan` 工具 | 按计划等 ①–④ 效果验证后再评估是否需要 |
+| 6 | 设计文档 10.3 剩余项 | 只剩「允许列表按连接维度细分」(标注为可选) |
+| 7 | PowerShell / cmd 捕获方案 | 哨兵探针会正确报不可用,但这两类远端目前仍无 Agent 能力 |
+| 8 | 设计文档 10.4 阶段 3 剩余 | `write_file` 带 diff 预览、"沉淀为脚本"、SSH 远端 integration 注入 |
+| 9 | `.DS_Store` 未入 `.gitignore` | 一直以未跟踪状态留在仓库根,未扩大改动范围去处理 |
+
+## 8. 下一步已批方案:阶段 3 第一项 `read_file` / `list_directory`
+
+用户已选定先做设计文档 §10.4 的第一项(也是 `write_file` 的前置),方案已评审通过。**本次会话只完成规划,未写任何阶段 3 代码。**
+
+### 第 0 步(前置):路径敏感度门 —— 修复 §1.6
+
+新增 `frontend/src/lib/pathPrivacy.ts` 导出纯函数 `isSensitivePath(path)`,匹配私钥与凭据文件:`~/.ssh/id_*`(排除 `.pub`)、`.pem` / `.key` / `.p12` / `.pfx`、`.env` 系列、`.aws/credentials`、`.kube/config`、`.docker/config.json`、`.netrc`、`.npmrc` / `.pypirc`、`shadow` / `sudoers`、浏览器与钥匙串库。
+
+接入两处:`classifyStep`(AiPanel 装配处,从命令 token 里抽路径参数——**复用 `agentAutoApprove.ts` 既有的引号感知分段器 `scanCommand`,不要另写扫描器**),以及文件工具的 `path` 参数。命中即走既有敏感分支:人工审批、无「总是允许」、输出不落库。
+
+**这一步独立可交付可验收**:验收 §5.3.3 由"必然不通过"变为通过。即使阶段 3 后续不做,也应该单独落地。
+
+### 范围边界:bastion 连接不暴露文件工具
+
+SFTP 命令按 `connection_id` 解析 profile(`commands.rs` 的 `sftp_profile`),而跳板目标(`targetHost`/`targetUsername`)是 `FileTransferPanel` 的**面板内状态**(`FileTransferPanel.vue:243`),AiPanel 拿不到。bastion 场景下终端可能在跳板后的目标机上,不带 override 的 SFTP 会去读**跳板机本身**——读错机器且静默。因此只对直连(`connectionRole === 'direct'`)与本地开放;bastion 下让模型退回 `run_command` 的 `cat`/`ls`,那条路始终在真实终端里跑。
+
+### 其余步骤要点
+
+| 步骤 | 要点 |
+| --- | --- |
+| 后端工具定义 | `agent.rs:192` 的 `"tools": [...]` 追加两项;**SSE 累积器已 name-agnostic(原样透传 `call.name`),无需改解析**;系统提示词补"排查系统状态仍用 run_command" |
+| 后端缺口 | `filesystem/local.rs` 有 `list_directory` 但**没有读文件函数**,需新增 + Tauri 命令;守卫复用 `sftp.rs` 的 `validate_remote_text_bytes`(2MB 上限 / NUL 判二进制 / UTF-8),**提到共享位置而非复制** |
+| 远端 | 零新增:`sftp_read_text_file` / `sftp_list_directory` 已具备,自带超时与取消令牌 |
+| 循环分发(核心) | `handleToolCall` 目前**完全不看 `toolCall.name`**,无条件按 run_command 解析。改为按 name 分发;`AgentStep.tool` 设为**可选且缺省视为 `run_command`**,否则老 `payloadJson` 的 hydrate 会坏;未知工具名走 `invalid_arguments` 同款回传 |
+| 超时 | 文件步骤**仍要 `raceCommandResult` 三方竞速**(dep 由 AiPanel 注入,Promise 可能永不 resolve,须保证停止随时可用),但**不跑 `peekOutput` 采样与 `deadlineAt` 倒计时**——文件读取无增量输出 |
+| 抽象度 | 3 个工具不值得"工具描述符表",`switch` + 两个小函数即可 |
+| 卡片 | 按 `step.tool` 分支;**必须显式标注通道与目标主机**——文件工具绕过终端,与设计文档 §2.1「命令始终在用户可见终端执行」有张力,标注是对该承诺的补偿 |
+| 自动执行 | 沿用同一个 `agentAutoExecReadonly` 开关(不无条件自动),敏感路径一票否决 |
+
+### 已知风险
+
+- **透明性折衷**:文件读取不经终端。若认为不可接受,替代方案是让工具在终端里跑 `cat`——但那样相对 `run_command` 就只剩"结构化返回"一点价值。
+- `read_remote_text_file` 是**先整文件下载到临时文件再校验大小**,超大远端文件会先付下载代价才被拒(既有编辑器行为,本期不改)。
