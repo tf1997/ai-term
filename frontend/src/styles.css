@@ -525,27 +525,29 @@ code,
   border: 1px solid #1c2534;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(22, 29, 42, .94), rgba(16, 22, 32, .94));
-  padding: 9px 10px;
+  padding: 12px 14px;
   text-align: left;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
+/* 选中/hover 的实际观感由下面 .app-shell .settings-sidebar 段落决定(特异性更高),
+   这里只留一份不依赖主题的基线,避免侧栏外复用时没有选中态。 */
 .settings-card.active {
-  border-color: rgba(80, 124, 255, .75);
-  background: rgba(24, 35, 52, .96);
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
 }
 .settings-card-head {
   width: 100%;
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .settings-card-main {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex: 1;
 }
 .settings-card-main strong {
   min-width: 0;
@@ -553,17 +555,41 @@ code,
   color: #eef2f8;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+/* 用卡片自己的类名,不复用全局 .status-dot —— 那个是连接状态点(默认灰),
+   浅色主题还有一条更高特异性的规则会把它改回灰色。 */
+.settings-card-main .settings-card-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--workbench-accent);
+}
+.settings-card .settings-card-current {
+  flex: 0 0 auto;
+  overflow: visible;
+  color: var(--workbench-accent);
+  font-size: var(--font-xs);
+  white-space: nowrap;
 }
 .settings-card span {
   max-width: 100%;
   overflow: hidden;
-  color: #8c99ad;
+  color: #9ca3af;
   font-size: var(--font-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.4;
+}
+.settings-card span.warning {
+  color: #f59e0b;
 }
 .settings-card .card-actions {
-  grid-template-columns: repeat(2, 26px);
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
 }
 .modal-backdrop {
   position: fixed;
@@ -6052,10 +6078,11 @@ code {
 .settings-card small {
   min-width: 0;
   overflow: hidden;
-  color: #647084;
+  color: #9ca3af;
   font-size: var(--font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.4;
 }
 .settings-empty {
   margin: 0;
@@ -6458,9 +6485,12 @@ code {
   border-color: #d6dfed;
   background: rgba(255, 255, 255, .92);
 }
+.theme-light .settings-card:hover {
+  border-color: #10b981;
+}
 .theme-light .settings-option:hover, .theme-light .settings-option.active, .theme-light .settings-card.active, .theme-light .server-card.active, .theme-light .script-library-row:hover, .theme-light .script-library-row.active, .theme-light .file-row:hover, .theme-light .file-row.active {
-  border-color: #ccebdd;
-  background: var(--light-accent-soft);
+  border-color: #10b981;
+  background: #ecfdf5;
 }
 .theme-light .settings-option-icon {
   border-color: #d4e9df;
@@ -6473,22 +6503,20 @@ code {
   color: #06724f;
 }
 .theme-light .settings-card .icon-button {
-  border-color: #dce5ea;
-  background: #f8fafb;
+  border: none;
+  background: transparent;
   color: #536271;
 }
 .theme-light .settings-card .icon-button:hover:not(:disabled) {
-  border-color: #ccebdd;
-  background: var(--light-accent-soft);
-  color: var(--light-accent-strong);
+  background: #f3f4f6;
+  color: #111827;
 }
 .theme-light .settings-card .icon-button.danger {
   color: #64748b;
 }
 .theme-light .settings-card .icon-button.danger:hover:not(:disabled) {
-  border-color: #f3c6cb;
-  background: #fff1f2;
-  color: #be123c;
+  background: #fef2f2;
+  color: #dc2626;
 }
 .theme-light .message-list, .theme-light .script-chat-list, .theme-light .script-library-body, .theme-light .file-list {
   background:     linear-gradient(180deg, rgba(72, 102, 255, .045), transparent 36%),     #f7f9fd;
@@ -9531,6 +9559,13 @@ code {
 .app-shell.theme-light .empty-state, .app-shell.theme-light .history-meta, .app-shell.theme-light .terminal-subtitle, .app-shell.theme-light .settings-card small, .app-shell.theme-light .settings-card span, .app-shell.theme-light .file-row span, .app-shell.theme-light .transfer-pane-head span {
   color: var(--light-muted);
 }
+/* 上面那条把卡片里所有 span 刷成 muted,状态标签与未配置警示要单独捞回来。 */
+.app-shell.theme-light .settings-card .settings-card-current {
+  color: var(--workbench-accent);
+}
+.app-shell.theme-light .settings-card span.warning {
+  color: #b45309;
+}
 .app-shell.theme-light .markdown-content,
 .app-shell.theme-light .markdown-content p,
 .app-shell.theme-light .markdown-content li,
@@ -10450,13 +10485,20 @@ code {
   box-shadow: none;
 }
 
+/* 与 AI 配置卡片同一套语言:hover 只提亮,选中态用整卡淡绿底 + 描边。
+   inset 左边条会和 6px 圆角错位,浅色主题下那道深绿也显脏。 */
 .server-card:hover,
-.server-card.active,
-.theme-light .server-card:hover,
-.theme-light .server-card.active {
+.theme-light .server-card:hover {
   border-color: transparent;
   background: var(--workbench-hover);
-  box-shadow: inset 2px 0 var(--workbench-accent);
+  box-shadow: none;
+}
+
+.server-card.active,
+.theme-light .server-card.active {
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 10%, transparent);
+  box-shadow: none;
 }
 
 .server-content {
@@ -10499,10 +10541,31 @@ code {
   font-size: 10px;
 }
 
+/* 「直连」是每行都有的静态属性,不是状态,用绿色等于整列都在报警;
+   降成中性描边,把绿色留给真正的状态(连接中 / 选中)。 */
 .server-main .badge.ok {
-  border-color: rgba(53, 183, 121, .32);
+  border-color: var(--workbench-line);
+  background: transparent;
+  color: var(--workbench-muted);
+}
+
+.server-main .badge.warn {
+  border-color: color-mix(in srgb, var(--workbench-accent) 34%, transparent);
   background: var(--workbench-accent-soft);
   color: var(--workbench-accent-strong);
+}
+
+/* 浅色主题的 .app-shell.theme-light .badge.ok 特异性更高,要同深度压过去。 */
+.app-shell.theme-light .server-main .badge.ok {
+  border-color: var(--workbench-line);
+  background: transparent;
+  color: var(--workbench-muted);
+}
+
+.app-shell.theme-light .server-main .badge.warn {
+  border-color: #bfe9d3;
+  background: #f0fbf5;
+  color: var(--light-accent-strong);
 }
 
 .server-card .card-actions {
@@ -11280,18 +11343,50 @@ body.workspace-resizing * {
 }
 
 .app-shell .settings-sidebar .settings-card {
+  gap: 2px;
+  min-height: 0;
   border-color: transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  padding: 8px;
+  padding: 8px 10px;
   box-shadow: none;
 }
 
-.app-shell .settings-sidebar .settings-card:hover,
-.app-shell .settings-sidebar .settings-card.active {
+/* 模型名与 URL 收成一条 11px 的副信息行:原先 12px + 12px 两行几乎和标题同重,
+   三行读起来分不出主次。 */
+.app-shell .settings-sidebar .settings-card span,
+.app-shell .settings-sidebar .settings-card small {
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+/* hover 只提亮底色;选中态才上淡绿底 + 描边。inset 左边条会和圆角打架,
+   而且在浅色主题下那道深绿显得脏,因此选中态用整卡底色表达。 */
+.app-shell .settings-sidebar .settings-card:hover {
   border-color: transparent;
   background: var(--workbench-hover);
-  box-shadow: inset 2px 0 var(--workbench-accent);
+  box-shadow: none;
+}
+
+.app-shell .settings-sidebar .settings-card.active {
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 10%, transparent);
+  box-shadow: none;
+}
+
+/* 卡片里的操作按钮压到 26px 并去掉描边:32px 的通用尺寸在这条窄侧栏里
+   和 13px 的配置名不成比例,两个方框也把标题挤到没地方。 */
+.app-shell .settings-sidebar .settings-card .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* 按钮的 hover 底不能用 --workbench-hover:卡片 hover 时正是这个色,叠上去看不出来。 */
+.app-shell .settings-sidebar .settings-card .icon-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--workbench-text) 12%, transparent);
 }
 
 .app-shell .settings-sidebar .settings-card .card-actions {

@@ -889,11 +889,16 @@ function selectAiConfig(configId: string) {
   }
 }
 
+/**
+ * 编辑不改「当前使用」:草稿直接按 configId 取,不经过 selectedAiConfigId。
+ * 之前借 selectAiConfig 是为了让 aiConfig 指向目标,副作用是点一下铅笔就把
+ * 正在用的配置换了 —— 编辑和启用是两件事。
+ */
 function editAiConfig(configId?: string) {
-  if (configId) {
-    selectAiConfig(configId)
-  }
-  aiConfigDraft.value = cloneAiConfig(aiConfig.value)
+  const target = configId
+    ? aiConfigs.value.find((config) => config.id === configId) ?? aiConfig.value
+    : aiConfig.value
+  aiConfigDraft.value = cloneAiConfig(target)
   aiConfigSaveState.value = 'idle'
   aiConfigSaveError.value = ''
   aiConfigEditorMode.value = 'edit'
@@ -923,10 +928,16 @@ async function saveAiConfig(config: AiProviderConfig, apiKey = '') {
       [savedConfig.id]: savedConfig.apiKey
     }
   }
+  const wasCreating = aiConfigEditorMode.value === 'create'
+  const previousSelectedId = selectedAiConfigId.value
   try {
     await saveAiProviderConfig(savedConfig)
     aiConfigs.value = await listAiProviderConfigs()
-    selectedAiConfigId.value = savedConfig.id
+    // 新建后切到新配置;编辑则保持原来的「当前使用」。改 id 相当于重命名,
+    // 原 id 已经不在列表里,这时才跟到新 id,否则 aiConfig 会回落到列表首项。
+    selectedAiConfigId.value = wasCreating || !aiConfigs.value.some((config) => config.id === previousSelectedId)
+      ? savedConfig.id
+      : previousSelectedId
     profileStoreStatus.value = 'ready'
     aiConfigSaveState.value = 'saved'
     aiConfigEditorOpen.value = false

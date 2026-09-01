@@ -380,8 +380,9 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
           >
             <div class="settings-card-head">
               <div class="settings-card-main">
+                <span v-if="config.id === selectedAiConfigId" class="settings-card-dot" aria-hidden="true"></span>
                 <strong>{{ config.id }}</strong>
-                <span v-if="config.id === selectedAiConfigId" class="badge ok">当前使用</span>
+                <span v-if="config.id === selectedAiConfigId" class="settings-card-current">当前使用</span>
               </div>
               <div class="card-actions">
                 <button class="icon-button" type="button" title="编辑 AI 配置" aria-label="编辑 AI 配置" @click.stop="editConfig(config.id)">
@@ -392,7 +393,7 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
                 </button>
               </div>
             </div>
-            <span>{{ config.model || '未配置模型' }}</span>
+            <span :class="{ warning: !config.model }">{{ config.model || '未配置模型' }}</span>
             <small v-if="config.baseUrl">{{ config.baseUrl }}</small>
           </article>
 
