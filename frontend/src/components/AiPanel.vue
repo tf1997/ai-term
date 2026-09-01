@@ -797,9 +797,11 @@ async function runAgentTurn(
   }
 
   // 步数上限与命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
+  // 重试时传入已完成的步骤,恢复执行上下文
   const { done, stop } = runAgentTask(goal, deps, {
     stepLimit: props.agentStepLimit,
-    commandTimeoutMs: props.agentCommandTimeoutMs
+    commandTimeoutMs: props.agentCommandTimeoutMs,
+    initialSteps: assistantMessage.agentSteps?.filter(s => s.status === 'completed' || s.status === 'skipped')
   })
   agentStopHandle = stop
   try {
@@ -872,13 +874,17 @@ async function retryMessage(message: AiMessage) {
   }
 
   // 先把消息打回进行中:streaming 的更新只改内存不落库,重试的终态会覆盖原来的错误行
+  // Agent 模式:保留已完成的步骤,只重试失败/中断的工作
+  const completedSteps = agentMode && message.agentSteps
+    ? message.agentSteps.filter(s => s.status === 'completed' || s.status === 'skipped')
+    : []
   const pending: AiMessage = {
     ...message,
     text: '',
     command: '',
     error: false,
     streaming: true,
-    agentSteps: agentMode ? [] : undefined,
+    agentSteps: agentMode ? completedSteps : undefined,
     agentStatus: agentMode ? 'running' : undefined,
     payloadJson: undefined
   }
@@ -1541,12 +1547,11 @@ watch(
     <div class="context-strip ai-context-strip" :class="{ expanded: contextOpen }">
       <div class="context-strip-main">
         <button class="context-summary-button" type="button" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
-          <UiIcon name="database" size="14" />
+          <UiIcon name="database" />
           <span>{{ contextSummaryLabel }}</span>
-          <UiIcon v-if="contextOpen" name="arrow-up" size="14" />
-          <UiIcon v-else name="arrow-down" size="14" />
+          <UiIcon v-if="contextOpen" name="arrow-up" />
+          <UiIcon v-else name="arrow-down" />
         </button>
-        <span v-if="isAsking" class="chip ai-live-status">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
         <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
       </div>
       <div v-if="contextOpen" class="ai-context-detail">

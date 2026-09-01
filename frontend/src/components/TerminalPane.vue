@@ -42,11 +42,21 @@ import { isSuffixSafeForSentinel } from '../lib/agentAutoApprove'
 import type { AgentCaptureMode, AgentCommandHandle, AgentCommandResult } from '../types/agent'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
+import {
+  SYSTEM_TERMINAL_CJK_FALLBACK,
+  WINDOWS_TERMINAL_CJK_FALLBACK,
+  withCjkFallback
+} from '../lib/terminalFont'
 import UiIcon from './UiIcon.vue'
 
 const terminalTypographyOptions = isWindowsPlatform()
   ? { lineHeight: 1.12, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
   : { lineHeight: 1, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
+
+// 终端正文的 CJK 兜底见 lib/terminalFont.ts —— xterm 用 JS 传字体族,吃不到 CSS 变量上的兜底。
+const TERMINAL_CJK_FALLBACK = isWindowsPlatform()
+  ? WINDOWS_TERMINAL_CJK_FALLBACK
+  : SYSTEM_TERMINAL_CJK_FALLBACK
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
@@ -153,11 +163,9 @@ let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
-let terminalOutputRecentTail = ''
 let terminalOutputEmitTimer: number | undefined
 const TERMINAL_OUTPUT_EMIT_INTERVAL = 200
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1_500_000
-const TERMINAL_OUTPUT_TAIL_LIMIT = 4_000
 let selectionCopyTimer: number | undefined
 const SELECTION_COPY_DEBOUNCE = 150
 let inputCommandBuffer = ''
@@ -378,8 +386,7 @@ async function confirmSshHostKeyReset() {
     const notice = removed > 0
       ? `\r\n[AI Term] 已移除 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
       : `\r\n[AI Term] 没有找到 ${target.label} 的旧主机密钥记录，正在重新连接。\r\n`
-    writeTerminalView(notice, true)
-    appendTerminalOutput(notice)
+    ingestTerminalOutput(notice, true)
     await connectRemote()
   } catch (error) {
     sshHostKeyError.value = formatError(error)
@@ -1059,7 +1066,6 @@ function scheduleTerminalSnapshotEmit() {
 
 function setTerminalOutputBuffer(text: string) {
   terminalOutputBuffer = text
-  terminalOutputRecentTail = text.slice(-TERMINAL_OUTPUT_TAIL_LIMIT)
 }
 
 function appendTerminalOutput(data: string) {
@@ -1068,12 +1074,18 @@ function appendTerminalOutput(data: string) {
   if (terminalOutputBuffer.length > TERMINAL_OUTPUT_BUFFER_LIMIT * 2) {
     terminalOutputBuffer = terminalOutputBuffer.slice(-TERMINAL_OUTPUT_BUFFER_LIMIT)
   }
-  terminalOutputRecentTail = `${terminalOutputRecentTail}${data}`
-  if (terminalOutputRecentTail.length > TERMINAL_OUTPUT_TAIL_LIMIT * 2) {
-    terminalOutputRecentTail = terminalOutputRecentTail.slice(-TERMINAL_OUTPUT_TAIL_LIMIT)
-  }
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
   scheduleTerminalSnapshotEmit()
+}
+
+// 上屏与入快照必须成对且快照在先。xterm 的 WriteBuffer 在"用户刚敲过键且写队列
+// 为空"时(_didUserInput 低延迟快路径)会同步解析本次 write 并同步触发回调,回调
+// 里跑的是提示符识别与命令捕获;先 append 再 write 才能保证这些消费方看到的快照
+// 不会比屏幕旧。历史上提示符识别读的是字节流尾巴,这个顺序反了会让命令(或 Ctrl+C)
+// 之后的新提示符认不出来,快捷命令/历史填入随即误报"Shell 尚未返回可输入提示符"。
+function ingestTerminalOutput(data: string, forceScroll = false) {
+  appendTerminalOutput(data)
+  writeTerminalView(data, forceScroll)
 }
 
 function activeBufferLine(y: number) {
@@ -1638,9 +1650,15 @@ function terminalLineReadyForAppInput() {
   if (shellIntegrationInputActive()) {
     return shellIntegrationCommandLine().trim().length === 0
   }
-  return terminalInputContext === 'shell'
-    && inputCommandReliable
-    && inputCommandBuffer.trim().length === 0
+  if (terminalInputContext !== 'shell') return false
+  if (inputCommandReliable && inputCommandBuffer.trim().length === 0) return true
+  // 影子跟踪不可信时(Tab / ↑↓ / Alt 词跳转打成 unreliable,或被 read -n1、y/n
+  // 确认这类不带回车的按键留下残留),缓冲代表不了实际行内容,据此判"行内有输入"
+  // 会在明明是空提示符的行上误报。此时改以屏幕为准,并把跟踪状态一并校正,
+  // 免得随后填入的命令被接在残留后面、连命令历史都记错。
+  if (!trackedInputResidueIsStale()) return false
+  resetTrackedTerminalInput('shell')
+  return true
 }
 
 function terminalInputSyncState(): TerminalInputSyncState {
@@ -1655,12 +1673,20 @@ function terminalInputSyncState(): TerminalInputSyncState {
   }
 }
 
+// 提示符识别只在输出到达时跑,终端静默期间 terminalInputContext 停在上一块数据
+// 的结论。任何以"光标是否停在提示符上"为准的入口(就绪判定、填入、派发)都要先
+// 复算一次,否则会拿陈旧状态否掉一条本可执行的命令。集成模式下边界由 OSC 133
+// 语义标记给出,不走启发式复算。
+function refreshTerminalInputContext() {
+  if (!shellIntegrationInputActive()) updateTerminalInputContextFromOutput()
+}
+
 function commandExecutionReadiness(): TerminalCommandReadiness {
   if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
   if (shellIntegrationInputActive()) {
     return shellIntegrationCommandLine().trim() ? 'line-busy' : 'ready'
   }
-  updateTerminalInputContextFromOutput()
+  refreshTerminalInputContext()
   if (terminalLineReadyForAppInput()) return 'ready'
   if (terminalInputContext === 'shell') return 'line-busy'
   return 'shell-busy'
@@ -1692,12 +1718,16 @@ function updateTerminalInputContextFromOutput() {
     // 退出全屏程序(vim 等)后 shell 会重绘提示符,视同等待新提示符
     shellCommandAwaitingPrompt = true
   }
-  const text = terminalOutputRecentTail
-    .slice(-2_000)
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\r/g, '')
-  const lastLine = text.split('\n').pop()?.trimEnd() ?? ''
+  // 以屏幕为准,而不是在原始字节流上用正则复原最后一行 —— 后者做不到:
+  //   · \r 一律删掉会把原地重画的前后内容拼成一行(Ctrl+U 之后就认不出提示符)
+  //   · OSC 的 [^BEL]* 是贪婪的,ST 结尾的 OSC 后面再来一个 BEL 结尾的,
+  //     中间的提示符会被整段吞掉
+  //   · 私有参数 CSI(\e[>4;2m)不匹配剥离正则,DCS/APC(\eP…\e\\)根本没处理
+  //   · 尾巴按长度截断还会从转义序列中间切开
+  // xterm 已经把这些都解释完了,而 trackedInputResidueIsStale /
+  // recoverTrackedTerminalInputFromRenderedLine / submittedTerminalCommand
+  // 用的本来就是这个事实来源,统一到一处也免得两套结论互相打架。
+  const lastLine = currentRenderedCommandLine()
   if (!lastLine) return
   if (/(?:password|passphrase|verification code|one[- ]time(?: password| code)?|otp|pin|token)[^\n]{0,40}[:：]?\s*$/i.test(lastLine)) {
     resetTrackedTerminalInput('sensitive')
@@ -1708,7 +1738,10 @@ function updateTerminalInputContextFromOutput() {
     if (!trackedInputResidueIsStale()) return
     resetTrackedTerminalInput()
   }
-  if (!shellPromptDiscoveryOpen && terminalInputContext === 'shell') return
+  // 已在已知提示符上且跟踪可信时跳过重认。跟踪一旦被打成 unreliable 就不能再跳:
+  // 此路径下 markTrackedTerminalInputAsShell() 正是唯一能把它修回可信的地方,
+  // 跳过就会一直卡在"命令行已有输入"上。
+  if (!shellPromptDiscoveryOpen && terminalInputContext === 'shell' && inputCommandReliable) return
   const prompt = recognizedShellPrompt(lastLine)
   if (!prompt) return
   shellPromptText = prompt.text
@@ -1820,6 +1853,9 @@ function trackUserInput(data: string): TerminalInputTrackResult {
     } else if (code === 1) {
       if (inputCommandReliable) inputCommandCursor = 0
     } else if (code === 3) {
+      // Ctrl+C 与回车一样会让 shell 重画一行新提示符,同样要进入"等待新提示符"
+      // 态,否则 generic/bare 签名的复认条件收不拢,连续多行认不出提示符
+      shellCommandAwaitingPrompt = true
       resetTrackedTerminalInput('unknown')
       result = 'submitted'
     } else if (code === 5) {
@@ -1898,7 +1934,10 @@ function skipInputControlSequence(char: string) {
 
 function resolvedTerminalSettings() {
   return {
-    terminalFontFamily: props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    terminalFontFamily: withCjkFallback(
+      props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      TERMINAL_CJK_FALLBACK
+    ),
     terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || 13)),
     terminalTheme: props.appTheme === 'light' ? 'light' : props.terminalSettings?.terminalTheme || 'midnight'
   }
@@ -2085,8 +2124,7 @@ function handleTerminalSessionClosed(reason: string) {
   resetTrackedTerminalInput('unknown')
   closeCompletion()
   const message = `\r\nShell exited: ${reason}\r\n`
-  writeTerminalView(message, true)
-  appendTerminalOutput(message)
+  ingestTerminalOutput(message, true)
   void disconnectTerminal(closedSessionId)
 }
 
@@ -2114,8 +2152,7 @@ async function attachTerminalEvents(activeSessionId = sessionId) {
 
   const nextUnlisten = await onTerminalData(activeSessionId, (event) => {
     if (event.sessionId === activeSessionId && sessionId === activeSessionId) {
-      writeTerminalView(event.data)
-      appendTerminalOutput(event.data)
+      ingestTerminalOutput(event.data)
       // 哨兵捕获挂在既有订阅上:布防即赋值,因此不存在"订阅晚于派发"的丢数据窗口
       sentinelSink?.(event.data)
     }
@@ -2207,8 +2244,7 @@ async function connectRemote() {
     activeSessionProfile.value = profile
     const detail = formatError(error)
     const message = `\r\nSSH connection failed: ${detail}\r\n`
-    writeTerminalView(message, true)
-    appendTerminalOutput(message)
+    ingestTerminalOutput(message, true)
     if (shouldAskForSshHostKeyReset(error)) {
       openSshHostKeyPrompt(detail)
     } else if (shouldAskForSshPassword(error)) {
@@ -2316,8 +2352,8 @@ function enterPreviewMode() {
   terminal?.writeln('\x1b[33mTauri backend is not available in browser preview.\x1b[0m')
   terminal?.writeln('Run `cargo run` inside src-tauri to attach a local shell.')
   terminal?.writeln('')
-  writeTerminalView('\x1b[94mpreview\x1b[0m$ ', true)
   appendTerminalOutput('Tauri backend is not available in browser preview.\nRun `cargo run` inside src-tauri to attach a local shell.\npreview$ ')
+  writeTerminalView('\x1b[94mpreview\x1b[0m$ ', true)
   shellPromptText = 'preview$'
   shellPromptSignature = parseShellPrompt(shellPromptText)
   shellPromptDiscoveryOpen = false
@@ -2376,8 +2412,17 @@ function showQuickCommandBarNotice(message: string) {
 function fillCommand(command: string) {
   const value = command.trim()
   if (!value) return false
-  if (!terminalLineReadyForAppInput()) {
-    showQuickCommandBarNotice(completionInputLine().trim() ? '当前命令行已有输入，请先提交或清空。' : '当前终端不在可识别的命令提示符。')
+  // 提示语按就绪判定给,而不是看影子缓冲:缓冲为空只说明跟踪不知道行里有什么,
+  // 不代表行是空的,反过来也一样
+  const readiness = commandExecutionReadiness()
+  if (readiness !== 'ready') {
+    showQuickCommandBarNotice(
+      readiness === 'line-busy'
+        ? '当前命令行已有输入，请先提交或清空。'
+        : readiness === 'unavailable'
+          ? '当前终端不可用。'
+          : '当前终端不在可识别的命令提示符。'
+    )
     focusTerminal()
     return false
   }
@@ -2429,8 +2474,7 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
     return true
   }
   if (status.value !== 'preview') return false
-  writeTerminalView(data, true)
-  appendTerminalOutput(data)
+  ingestTerminalOutput(data, true)
   commits.forEach(runTerminalInputCommit)
   if (shellPromptSignature) shellPromptDiscoveryOpen = false
   return true
@@ -2444,6 +2488,7 @@ function executeCommand(command: string, options?: { historyCommand?: string }) 
   const value = command.trim()
   if (!value) return false
   const recorded = options?.historyCommand ?? value
+  refreshTerminalInputContext()
   if (terminalBackendInputReady()) {
     if (!terminalLineReadyForAppInput()) return false
     closeCompletion()
@@ -2464,8 +2509,7 @@ function executeCommand(command: string, options?: { historyCommand?: string }) 
   if (status.value === 'preview') {
     if (!terminalLineReadyForAppInput()) return false
     const previewLine = `${value}\r\n`
-    writeTerminalView(previewLine, true)
-    appendTerminalOutput(previewLine)
+    ingestTerminalOutput(previewLine, true)
     recordCommand(recorded)
     resetTrackedTerminalInput('shell')
     return true

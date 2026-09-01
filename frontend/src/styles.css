@@ -1,7 +1,11 @@
 :root {
   color-scheme: dark;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+  /* CJK 兜底排在 Latin 等宽之后、generic monospace 关键字之前。等宽栈里没有一张脸
+     带中文字形,不显式兜底就会穿透到 generic 关键字由系统挑:macOS 挑到 PingFang SC
+     还算能看,Windows 挑到 SimSun(衬线点阵脸,跟 Cascadia 完全不搭,11px 下尤其毛糙)。
+     写死才能两端一致。中文是全宽方块字,不参与 Latin 的列对齐,不影响等宽排版。 */
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "PingFang SC", monospace;
   font-family: var(--font-sans);
   font-synthesis: none;
   font-kerning: normal;
@@ -28,7 +32,10 @@ body {
 
 :root[data-platform="windows"] {
   --font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  /* 兜底顺序的理由见 :root 的 --font-mono。Noto Sans SC Variable 由 main.ts 在 Windows
+     上打包加载,font-display: swap 首帧可能还没就绪,所以后面再垫一张系统自带的
+     Microsoft YaHei UI。 */
+  --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans SC Variable", "Microsoft YaHei UI", monospace;
   text-rendering: auto;
 }
 
@@ -8402,6 +8409,10 @@ code {
   font-size: var(--font-sm);
   text-align: left;
 }
+.context-summary-button .ui-icon {
+  width: 1.17em;
+  height: 1.17em;
+}
 .context-summary-button span {
   min-width: 0;
   overflow: hidden;
@@ -13276,12 +13287,31 @@ button.script-readiness-status:hover {
   border-color: rgba(91, 111, 255, .55);
   color: #eef2f8;
 }
-/* 允许列表 pattern 可能很长,单独给它收缩权并省略号截断(完整值在 title) */
+/* 允许列表 pattern 可能很长,单独给它收缩权并省略号截断(完整值在 title)。
+   整块不能吃 var(--font-mono):标签是「总是允许 <pattern>」中文混排,等宽栈没有中文
+   字形,中文会落到兜底脸上、跟相邻按钮对不齐。改成只有 pattern 走等宽,中文沿用
+   .agent-action 的 sans 与 var(--font-sm),与「跳过」「停止」完全一致。 */
 .agent-action-allow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 0 1 auto;
   min-width: 72px;
+}
+.agent-allow-lead {
+  flex: 0 0 auto;
+}
+/* 裸 code 选择器会带自己的 color 和 font-size 进来,这里必须显式挡掉,
+   否则按钮的常态色与 hover 色都作用不到 pattern 上。 */
+.agent-allow-pattern {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
   font-family: var(--font-mono);
   font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .agent-action.primary {
   flex: 0 0 auto;

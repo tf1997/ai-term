@@ -67,12 +67,18 @@ const executeLabel = computed(() => {
 
 const allowPatterns = computed(() => props.proposal?.suggestedPatterns ?? [])
 
-/** 多段命令需要补齐每一段,标签只显示首项 + 总数,完整清单放 title。 */
+/**
+ * 多段命令需要补齐每一段,标签只显示首项 + 总数,完整清单放 title。
+ * 中文与 pattern 分开返回:pattern 要等宽(和终端里的命令观感一致),中文不能吃等宽——
+ * 等宽栈里没有中文字形,中文会落到兜底脸上,与相邻按钮的字体和字号都对不上。
+ */
 const allowLabel = computed(() => {
   const patterns = allowPatterns.value
-  if (!patterns.length) return ''
-  if (patterns.length === 1) return `总是允许 ${patterns[0]}`
-  return `总是允许 ${patterns[0]} 等 ${patterns.length} 项`
+  if (!patterns.length) return null
+  return {
+    pattern: patterns[0],
+    suffix: patterns.length === 1 ? '' : `等 ${patterns.length} 项`
+  }
 })
 
 const allowTitle = computed(() => {
@@ -296,12 +302,15 @@ onBeforeUnmount(() => {
         @click="hasRisk ? emit('reviewRisk') : emit('execute')"
       >{{ executeLabel }}</button>
       <button
-        v-if="allowPatterns.length"
+        v-if="allowLabel"
         type="button"
         class="agent-action agent-action-allow"
         :title="allowTitle"
         @click="emit('executeAndAllow')"
-      >{{ allowLabel }}</button>
+      ><span class="agent-allow-lead">总是允许</span><code class="agent-allow-pattern">{{ allowLabel.pattern }}</code><span
+        v-if="allowLabel.suffix"
+        class="agent-allow-lead"
+      >{{ allowLabel.suffix }}</span></button>
       <button type="button" class="agent-action" @click="emit('skip')">跳过</button>
       <button type="button" class="agent-action danger" @click="emit('stop')">停止</button>
     </div>
