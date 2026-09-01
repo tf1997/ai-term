@@ -1546,7 +1546,6 @@ watch(
           <UiIcon v-if="contextOpen" name="arrow-up" />
           <UiIcon v-else name="arrow-down" />
         </button>
-        <span v-if="isAsking" class="chip ai-live-status">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
         <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
       </div>
       <div v-if="contextOpen" class="ai-context-detail">
