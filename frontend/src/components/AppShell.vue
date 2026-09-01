@@ -1852,19 +1852,29 @@ function executeCommandOnTargetTerminals(command: string) {
   void executeCommandOnTerminalIds(command, [...targetTerminalIds.value])
 }
 
-function fillHistoryCommandOnActiveTerminal(command: string) {
+// 与派发路径共用一套重试节奏:刚回车、shell 还没把新提示符吐回来时不该直接判失败。
+// 和派发一样先问就绪再动手,免得 fillCommand 内部的行内提示在每次重试时闪一遍。
+async function fillHistoryCommandOnActiveTerminal(command: string) {
   const value = command.trim()
   if (!value) return
-  const pane = terminalRefs.value[activeTerminalId.value]
-  if (pane?.fillCommand(value)) {
-    showToast('success', '已填入终端', commandPreview(value))
-    return
+  let lastReadiness: ReturnType<TerminalPaneInstance['commandExecutionReadiness']> = 'unavailable'
+
+  for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay))
+    await nextTick()
+    const pane = terminalRefs.value[activeTerminalId.value]
+    lastReadiness = pane?.commandExecutionReadiness() ?? 'unavailable'
+    if (lastReadiness === 'ready' && pane?.fillCommand(value)) {
+      showToast('success', '已填入终端', commandPreview(value))
+      return
+    }
+    // 行内已有内容是用户自己敲的,等下去也不会变
+    if (lastReadiness === 'line-busy') break
   }
 
-  const readiness = pane?.commandExecutionReadiness() ?? 'unavailable'
-  if (readiness === 'line-busy') {
+  if (lastReadiness === 'line-busy') {
     showToast('warning', '命令未填入', '当前命令行已有输入或补全内容，请先提交或清空。')
-  } else if (readiness === 'shell-busy') {
+  } else if (lastReadiness === 'shell-busy') {
     showToast('warning', '命令未填入', 'Shell 尚未返回可输入提示符，请稍后重试。')
   } else {
     showToast('error', '命令未填入', '当前终端尚未就绪或连接已断开。')

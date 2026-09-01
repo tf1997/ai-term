@@ -1236,7 +1236,9 @@ assert(
     !terminalPane.includes('measureTerminalCell') &&
     terminalPane.includes('scrollTerminalToBottom') &&
     terminalPane.includes('terminal.buffer.active') &&
-    terminalPane.includes('writeTerminalView(event.data)') &&
+    terminalPane.includes('ingestTerminalOutput(event.data)') &&
+    terminalPane.indexOf('appendTerminalOutput(data)', terminalPane.indexOf('function ingestTerminalOutput')) <
+      terminalPane.indexOf('writeTerminalView(data, forceScroll)', terminalPane.indexOf('function ingestTerminalOutput')) &&
     !terminalPane.includes('Math.floor(element.clientHeight / 18)'),
   'TerminalPane must provide native-feeling terminal code styling, command completion, official fitted sizing, active-tab resize guards, and bottom-pinned output.'
 )
