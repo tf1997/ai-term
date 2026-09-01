@@ -42,11 +42,21 @@ import { isSuffixSafeForSentinel } from '../lib/agentAutoApprove'
 import type { AgentCaptureMode, AgentCommandHandle, AgentCommandResult } from '../types/agent'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
 import { isWindowsPlatform } from '../utils/platform'
+import {
+  SYSTEM_TERMINAL_CJK_FALLBACK,
+  WINDOWS_TERMINAL_CJK_FALLBACK,
+  withCjkFallback
+} from '../lib/terminalFont'
 import UiIcon from './UiIcon.vue'
 
 const terminalTypographyOptions = isWindowsPlatform()
   ? { lineHeight: 1.12, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
   : { lineHeight: 1, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
+
+// 终端正文的 CJK 兜底见 lib/terminalFont.ts —— xterm 用 JS 传字体族,吃不到 CSS 变量上的兜底。
+const TERMINAL_CJK_FALLBACK = isWindowsPlatform()
+  ? WINDOWS_TERMINAL_CJK_FALLBACK
+  : SYSTEM_TERMINAL_CJK_FALLBACK
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
@@ -1924,7 +1934,10 @@ function skipInputControlSequence(char: string) {
 
 function resolvedTerminalSettings() {
   return {
-    terminalFontFamily: props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    terminalFontFamily: withCjkFallback(
+      props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      TERMINAL_CJK_FALLBACK
+    ),
     terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || 13)),
     terminalTheme: props.appTheme === 'light' ? 'light' : props.terminalSettings?.terminalTheme || 'midnight'
   }
