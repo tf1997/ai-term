@@ -8409,6 +8409,10 @@ code {
   font-size: var(--font-sm);
   text-align: left;
 }
+.context-summary-button .ui-icon {
+  width: 1.17em;
+  height: 1.17em;
+}
 .context-summary-button span {
   min-width: 0;
   overflow: hidden;

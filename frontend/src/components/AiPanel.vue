@@ -1541,10 +1541,10 @@ watch(
     <div class="context-strip ai-context-strip" :class="{ expanded: contextOpen }">
       <div class="context-strip-main">
         <button class="context-summary-button" type="button" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
-          <UiIcon name="database" size="14" />
+          <UiIcon name="database" />
           <span>{{ contextSummaryLabel }}</span>
-          <UiIcon v-if="contextOpen" name="arrow-up" size="14" />
-          <UiIcon v-else name="arrow-down" size="14" />
+          <UiIcon v-if="contextOpen" name="arrow-up" />
+          <UiIcon v-else name="arrow-down" />
         </button>
         <span v-if="isAsking" class="chip ai-live-status">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
         <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
