@@ -9495,16 +9495,6 @@ code {
   border-color: #ccebdd;
   background: #f8fffb;
 }
-.app-shell.theme-light .settings-option.active {
-  border-color: #bfe9d3;
-  background: #fff;
-  box-shadow: inset 3px 0 0 var(--light-accent);
-}
-.app-shell.theme-light .settings-option.active .settings-option-icon {
-  border-color: #bfe9d3;
-  background: #e8f8ef;
-  color: var(--light-accent-strong);
-}
 .app-shell.theme-light .terminal-settings-panel {
   background: #fff;
 }
@@ -12732,6 +12722,20 @@ button.script-readiness-status:hover {
 .app-shell.theme-dark .script-risk-actions {
   border-top-color: #293246;
   background: #090e16;
+}
+
+/* Light theme settings-option active state needs to win over layout-layer
+   .app-shell .settings-sidebar .settings-option.active at line ~11300, which
+   resets icon background to transparent. This must come after that rule. */
+.app-shell.theme-light .settings-option.active {
+  border-color: #bfe9d3;
+  border-left-color: var(--light-accent);
+  background: #fff;
+}
+.app-shell.theme-light .settings-option.active .settings-option-icon {
+  border-color: #bfe9d3;
+  background: #e8f8ef;
+  color: var(--light-accent-strong);
 }
 
 /* End light theme color-only surface contract. */
