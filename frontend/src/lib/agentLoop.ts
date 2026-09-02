@@ -48,8 +48,55 @@ export interface AgentLoopOptions {
 
 const DEFAULT_STEP_LIMIT = 25
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
-const DEFAULT_MAX_TURN_CHARS = 500_000
+/** 低于后端 MAX_AGENT_TURN_CHARS(80k),保证前端先压缩而不是后端拒绝(文档 10.2)。 */
+const DEFAULT_MAX_TURN_CHARS = 72_000
 const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2000
+/** 压缩时最近保留的完整轮次数(文档 8);探索任务依赖较长证据链。 */
+const PROTECTED_RECENT_TURNS = 6
+/** 压缩时 Assistant 文本保留的字符数。 */
+const COMPRESSED_ASSISTANT_TEXT_CHARS = 200
+/** 压缩后仍保留的命令输出尾部字符数:报错通常在尾部,整体丢弃会让模型失忆。 */
+const COMPRESSED_OUTPUT_TAIL_CHARS = 300
+const OMITTED_OUTPUT_NOTE = '输出已省略'
+const TRUNCATED_OUTPUT_NOTE = '仅保留输出尾部'
+
+const INTERACTIVE_PROMPT_PATTERNS = [
+  /\$ ?$/,
+  /# ?$/,
+  /> ?$/,
+  /\[.*?\][\$#] ?$/,
+  /password[^:]{0,20}:/i,
+  /\(y\/n\) ?$/i
+]
+
+export function looksLikeInteractivePrompt(output: string): boolean {
+  if (!output || /\n\s*$/.test(output)) return false
+  const lastLine = output.split('\n').pop()?.trimEnd() ?? ''
+  if (!lastLine) return false
+  if (INTERACTIVE_PROMPT_PATTERNS.some((pattern) => pattern.test(lastLine))) return true
+  // 兜底:停在冒号/问号/提示箭头且没有换行,多半在等输入
+  return /[:：?？>]$/.test(lastLine)
+}
+
+function seconds(ms: number): number {
+  return Math.max(0, Math.round(ms / 1000))
+}
+
+/** 停止语义的固定说明(文档 9):继续等待不重启命令,停止也不 kill 命令。 */
+const TIMEOUT_SEMANTICS_NOTE = '继续等待不会重启命令；停止只放弃等待，不会终止终端里的命令。'
+
+/** 把超时现场翻译成一句面向用户的解释,三种情形分开说。 */
+export function describeTimeoutHint(info: Omit<AgentTimeoutInfo, 'hint'>): string {
+  const waited = seconds(info.waitedMs)
+  if (info.outputGrowing) {
+    return `已运行 ${waited}s，命令仍在持续输出，可继续等待。`
+  }
+  const silent = seconds(info.silentMs)
+  if (info.likelyInteractive) {
+    return `已运行 ${waited}s，最近 ${silent}s 无新输出，末尾像是在等待你的输入。可切到终端手动响应后点「继续等待」，或停止任务。${TIMEOUT_SEMANTICS_NOTE}`
+  }
+  return `已运行 ${waited}s，最近 ${silent}s 无新输出，命令可能仍在运行或已卡住。${TIMEOUT_SEMANTICS_NOTE}`
+}
 
 /**
  * 从已完成的步骤重建 turns 数组,供重试时恢复模型上下文。
@@ -96,38 +143,74 @@ function commandKey(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
-/** 从 maxTurnChars 推导压缩门限(文档 8 的「50% 触发、剩 25%」策略)。 */
-function compactionThreshold(maxTurnChars: number): number {
-  return Math.floor(maxTurnChars * 0.5)
-}
-
-/** 从 maxTurnChars 推导压缩后应保留的字符数量。 */
-function compactionTarget(maxTurnChars: number): number {
-  return Math.floor(maxTurnChars * 0.25)
-}
-
-/** 把 turns 压缩到目标长度(删除中段的 toolResult,保留首尾);返回新数组。 */
-function compactTurns(turns: AiAgentTurn[], targetChars: number): AiAgentTurn[] {
-  const total = sumTurnChars(turns)
-  if (total <= targetChars) return turns
-
-  // 保留前 1/3 与后 2/3 的 turn(按索引),中间的 toolResult 全删
-  const keepHead = Math.max(1, Math.floor(turns.length / 3))
-  const keepTail = turns.length - Math.floor(turns.length / 3)
-  const compacted: AiAgentTurn[] = []
-  for (let i = 0; i < turns.length; i++) {
-    if (i < keepHead || i >= keepTail) {
-      compacted.push(turns[i])
-    } else if (turns[i].kind !== 'toolResult') {
-      // assistant 保留,只删 toolResult
-      compacted.push(turns[i])
-    }
+/** 轮次的预算占用:text + content + arguments(文档 8 的口径)。 */
+function turnChars(turn: AiAgentTurn): number {
+  if (turn.kind === 'assistant') {
+    return turn.toolCalls.reduce((sum, call) => sum + call.arguments.length, turn.text.length)
   }
-  return compacted
+  return turn.content.length
 }
 
-function sumTurnChars(turns: AiAgentTurn[]): number {
-  return turns.reduce((sum, turn) => sum + JSON.stringify(turn).length, 0)
+/**
+ * 压缩单条工具结果:尽力保留退出码与输出尾部(报错多在尾部),
+ * 整体丢弃会让模型忘记前面查到了什么,探索型任务尤其致命。
+ */
+function compressToolResultContent(content: string): string {
+  let exitCode: number | undefined
+  let output: string | undefined
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as { exitCode?: unknown; output?: unknown }
+      if (typeof record.exitCode === 'number') exitCode = record.exitCode
+      if (typeof record.output === 'string') output = record.output
+    }
+  } catch {
+    // 原 content 不是 JSON:退化为仅保留省略说明
+  }
+
+  const tail = output && output.length > COMPRESSED_OUTPUT_TAIL_CHARS
+    ? output.slice(output.length - COMPRESSED_OUTPUT_TAIL_CHARS)
+    : output
+  const payload: Record<string, unknown> = {}
+  if (exitCode !== undefined) payload.exitCode = exitCode
+  if (tail) {
+    payload.output = tail
+    payload.note = tail === output ? OMITTED_OUTPUT_NOTE : TRUNCATED_OUTPUT_NOTE
+  } else {
+    payload.note = OMITTED_OUTPUT_NOTE
+  }
+  return JSON.stringify(payload)
+}
+
+/**
+ * 轮次预算压缩(文档 8):总字符超过 maxTurnChars 时从最早轮次开始压缩,
+ * ToolResult.content 保留退出码与输出尾部,Assistant.text 截断;
+ * 最近 PROTECTED_RECENT_TURNS 个轮次保持原样。
+ * 保留轮次结构(不删除轮次),避免 toolCall 找不到对应结果。
+ * 不修改入参,返回新数组(未超限时原样返回)。
+ */
+export function compressAgentTurns(turns: AiAgentTurn[], maxTurnChars: number): AiAgentTurn[] {
+  let total = turns.reduce((sum, turn) => sum + turnChars(turn), 0)
+  if (total <= maxTurnChars) return turns
+
+  const compressed = turns.slice()
+  const protectedFrom = Math.max(0, compressed.length - PROTECTED_RECENT_TURNS)
+  for (let index = 0; index < protectedFrom && total > maxTurnChars; index += 1) {
+    const turn = compressed[index]
+    let next: AiAgentTurn | undefined
+    if (turn.kind === 'toolResult') {
+      const content = compressToolResultContent(turn.content)
+      // 占位比原文还长时保持原样,避免"压缩"反而膨胀
+      if (content.length < turn.content.length) next = { ...turn, content }
+    } else if (turn.text.length > COMPRESSED_ASSISTANT_TEXT_CHARS) {
+      next = { ...turn, text: turn.text.slice(0, COMPRESSED_ASSISTANT_TEXT_CHARS) }
+    }
+    if (!next) continue
+    total += turnChars(next) - turnChars(turn)
+    compressed[index] = next
+  }
+  return compressed
 }
 
 /** 对单个工具调用生成审批提案;执行统一流程(classifyStep → autoExec/人工审批)。 */
@@ -176,9 +259,6 @@ async function executeStep(
   outputSampleIntervalMs: number,
   stopSignal: { stopped: boolean }
 ): Promise<AgentStep> {
-  const handle = await deps.startCommand(proposal.command)
-  let waitedMs = 0
-
   const step: AgentStep = {
     id: proposal.id,
     command: proposal.command,
@@ -186,63 +266,94 @@ async function executeStep(
     risks: proposal.risks,
     sensitive: proposal.sensitive,
     autoApproved: false,
-    status: 'running',
-    deadlineAt: Date.now() + commandTimeoutMs
+    status: 'running'
   }
 
-  // 轮询:命令结束或超时
-  while (true) {
-    if (stopSignal.stopped) {
-      step.status = 'timeout'
-      delete step.deadlineAt
-      return step
+  const handle = await deps.startCommand(proposal.command)
+
+  // 输出静默采样(文档 10.3):只比对 peekOutput 的长度,超时时据此说明卡在哪。
+  // 派发瞬间先取一次基线,否则"静默的旧输出"会在超时那一刻被误判成刚刚增长。
+  let lastOutputLength = -1
+  let lastOutputAt = Date.now()
+  const sampleOutput = (): string => {
+    let partial = ''
+    try {
+      partial = handle.peekOutput()
+    } catch {
+      // 捕获侧异常不应中断循环:按"无新输出"处理
+      return ''
     }
-
-    const startWait = Date.now()
-    const result = await Promise.race([
-      handle.result,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), outputSampleIntervalMs))
-    ])
-    waitedMs += Date.now() - startWait
-
-    if (result) {
-      step.status = result.status === 'completed' && result.exitCode === 0 ? 'completed' : 'failed'
-      step.output = result.output
-      step.exitCode = result.exitCode
-      step.durationMs = result.durationMs
-      delete step.deadlineAt
-      return step
+    if (partial.length !== lastOutputLength) {
+      lastOutputLength = partial.length
+      lastOutputAt = Date.now()
     }
+    return partial
+  }
+  sampleOutput()
+  const sampler = setInterval(sampleOutput, outputSampleIntervalMs)
 
-    if (waitedMs >= commandTimeoutMs) {
-      // 超时:采样部分输出并请求决策
-      const partialOutput = handle.peekOutput()
-      const info: AgentTimeoutInfo = {
-        waitedMs,
-        silentMs: waitedMs,
-        partialOutput: partialOutput.slice(-500),
-        outputGrowing: false,
-        likelyInteractive: /[:?]\s*$/.test(partialOutput),
-        hint: waitedMs > commandTimeoutMs * 0.8
-          ? `命令已静默 ${Math.round(waitedMs / 1000)}s,可能已卡住`
-          : '命令仍在运行,可继续等待或停止任务'
+  step.deadlineAt = Date.now() + commandTimeoutMs
+
+  try {
+    let waitedMs = 0
+    while (true) {
+      if (stopSignal.stopped) {
+        step.status = 'timeout'
+        step.deadlineAt = undefined
+        return step
       }
+
+      const result = await Promise.race([
+        handle.result,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), commandTimeoutMs))
+      ])
+
+      if (result) {
+        // 命令完成
+        step.status = result.status === 'completed' && result.exitCode === 0 ? 'completed' : 'failed'
+        step.output = result.output
+        step.exitCode = result.exitCode
+        step.durationMs = result.durationMs
+        step.deadlineAt = undefined
+        return step
+      }
+
+      // 超时:采样输出,生成 hint,请求用户决策
+      waitedMs += commandTimeoutMs
+      const partial = sampleOutput()
+      const TIMEOUT_PARTIAL_OUTPUT_CHARS = 500
+      const partialOutput =
+        partial.length > TIMEOUT_PARTIAL_OUTPUT_CHARS
+          ? partial.slice(partial.length - TIMEOUT_PARTIAL_OUTPUT_CHARS)
+          : partial
+      const silentMs = Date.now() - lastOutputAt
+      const outputGrowing = silentMs <= outputSampleIntervalMs
+      const facts = {
+        waitedMs,
+        silentMs,
+        partialOutput,
+        outputGrowing,
+        likelyInteractive: !outputGrowing && looksLikeInteractivePrompt(partialOutput)
+      }
+      const info: AgentTimeoutInfo = { ...facts, hint: describeTimeoutHint(facts) }
 
       step.deadlineAt = Date.now() + commandTimeoutMs
       const decision = await deps.requestTimeoutDecision(step, info)
+
       if (decision === 'wait') {
-        waitedMs = 0
-        step.deadlineAt = Date.now() + commandTimeoutMs
+        // 用户选择继续等待
         continue
       } else {
-        // stop
+        // 用户选择停止
         handle.cancel()
         step.status = 'timeout'
-        step.output = partialOutput
-        delete step.deadlineAt
+        step.output = partial
+        step.deadlineAt = undefined
         return step
       }
     }
+  } finally {
+    clearInterval(sampler)
   }
 }
 
@@ -309,11 +420,8 @@ export function runAgentTask(
         break
       }
 
-      // 轮次压缩(文档 8)
-      const currentChars = sumTurnChars(turns)
-      if (currentChars > compactionThreshold(maxTurnChars)) {
-        turns = compactTurns(turns, compactionTarget(maxTurnChars))
-      }
+      // 轮次压缩(文档 8):超出预算时就地压缩,不删除轮次
+      turns = compressAgentTurns(turns, maxTurnChars)
 
       // 调用模型
       state.status = 'calling-model'
@@ -433,8 +541,8 @@ export function runAgentTask(
         // execute 或 execute-and-allow
         const classification = deps.classifyStep(proposal.command)
         if (decision === 'execute-and-allow') {
-          const patterns = proposal.suggestedPatterns || []
-          for (const pattern of patterns) {
+          const suggestedPatterns = proposal.suggestedPatterns || []
+          for (const pattern of suggestedPatterns) {
             await deps.onAllowPattern(pattern, proposal.command)
           }
         }

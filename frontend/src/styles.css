@@ -6502,8 +6502,10 @@ code {
   background: #dff6eb;
   color: #06724f;
 }
+/* border: none 会连 border-width/style 一起清掉,那是结构改动,这层只许改颜色。
+   保留通用 button 的 1px 结构,把边框染成透明达到同样的视觉效果。 */
 .theme-light .settings-card .icon-button {
-  border: none;
+  border-color: transparent;
   background: transparent;
   color: #536271;
 }
@@ -11600,10 +11602,13 @@ body.workspace-resizing * {
   overflow-wrap: anywhere;
 }
 
+/* 定高 chip 配 line-height 1.4 的标题，start 对齐会让 HTTP 502 比标题高一点。
+   下移 1px 让两者视觉基线对齐。 */
 .ai-error-code {
   align-self: start;
   height: 23px;
   max-width: 100%;
+  transform: translateY(1px);
   border-color: var(--workbench-line);
   background: var(--workbench-panel-strong);
   color: var(--workbench-muted);
@@ -11622,39 +11627,51 @@ body.workspace-resizing * {
   word-break: break-word;
 }
 
+/* 建议命令可能是几百字符的一整行，换行后高度远超按钮。
+   原来的三列 + align-items: center 会把「本地建议」和「执行」吊在代码块的
+   垂直中心，跟顶部标题对不上，代码也被挤成很窄的一条。
+   改成两行：标签独占一行，代码和按钮在下面对齐到顶部。 */
 .ai-error-suggestion {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 8px;
   border: 1px solid var(--workbench-danger-line);
   border-radius: 6px;
   background: rgba(255, 255, 255, .03);
-  padding: 7px 8px;
+  padding: 8px 9px;
 }
 
 .ai-error-suggestion-label {
+  grid-column: 1 / -1;
   color: var(--workbench-danger-strong);
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
 
+/* overflow-wrap: anywhere 会在任意字符间断开，powercfg /devicequery 这类命令
+   被切成 "powercf|g"，可读性很差。改成优先在空白处断行，只有单个 token 本身
+   超宽时才强断（break-word 的语义），并且限高可滚动，避免一条长命令把整张
+   失败卡片顶开。 */
 .ai-error-suggestion code {
   min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  max-height: 88px;
+  overflow-y: auto;
+  overflow-wrap: break-word;
+  word-break: normal;
   color: var(--workbench-text);
   font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .ai-error-suggestion .text-button {
   height: 26px;
-  padding-inline: 8px;
+  align-self: start;
+  padding-inline: 10px;
 }
 
 .ai-error-actions {
@@ -11763,13 +11780,7 @@ body.workspace-resizing * {
     grid-template-columns: 18px minmax(0, 1fr) auto;
   }
 
-  .ai-error-suggestion {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .ai-error-suggestion-label {
-    grid-column: 1 / -1;
-  }
+  /* .ai-error-suggestion 的两行布局已经是基础样式，这里不再需要覆盖。 */
 }
 
 @media (max-width: 560px) {
@@ -14475,4 +14486,134 @@ button.script-readiness-status:hover {
 .app-shell.theme-light .agent-step-scrollbar-thumb,
 .theme-light .agent-step-scrollbar-thumb {
   background: #94a3b8;
+}
+
+/* Windows glyph and icon alignment pass.
+
+   Three native differences drive the artifacts macOS never shows:
+   1. Cascadia/Consolas have no CJK coverage, so Chinese inside mono surfaces
+      falls back to a proportional face at a different cap height and baseline.
+   2. Segoe UI / Noto Sans SC sit lower in their em box than SF Pro, so an
+      `align-items: center` icon next to text reads one pixel high.
+   3. Windows rounds fractional stroke widths up, making 2px strokes on small
+      icons look heavier than the surrounding text.
+
+   Everything here stays scoped to :root[data-platform="windows"]. */
+
+:root[data-platform="windows"] {
+  --win-icon-stroke: 1.7;
+}
+
+/* Mixed CJK + ASCII inside mono blocks: let the CJK fallback do the CJK and
+   keep the Latin metrics from Cascadia, then normalize the seam. */
+:root[data-platform="windows"] .ai-error-title,
+:root[data-platform="windows"] .ai-error-hint,
+:root[data-platform="windows"] .agent-step-reason,
+:root[data-platform="windows"] .agent-step-empty-output,
+:root[data-platform="windows"] .agent-step-timeout-note,
+:root[data-platform="windows"] .agent-run-status {
+  font-family: var(--font-sans);
+  font-variant-ligatures: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Latin-only run inside a mono surface keeps mono; a mixed run should not
+   half-fall-back mid-string. Applies to the failure detail and step output. */
+:root[data-platform="windows"] .ai-error-detail,
+:root[data-platform="windows"] .ai-error-detail code,
+:root[data-platform="windows"] .agent-step-command,
+:root[data-platform="windows"] .agent-step-command code,
+:root[data-platform="windows"] .agent-step-output,
+:root[data-platform="windows"] .agent-step-output code,
+:root[data-platform="windows"] .agent-step-preview-content,
+:root[data-platform="windows"] .agent-step-preview-content code {
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0;
+  font-synthesis: none;
+}
+
+/* Icons: trim the stroke so 13–14px glyphs match the text weight beside them. */
+:root[data-platform="windows"] .ui-icon {
+  stroke-width: var(--win-icon-stroke);
+  shape-rendering: geometricPrecision;
+}
+
+/* The context chip: database icon, label, and caret on one optical baseline.
+   Segoe's lower baseline needs the icons nudged down, not the text up. */
+:root[data-platform="windows"] .context-summary-button {
+  align-items: center;
+  line-height: 1;
+}
+
+:root[data-platform="windows"] .context-summary-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
+}
+
+:root[data-platform="windows"] .context-summary-button > span {
+  line-height: 1.45;
+}
+
+/* Failure-notice actions: 重试 / 复制详情 / 查看详情.
+
+   Only 重试 and 查看详情 wrap their label in a <span>; 复制详情 is a bare text
+   node, so any label rule has to live on the button itself or it silently
+   skips one of the three. The button keeps a CJK-friendly line-height rather
+   than a tight one — YaHei and Noto Sans SC need the vertical room, and 11px
+   is below where DirectWrite hints Chinese cleanly, so these lift to 12px. */
+:root[data-platform="windows"] .ai-error-actions .text-button {
+  align-items: center;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+:root[data-platform="windows"] .ai-error-actions .text-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
+}
+
+:root[data-platform="windows"] .ai-error-head > .ai-error-icon {
+  align-self: start;
+  transform: translateY(.5px);
+}
+
+/* The rest of the 11px CJK surfaces, same reason as the action row above:
+   DirectWrite stops hinting Chinese cleanly below 12px, so these read muddy
+   next to Latin that looks fine at the same size. Latin-only 11px labels
+   (.script-line-rail line numbers, .script-editor-statusbar's "Shell · UTF-8
+   · LF", HTTP status codes) are left alone — they hint fine and moving them
+   would shift layout that is already correct. */
+:root[data-platform="windows"] .ai-error-suggestion-label,
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button,
+:root[data-platform="windows"] .settings-option-copy strong,
+:root[data-platform="windows"] .settings-sidebar .settings-tab .settings-option-copy strong,
+:root[data-platform="windows"] .script-conversation .message-title strong {
+  font-size: var(--font-sm);
+}
+
+/* .ai-error-code carries either a CJK word (配置 / 超时 / 网络 / 空响应) or an
+   ASCII "HTTP 429" from aiErrorPresentation, so it cannot be split by content. */
+:root[data-platform="windows"] .ai-error-code {
+  font-size: var(--font-sm);
+}
+
+/* Mixed CJK + Latin per line: "行 12，列 4" and "1,781 字符" sit beside the
+   Latin-only cell, so raise the whole bar to keep one baseline across it. */
+:root[data-platform="windows"] .script-editor-statusbar {
+  font-size: var(--font-sm);
+}
+
+/* Same span/bare-text asymmetry as the failure row: this label is wrapped,
+   but keep the metric on the button so it holds either way. */
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button {
+  align-items: center;
+  line-height: 1.5;
+}
+
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
 }
