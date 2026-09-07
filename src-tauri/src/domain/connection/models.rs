@@ -109,4 +109,6 @@ pub struct AiProviderConfig {
     pub context_policy: ContextPolicy,
     pub system_prompt: String,
     pub risk_policy: String,
+    #[serde(default)]
+    pub timeout_seconds: u32,
 }

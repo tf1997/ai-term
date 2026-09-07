@@ -532,7 +532,7 @@ pub async fn chat_with_ai_provider_stream(
             Ok(response)
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             let _ = app.emit_all(
                 &event_name,
                 AiChatStreamEvent {
@@ -601,7 +601,7 @@ pub async fn ai_agent_turn_stream(
             Ok(response)
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             let _ = app.emit_all(
                 &event_name,
                 AiChatStreamEvent {

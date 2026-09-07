@@ -31,6 +31,7 @@ import {
   summarizeScriptRisks
 } from '../lib/scriptRisk'
 import { isSensitivePath } from '../lib/pathPrivacy'
+import { aiStreamPartialText, createAiStreamErrorMessage } from '../lib/aiStreamError'
 import AiMarkdownMessage from './AiMarkdownMessage.vue'
 import AiErrorNotice from './AiErrorNotice.vue'
 import AgentStepCard from './AgentStepCard.vue'
@@ -286,23 +287,6 @@ function aiCommandHistory() {
     .slice(-MAX_AI_COMMAND_HISTORY)
 }
 
-function inferCommand(question: string, terminalSnapshot = props.terminalSnapshot, commandHistory = aiCommandHistory()) {
-  const text = question.toLowerCase()
-  const recentCommands = commandHistory.slice(-8).join('\n')
-  const context = `${terminalSnapshot}\n${recentCommands}`.toLowerCase()
-
-  if (text.includes('磁盘') || text.includes('空间') || text.includes('disk')) return 'df -h'
-  if (text.includes('内存') || text.includes('memory')) return 'free -h'
-  if (text.includes('端口') || text.includes('port')) return 'ss -tulpn'
-  if (text.includes('进程') || text.includes('process')) return 'ps aux --sort=-%mem | head'
-  if (text.includes('日志') || text.includes('log')) return 'journalctl -n 100 --no-pager'
-  if (text.includes('更新') || text.includes('upgrade') || context.includes('apt list --upgradable')) {
-    return 'apt list --upgradable'
-  }
-  const fallbackCommands = recentCommands.split('\n').filter(Boolean)
-  return fallbackCommands[fallbackCommands.length - 1] ?? 'uname -a'
-}
-
 /**
  * Splits the session conversation at the compaction watermark: turns covered
  * by the stored AI summary vs. turns that still ship verbatim. If the anchor
@@ -409,7 +393,7 @@ async function runChatTurn(
   }
   try {
     unlisten = await onAiChatStream(requestId, (event) => {
-      if (stopRequested.value || currentRequestId.value !== requestId) return
+      if (stopRequested.value || currentRequestId.value !== requestId || errorNotified) return
       if (event.kind === 'chunk') {
         streamedAnswer += event.delta
         if (streamFlushTimer === undefined) {
@@ -420,14 +404,7 @@ async function runChatTurn(
         if (stopRequested.value) return
         cancelStreamFlush()
         notifyAiError(event.error)
-        // 正文只放原始报错,结构化呈现交给 AiErrorNotice
-        emit('updateMessage', {
-          ...assistantMessage,
-          text: event.error,
-          command: '',
-          error: true,
-          streaming: false
-        })
+        emit('updateMessage', createAiStreamErrorMessage(assistantMessage, event.error, streamedAnswer))
       }
     })
     const response = await callConfiguredModelStream(
@@ -438,7 +415,7 @@ async function runChatTurn(
       conversationMessages,
       conversationSummary
     )
-    if (stopRequested.value || currentRequestId.value !== requestId) return
+    if (stopRequested.value || currentRequestId.value !== requestId || errorNotified) return
     cancelStreamFlush()
     const answer = streamedAnswer || response.answer
     const command = extractPrimaryShellCommand(answer)
@@ -461,13 +438,7 @@ async function runChatTurn(
     cancelStreamFlush()
     const detail = formatAiError(error)
     notifyAiError(detail)
-    emit('updateMessage', {
-      ...assistantMessage,
-      text: detail,
-      command: inferCommand(question, terminalSnapshot, commandHistory),
-      error: true,
-      streaming: false
-    })
+    emit('updateMessage', createAiStreamErrorMessage(assistantMessage, detail, streamedAnswer))
   } finally {
     cancelStreamFlush()
     unlisten?.()
@@ -701,10 +672,9 @@ async function runAgentTurn(
     const status = agentStatusFromRun(state)
     const terminal = status !== 'running'
     const failed = status === 'error'
-    emit('updateMessage', {
+    const updated: AiMessage = {
       ...assistantMessage,
       mode: 'agent',
-      // 失败时正文只放原始报错,结构化呈现交给 AiErrorNotice
       text: failed ? state.error || '任务出错' : state.finalText,
       agentSteps: state.steps,
       agentStatus: status,
@@ -713,7 +683,10 @@ async function runAgentTurn(
       payloadJson: terminal
         ? JSON.stringify({ mode: 'agent', agentSteps: persistableAgentSteps(state.steps), agentStatus: status })
         : undefined
-    })
+    }
+    emit('updateMessage', failed
+      ? createAiStreamErrorMessage(updated, updated.text, agentStreamText.value)
+      : updated)
   }
 
   const deps: AgentLoopDeps = {
@@ -1618,8 +1591,12 @@ watch(
               @wait="resolveAgentTimeout('wait')"
               @timeout-stop="resolveAgentTimeout('stop')"
             />
-            <div v-if="message.id === agentRunMessageId && agentStreamText" class="agent-stream-text">{{ agentStreamText }}</div>
+            <div v-if="message.id === agentRunMessageId && agentStreamText && !message.error" class="agent-stream-text">{{ agentStreamText }}</div>
           </div>
+          <template v-if="aiStreamPartialText(message)">
+            <p class="ai-error-hint">回复中断，以下是已收到的不完整内容：</p>
+            <AiMarkdownMessage :content="aiStreamPartialText(message)" :interactive-commands="false" />
+          </template>
           <AiErrorNotice
             v-if="message.error"
             :detail="message.text"

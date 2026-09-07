@@ -57,7 +57,8 @@ const AI_PROVIDER_CONFIG_SELECT: &str = r#"
       api_key,
       context_policy,
       system_prompt,
-      risk_policy
+      risk_policy,
+      timeout_seconds
     FROM ai_provider_configs
 "#;
 
@@ -107,6 +108,7 @@ fn map_ai_provider_config_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiPro
         context_policy: context_policy_from_str(&context_policy),
         system_prompt: row.get(7)?,
         risk_policy: row.get(8)?,
+        timeout_seconds: row.get(9)?,
     })
 }
 
@@ -298,9 +300,10 @@ impl SqliteConfigStore {
               context_policy,
               system_prompt,
               risk_policy,
+              timeout_seconds,
               updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
               provider = excluded.provider,
               base_url = excluded.base_url,
@@ -310,6 +313,7 @@ impl SqliteConfigStore {
               context_policy = excluded.context_policy,
               system_prompt = excluded.system_prompt,
               risk_policy = excluded.risk_policy,
+              timeout_seconds = excluded.timeout_seconds,
               updated_at = CURRENT_TIMESTAMP
             "#,
             params![
@@ -322,6 +326,7 @@ impl SqliteConfigStore {
                 context_policy_to_str(&stored.context_policy),
                 stored.system_prompt,
                 stored.risk_policy,
+                stored.timeout_seconds,
             ],
         )?;
         Ok(())
@@ -1081,6 +1086,12 @@ fn migrate_connection_profiles(connection: &Connection) -> Result<()> {
 
 fn migrate_ai_provider_configs(connection: &Connection) -> Result<()> {
     ensure_column(connection, "ai_provider_configs", "api_key", "TEXT")?;
+    ensure_column(
+        connection,
+        "ai_provider_configs",
+        "timeout_seconds",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     Ok(())
 }
 

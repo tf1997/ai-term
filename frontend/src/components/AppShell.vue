@@ -158,7 +158,8 @@ const defaultAiConfig: AiProviderConfig = {
   apiKey: '',
   contextPolicy: 'selected-output-only',
   systemPrompt: 'You are an assistant for safe server operations.',
-  riskPolicy: 'confirm-dangerous'
+  riskPolicy: 'confirm-dangerous',
+  timeoutSeconds: 0
 }
 const LOCAL_CONNECTION_ID = 'local'
 const DEFAULT_AI_SESSION_ID = 'ai:default'

@@ -156,6 +156,8 @@ npm run dev
 
 AI Term accepts an API root such as `https://provider.example/v1` or a complete Chat Completions endpoint. You can configure the model, API key, context policy, and risk policy.
 
+Each AI configuration has an editable request timeout in seconds, defaulting to `0` (no application timeout), including existing configurations after upgrade. A positive value limits how long Chat and Agent streams wait for the first or next data chunk, not their total reply duration; non-streaming requests use it as a total request deadline. Streaming requests can still be stopped manually when the timeout is disabled. If a connection is interrupted, the received text is retained as an incomplete reply alongside the error details, without executable command buttons. Retry manually after checking the network, proxy, or model service; proxy and provider timeouts may still apply.
+
 Connection profiles, command history, conversations, and scripts are stored locally. Only context explicitly selected and attached to an AI request is sent to the configured provider. Review that provider's retention and privacy policy before sending sensitive terminal output.
 
 For convenience, the current version may still store SSH passwords and AI API keys in plaintext. Protect the workstation with disk encryption and operating system account controls; OS keychain integration is still being improved.

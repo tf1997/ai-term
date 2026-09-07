@@ -61,6 +61,34 @@ test('网络不可达归类到网络', () => {
   assert.equal(view.retryable, true)
 })
 
+test('流式读取中断包含旧版错误提示且保留底层原因', () => {
+  for (const detail of [
+    'failed to read AI stream chunk',
+    'AI 流式响应读取中断：网络连接或模型服务提前关闭了响应: error reading a body from connection: connection reset'
+  ]) {
+    const view = describeAiError(detail)
+    assert.equal(view.title, 'AI 回复连接中断')
+    assert.equal(view.code, '断流')
+    assert.equal(view.detail, detail)
+    assert.equal(view.retryable, true)
+    assert.equal(hasExtraErrorDetail(view), true)
+  }
+})
+
+test('流式空闲超时和历史总超时均可归类', () => {
+  const idle = describeAiError('AI 流式响应超时：连续 30 秒未收到数据，可调整 AI 配置中的请求超时后重试')
+  assert.equal(idle.title, 'AI 回复等待超时')
+  assert.match(idle.hint, /AI 配置/)
+  assert.match(idle.hint, /设为 0/)
+  assert.doesNotMatch(idle.hint, /90 秒/)
+  assert.match(idle.detail, /连续 30 秒/)
+  assert.equal(idle.retryable, true)
+
+  const legacy = describeAiError('failed to read AI stream chunk: operation timed out')
+  assert.equal(legacy.title, 'AI 回复等待超时')
+  assert.doesNotMatch(legacy.hint, /连续 90 秒/)
+})
+
 test('配置缺失优先于 HTTP 归类', () => {
   for (const raw of ['请先配置 AI Base URL', '请先配置 AI Model', '请在 AI 配置中填写 API Key 并保存']) {
     const view = describeAiError(raw)

@@ -12,6 +12,7 @@ fn config() -> AiProviderConfig {
         context_policy: ContextPolicy::SelectedOutputOnly,
         system_prompt: "You are an assistant for safe server operations.".into(),
         risk_policy: "confirm-dangerous".into(),
+        timeout_seconds: 0,
     }
 }
 
@@ -54,7 +55,32 @@ fn ai_provider_json_uses_backend_kebab_case_names() {
 
     let config: AiProviderConfig = serde_json::from_value(payload).unwrap();
     assert_eq!(config.provider, AiProviderType::OpenAiCompatible);
+    assert_eq!(config.timeout_seconds, 0);
 
     let serialized = serde_json::to_value(config).unwrap();
     assert_eq!(serialized["provider"], "open-ai-compatible");
+    assert_eq!(serialized["timeoutSeconds"], 0);
+}
+
+#[test]
+fn ai_timeout_round_trips_and_rejects_invalid_values() {
+    let mut configured = config();
+    configured.timeout_seconds = 120;
+    assert!(validate_ai_config(&configured).is_ok());
+    let payload = serde_json::to_value(&configured).unwrap();
+    assert_eq!(payload["timeoutSeconds"], 120);
+    assert_eq!(
+        serde_json::from_value::<AiProviderConfig>(payload.clone()).unwrap(),
+        configured
+    );
+
+    for invalid in [
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!(4_294_967_296_u64),
+    ] {
+        let mut invalid_payload = payload.clone();
+        invalid_payload["timeoutSeconds"] = invalid;
+        assert!(serde_json::from_value::<AiProviderConfig>(invalid_payload).is_err());
+    }
 }

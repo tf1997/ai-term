@@ -148,6 +148,29 @@ function classify(text: string): Classification {
     }
   }
 
+  const streamInterrupted = text.includes('流式响应读取中断') || lower.includes('failed to read ai stream chunk')
+  const streamIdleTimeout = text.includes('流式响应超时')
+
+  if ((streamInterrupted || streamIdleTimeout) && (text.includes('超时') || lower.includes('timeout') || lower.includes('timed out'))) {
+    return {
+      title: 'AI 回复等待超时',
+      code: '超时',
+      hint: streamIdleTimeout
+        ? '等待模型数据超过配置的超时时间。可在 AI 配置中调大请求超时，或设为 0 取消超时后重试。'
+        : '流式连接等待超时。可重试；持续发生时请检查网络、代理或模型服务的超时设置。',
+      retryable: true
+    }
+  }
+
+  if (streamInterrupted) {
+    return {
+      title: 'AI 回复连接中断',
+      code: '断流',
+      hint: '网络、代理或模型服务可能提前关闭了连接。可重试；部分回复不代表完整结果。',
+      retryable: true
+    }
+  }
+
   if (text.includes('超时') || lower.includes('timeout') || lower.includes('timed out')) {
     return {
       title: '请求超时',
