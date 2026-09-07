@@ -15,6 +15,7 @@ fn config(id: &str, model: &str) -> AiProviderConfig {
         context_policy: ContextPolicy::ActiveCommandOutput,
         system_prompt: "You are an assistant for safe server operations.".into(),
         risk_policy: "confirm-dangerous".into(),
+        timeout_seconds: 0,
     }
 }
 
@@ -69,6 +70,29 @@ fn sqlite_store_updates_existing_ai_provider_config() {
     assert_eq!(
         store.get_ai_provider_config("default").unwrap(),
         Some(updated)
+    );
+}
+
+#[test]
+fn sqlite_store_persists_timeout_and_can_disable_it_again() {
+    let database_path = temp_db_path("ai-config-timeout");
+    let credentials = Arc::new(MemoryCredentialStore::default());
+    let store = SqliteConfigStore::with_credential_store(&database_path, credentials.clone());
+    let mut configured = config("timeout-config", "test-model");
+    configured.timeout_seconds = 45;
+    store.save_ai_provider_config(&configured).unwrap();
+    drop(store);
+
+    let reopened = SqliteConfigStore::with_credential_store(database_path, credentials);
+    assert_eq!(
+        reopened.list_ai_provider_configs().unwrap(),
+        vec![configured.clone()]
+    );
+    configured.timeout_seconds = 0;
+    reopened.save_ai_provider_config(&configured).unwrap();
+    assert_eq!(
+        reopened.get_ai_provider_config("timeout-config").unwrap(),
+        Some(configured)
     );
 }
 
@@ -190,7 +214,9 @@ fn sqlite_store_migrates_legacy_plaintext_ai_api_key_on_read() {
     let mut expected = config("legacy-gpt", "gpt-4.1");
     expected.api_key = Some("sk-legacy".into());
 
-    assert_eq!(store.list_ai_provider_configs().unwrap(), vec![expected]);
+    let migrated = store.list_ai_provider_configs().unwrap();
+    assert_eq!(migrated[0].timeout_seconds, 0);
+    assert_eq!(migrated, vec![expected]);
 
     let connection = Connection::open(store.database_path()).unwrap();
     let raw: (String, Option<String>) = connection

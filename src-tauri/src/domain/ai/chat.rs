@@ -9,6 +9,9 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::domain::ai::stream::{
+    is_stream_done, send_stream_request, stream_error_body, wait_for_stream, SseEventBuffer,
+};
 use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::text::Utf8StreamDecoder;
 
@@ -135,8 +138,13 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_chat_payload(&request, &context, &conversation, false);
 
-    let response_text =
-        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let response_text = send_openai_compatible_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        request.config.timeout_seconds,
+    )
+    .await?;
     let answer = extract_chat_answer(&response_text)?;
 
     Ok(AiChatResponse {
@@ -168,6 +176,7 @@ where
         &endpoint,
         &request.api_key,
         payload,
+        request.config.timeout_seconds,
         on_delta,
         cancel_token,
     )
@@ -205,8 +214,13 @@ pub async fn generate_session_title(
         "stream": false
     });
 
-    let response_text =
-        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let response_text = send_openai_compatible_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        request.config.timeout_seconds,
+    )
+    .await?;
     let answer = extract_chat_answer(&response_text)?;
     let title = sanitize_session_title(&answer)
         .or_else(|| sanitize_session_title(&request.user_message))
@@ -234,8 +248,13 @@ pub async fn generate_script_title(request: AiScriptTitleRequest) -> Result<AiSc
         "stream": false
     });
 
-    let response_text =
-        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let response_text = send_openai_compatible_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        request.config.timeout_seconds,
+    )
+    .await?;
     let answer = extract_chat_answer(&response_text)?;
     let title = sanitize_session_title(&answer)
         .or_else(|| sanitize_session_title(&request.user_request))
@@ -268,8 +287,13 @@ pub async fn compress_conversation_context(
         "stream": false
     });
 
-    let response_text =
-        send_openai_compatible_request(&endpoint, &request.api_key, payload).await?;
+    let response_text = send_openai_compatible_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        request.config.timeout_seconds,
+    )
+    .await?;
     let answer = extract_chat_answer(&response_text)?;
     let summary = truncate_for_prompt(answer.trim(), MAX_CONVERSATION_SUMMARY_CHARS);
     if summary.trim().is_empty() {
@@ -775,15 +799,14 @@ pub(crate) fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
 /// Shared HTTP client reused across all AI requests.
 ///
 /// Building a client per request re-initializes TLS and discards the connection
-/// pool every call. A single lazily-built client keeps connections warm; the
-/// long overall deadline is applied per-request via `RequestBuilder::timeout`.
+/// pool every call. A single lazily-built client keeps connections warm.
+/// Non-streaming requests use a total deadline; streams time out only when idle.
 pub(crate) fn ai_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client);
     }
     let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(20))
         .user_agent(AI_TERM_USER_AGENT)
         .build()
         .context("failed to build AI HTTP client")?;
@@ -794,15 +817,19 @@ async fn send_openai_compatible_request(
     endpoint: &str,
     api_key: &str,
     payload: Value,
+    timeout_seconds: u32,
 ) -> Result<String> {
-    let response = ai_http_client()?
+    let mut request = ai_http_client()?
         .post(endpoint)
         .header("Content-Type", "application/json")
         .header("X-Client-Name", AI_TERM_CLIENT_NAME)
         .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
-        .body(payload.to_string())
-        .timeout(Duration::from_secs(90))
+        .body(payload.to_string());
+    if timeout_seconds > 0 {
+        request = request.timeout(Duration::from_secs(u64::from(timeout_seconds)));
+    }
+    let response = request
         .send()
         .await
         .with_context(|| format!("AI 网络请求失败：{endpoint}"))?;
@@ -824,43 +851,40 @@ async fn send_openai_compatible_stream_request<F>(
     endpoint: &str,
     api_key: &str,
     payload: Value,
+    timeout_seconds: u32,
     mut on_delta: F,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<String>
 where
     F: FnMut(String) + Send,
 {
-    let response = ai_http_client()?
-        .post(endpoint)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .header("X-Client-Name", AI_TERM_CLIENT_NAME)
-        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
-        .bearer_auth(api_key.trim())
-        .body(payload.to_string())
-        .timeout(Duration::from_secs(90))
-        .send()
-        .await
-        .with_context(|| format!("AI 流式网络请求失败：{endpoint}"))?;
+    let Some(response) =
+        send_stream_request(endpoint, api_key, payload, timeout_seconds, cancel_token).await?
+    else {
+        return Ok(String::new());
+    };
 
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let raw = response.text().await.unwrap_or_default();
+        let raw = stream_error_body(response, timeout_seconds, cancel_token).await;
         bail!("模型请求失败：HTTP {status}\n{}", parse_model_error(&raw));
     }
 
     let mut stream = response.bytes_stream();
     let mut decoder = Utf8StreamDecoder::default();
     let mut raw = String::new();
-    let mut event_buffer = String::new();
+    let mut event_buffer = SseEventBuffer::default();
     let mut answer = String::new();
     let mut saw_sse_delta = false;
 
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = wait_for_stream(stream.next(), timeout_seconds, cancel_token)
+        .await?
+        .flatten()
+    {
         if is_cancelled(cancel_token) {
             return Ok(answer);
         }
-        let chunk = chunk.context("failed to read AI stream chunk")?;
+        let chunk = chunk.context("AI 流式响应读取中断：网络连接或模型服务提前关闭了响应")?;
         let text = decoder.push(&chunk);
         if text.is_empty() {
             continue;
@@ -870,11 +894,9 @@ where
         if !saw_sse_delta {
             raw.push_str(&text);
         }
-        event_buffer.push_str(&text);
+        event_buffer.push(&text);
 
-        while let Some(index) = event_buffer.find("\n\n") {
-            let event = event_buffer[..index].to_string();
-            event_buffer.drain(..index + 2);
+        while let Some(event) = event_buffer.next_event() {
             for delta in parse_sse_event_deltas(&event)? {
                 if is_cancelled(cancel_token) {
                     return Ok(answer);
@@ -883,11 +905,21 @@ where
                 answer.push_str(&delta);
                 on_delta(delta);
             }
+            if is_stream_done(&event) {
+                if !saw_sse_delta {
+                    bail!("模型返回为空");
+                }
+                return Ok(answer);
+            }
         }
     }
 
-    if !event_buffer.trim().is_empty() {
-        for delta in parse_sse_event_deltas(&event_buffer)? {
+    if is_cancelled(cancel_token) {
+        return Ok(answer);
+    }
+
+    if !event_buffer.remaining().trim().is_empty() {
+        for delta in parse_sse_event_deltas(event_buffer.remaining())? {
             if is_cancelled(cancel_token) {
                 return Ok(answer);
             }
@@ -923,7 +955,10 @@ fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {
             continue;
         }
         let data = line.trim_start_matches("data:").trim();
-        if data.is_empty() || data == "[DONE]" {
+        if data == "[DONE]" {
+            break;
+        }
+        if data.is_empty() {
             continue;
         }
 
@@ -1250,6 +1285,12 @@ mod tests {
     }
 
     #[test]
+    fn ignores_data_after_stream_done() {
+        let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
+        assert_eq!(parse_sse_event_deltas(event).unwrap(), vec!["完成"]);
+    }
+
+    #[test]
     fn sanitizes_model_session_title() {
         assert_eq!(
             sanitize_session_title("标题：\"查看 CPU 使用率。\"").as_deref(),
@@ -1302,6 +1343,7 @@ mod tests {
             context_policy: crate::domain::connection::models::ContextPolicy::SelectedOutputOnly,
             system_prompt: String::new(),
             risk_policy: String::new(),
+            timeout_seconds: 0,
         }
     }
 

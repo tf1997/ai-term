@@ -2,7 +2,6 @@
 //! 设计见 docs/ai-agent-mode-development.md 第 5 节；HTTP/SSE 基础设施复用 chat 模块。
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
@@ -10,12 +9,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::ai::chat::{
-    ai_http_client, build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
+    build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
     conversation_context_chars, conversation_context_was_compressed,
     conversation_messages_for_payload, extract_chat_answer, extract_stream_delta, is_cancelled,
     parse_model_error, reject_html_response, truncate_for_prompt, AiCancelToken,
-    AiConversationRole, AiConversationTurn, ContextBundle, AI_TERM_CLIENT_NAME,
-    AI_TERM_CLIENT_VERSION, MAX_CONVERSATION_SUMMARY_CHARS,
+    AiConversationRole, AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
+};
+use crate::domain::ai::stream::{
+    is_stream_done, send_stream_request, stream_error_body, wait_for_stream, SseEventBuffer,
 };
 use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::text::Utf8StreamDecoder;
@@ -101,9 +102,15 @@ where
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_agent_payload(&request, &context, &conversation, true)?;
 
-    let (text, tool_calls) =
-        send_agent_stream_request(&endpoint, &request.api_key, payload, on_delta, cancel_token)
-            .await?;
+    let (text, tool_calls) = send_agent_stream_request(
+        &endpoint,
+        &request.api_key,
+        payload,
+        request.config.timeout_seconds,
+        on_delta,
+        cancel_token,
+    )
+    .await?;
 
     Ok(AiAgentTurnResponse {
         text,
@@ -330,28 +337,22 @@ async fn send_agent_stream_request<F>(
     endpoint: &str,
     api_key: &str,
     payload: Value,
+    timeout_seconds: u32,
     mut on_delta: F,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<(String, Vec<AiToolCall>)>
 where
     F: FnMut(String) + Send,
 {
-    let response = ai_http_client()?
-        .post(endpoint)
-        .header("Content-Type", "application/json")
-        .header("Accept", "text/event-stream")
-        .header("X-Client-Name", AI_TERM_CLIENT_NAME)
-        .header("X-Client-Version", AI_TERM_CLIENT_VERSION)
-        .bearer_auth(api_key.trim())
-        .body(payload.to_string())
-        .timeout(Duration::from_secs(90))
-        .send()
-        .await
-        .with_context(|| format!("AI 流式网络请求失败：{endpoint}"))?;
+    let Some(response) =
+        send_stream_request(endpoint, api_key, payload, timeout_seconds, cancel_token).await?
+    else {
+        return Ok((String::new(), Vec::new()));
+    };
 
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let raw = response.text().await.unwrap_or_default();
+        let raw = stream_error_body(response, timeout_seconds, cancel_token).await;
         bail!(
             "模型请求失败：HTTP {status}\n{}",
             agent_model_error_detail(&raw)
@@ -361,16 +362,19 @@ where
     let mut stream = response.bytes_stream();
     let mut decoder = Utf8StreamDecoder::default();
     let mut raw = String::new();
-    let mut event_buffer = String::new();
+    let mut event_buffer = SseEventBuffer::default();
     let mut text = String::new();
     let mut accumulator: BTreeMap<u64, AiToolCall> = BTreeMap::new();
     let mut saw_sse_delta = false;
 
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = wait_for_stream(stream.next(), timeout_seconds, cancel_token)
+        .await?
+        .flatten()
+    {
         if is_cancelled(cancel_token) {
             return Ok((text, finalize_tool_calls(accumulator)));
         }
-        let chunk = chunk.context("failed to read AI stream chunk")?;
+        let chunk = chunk.context("AI 流式响应读取中断：网络连接或模型服务提前关闭了响应")?;
         let chunk_text = decoder.push(&chunk);
         if chunk_text.is_empty() {
             continue;
@@ -380,11 +384,9 @@ where
         if !saw_sse_delta {
             raw.push_str(&chunk_text);
         }
-        event_buffer.push_str(&chunk_text);
+        event_buffer.push(&chunk_text);
 
-        while let Some(index) = event_buffer.find("\n\n") {
-            let event = event_buffer[..index].to_string();
-            event_buffer.drain(..index + 2);
+        while let Some(event) = event_buffer.next_event() {
             for delta in parse_agent_sse_event(&event, &mut accumulator)? {
                 if is_cancelled(cancel_token) {
                     return Ok((text, finalize_tool_calls(accumulator)));
@@ -394,11 +396,21 @@ where
                 on_delta(delta);
             }
             saw_sse_delta = saw_sse_delta || !accumulator.is_empty();
+            if is_stream_done(&event) {
+                if !saw_sse_delta {
+                    bail!("模型返回为空");
+                }
+                return Ok((text, finalize_tool_calls(accumulator)));
+            }
         }
     }
 
-    if !event_buffer.trim().is_empty() {
-        for delta in parse_agent_sse_event(&event_buffer, &mut accumulator)? {
+    if is_cancelled(cancel_token) {
+        return Ok((text, finalize_tool_calls(accumulator)));
+    }
+
+    if !event_buffer.remaining().trim().is_empty() {
+        for delta in parse_agent_sse_event(event_buffer.remaining(), &mut accumulator)? {
             if is_cancelled(cancel_token) {
                 return Ok((text, finalize_tool_calls(accumulator)));
             }
@@ -433,7 +445,10 @@ fn parse_agent_sse_event(
             continue;
         }
         let data = line.trim_start_matches("data:").trim();
-        if data.is_empty() || data == "[DONE]" {
+        if data == "[DONE]" {
+            break;
+        }
+        if data.is_empty() {
             continue;
         }
 
@@ -602,6 +617,7 @@ mod tests {
             context_policy: crate::domain::connection::models::ContextPolicy::SelectedOutputOnly,
             system_prompt: String::new(),
             risk_policy: String::new(),
+            timeout_seconds: 0,
         }
     }
 
@@ -800,6 +816,17 @@ mod tests {
             Some(SKIPPED_TOOL_RESULT_CONTENT)
         );
         assert_eq!(messages.len(), 7);
+    }
+
+    #[test]
+    fn ignores_data_after_stream_done() {
+        let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
+        let mut accumulator = BTreeMap::new();
+        assert_eq!(
+            parse_agent_sse_event(event, &mut accumulator).unwrap(),
+            vec!["完成"]
+        );
+        assert!(accumulator.is_empty());
     }
 
     #[test]

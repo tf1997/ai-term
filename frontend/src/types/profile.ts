@@ -61,6 +61,7 @@ export interface AiProviderConfig {
   contextPolicy: ContextPolicy
   systemPrompt: string
   riskPolicy: 'confirm-dangerous'
+  timeoutSeconds: number
 }
 
 export interface SessionInfo {
