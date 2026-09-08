@@ -297,6 +297,81 @@ test('连续两次 invalid_arguments:任务以 error 结束', async () => {
   assert.equal(state.steps.length, 0)
 })
 
+test('run_command 是唯一受支持的工具名,异常工具不会执行', async () => {
+  let commandStarts = 0
+  const { calls, callModel } = scriptedModel([
+    turnResponse('误用工具', [{ id: 'bad-tool', name: 'bash', arguments: '{"command":"uptime"}' }]),
+    turnResponse('改用正确工具', [toolCall('good-tool', 'uptime')]),
+    turnResponse('完成', [])
+  ])
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => {
+      commandStarts += 1
+      return makeSimpleHandle()
+    }
+  })
+  const state = await runAgentTask('测试', deps).done
+
+  assert.equal(state.status, 'done')
+  assert.equal(commandStarts, 1)
+  assert.equal(JSON.parse(calls[1].turns[1].content).status, 'unsupported_tool')
+})
+
+test('连续异常工具会返回明确错误而不是空泛的任务出错', async () => {
+  const { callModel } = scriptedModel([
+    turnResponse('第一次误用', [{ id: 'bad-1', name: 'bash', arguments: '{"command":"uptime"}' }]),
+    turnResponse('第二次误用', [{ id: 'bad-2', name: '', arguments: '{"command":"uptime"}' }])
+  ])
+  const { deps } = makeDeps({ callModel })
+  const state = await runAgentTask('测试', deps).done
+
+  assert.equal(state.status, 'error')
+  assert.match(state.error, /连续 2 次调用了不支持的工具/)
+  assert.match(state.error, /空名称/)
+  assert.equal(state.steps.length, 0)
+})
+
+test('重试会保留已完成步骤并以 run_command 协议恢复上下文', async () => {
+  const initialSteps = [
+    {
+      id: 'old-completed',
+      command: 'df -h',
+      reason: '查看磁盘',
+      risks: [],
+      sensitive: false,
+      status: 'completed',
+      output: 'disk-ok',
+      exitCode: 0,
+      durationMs: 12
+    },
+    {
+      id: 'old-skipped',
+      command: 'systemctl restart nginx',
+      reason: '重启服务',
+      risks: [],
+      sensitive: false,
+      status: 'skipped'
+    }
+  ]
+  const { calls, callModel } = scriptedModel([turnResponse('已有信息足够', [])])
+  const { deps } = makeDeps({ callModel })
+  const state = await runAgentTask('继续排查', deps, { initialSteps }).done
+
+  assert.equal(state.status, 'done')
+  assert.equal(state.steps.length, 2)
+  assert.notEqual(state.steps, initialSteps)
+  assert.equal(calls[0].turns.length, 4)
+  assert.equal(calls[0].turns[0].toolCalls[0].name, 'run_command')
+  assert.deepEqual(JSON.parse(calls[0].turns[1].content), {
+    exitCode: 0,
+    durationMs: 12,
+    truncated: false,
+    output: 'disk-ok'
+  })
+  assert.deepEqual(JSON.parse(calls[0].turns[3].content), { status: 'skipped_by_user' })
+})
+
 test('callModel 抛异常:状态 error 且 error 为异常信息', async () => {
   const { deps } = makeDeps({
     callModel: async () => {
@@ -705,4 +780,3 @@ test('describeTimeoutHint:三个分支各自成文,停止语义只附在需要�
   assert.ok(stuck.includes('可能仍在运行或已卡住'))
   assert.ok(stuck.includes(semantics))
 })
-

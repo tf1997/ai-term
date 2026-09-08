@@ -466,8 +466,8 @@ fn parse_agent_sse_event(
     Ok(deltas)
 }
 
-/// 按 index 累积工具调用增量：id/name 取首个非空值，arguments 逐片拼接。
-/// 兼容分片下发（标准）与单个 delta 携带完整调用两类网关行为。
+/// 按 index 累积工具调用增量：id/name/arguments 都兼容分片下发。
+/// 部分兼容网关会重复发送完整 id/name，合并时避免把重复值拼接两次。
 fn accumulate_tool_call_deltas(accumulator: &mut BTreeMap<u64, AiToolCall>, payload: &Value) {
     let Some(deltas) = payload
         .pointer("/choices/0/delta/tool_calls")
@@ -482,28 +482,35 @@ fn accumulate_tool_call_deltas(accumulator: &mut BTreeMap<u64, AiToolCall>, payl
             .and_then(Value::as_u64)
             .unwrap_or(position as u64);
         let call = accumulator.entry(index).or_insert_with(empty_tool_call);
-        if call.id.is_empty() {
-            if let Some(id) = delta
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-            {
-                call.id = id.to_string();
-            }
+        if let Some(id) = delta
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            merge_stream_field(&mut call.id, id);
         }
-        if call.name.is_empty() {
-            if let Some(name) = delta
-                .pointer("/function/name")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-            {
-                call.name = name.to_string();
-            }
+        if let Some(name) = delta
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            merge_stream_field(&mut call.name, name);
         }
         if let Some(arguments) = delta.pointer("/function/arguments") {
             call.arguments
                 .push_str(&tool_call_arguments_text(arguments));
         }
+    }
+}
+
+fn merge_stream_field(target: &mut String, fragment: &str) {
+    if target.is_empty() {
+        target.push_str(fragment);
+    } else if fragment.starts_with(target.as_str()) {
+        target.clear();
+        target.push_str(fragment);
+    } else if !target.starts_with(fragment) {
+        target.push_str(fragment);
     }
 }
 
@@ -527,8 +534,16 @@ fn tool_call_arguments_text(value: &Value) -> String {
 /// 累积表非空即输出 tool_calls，不依赖 finish_reason（部分网关不回传）。
 fn finalize_tool_calls(accumulator: BTreeMap<u64, AiToolCall>) -> Vec<AiToolCall> {
     accumulator
-        .into_values()
-        .filter(|call| !call.id.is_empty() || !call.name.is_empty() || !call.arguments.is_empty())
+        .into_iter()
+        .filter_map(|(index, mut call)| {
+            if call.id.is_empty() && call.name.is_empty() && call.arguments.is_empty() {
+                return None;
+            }
+            if call.id.is_empty() {
+                call.id = format!("ai-term-call-{index}");
+            }
+            Some(call)
+        })
         .collect()
 }
 
@@ -907,6 +922,33 @@ mod tests {
         assert_eq!(calls[0].id, "call-1");
         assert_eq!(calls[0].name, "run_command");
         assert_eq!(calls[0].arguments, r#"{"command":"df -h"}"#);
+    }
+
+    #[test]
+    fn accumulates_fragmented_and_repeated_tool_metadata() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-","function":{"name":"run_","arguments":"{\"command\":"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"1","function":{"name":"command","arguments":"\"uptime\"}"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command"}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].arguments, r#"{"command":"uptime"}"#);
+    }
+
+    #[test]
+    fn supplies_id_when_compatible_gateway_omits_it() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"run_command","arguments":"{\"command\":\"uptime\"}"}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "ai-term-call-3");
+        assert_eq!(calls[0].name, "run_command");
     }
 
     #[test]
