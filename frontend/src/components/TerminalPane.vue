@@ -38,6 +38,7 @@ import {
   SENTINEL_PROBE_EXIT_CODE,
   type SentinelScanner
 } from '../lib/agentSentinelCapture'
+import { createDeferredAgentCommand } from '../lib/deferredAgentCommand'
 import { isSuffixSafeForSentinel } from '../lib/agentAutoApprove'
 import type { AgentCaptureMode, AgentCommandHandle, AgentCommandResult } from '../types/agent'
 import { scriptRiskStatusForContent } from '../lib/scriptRisk'
@@ -80,6 +81,7 @@ interface TerminalInputBatch {
   source: TerminalInputWriteSource
   sourceTerminalId?: string
   commits: Array<() => void>
+  failures: Array<(error: unknown) => void>
 }
 
 interface PendingTerminalInput {
@@ -97,6 +99,7 @@ interface PreparedTerminalInputOptions {
   sourceTerminalId?: string
   submittedCommands?: readonly string[]
   onWritten?: () => void
+  onWriteFailed?: (error: unknown) => void
 }
 
 type ShellPromptKind = 'powershell' | 'cmd' | 'posix' | 'generic' | 'bare'
@@ -1314,7 +1317,17 @@ function commitTrackedCommands(commands: string[]) {
   commands.forEach(recordCommand)
 }
 
+let activeAgentCaptureAbort: ((reason: string) => void) | undefined
+
 function advanceTerminalInputGeneration() {
+  activeAgentCaptureAbort?.('终端会话已关闭或重新连接')
+  const staleInput = terminalInputQueue.splice(0)
+  staleInput.forEach((batch) => {
+    batch.failures.forEach((failure) => runTerminalInputFailure(
+      failure,
+      new Error('终端会话已关闭或重新连接')
+    ))
+  })
   deferredCommandCaptureTimers.forEach((timer) => window.clearTimeout(timer))
   deferredCommandCaptureTimers.clear()
   shellIntegrationAttachment?.tracker.reset()
@@ -1329,7 +1342,6 @@ function advanceTerminalInputGeneration() {
   shellPromptDiscoveryOpen = true
   shellCommandAwaitingPrompt = false
   terminalWasInAlternateBuffer = false
-  terminalInputQueue.length = 0
   pendingPreReadyTerminalInput.length = 0
   pendingPreReadyTerminalInputSize = 0
   pendingTerminalProtocolResponses.length = 0
@@ -1400,6 +1412,7 @@ function enqueueTerminalInput(
   data: string,
   source: TerminalInputWriteSource,
   commits: Array<() => void> = [],
+  failures: Array<(error: unknown) => void> = [],
   sourceTerminalId?: string
 ) {
   if (!data || !terminalBackendInputReady()) return false
@@ -1409,6 +1422,7 @@ function enqueueTerminalInput(
   if (tail && sameTerminalInputBatch(tail, generation, activeSessionId, source, sourceTerminalId)) {
     tail.data += data
     tail.commits.push(...commits)
+    tail.failures.push(...failures)
   } else {
     terminalInputQueue.push({
       generation,
@@ -1416,7 +1430,8 @@ function enqueueTerminalInput(
       data,
       source,
       sourceTerminalId,
-      commits: [...commits]
+      commits: [...commits],
+      failures: [...failures]
     })
   }
   if (shellPromptSignature) shellPromptDiscoveryOpen = false
@@ -1439,6 +1454,10 @@ async function pumpTerminalInputQueue(generation = terminalInputGeneration) {
         !terminalInputReady ||
         failedTerminalInputGeneration === batch.generation
       ) {
+        batch.failures.forEach((failure) => runTerminalInputFailure(
+          failure,
+          new Error('终端会话在写入前已切换或不可用')
+        ))
         continue
       }
       try {
@@ -1449,8 +1468,12 @@ async function pumpTerminalInputQueue(generation = terminalInputGeneration) {
         failedTerminalInputGeneration = batch.generation
         pendingTrackedCommands = []
         invalidateTrackedTerminalInput()
+        batch.failures.forEach((failure) => runTerminalInputFailure(failure, error))
         for (let index = terminalInputQueue.length - 1; index >= 0; index -= 1) {
-          if (terminalInputQueue[index]?.generation === batch.generation) terminalInputQueue.splice(index, 1)
+          const queued = terminalInputQueue[index]
+          if (queued?.generation !== batch.generation) continue
+          terminalInputQueue.splice(index, 1)
+          queued.failures.forEach((failure) => runTerminalInputFailure(failure, error))
         }
         emit('terminalInputWriteFailed', {
           terminalId: props.terminalId,
@@ -2455,17 +2478,27 @@ function runTerminalInputCommit(commit: () => void) {
   }
 }
 
+function runTerminalInputFailure(failure: (error: unknown) => void, error: unknown) {
+  try {
+    failure(error)
+  } catch (callbackError) {
+    console.error('failed to report terminal input failure', callbackError)
+  }
+}
+
 function writePreparedTerminalInput(data: string, options: PreparedTerminalInputOptions) {
   if (!data || !terminalInputDestinationAvailable()) return false
   const submittedCommands = [...(options.submittedCommands ?? [])]
   const commits: Array<() => void> = []
+  const failures: Array<(error: unknown) => void> = []
   if (submittedCommands.length > 0) {
     commits.push(() => commitTrackedCommands(submittedCommands))
   }
   if (options.onWritten) commits.push(options.onWritten)
+  if (options.onWriteFailed) failures.push(options.onWriteFailed)
 
   if (terminalBackendInputReady()) {
-    if (!enqueueTerminalInput(data, options.source, commits, options.sourceTerminalId)) return false
+    if (!enqueueTerminalInput(data, options.source, commits, failures, options.sourceTerminalId)) return false
     // vim 鼠标模式下 xterm 会以 onData 形式发出鼠标上报等转义序列,并不代表
     // 用户在终端打字;此时不抢焦点,避免把 AI/脚本面板输入框的焦点拉回终端
     if (options.source !== 'interactive' || !data.startsWith('\x1b')) {
@@ -2484,7 +2517,7 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
  * 派发一条命令到终端。`historyCommand` 用于哨兵路径:派发的是包装后的长命令,
  * 但命令历史与事件应记录用户/模型看到的干净命令;传空串则不记历史(探针)。
  */
-function executeCommand(command: string, options?: { historyCommand?: string }) {
+function executeCommand(command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void }) {
   const value = command.trim()
   if (!value) return false
   const recorded = options?.historyCommand ?? value
@@ -2498,7 +2531,8 @@ function executeCommand(command: string, options?: { historyCommand?: string }) 
       // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
       onWritten: () => {
         if (!integrationCaptures) recordCommand(recorded)
-      }
+      },
+      onWriteFailed: options?.onWriteFailed
     })
     if (!accepted) return false
     shellCommandAwaitingPrompt = true
@@ -2541,6 +2575,10 @@ function agentCaptureProbed() {
   return agentCaptureMode() === 'markers' || sentinelProbe?.sessionId === sessionId
 }
 
+function agentCapturePreparing() {
+  return sentinelProbeInFlight !== undefined
+}
+
 /** Agent 模式可用性:有语义标记,或哨兵兜底未被探针否定。 */
 function agentCaptureSupported() {
   return agentCaptureMode() !== 'unsupported'
@@ -2576,15 +2614,21 @@ function agentReadinessFailure(): string {
 function captureWithMarkers(command: string, maxOutputChars: number): AgentCommandHandle {
   const tracker = shellIntegrationAttachment?.tracker
   if (!tracker) return agentDispatchFailure('终端未启用 shell integration')
+  if (activeAgentCaptureAbort) return agentDispatchFailure('已有 Agent 命令正在等待终端结果')
   const dispatchedAt = Date.now()
   let settled = false
+  let abortCapture!: (reason: string) => void
   let resolveResult!: (result: AgentCommandResult) => void
   const result = new Promise<AgentCommandResult>((resolve) => {
     resolveResult = resolve
   })
+  const clearActiveCapture = () => {
+    if (activeAgentCaptureAbort === abortCapture) activeAgentCaptureAbort = undefined
+  }
   const armed = tracker.armCommandCapture(maxOutputChars, (capture) => {
     if (settled) return
     settled = true
+    clearActiveCapture()
     // 捕获到的命令与派发不一致 = 用户手动输入串扰;空文本视为未知,不判串扰
     const captured = normalizeForCommandMatch(capture.command)
     const mismatch = captured !== '' && captured !== normalizeForCommandMatch(command)
@@ -2598,9 +2642,26 @@ function captureWithMarkers(command: string, maxOutputChars: number): AgentComma
     })
   })
 
-  if (!executeCommand(command)) {
+  abortCapture = (reason: string) => {
+    if (settled) return
+    settled = true
+    armed.dispose()
+    clearActiveCapture()
+    resolveResult({
+      status: 'dispatch-failed',
+      output: '',
+      durationMs: Date.now() - dispatchedAt,
+      truncated: false,
+      failureReason: reason
+    })
+  }
+  activeAgentCaptureAbort = abortCapture
+  const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
+
+  if (!executeCommand(command, { onWriteFailed: failWrite })) {
     armed.dispose()
     settled = true
+    clearActiveCapture()
     return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
   }
 
@@ -2612,6 +2673,7 @@ function captureWithMarkers(command: string, maxOutputChars: number): AgentComma
       settled = true
       const partial = armed.peekOutput()
       armed.dispose()
+      clearActiveCapture()
       resolveResult({
         status: 'cancelled',
         output: partial,
@@ -2635,16 +2697,21 @@ function captureWithSentinel(
   if (!safety.ok) {
     return agentDispatchFailure(`${safety.reason};该终端无 shell integration 标记,需改写为可追加哨兵的单条命令`)
   }
+  if (activeAgentCaptureAbort) return agentDispatchFailure('已有 Agent 命令正在等待终端结果')
 
   const nonce = createSentinelNonce()
   const wrapped = wrapCommandWithSentinel(command, nonce)
   const dispatchedAt = Date.now()
   let settled = false
+  let abortCapture!: (reason: string) => void
   let scanner: SentinelScanner | undefined
   let resolveResult!: (result: AgentCommandResult) => void
   const result = new Promise<AgentCommandResult>((resolve) => {
     resolveResult = resolve
   })
+  const clearActiveCapture = () => {
+    if (activeAgentCaptureAbort === abortCapture) activeAgentCaptureAbort = undefined
+  }
 
   const detach = () => {
     if (sentinelSink === feed) sentinelSink = undefined
@@ -2659,6 +2726,7 @@ function captureWithSentinel(
       if (settled) return
       settled = true
       detach()
+      clearActiveCapture()
       resolveResult({
         status: 'completed',
         output: capture.output,
@@ -2672,10 +2740,30 @@ function captureWithSentinel(
     scanner?.push(chunk)
   }
 
-  sentinelSink = feed
-  if (!executeCommand(wrapped, { historyCommand: options?.skipHistory ? '' : command })) {
+  abortCapture = (reason: string) => {
+    if (settled) return
     settled = true
     detach()
+    clearActiveCapture()
+    resolveResult({
+      status: 'dispatch-failed',
+      output: '',
+      durationMs: Date.now() - dispatchedAt,
+      truncated: false,
+      failureReason: reason
+    })
+  }
+  activeAgentCaptureAbort = abortCapture
+  const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
+
+  sentinelSink = feed
+  if (!executeCommand(wrapped, {
+    historyCommand: options?.skipHistory ? '' : command,
+    onWriteFailed: failWrite
+  })) {
+    settled = true
+    detach()
+    clearActiveCapture()
     return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
   }
 
@@ -2687,6 +2775,7 @@ function captureWithSentinel(
       settled = true
       const partial = scanner?.peekOutput() ?? ''
       detach()
+      clearActiveCapture()
       resolveResult({
         status: 'cancelled',
         output: partial,
@@ -2738,9 +2827,14 @@ async function ensureAgentCapture(): Promise<AgentCaptureMode> {
  * Agent 派发命令并捕获输出与退出码(文档 6.2 / 10.3)。
  * 超时决策在循环层;cancel 只放弃等待,不终止命令本身。
  */
-function runCommandAndCapture(command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
+function runCommandAndCapture(
+  command: string,
+  options?: { maxOutputChars?: number; dispatchGuard?: () => string }
+): AgentCommandHandle {
   const value = command.trim()
   if (!value) return agentDispatchFailure('命令为空')
+  const bindingFailure = options?.dispatchGuard?.() ?? ''
+  if (bindingFailure) return agentDispatchFailure(bindingFailure)
   const readinessFailure = agentReadinessFailure()
   if (readinessFailure) return agentDispatchFailure(readinessFailure)
 
@@ -2751,24 +2845,19 @@ function runCommandAndCapture(command: string, options?: { maxOutputChars?: numb
     return agentDispatchFailure('当前终端既无 shell integration 语义标记,也不支持哨兵捕获,Agent 无法感知命令完成')
   }
   if (!agentCaptureProbed()) {
-    // 未探测就派发有误判风险:先探针,再走正常路径
-    return {
-      result: (async () => {
+    // 未探测就派发有误判风险:先探针。停止期间不得在探针完成后补发真实命令。
+    return createDeferredAgentCommand(
+      async () => {
         const probed = await ensureAgentCapture()
         if (probed === 'unsupported') {
-          return {
-            status: 'dispatch-failed' as const,
-            output: '',
-            durationMs: 0,
-            truncated: false,
-            failureReason: '当前终端的 shell 不支持哨兵捕获(需 POSIX printf 与 $?),Agent 暂不可用'
-          }
+          return '当前终端的 shell 不支持哨兵捕获(需 POSIX printf 与 $?),Agent 暂不可用'
         }
-        return runCommandAndCapture(value, options).result
-      })(),
-      peekOutput: () => '',
-      cancel: () => {}
-    }
+        const delayedBindingFailure = options?.dispatchGuard?.() ?? ''
+        if (delayedBindingFailure) return delayedBindingFailure
+        return agentReadinessFailure()
+      },
+      () => runCommandAndCapture(value, options)
+    )
   }
   return captureWithSentinel(value, maxOutputChars)
 }
@@ -2925,6 +3014,7 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
+  agentCapturePreparing,
   agentCaptureSupported,
   clearTerminal,
   commandExecutionReadiness,

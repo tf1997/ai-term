@@ -2,7 +2,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
-    "test:scripts": "tsx --test scripts/script-execution.test.mjs scripts/command-privacy.test.mjs scripts/path-privacy.test.mjs scripts/shell-integration.test.mjs scripts/terminal-font.test.mjs scripts/agent-loop.test.mjs scripts/agent-auto-approve.test.mjs scripts/agent-sentinel-capture.test.mjs scripts/ai-error-presentation.test.mjs scripts/ai-stream-error.test.mjs scripts/ai-timeout.test.mjs",
+    "test:scripts": "tsx --test scripts/script-execution.test.mjs scripts/command-privacy.test.mjs scripts/path-privacy.test.mjs scripts/shell-integration.test.mjs scripts/terminal-font.test.mjs scripts/agent-loop.test.mjs scripts/agent-auto-approve.test.mjs scripts/agent-sentinel-capture.test.mjs scripts/ai-error-presentation.test.mjs scripts/ai-stream-error.test.mjs scripts/ai-timeout.test.mjs scripts/agent-run-snapshot.test.mjs scripts/deferred-agent-command.test.mjs scripts/stable-ref-registry.test.mjs",
     "test:ui": "node scripts/production-ui-check.mjs",
     "tauri": "tauri"
   },

@@ -44,6 +44,8 @@ export interface AgentLoopOptions {
   outputSampleIntervalMs?: number
   /** 重试时已完成的步骤;循环会从这些步骤继续,恢复 turns 数组和计数。 */
   initialSteps?: AgentStep[]
+  /** 用户点击重试时需要直接重新执行的失败步骤。 */
+  retryStep?: AgentStep
 }
 
 const DEFAULT_STEP_LIMIT = 25
@@ -64,14 +66,18 @@ const OMITTED_OUTPUT_NOTE = '输出已省略'
 const TRUNCATED_OUTPUT_NOTE = '仅保留输出尾部'
 const RUN_COMMAND_TOOL_NAME = 'run_command'
 
+function toolCallFromStep(step: AgentStep): AiToolCall {
+  return {
+    id: step.id,
+    name: RUN_COMMAND_TOOL_NAME,
+    arguments: JSON.stringify({ command: step.command, reason: step.reason })
+  }
+}
+
 /** 把重试前已完成的步骤还原成符合 OpenAI 工具协议的轮次。 */
 function rebuildTurnsFromSteps(steps: AgentStep[]): AiAgentTurn[] {
   return steps.flatMap((step): AiAgentTurn[] => {
-    const toolCall: AiToolCall = {
-      id: step.id,
-      name: RUN_COMMAND_TOOL_NAME,
-      arguments: JSON.stringify({ command: step.command, reason: step.reason })
-    }
+    const toolCall = toolCallFromStep(step)
     const content = step.status === 'skipped'
       ? JSON.stringify({ status: 'skipped_by_user' })
       : JSON.stringify({
@@ -231,10 +237,20 @@ export function runAgentTask(
   const initialSteps = (options.initialSteps ?? [])
     .filter((step) => step.status === 'completed' || step.status === 'skipped')
     .map((step) => structuredClone(step))
+  const retryStep = options.retryStep?.status === 'failed'
+    ? {
+        ...structuredClone(options.retryStep),
+        status: 'pending' as const,
+        output: undefined,
+        exitCode: undefined,
+        durationMs: undefined,
+        deadlineAt: undefined
+      }
+    : undefined
 
   const state: AgentRunState = {
-    status: 'calling-model',
-    steps: initialSteps,
+    status: retryStep ? 'executing' : 'calling-model',
+    steps: retryStep ? [...initialSteps, retryStep] : initialSteps,
     finalText: '',
     stepLimit,
     commandTimeoutMs
@@ -285,10 +301,11 @@ export function runAgentTask(
     })
   }
 
-  const finishError = (message: string) => {
+  const finishError = (message: string, errorKind: NonNullable<AgentRunState['errorKind']>) => {
     finishRun(() => {
       state.status = 'error'
       state.error = message
+      state.errorKind = errorKind
     })
   }
 
@@ -371,7 +388,7 @@ export function runAgentTask(
       return undefined
     }
     if (outcome.kind === 'error') {
-      finishError(`审批流程异常:${errorMessage(outcome.error)}`)
+      finishError(`审批流程异常:${errorMessage(outcome.error)}`, 'tool')
       return undefined
     }
     return outcome.value
@@ -393,7 +410,7 @@ export function runAgentTask(
     }
     if (startOutcome.kind === 'error') {
       step.status = 'failed'
-      finishError(`命令启动失败:${errorMessage(startOutcome.error)}`)
+      finishError(`命令启动失败:${errorMessage(startOutcome.error)}`, 'tool')
       return 'ended'
     }
     const handle = startOutcome.value
@@ -436,7 +453,7 @@ export function runAgentTask(
         if (outcome.kind === 'error') {
           step.status = 'failed'
           step.deadlineAt = undefined
-          finishError(`等待命令结果异常:${errorMessage(outcome.error)}`)
+          finishError(`等待命令结果异常:${errorMessage(outcome.error)}`, 'tool')
           return 'ended'
         }
         if (outcome.kind === 'timeout') {
@@ -464,7 +481,7 @@ export function runAgentTask(
           }
           if (decision.kind === 'error') {
             step.deadlineAt = undefined
-            finishError(`超时决策异常:${errorMessage(decision.error)}`)
+            finishError(`超时决策异常:${errorMessage(decision.error)}`, 'tool')
             return 'ended'
           }
           if (decision.value === 'wait') {
@@ -495,7 +512,7 @@ export function runAgentTask(
         if (result.status === 'dispatch-failed') {
           step.status = 'failed'
           notify()
-          finishError(`命令派发失败:${result.failureReason ?? '未知原因'}`)
+          finishError(`命令派发失败:${result.failureReason ?? '未知原因'}`, 'tool')
           return 'ended'
         }
         if (result.commandMismatch) {
@@ -542,7 +559,7 @@ export function runAgentTask(
         content: JSON.stringify({ status: 'unsupported_tool', error })
       })
       if (parseFailureStreak >= 2) {
-        finishError(`模型连续 2 次调用了不支持的工具:${toolCall.name || '(空名称)'}`)
+        finishError(`模型连续 2 次调用了不支持的工具:${toolCall.name || '(空名称)'}`, 'protocol')
         return 'ended'
       }
       return 'continue'
@@ -556,7 +573,7 @@ export function runAgentTask(
         content: JSON.stringify({ status: 'invalid_arguments', error: parsed.error })
       })
       if (parseFailureStreak >= 2) {
-        finishError(`模型连续 2 次给出无法解析的工具参数:${parsed.error}`)
+        finishError(`模型连续 2 次给出无法解析的工具参数:${parsed.error}`, 'protocol')
         return 'ended'
       }
       return 'continue'
@@ -620,7 +637,7 @@ export function runAgentTask(
           return 'ended'
         }
         if (allowOutcome.kind === 'error') {
-          finishError(`写入允许列表失败:${errorMessage(allowOutcome.error)}`)
+          finishError(`写入允许列表失败:${errorMessage(allowOutcome.error)}`, 'tool')
           return 'ended'
         }
       }
@@ -633,6 +650,13 @@ export function runAgentTask(
   const run = async () => {
     notify()
     try {
+      if (retryStep) {
+        turns.push({ kind: 'assistant', text: '', toolCalls: [toolCallFromStep(retryStep)] })
+        stepsTaken += 1
+        const retryOutcome = await executeStep(retryStep, retryStep.id)
+        if (retryOutcome === 'ended') return
+      }
+
       while (true) {
         if (stopRequested) {
           finishStopped()
@@ -652,7 +676,7 @@ export function runAgentTask(
           return
         }
         if (modelOutcome.kind === 'error') {
-          finishError(errorMessage(modelOutcome.error))
+          finishError(errorMessage(modelOutcome.error), 'model')
           return
         }
         const response = modelOutcome.value
@@ -684,7 +708,7 @@ export function runAgentTask(
       // 兜底:任何未归类异常都收敛为 error 终态,done 永不 reject
       const running = state.steps.find((step) => step.status === 'running')
       if (running) running.status = 'failed'
-      finishError(errorMessage(error))
+      finishError(errorMessage(error), 'protocol')
     }
   }
 

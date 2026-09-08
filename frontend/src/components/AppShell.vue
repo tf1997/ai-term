@@ -36,8 +36,9 @@ import {
   saveConnectionProfile,
   saveWorkspaceSession
 } from '../lib/tauri'
-import type { AgentAllowlistEntry, AgentCaptureMode, AgentCommandHandle, AiPanelMode } from '../types/agent'
+import type { AgentAllowlistEntry, AgentCaptureMode, AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from '../types/agent'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
+import { createStableRefRegistry } from '../lib/stableRefRegistry'
 import ConnectionSidebar from './ConnectionSidebar.vue'
 import ContextMenu from './ContextMenu.vue'
 import SettingsSidebar from './SettingsSidebar.vue'
@@ -88,8 +89,12 @@ type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
   agentCaptureSupported: () => boolean
+  agentCapturePreparing: () => boolean
   ensureAgentCapture: () => Promise<AgentCaptureMode>
-  runCommandAndCapture: (command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
+  runCommandAndCapture: (
+    command: string,
+    options?: { maxOutputChars?: number; dispatchGuard?: () => string }
+  ) => AgentCommandHandle
   fillCommand: (command: string) => boolean
   pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'
   terminalInputSyncState: () => TerminalInputSyncState
@@ -216,7 +221,8 @@ const selectedTerminalIds = ref<string[]>(['local-1'])
 const pausedTerminalSyncIds = ref<string[]>([])
 // shallowRef: component instances are only accessed imperatively; deep
 // reactivity would proxy every TerminalPane instance for no benefit.
-const terminalRefs = shallowRef<Record<string, TerminalPaneInstance | null>>({})
+const terminalRefRegistry = createStableRefRegistry<TerminalPaneInstance>()
+const terminalRefs = shallowRef(terminalRefRegistry.values)
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalOutputEvents = ref<Record<string, TerminalOutputDeltaEvent>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
@@ -1530,28 +1536,59 @@ async function clearAgentAllowlist() {
 }
 
 /** Agent 执行入口:任务开始时绑定的 terminalId 在整个任务期间不变(文档 6.6)。 */
-function agentCommandRunner(terminalId: string, command: string, options?: { maxOutputChars?: number }): AgentCommandHandle {
-  const pane = terminalRefs.value[terminalId]
-  if (!pane) {
-    return {
-      result: Promise.resolve({
-        status: 'dispatch-failed' as const,
-        output: '',
-        durationMs: 0,
-        truncated: false,
-        failureReason: '任务绑定的终端已关闭或不可用'
-      }),
-      peekOutput: () => '',
-      cancel: () => {}
-    }
+function agentCommandDispatchFailure(reason: string): AgentCommandHandle {
+  return {
+    result: Promise.resolve({
+      status: 'dispatch-failed',
+      output: '',
+      durationMs: 0,
+      truncated: false,
+      failureReason: reason
+    }),
+    peekOutput: () => '',
+    cancel: () => {}
   }
-  return pane.runCommandAndCapture(command, options)
+}
+
+function agentCommandRunner(terminalId: string, command: string, options?: AgentCommandRunOptions): AgentCommandHandle {
+  const tab = terminalTabs.value.find((item) => item.id === terminalId)
+  if (!tab) return agentCommandDispatchFailure('任务绑定的终端标签已关闭')
+  if (
+    options?.connectionGeneration !== undefined &&
+    tab.connectionGeneration !== options.connectionGeneration
+  ) {
+    return agentCommandDispatchFailure('任务绑定的终端已经重新连接；为避免向新会话误发命令，请重新发起任务')
+  }
+  const pane = terminalRefs.value[terminalId]
+  if (!pane) return agentCommandDispatchFailure('任务绑定的终端组件暂不可用')
+  const dispatchGuard = () => {
+    const currentTab = terminalTabs.value.find((item) => item.id === terminalId)
+    if (!currentTab) return '任务绑定的终端标签已关闭'
+    if (
+      options?.connectionGeneration !== undefined &&
+      currentTab.connectionGeneration !== options.connectionGeneration
+    ) {
+      return '任务绑定的终端已经重新连接；为避免向新会话误发命令，请重新发起任务'
+    }
+    if (terminalRefs.value[terminalId] !== pane) return '任务绑定的终端组件已经替换'
+    return ''
+  }
+  return pane.runCommandAndCapture(command, {
+    maxOutputChars: options?.maxOutputChars,
+    dispatchGuard
+  })
 }
 
 /** Agent 模式可用性快检(同步):返回空串表示可用,否则为不可用原因。 */
 function agentAvailabilityCheck(): string {
   const pane = terminalRefs.value[activeTerminalId.value]
   if (!pane) return '当前终端不可用'
+  if (!pane.agentCapturePreparing()) {
+    const readiness = pane.commandExecutionReadiness()
+    if (readiness === 'line-busy') return '当前终端命令行已有输入或补全内容,请先提交或清空'
+    if (readiness === 'shell-busy') return 'Shell 尚未返回可执行提示符,请等待当前命令结束'
+    if (readiness === 'unavailable') return '当前终端不可用或连接已断开'
+  }
   if (!pane.agentCaptureSupported()) {
     return '当前终端的 shell 不支持命令捕获(既无 shell integration 语义标记,也不支持 POSIX printf 哨兵),Agent 暂不可用'
   }
@@ -1634,17 +1671,13 @@ function closeTerminalTab(tabId: string) {
   delete terminalSnapshots.value[tabId]
   delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
-  delete terminalRefs.value[tabId]
+  terminalRefRegistry.remove(tabId)
   delete scriptRecordingsByTerminal.value[tabId]
   if (activeTerminalId.value === tabId) {
     const nextTab = terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]
     activeTerminalId.value = nextTab.id
   }
   normalizeTerminalTargets(activeTerminalId.value)
-}
-
-function setTerminalRef(tabId: string, instance: TerminalPaneInstance | null) {
-  terminalRefs.value[tabId] = instance
 }
 
 function terminalStatusClass(status: TerminalRuntimeStatus) {
@@ -1659,8 +1692,8 @@ function terminalStatusClass(status: TerminalRuntimeStatus) {
 function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
   terminalTabs.value = terminalTabs.value.map((tab) => {
     if (tab.id !== terminalId) return tab
-    const wasConnected = tab.status === 'remote' || tab.status === 'sftp'
-    const isConnected = status === 'remote' || status === 'sftp'
+    const wasConnected = tab.status === 'local' || tab.status === 'remote' || tab.status === 'sftp'
+    const isConnected = status === 'local' || status === 'remote' || status === 'sftp'
     return {
       ...tab,
       status,
@@ -2258,7 +2291,10 @@ function hydrateAiMessagePayload(message: AiMessage): AiMessage {
   const raw = message.payloadJson?.trim()
   if (!raw) return message
   try {
-    const payload = JSON.parse(raw) as Partial<Pick<AiMessage, 'mode' | 'agentSteps' | 'agentStatus'>>
+    const payload = JSON.parse(raw) as Partial<Pick<
+      AiMessage,
+      'mode' | 'agentSteps' | 'agentStatus' | 'terminalConnectionGeneration'
+    >>
     if (payload.mode !== 'agent') return message
     return {
       ...message,
@@ -2266,7 +2302,10 @@ function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       agentSteps: Array.isArray(payload.agentSteps) ? payload.agentSteps : [],
       agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
         ? payload.agentStatus
-        : 'done'
+        : 'done',
+      terminalConnectionGeneration: Number.isSafeInteger(payload.terminalConnectionGeneration) && payload.terminalConnectionGeneration! >= 0
+        ? payload.terminalConnectionGeneration
+        : message.terminalConnectionGeneration
     }
   } catch {
     return message
@@ -2536,7 +2575,7 @@ onBeforeUnmount(() => {
         v-for="tab in terminalTabs"
         v-show="tab.id === activeTerminalId"
         :key="tab.id"
-        :ref="(instance) => setTerminalRef(tab.id, instance as TerminalPaneInstance | null)"
+        :ref="terminalRefRegistry.refFor(tab.id)"
         :terminal-id="tab.id"
         :active="tab.id === activeTerminalId"
         :profile="tab.profile"

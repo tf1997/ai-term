@@ -16,7 +16,8 @@ use crate::domain::ai::chat::{
     AiConversationRole, AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
 };
 use crate::domain::ai::stream::{
-    is_stream_done, send_stream_request, stream_error_body, wait_for_stream, SseEventBuffer,
+    is_stream_done, send_stream_request, sse_data_payloads, stream_error_body, wait_for_stream,
+    SseEventBuffer,
 };
 use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::text::Utf8StreamDecoder;
@@ -440,19 +441,12 @@ fn parse_agent_sse_event(
 ) -> Result<Vec<String>> {
     let mut deltas = Vec::new();
 
-    for line in event.lines().map(str::trim) {
-        if !line.starts_with("data:") {
-            continue;
-        }
-        let data = line.trim_start_matches("data:").trim();
+    for data in sse_data_payloads(event) {
         if data == "[DONE]" {
             break;
         }
-        if data.is_empty() {
-            continue;
-        }
 
-        let payload = serde_json::from_str::<Value>(data)
+        let payload = serde_json::from_str::<Value>(&data)
             .with_context(|| format!("模型流式返回不是合法 JSON：{data}"))?;
         if let Some(error) = payload.pointer("/error/message").and_then(Value::as_str) {
             bail!("模型流式返回错误：{error}");
@@ -469,10 +463,15 @@ fn parse_agent_sse_event(
 /// 按 index 累积工具调用增量：id/name/arguments 都兼容分片下发。
 /// 部分兼容网关会重复发送完整 id/name，合并时避免把重复值拼接两次。
 fn accumulate_tool_call_deltas(accumulator: &mut BTreeMap<u64, AiToolCall>, payload: &Value) {
-    let Some(deltas) = payload
+    let streamed = payload
         .pointer("/choices/0/delta/tool_calls")
-        .and_then(Value::as_array)
-    else {
+        .and_then(Value::as_array);
+    let complete = streamed.is_none();
+    let Some(deltas) = streamed.or_else(|| {
+        payload
+            .pointer("/choices/0/message/tool_calls")
+            .and_then(Value::as_array)
+    }) else {
         return;
     };
 
@@ -497,8 +496,12 @@ fn accumulate_tool_call_deltas(accumulator: &mut BTreeMap<u64, AiToolCall>, payl
             merge_stream_field(&mut call.name, name);
         }
         if let Some(arguments) = delta.pointer("/function/arguments") {
-            call.arguments
-                .push_str(&tool_call_arguments_text(arguments));
+            match arguments {
+                Value::String(value) if complete => call.arguments = value.clone(),
+                Value::String(fragment) => call.arguments.push_str(fragment),
+                Value::Null => {}
+                other => call.arguments = serde_json::to_string(other).unwrap_or_default(),
+            }
         }
     }
 }
@@ -936,6 +939,28 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call-1");
         assert_eq!(calls[0].name, "run_command");
+        assert_eq!(calls[0].arguments, r#"{"command":"uptime"}"#);
+    }
+
+    #[test]
+    fn complete_message_tool_call_replaces_partial_stream_arguments() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"comm"}}]}}]}"#,
+            r#"data: {"choices":[{"message":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"command\":\"uptime\"}"}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
+        assert_eq!(calls[0].arguments, r#"{"command":"uptime"}"#);
+    }
+
+    #[test]
+    fn object_arguments_replace_partial_string_arguments() {
+        let (_, accumulator) = apply_events(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"comm"}}]}}]}"#,
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":{"command":"uptime"}}}]}}]}"#,
+        ]);
+
+        let calls = finalize_tool_calls(accumulator);
         assert_eq!(calls[0].arguments, r#"{"command":"uptime"}"#);
     }
 

@@ -17,6 +17,7 @@ import { classifyForAutoExec, commandTokensForPrivacy } from '../lib/agentAutoAp
 import type {
   AgentApprovalDecision,
   AgentCommandHandle,
+  AgentCommandRunOptions,
   AgentRunState,
   AgentStep,
   AgentStepProposal,
@@ -32,6 +33,7 @@ import {
 } from '../lib/scriptRisk'
 import { isSensitivePath } from '../lib/pathPrivacy'
 import { aiStreamPartialText, createAiStreamErrorMessage } from '../lib/aiStreamError'
+import { createAgentRunSnapshot } from '../lib/agentRunSnapshot'
 import AiMarkdownMessage from './AiMarkdownMessage.vue'
 import AiErrorNotice from './AiErrorNotice.vue'
 import AgentStepCard from './AgentStepCard.vue'
@@ -50,6 +52,7 @@ const STREAM_TIMER_INTERVAL_MS = 1000
 
 const props = defineProps<{
   terminalId: string
+  terminalConnectionGeneration: number
   connectionId: string
   workspaceSessionId: string
   workspaceSessions: WorkspaceSession[]
@@ -68,7 +71,7 @@ const props = defineProps<{
   agentAvailabilityCheck?: () => string
   /** 异步确认(无标记终端会跑哨兵探针);返回空串表示可用。 */
   agentAvailabilityConfirm?: () => Promise<string>
-  agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
+  agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
   /** 每个任务的最大步数(设置项);未传时用 agentLoop 的默认值。 */
@@ -127,6 +130,7 @@ const agentRun = ref<AgentRunState | null>(null)
 const agentRunMessageId = ref('')
 const agentStreamText = ref('')
 const agentModeNotice = ref('')
+const agentPreparing = ref(false)
 const agentHighRiskArmed = ref(false)
 const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
 const agentPendingTimeout = ref<{ step: AgentStep; info: AgentTimeoutInfo; resolve: (decision: AgentTimeoutDecision) => void } | null>(null)
@@ -134,6 +138,7 @@ const agentPendingTimeout = ref<{ step: AgentStep; info: AgentTimeoutInfo; resol
 const agentNowMs = ref(Date.now())
 let agentClockTimer: number | undefined
 let agentStopHandle: (() => void) | null = null
+let agentPreparationSequence = 0
 
 const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
@@ -170,7 +175,7 @@ const agentRunActive = computed(() => {
   const status = agentRun.value?.status
   return status === 'calling-model' || status === 'awaiting-approval' || status === 'executing' || status === 'awaiting-user'
 })
-const composerBusy = computed(() => isAsking.value || agentRunActive.value)
+const composerBusy = computed(() => agentPreparing.value || isAsking.value || agentRunActive.value)
 
 // 倒计时时钟:只在任务运行期间跳动,空闲时不留定时器
 watch(agentRunActive, (active) => {
@@ -346,6 +351,8 @@ async function runChatTurn(
   const requestConnectionId = assistantMessage.connectionId
   const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
   const requestTerminalId = assistantMessage.terminalId
+  const requestConfig = { ...props.config }
+  const requestApiKey = requestConfig.apiKey?.trim() || props.apiKey.trim()
   const terminalSnapshot = props.terminalSnapshot
   const commandHistory = aiCommandHistory()
   const { summary: conversationSummary, unsummarized } = conversationContextParts(
@@ -409,6 +416,8 @@ async function runChatTurn(
     })
     const response = await callConfiguredModelStream(
       requestId,
+      requestConfig,
+      requestApiKey,
       buildQuestionWithSelectedTerminalText(question, selectedContext),
       terminalSnapshot,
       commandHistory,
@@ -431,7 +440,16 @@ async function runChatTurn(
       error: false,
       streaming: false
     })
-    maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, question, answer, terminalSnapshot, commandHistory)
+    maybeGenerateSessionTitle(
+      requestConnectionId,
+      requestWorkspaceSessionId,
+      question,
+      answer,
+      terminalSnapshot,
+      commandHistory,
+      requestConfig,
+      requestApiKey
+    )
     maybeCompactConversation(requestWorkspaceSessionId)
   } catch (error) {
     if (stopRequested.value || currentRequestId.value !== requestId) return
@@ -501,6 +519,17 @@ function stopCurrentAnswer() {
   isAsking.value = false
 }
 
+function cancelAgentPreparation() {
+  agentPreparationSequence += 1
+  agentPreparing.value = false
+}
+
+function stopActiveAiWork() {
+  if (agentPreparing.value) cancelAgentPreparation()
+  if (agentRunActive.value || agentStopHandle) stopAgentRun()
+  else if (isAsking.value) stopCurrentAnswer()
+}
+
 function selectPanelMode(mode: AiPanelMode) {
   if (mode === panelMode.value || composerBusy.value || !props.workspaceSessionId) return
   agentModeNotice.value = mode === 'agent' ? (props.agentAvailabilityCheck?.() ?? '') : ''
@@ -508,15 +537,22 @@ function selectPanelMode(mode: AiPanelMode) {
   // 无语义标记的终端要跑一次哨兵探针才能给出结论;结果回来再更新提示
   if (mode === 'agent' && !agentModeNotice.value && props.agentAvailabilityConfirm) {
     const confirmedFor = props.workspaceSessionId
-    void props.agentAvailabilityConfirm().then((notice) => {
-      if (panelMode.value === 'agent' && props.workspaceSessionId === confirmedFor) {
-        agentModeNotice.value = notice
-      }
-    })
+    void props.agentAvailabilityConfirm()
+      .then((notice) => {
+        if (panelMode.value === 'agent' && props.workspaceSessionId === confirmedFor) {
+          agentModeNotice.value = notice
+        }
+      })
+      .catch((error) => {
+        if (panelMode.value === 'agent' && props.workspaceSessionId === confirmedFor) {
+          agentModeNotice.value = `Agent 启动检查失败:${formatAiError(error)}`
+        }
+      })
   }
 }
 
 function composerPrimaryAction() {
+  if (agentPreparing.value) return cancelAgentPreparation()
   if (agentRunActive.value) return stopAgentRun()
   if (isAsking.value) return stopCurrentAnswer()
   if (panelMode.value === 'agent') return void startAgentTask()
@@ -607,32 +643,73 @@ async function ensureAgentReady() {
   return ''
 }
 
+interface AgentPreparationTarget {
+  connectionId: string
+  workspaceSessionId: string
+  terminalId: string
+  connectionGeneration: number
+}
+
+function currentAgentTarget(): AgentPreparationTarget {
+  return {
+    connectionId: props.connectionId,
+    workspaceSessionId: props.workspaceSessionId,
+    terminalId: props.terminalId,
+    connectionGeneration: props.terminalConnectionGeneration
+  }
+}
+
+function agentTargetIsCurrent(target: AgentPreparationTarget) {
+  return target.connectionId === props.connectionId &&
+    target.workspaceSessionId === props.workspaceSessionId &&
+    target.terminalId === props.terminalId &&
+    target.connectionGeneration === props.terminalConnectionGeneration
+}
+
+async function prepareAgentAction(target: AgentPreparationTarget) {
+  const sequence = ++agentPreparationSequence
+  agentPreparing.value = true
+  try {
+    let blocked = ''
+    try {
+      blocked = await ensureAgentReady()
+    } catch (error) {
+      blocked = `Agent 启动检查失败:${formatAiError(error)}`
+    }
+    if (sequence !== agentPreparationSequence || !agentTargetIsCurrent(target)) {
+      return { cancelled: true, blocked: '' }
+    }
+    return { cancelled: false, blocked }
+  } finally {
+    if (sequence === agentPreparationSequence) agentPreparing.value = false
+  }
+}
+
 async function startAgentTask() {
   const text = askText.value.trim()
   if (!text || !canSendMessage.value || composerBusy.value) return
-  const blocked = await ensureAgentReady()
-  if (blocked) {
-    agentModeNotice.value = blocked
+  const target = currentAgentTarget()
+  const selectedContext = selectedTerminalContext.value
+  const prepared = await prepareAgentAction(target)
+  if (prepared.cancelled) return
+  if (prepared.blocked) {
+    agentModeNotice.value = prepared.blocked
     return
   }
   agentModeNotice.value = ''
 
-  const requestConnectionId = props.connectionId
-  const requestWorkspaceSessionId = props.workspaceSessionId
-  // 任务-终端绑定:执行目标锁定为任务开始时的活动终端(文档 6.6)
-  const boundTerminalId = props.terminalId
-  const selectedContext = selectedTerminalContext.value
   const userMessageText = selectedContext
     ? `${text}\n\n选中终端内容：${formatSelectedLineRange(selectedContext)}（已加入上下文）`
     : text
 
-  const userMessage = createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'user', userMessageText)
+  const userMessage = createMessage(target.connectionId, target.workspaceSessionId, target.terminalId, 'user', userMessageText)
   emit('appendMessage', userMessage)
   const assistantMessage: AiMessage = {
-    ...createMessage(requestConnectionId, requestWorkspaceSessionId, boundTerminalId, 'assistant', '', '', false, true),
+    ...createMessage(target.connectionId, target.workspaceSessionId, target.terminalId, 'assistant', '', '', false, true),
     mode: 'agent',
     agentSteps: [],
-    agentStatus: 'running'
+    agentStatus: 'running',
+    terminalConnectionGeneration: target.connectionGeneration
   }
   emit('appendMessage', assistantMessage)
   askText.value = ''
@@ -647,7 +724,8 @@ async function runAgentTurn(
   assistantMessage: AiMessage,
   rawGoal: string,
   selectedContext: TerminalSelectionEvent | undefined,
-  historyCutoffMessageId: string
+  historyCutoffMessageId: string,
+  retryStep?: AgentStep
 ) {
   const runner = props.agentCommandRunner
   if (!runner) {
@@ -657,7 +735,32 @@ async function runAgentTurn(
   const requestConnectionId = assistantMessage.connectionId
   const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
   const boundTerminalId = assistantMessage.terminalId
-  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
+  const boundConnectionGeneration = assistantMessage.terminalConnectionGeneration ?? props.terminalConnectionGeneration
+  const { summary: conversationSummary, unsummarized } = conversationContextParts(
+    requestWorkspaceSessionId,
+    historyCutoffMessageId
+  )
+  const conversationMessages = unsummarized
+    .slice(-MAX_AI_CONVERSATION_MESSAGES)
+    .map((message) => ({ role: message.role, content: message.text }))
+  const runSnapshot = createAgentRunSnapshot({
+    config: props.config,
+    apiKey: props.config.apiKey?.trim() || props.apiKey.trim(),
+    terminalSnapshot: props.terminalSnapshot,
+    commandHistory: aiCommandHistory(),
+    conversationMessages,
+    conversationSummary,
+    allowlistPatterns: props.agentAllowlistPatterns ?? [],
+    builtinReadonlyEnabled: props.agentBuiltinReadonlyEnabled ?? false
+  })
+  const {
+    config: requestConfig,
+    apiKey,
+    terminalSnapshot,
+    commandHistory,
+    allowlistPatterns,
+    builtinReadonlyEnabled
+  } = runSnapshot
   const goal = buildQuestionWithSelectedTerminalText(rawGoal, selectedContext)
   const text = rawGoal
 
@@ -678,14 +781,24 @@ async function runAgentTurn(
       text: failed ? state.error || '任务出错' : state.finalText,
       agentSteps: state.steps,
       agentStatus: status,
+      terminalConnectionGeneration: boundConnectionGeneration,
       error: failed,
       streaming: !terminal,
       payloadJson: terminal
-        ? JSON.stringify({ mode: 'agent', agentSteps: persistableAgentSteps(state.steps), agentStatus: status })
+        ? JSON.stringify({
+            mode: 'agent',
+            agentSteps: persistableAgentSteps(state.steps),
+            agentStatus: status,
+            terminalConnectionGeneration: boundConnectionGeneration
+          })
         : undefined
     }
     emit('updateMessage', failed
-      ? createAiStreamErrorMessage(updated, updated.text, agentStreamText.value)
+      ? createAiStreamErrorMessage(
+          updated,
+          updated.text,
+          state.errorKind === 'model' ? agentStreamText.value : ''
+        )
       : updated)
   }
 
@@ -708,35 +821,31 @@ async function runAgentTurn(
             agentStreamText.value += event.delta
           }
         })
-        const { summary: conversationSummary, unsummarized } = conversationContextParts(
-          requestWorkspaceSessionId,
-          historyCutoffMessageId
-        )
-        const conversationMessages = unsummarized
-          .slice(-MAX_AI_CONVERSATION_MESSAGES)
-          .map((message) => ({ role: message.role, content: message.text }))
         return await aiAgentTurnStream(requestId, {
-          config: props.config,
+          config: requestConfig,
           apiKey,
           goal,
           turns,
-          terminalSnapshot: props.terminalSnapshot,
-          commandHistory: aiCommandHistory(),
-          conversationMessages,
-          conversationSummary
+          terminalSnapshot,
+          commandHistory,
+          conversationMessages: runSnapshot.conversationMessages,
+          conversationSummary: runSnapshot.conversationSummary
         })
       } finally {
         window.clearInterval(cancelWatch)
         unlisten?.()
       }
     },
-    startCommand: (command) => runner(boundTerminalId, command, { maxOutputChars: AGENT_OUTPUT_MAX_CHARS }),
+    startCommand: (command) => runner(boundTerminalId, command, {
+      maxOutputChars: AGENT_OUTPUT_MAX_CHARS,
+      connectionGeneration: boundConnectionGeneration
+    }),
     classifyStep: (command) => {
       const risks = analyzeScriptRisks(command)
       const sensitive = isSensitiveAgentCommand(command)
       const autoExec = classifyForAutoExec(command, {
-        userPatterns: props.agentAllowlistPatterns ?? [],
-        includeBuiltin: props.agentBuiltinReadonlyEnabled ?? false
+        userPatterns: allowlistPatterns,
+        includeBuiltin: builtinReadonlyEnabled
       })
       // 命中计数只在真正会自动执行时记录(镜像循环的判定顺序:风险/敏感门在前)
       if (autoExec.eligible && autoExec.matched && !sensitive && risks.length === 0) {
@@ -774,7 +883,8 @@ async function runAgentTurn(
   const { done, stop } = runAgentTask(goal, deps, {
     stepLimit: props.agentStepLimit,
     commandTimeoutMs: props.agentCommandTimeoutMs,
-    initialSteps: assistantMessage.agentSteps?.filter(s => s.status === 'completed' || s.status === 'skipped')
+    initialSteps: assistantMessage.agentSteps?.filter(s => s.status === 'completed' || s.status === 'skipped'),
+    retryStep
   })
   agentStopHandle = stop
   try {
@@ -783,7 +893,16 @@ async function runAgentTurn(
     syncAgentRunToMessage(finalState)
     if (finalState.status === 'error' && finalState.error) emit('aiError', finalState.error)
     if (finalState.status === 'done' && finalState.finalText) {
-      maybeGenerateSessionTitle(requestConnectionId, requestWorkspaceSessionId, text, finalState.finalText, props.terminalSnapshot, aiCommandHistory())
+      maybeGenerateSessionTitle(
+        requestConnectionId,
+        requestWorkspaceSessionId,
+        text,
+        finalState.finalText,
+        terminalSnapshot,
+        commandHistory,
+        requestConfig,
+        apiKey
+      )
     }
   } finally {
     agentStopHandle = null
@@ -818,12 +937,40 @@ function retryBlockedReason(message: AiMessage) {
   if (!canSendMessage.value) return '当前没有可用的 AI 配置'
   if (message.workspaceSessionId !== props.workspaceSessionId) return '该消息不属于当前会话'
   if (message.connectionId !== props.connectionId) return '已切换到其它连接,请切回原连接后重试'
+  if (message.terminalId !== props.terminalId) return '已切换到其它终端,请切回任务原终端后重试'
+  if (
+    message.mode === 'agent' &&
+    message.terminalConnectionGeneration !== undefined &&
+    message.terminalConnectionGeneration !== props.terminalConnectionGeneration
+  ) {
+    return '原终端已经重新连接,为避免重复或误执行命令,请重新发起任务'
+  }
   if (!pairedUserMessage(message)) return '找不到对应的提问,无法重试'
   return ''
 }
 
 function canRetryMessage(message: AiMessage) {
   return retryBlockedReason(message) === ''
+}
+
+function failedAgentStep(message: AiMessage) {
+  if (message.mode !== 'agent') return undefined
+  const steps = message.agentSteps ?? []
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].status === 'failed') return steps[index]
+  }
+  return undefined
+}
+
+function retryButtonLabel(message: AiMessage) {
+  return failedAgentStep(message) ? '重试命令' : '重试'
+}
+
+function retryButtonTitle(message: AiMessage) {
+  const step = failedAgentStep(message)
+  return step
+    ? `重新执行失败命令：${step.command}`
+    : '用同一个问题重新请求，替换这条失败回复'
 }
 
 /**
@@ -838,16 +985,19 @@ async function retryMessage(message: AiMessage) {
   if (!question) return
   const agentMode = message.mode === 'agent'
   if (agentMode) {
-    const blocked = await ensureAgentReady()
-    if (blocked) {
-      agentModeNotice.value = blocked
+    const target = currentAgentTarget()
+    const prepared = await prepareAgentAction(target)
+    if (prepared.cancelled) return
+    if (prepared.blocked) {
+      agentModeNotice.value = prepared.blocked
       return
     }
     agentModeNotice.value = ''
   }
 
   // 先把消息打回进行中:streaming 的更新只改内存不落库,重试的终态会覆盖原来的错误行
-  // Agent 模式:保留已完成的步骤,只重试失败/中断的工作
+  // Agent 模式:工具执行失败时先重跑失败命令;模型请求失败时才重新请求模型
+  const retryStep = agentMode ? failedAgentStep(message) : undefined
   const completedSteps = agentMode && message.agentSteps
     ? message.agentSteps.filter(s => s.status === 'completed' || s.status === 'skipped')
     : []
@@ -866,7 +1016,7 @@ async function retryMessage(message: AiMessage) {
 
   // 选中内容是实时的:仍然选中就沿用,已经取消则本次不带终端片段
   const selectedContext = selectedTerminalContext.value
-  if (agentMode) await runAgentTurn(pending, question, selectedContext, userMessage.id)
+  if (agentMode) await runAgentTurn(pending, question, selectedContext, userMessage.id, retryStep)
   else await runChatTurn(pending, question, selectedContext, userMessage.id)
 }
 
@@ -964,22 +1114,23 @@ function createMessage(
 
 async function callConfiguredModelStream(
   requestId: string,
+  config: AiProviderConfig,
+  apiKey: string,
   question: string,
   terminalSnapshot: string,
   commandHistory: string[],
   conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>,
   conversationSummary?: string
 ) {
-  if (!props.config.baseUrl.trim() || !props.config.model.trim()) {
+  if (!config.baseUrl.trim() || !config.model.trim()) {
     throw new Error('请先配置 AI Base URL 和 Model')
   }
-  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
   if (!apiKey) {
     throw new Error('请在 AI 配置中填写 API Key 并保存到系统凭据管理器')
   }
 
   return chatWithAiProviderStream(requestId, {
-    config: props.config,
+    config,
     apiKey,
     question,
     terminalSnapshot,
@@ -1202,19 +1353,19 @@ function handleDocumentPointerDown(event: PointerEvent) {
 }
 
 function selectSession(sessionId: string) {
-  if (sessionId !== props.workspaceSessionId && isAsking.value) stopCurrentAnswer()
+  if (sessionId !== props.workspaceSessionId && composerBusy.value) stopActiveAiWork()
   emit('selectSession', sessionId)
   historyOpen.value = false
 }
 
 function createSession() {
-  if (isAsking.value) stopCurrentAnswer()
+  if (composerBusy.value) stopActiveAiWork()
   emit('createSession')
   historyOpen.value = false
 }
 
 function deleteSession(sessionId: string) {
-  if (sessionId === props.workspaceSessionId && isAsking.value) stopCurrentAnswer()
+  if (sessionId === props.workspaceSessionId && composerBusy.value) stopActiveAiWork()
   emit('deleteSession', sessionId)
 }
 
@@ -1243,16 +1394,17 @@ function maybeGenerateSessionTitle(
   userMessage: string,
   assistantMessage: string,
   terminalSnapshot: string,
-  commandHistory: string[]
+  commandHistory: string[],
+  config: AiProviderConfig,
+  apiKey: string
 ) {
   const session = props.workspaceSessions.find((item) => item.id === sessionId)
   const currentName = session?.name?.trim() || activeSessionTitle.value
   if (!isAutoSessionName(currentName)) return
-  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
-  if (!props.config.baseUrl.trim() || !props.config.model.trim() || !apiKey) return
+  if (!config.baseUrl.trim() || !config.model.trim() || !apiKey) return
 
   void generateAiSessionTitle({
-    config: props.config,
+    config,
     apiKey,
     userMessage,
     assistantMessage,
@@ -1353,6 +1505,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelAgentPreparation()
+  agentStopHandle?.()
+  const requestId = currentRequestId.value
+  if (requestId) void cancelTask(requestId).catch(() => {})
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
   if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
   stopAnswerTimer()
@@ -1603,6 +1759,8 @@ watch(
             :suggested-command="message.mode === 'agent' ? '' : message.command || ''"
             :can-retry="canRetryMessage(message)"
             :retry-disabled-reason="retryBlockedReason(message)"
+            :retry-label="retryButtonLabel(message)"
+            :retry-title="retryButtonTitle(message)"
             @retry="retryMessage(message)"
             @execute-command="executeGeneratedCommand($event, message)"
           />
@@ -1661,7 +1819,7 @@ watch(
       </div>
       <button
         class="icon-button"
-        :title="composerBusy ? (agentRunActive ? '停止任务' : '停止回答') : 'Ctrl+Enter / ⌘+Enter 发送'"
+        :title="composerBusy ? (agentPreparing || agentRunActive ? '停止任务' : '停止回答') : 'Ctrl+Enter / ⌘+Enter 发送'"
         :aria-label="composerBusy ? '停止' : '发送'"
         :disabled="!composerBusy && !canSendMessage"
         @click="composerPrimaryAction()"

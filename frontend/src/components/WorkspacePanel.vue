@@ -10,7 +10,7 @@ import type {
   TerminalSelectionEvent,
   WorkspaceSession
 } from '../types/workspace'
-import type { AgentCommandHandle, AiPanelMode } from '../types/agent'
+import type { AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from '../types/agent'
 import AiPanel from './AiPanel.vue'
 import CommandHistoryPanel from './CommandHistoryPanel.vue'
 import FileTransferPanel from './FileTransferPanel.vue'
@@ -42,7 +42,7 @@ defineProps<{
   scriptRecording: ScriptRecording
   agentAvailabilityCheck?: () => string
   agentAvailabilityConfirm?: () => Promise<string>
-  agentCommandRunner?: (terminalId: string, command: string, options?: { maxOutputChars?: number }) => AgentCommandHandle
+  agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
   agentBuiltinReadonlyEnabled?: boolean
   agentStepLimit?: number
@@ -150,6 +150,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
     <AiPanel
       v-if="activeWorkspaceTab === 'ai'"
       :terminal-id="terminalId"
+      :terminal-connection-generation="terminalConnectionGeneration"
       :connection-id="connectionId"
       :workspace-session-id="workspaceSessionId"
       :workspace-sessions="workspaceSessions"

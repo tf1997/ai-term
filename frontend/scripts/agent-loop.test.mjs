@@ -294,6 +294,7 @@ test('连续两次 invalid_arguments:任务以 error 结束', async () => {
 
   assert.equal(state.status, 'error')
   assert.ok(state.error)
+  assert.equal(state.errorKind, 'protocol')
   assert.equal(state.steps.length, 0)
 })
 
@@ -327,6 +328,7 @@ test('连续异常工具会返回明确错误而不是空泛的任务出错', as
   const state = await runAgentTask('测试', deps).done
 
   assert.equal(state.status, 'error')
+  assert.equal(state.errorKind, 'protocol')
   assert.match(state.error, /连续 2 次调用了不支持的工具/)
   assert.match(state.error, /空名称/)
   assert.equal(state.steps.length, 0)
@@ -372,6 +374,107 @@ test('重试会保留已完成步骤并以 run_command 协议恢复上下文', a
   assert.deepEqual(JSON.parse(calls[0].turns[3].content), { status: 'skipped_by_user' })
 })
 
+test('失败工具重试时先重新执行命令,成功后才请求模型', async () => {
+  const events = []
+  const retryStep = {
+    id: 'failed-command',
+    command: 'systemctl status nginx',
+    reason: '查看服务状态',
+    risks: [],
+    sensitive: false,
+    status: 'failed',
+    output: 'old failure',
+    durationMs: 5
+  }
+  const { deps } = makeDeps({
+    startCommand: (command) => {
+      events.push(`command:${command}`)
+      return makeSimpleHandle({ output: 'active', durationMs: 9 })
+    },
+    callModel: async (turns) => {
+      events.push('model')
+      assert.equal(turns.length, 2)
+      assert.equal(turns[0].kind, 'assistant')
+      assert.equal(turns[0].toolCalls[0].id, retryStep.id)
+      assert.equal(turns[0].toolCalls[0].name, 'run_command')
+      assert.deepEqual(JSON.parse(turns[1].content), {
+        exitCode: 0,
+        durationMs: 9,
+        truncated: false,
+        output: 'active'
+      })
+      return turnResponse('重试成功', [])
+    }
+  })
+
+  const state = await runAgentTask('继续任务', deps, { retryStep }).done
+
+  assert.deepEqual(events, ['command:systemctl status nginx', 'model'])
+  assert.equal(state.status, 'done')
+  assert.equal(state.steps.length, 1)
+  assert.equal(state.steps[0].status, 'completed')
+  assert.equal(state.steps[0].output, 'active')
+})
+
+test('失败工具重试仍失败时不请求模型', async () => {
+  let modelCalls = 0
+  const retryStep = {
+    id: 'failed-command',
+    command: 'systemctl status nginx',
+    reason: '查看服务状态',
+    risks: [],
+    sensitive: false,
+    status: 'failed'
+  }
+  const { deps } = makeDeps({
+    startCommand: () => makeSimpleHandle({
+      status: 'dispatch-failed',
+      failureReason: '终端不可用'
+    }),
+    callModel: async () => {
+      modelCalls += 1
+      return turnResponse('不应调用', [])
+    }
+  })
+
+  const state = await runAgentTask('继续任务', deps, { retryStep }).done
+
+  assert.equal(modelCalls, 0)
+  assert.equal(state.status, 'error')
+  assert.equal(state.errorKind, 'tool')
+  assert.equal(state.steps[0].status, 'failed')
+  assert.match(state.error, /终端不可用/)
+})
+
+test('非 failed 步骤不会被自动重新执行', async () => {
+  let commandStarts = 0
+  let modelCalls = 0
+  const { deps } = makeDeps({
+    startCommand: () => {
+      commandStarts += 1
+      return makeSimpleHandle()
+    },
+    callModel: async () => {
+      modelCalls += 1
+      return turnResponse('保持停止', [])
+    }
+  })
+  const timeoutStep = {
+    id: 'possibly-running',
+    command: 'deploy.sh',
+    reason: '部署',
+    risks: [],
+    sensitive: false,
+    status: 'timeout'
+  }
+
+  const state = await runAgentTask('继续任务', deps, { retryStep: timeoutStep }).done
+
+  assert.equal(commandStarts, 0)
+  assert.equal(modelCalls, 1)
+  assert.equal(state.status, 'done')
+})
+
 test('callModel 抛异常:状态 error 且 error 为异常信息', async () => {
   const { deps } = makeDeps({
     callModel: async () => {
@@ -382,6 +485,7 @@ test('callModel 抛异常:状态 error 且 error 为异常信息', async () => {
 
   assert.equal(state.status, 'error')
   assert.equal(state.error, '网关超载')
+  assert.equal(state.errorKind, 'model')
 })
 
 test('步数上限:达到后不再调模型,finalText 带说明', async () => {

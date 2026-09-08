@@ -12,10 +12,14 @@ const props = withDefaults(defineProps<{
   canRetry?: boolean
   /** canRetry 为 false 时解释原因,挂在按钮 title 上。 */
   retryDisabledReason?: string
+  retryLabel?: string
+  retryTitle?: string
 }>(), {
   suggestedCommand: '',
   canRetry: false,
-  retryDisabledReason: ''
+  retryDisabledReason: '',
+  retryLabel: '重试',
+  retryTitle: '用同一个问题重新请求，替换这条失败回复'
 })
 
 const emit = defineEmits<{
@@ -86,11 +90,11 @@ onBeforeUnmount(() => {
         :class="{ 'primary-action': view.retryable }"
         type="button"
         :disabled="!canRetry"
-        :title="canRetry ? '用同一个问题重新请求，替换这条失败回复' : retryDisabledReason || '当前无法重试'"
+        :title="canRetry ? retryTitle : retryDisabledReason || '当前无法重试'"
         @click="emit('retry')"
       >
         <UiIcon name="refresh" size="13" />
-        <span>重试</span>
+        <span>{{ retryLabel }}</span>
       </button>
       <button class="text-button" type="button" :title="copied ? '已复制' : '复制原始报错'" @click="copyDetail">
         {{ copied ? '已复制' : '复制详情' }}

@@ -204,7 +204,8 @@ messages 组装顺序:
 扩展点在 agent 模块内,不修改 chat 的 `parse_sse_event_deltas`:
 
 - 文本增量:沿用 `choices/0/delta/content` 等指针,通过 `on_delta` 回调外发(前端体验与 chat 一致)。
-- 工具调用增量:`choices/0/delta/tool_calls` 是数组,元素形如 `{index, id?, type?, function:{name?, arguments?}}`。按 `index` 维护累积表:`id`/`name` 取首个非空值,`arguments` 字符串逐片拼接。兼容两类网关行为:分片下发(标准)与单个 delta 携带完整调用。
+- 工具调用增量:`choices/0/delta/tool_calls` 是数组,元素形如 `{index, id?, type?, function:{name?, arguments?}}`。按 `index` 维护累积表:`id`/`name`/`arguments` 均支持分片；重复发送完整字段时去重。兼容流末尾补发完整 `choices/0/message/tool_calls`、对象形式 `arguments` 和缺失调用 ID 的网关。
+- SSE 事件按规范合并同一事件内的多个 `data:` 行，忽略空数据事件，并兼容 LF / CRLF / CR 分隔。
 - 结束判定:流结束后累积表非空即视为有 tool call(不依赖 `finish_reason`,部分网关不回传);`arguments` 在后端仅做非空校验,JSON 解析留给前端以便把格式错误呈现在步骤卡片上重试。
 - 非流式兜底:与 chat 相同,SSE 无增量时把完整响应按 `choices/0/message/tool_calls` 提取。
 - 取消:沿用 `AiCancelToken` 检查点。
@@ -258,6 +259,9 @@ runCommandAndCapture(command: string, options: { timeoutMs: number; maxOutputCha
 - **marker 失效兜底**:输出超过 scrollback 导致起始 marker 被回收时,退化为取当前缓冲尾部 `maxOutputChars` 并标注"输出过长,仅保留末尾"。
 - **超时**:默认 120s。超时不杀命令(这是用户的活动终端),Promise 以 `timeout` 结果返回,输出为已捕获的尾部内容;循环层转入 `awaiting-user`。
 - **串扰防护**:布防到 D 期间用户手动输入回车会让捕获对应到错误的命令。布防时记录派发的命令文本,`onCommandFinished.command` 不匹配时结果标注 `commandMismatch`,循环层按执行失败处理并提示用户接管。
+- **写入失败回传**:PTY 写入队列的异步失败同时通知 Agent 捕获句柄,立即形成 `dispatch-failed`,不再只弹 toast 后等待命令超时。
+- **会话失效**:终端关闭或重连时立即结算活动捕获并清理排队写入；同一终端只允许一个 Agent 捕获,防止哨兵扫描器互相覆盖。
+- **探针可取消**:首次哨兵探针期间停止任务时,探针可自行结束,但真实命令不会在探针完成后延迟派发。
 
 ### 6.3 Agent 循环编排器 `lib/agentLoop.ts`
 
@@ -381,12 +385,16 @@ interface AiMessage {
 - 运行中的实时更新沿用现有 `updateMessage` 事件流(节流策略参考 chat 的 80ms 合并)。
 - `text` 字段始终写入最终总结(运行中为空),保证旧版本与压缩逻辑可用。
 - 会话压缩:`compress_conversation_context` 的输入把 agent 消息展开为"文本 + 每步一行(命令/退出码/一句话结果)"的纯文本,不需要后端感知步骤结构。
+- 错误按 `model / tool / protocol` 分类。只有模型流中断才把已收到文本标为“不完整回复”；工具派发失败不会误标模型说明。
+- 重试按错误来源分流:存在 `failed` 工具步骤时按钮显示“重试命令”,先重新执行原命令,成功后才把新结果交给模型；再次失败不请求模型。模型或协议错误仍重新请求模型。`timeout` 不直接重跑,因为原命令可能仍在终端执行。
 
 ### 6.6 AppShell 接线
 
-- AppShell 向 AiPanel 传入 `agentCommandRunner: (command, opts) => Promise<AgentCommandResult>` prop,内部定位活动终端 `terminalRefs.value[activeTerminalId.value]` 并调用其 `runCommandAndCapture`;终端不可用时返回 `dispatch-failed`。
-- 任务与终端绑定:任务开始时锁定当时的 `terminalId`,期间用户切换活动终端不改变执行目标;该终端断开则任务以 error 终止。
-- 消息持久化沿用 AppShell 现有的 `save_ai_conversation_message` 调用点,增加 payload 字段(见 7)。
+- AppShell 向 AiPanel 传入 `agentCommandRunner: (terminalId, command, opts) => AgentCommandHandle` prop,按任务绑定 ID 定位终端并调用其 `runCommandAndCapture`;终端不可用时返回 `dispatch-failed`。每个终端 ID 使用稳定的 Vue ref 回调,父组件因终端输出重渲染不会误删实例。
+- 任务与终端绑定:任务开始时同时锁定 `terminalId` 和 `connectionGeneration`,期间用户切换活动终端不改变执行目标；原标签关闭或同标签重连后拒绝继续派发,防止旧任务命令进入新会话。
+- 模型配置、API Key、终端快照、命令历史、会话背景和允许列表在任务启动时生成独立快照。切换终端、会话或配置不会污染运行中的模型轮次。
+- 切换/删除 AI 会话及组件卸载会停止 Agent；探针准备阶段也计入 busy 状态,阻止重复提交并支持停止。
+- 消息持久化沿用 AppShell 现有的 `save_ai_conversation_message` 调用点,payload 额外保存 `terminalConnectionGeneration`,重启应用后仍能阻止旧错误消息向重连后的终端重试。
 
 ## 7. 持久化与迁移
 
@@ -395,7 +403,7 @@ interface AiMessage {
 | 表 | 新列 | 定义 | 用途 |
 | --- | --- | --- | --- |
 | `workspace_sessions` | `ai_mode` | `TEXT NOT NULL DEFAULT 'chat'` | 会话模式 |
-| `ai_conversation_messages` | `payload_json` | `TEXT NOT NULL DEFAULT ''` | agent 消息的 `{mode, agentSteps, agentStatus}` 序列化 |
+| `ai_conversation_messages` | `payload_json` | `TEXT NOT NULL DEFAULT ''` | agent 消息的 `{mode, agentSteps, agentStatus, terminalConnectionGeneration}` 序列化 |
 
 新增表 `agent_command_allowlist(pattern TEXT PRIMARY KEY NOT NULL, source_command TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0)` 及配套 `list / save / delete / touch(命中计数)` Tauri 命令,建表风格参照 `update_scripts` 的 `CREATE TABLE IF NOT EXISTS`;「内置只读集」开关等轻量偏好沿用现有前端设置持久化方式(与主题偏好一致)。
 

@@ -57,6 +57,12 @@ export interface AgentCommandHandle {
   cancel(): void
 }
 
+export interface AgentCommandRunOptions {
+  maxOutputChars?: number
+  /** 防止旧任务在同一标签重连后误发到新的终端会话。 */
+  connectionGeneration?: number
+}
+
 /**
  * 命令捕获方式。`markers` 为 OSC 133 语义标记;`sentinel` 为无标记终端(远端 SSH)
  * 的 printf 哨兵兜底(文档 10.3);`unsupported` 表示两者都不可用。
@@ -107,6 +113,7 @@ export interface AgentRunState {
   /** 单条命令等待多久后询问用户(与 deadlineAt 配合显示倒计时)。 */
   commandTimeoutMs: number
   error?: string
+  errorKind?: 'model' | 'tool' | 'protocol'
 }
 
 export type AgentApprovalDecision = 'execute' | 'execute-and-allow' | 'skip' | 'stop'

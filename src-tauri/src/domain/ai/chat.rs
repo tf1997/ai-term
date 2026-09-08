@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::ai::stream::{
-    is_stream_done, send_stream_request, stream_error_body, wait_for_stream, SseEventBuffer,
+    is_stream_done, send_stream_request, sse_data_payloads, stream_error_body, wait_for_stream,
+    SseEventBuffer,
 };
 use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::text::Utf8StreamDecoder;
@@ -950,19 +951,12 @@ pub(crate) fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
 fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {
     let mut deltas = Vec::new();
 
-    for line in event.lines().map(str::trim) {
-        if !line.starts_with("data:") {
-            continue;
-        }
-        let data = line.trim_start_matches("data:").trim();
+    for data in sse_data_payloads(event) {
         if data == "[DONE]" {
             break;
         }
-        if data.is_empty() {
-            continue;
-        }
 
-        let payload = serde_json::from_str::<Value>(data)
+        let payload = serde_json::from_str::<Value>(&data)
             .with_context(|| format!("模型流式返回不是合法 JSON：{data}"))?;
         if let Some(error) = payload.pointer("/error/message").and_then(Value::as_str) {
             bail!("模型流式返回错误：{error}");

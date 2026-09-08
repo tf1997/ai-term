@@ -109,6 +109,22 @@ pub(super) fn is_stream_done(event: &str) -> bool {
     })
 }
 
+pub(super) fn sse_data_payloads(event: &str) -> Vec<String> {
+    event
+        .split("\n\n")
+        .filter_map(|block| {
+            let data = block
+                .lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix("data:"))
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!data.trim().is_empty()).then_some(data)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{atomic::Ordering, Arc};
@@ -206,5 +222,13 @@ mod tests {
         assert!(is_stream_done("data: [DONE]"));
         assert!(!is_stream_done(": [DONE]"));
         assert!(!is_stream_done("data: {\"text\":\"[DONE]\"}"));
+    }
+
+    #[test]
+    fn joins_multiline_sse_data_and_keeps_events_separate() {
+        assert_eq!(
+            sse_data_payloads("event: message\ndata: {\"value\":\ndata: 1}\n\ndata: [DONE]"),
+            vec!["{\"value\":\n1}", "[DONE]"]
+        );
     }
 }

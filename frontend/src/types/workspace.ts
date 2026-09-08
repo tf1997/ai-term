@@ -99,6 +99,8 @@ export interface AiMessage {
   /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */
   agentSteps?: AgentStep[]
   agentStatus?: 'running' | 'done' | 'stopped' | 'error'
+  /** Agent 启动时绑定的终端连接代次；用于阻止重连后误执行旧任务。 */
+  terminalConnectionGeneration?: number
   /** Agent 载荷序列化(与后端 payload_json 列对应)。 */
   payloadJson?: string
   createdAt: string
