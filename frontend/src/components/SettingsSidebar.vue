@@ -4,36 +4,23 @@ import type { AiProviderConfig } from '../types/profile'
 import type { AgentAllowlistEntry } from '../types/agent'
 import { BUILTIN_READONLY_COMMANDS, validateAllowlistPattern } from '../lib/agentAutoApprove'
 import { isWindowsPlatform } from '../utils/platform'
+import type { AppUserSettings } from '../types/settings'
+import {
+  createDefaultUserSettings,
+  MAX_AGENT_COMMAND_TIMEOUT_SEC,
+  MAX_AGENT_STEP_LIMIT,
+  MAX_TERMINAL_FONT_SIZE,
+  MIN_AGENT_COMMAND_TIMEOUT_SEC,
+  MIN_AGENT_STEP_LIMIT,
+  MIN_TERMINAL_FONT_SIZE,
+  normalizeUserSettings
+} from '../lib/userSettings'
 import AiConfigPanel from './AiConfigPanel.vue'
 import UiIcon from './UiIcon.vue'
 
 type SettingsSection = 'ai' | 'terminal' | 'agent'
-type TerminalTheme = 'midnight' | 'matrix' | 'light'
-const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
-const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
 const windowsPlatform = isWindowsPlatform()
-const DEFAULT_TERMINAL_FONT_FAMILY = windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
-const DEFAULT_TERMINAL_FONT_SIZE = 13
-// Agent 任务预算(与 AppShell 的取值范围保持一致)
-const DEFAULT_AGENT_STEP_LIMIT = 25
-const MIN_AGENT_STEP_LIMIT = 1
-const MAX_AGENT_STEP_LIMIT = 25
-const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
-const MIN_AGENT_COMMAND_TIMEOUT_SEC = 15
-const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
-
-interface AppUserSettings {
-  terminalFontFamily: string
-  terminalFontSize: number
-  terminalTheme: TerminalTheme
-  defaultShell: string
-  /** Agent 模式:自动执行内置只读命令集的开关(默认开,与 AppShell 的定义保持一致)。 */
-  agentAutoExecReadonly: boolean
-  /** Agent 模式:每个任务的最大步数(1–25)。 */
-  agentStepLimit: number
-  /** Agent 模式:单条命令等待多久后询问用户(15–600 秒)。 */
-  agentCommandTimeoutSec: number
-}
+const defaultUserSettings = createDefaultUserSettings(windowsPlatform)
 
 const props = defineProps<{
   aiConfigs: AiProviderConfig[]
@@ -134,32 +121,13 @@ function closeAiConfig() {
   emit('closeAiConfig')
 }
 
-function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const parsed = Math.round(Number(value))
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
 function saveSettings() {
-  emit('updateSettings', {
-    ...draft,
-    terminalFontSize: Math.max(11, Math.min(22, Number(draft.terminalFontSize) || DEFAULT_TERMINAL_FONT_SIZE)),
-    terminalFontFamily: draft.terminalFontFamily.trim() || DEFAULT_TERMINAL_FONT_FAMILY,
-    terminalTheme: 'midnight',
-    defaultShell: draft.defaultShell.trim() || 'system',
-    agentStepLimit: clampNumber(draft.agentStepLimit, MIN_AGENT_STEP_LIMIT, MAX_AGENT_STEP_LIMIT, DEFAULT_AGENT_STEP_LIMIT),
-    agentCommandTimeoutSec: clampNumber(
-      draft.agentCommandTimeoutSec,
-      MIN_AGENT_COMMAND_TIMEOUT_SEC,
-      MAX_AGENT_COMMAND_TIMEOUT_SEC,
-      DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
-    )
-  })
+  emit('updateSettings', normalizeUserSettings(draft, windowsPlatform))
 }
 
 function resetTerminalAppearance() {
-  draft.terminalFontFamily = DEFAULT_TERMINAL_FONT_FAMILY
-  draft.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
+  draft.terminalFontFamily = defaultUserSettings.terminalFontFamily
+  draft.terminalFontSize = defaultUserSettings.terminalFontSize
   saveSettings()
 }
 
@@ -246,7 +214,7 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
           </label>
           <label class="settings-field inline">
             <span>字号</span>
-            <input v-model.number="draft.terminalFontSize" type="number" min="11" max="22" />
+            <input v-model.number="draft.terminalFontSize" type="number" :min="MIN_TERMINAL_FONT_SIZE" :max="MAX_TERMINAL_FONT_SIZE" />
           </label>
           <label class="settings-field">
             <span>默认 Shell 偏好</span>

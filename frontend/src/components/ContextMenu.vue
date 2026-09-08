@@ -1,17 +1,11 @@
 <script setup lang="ts">
-interface ContextMenuItem {
-  id: string
-  label: string
-  danger?: boolean
-  disabled?: boolean
-  action: () => void
-}
+import type { ContextMenuItem } from '../types/overlays'
 
 defineProps<{
   x: number
   y: number
   title?: string
-  items: ContextMenuItem[]
+  items: readonly ContextMenuItem[]
 }>()
 
 const emit = defineEmits<{

@@ -1,13 +1,23 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { AiProviderConfig, ConnectionProfile } from '../types/profile'
-import { isWindowsPlatform } from '../utils/platform'
+import type { AppUserSettings } from '../types/settings'
+import { useUserSettings } from '../composables/useUserSettings'
+import { useAppTheme } from '../composables/useAppTheme'
+import { useWorkspaceResize } from '../composables/useWorkspaceResize'
+import { useToasts } from '../composables/useToasts'
+import { useContextMenu } from '../composables/useContextMenu'
+import { useCommandHistory } from '../composables/useCommandHistory'
+import { useWorkspaceSessions } from '../composables/useWorkspaceSessions'
+import { useAiMessages } from '../composables/useAiMessages'
+import { DEFAULT_AI_SESSION_ID, nowText } from '../lib/workspaceSessions'
+import { MAX_WORKSPACE_WIDTH, MIN_WORKSPACE_WIDTH } from '../lib/workspaceLayout'
 
-type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
+import type { TerminalTab } from '../types/terminal'
+import { useTerminalTabs } from '../composables/useTerminalTabs'
+import { useTerminalTabScroll } from '../composables/useTerminalTabScroll'
+import { terminalStatusClass } from '../lib/terminalTabs'
 import type {
-  AiContextStatus,
-  AiMessage,
-  CommandHistoryEntry,
   CommandRecordedEvent,
   ScriptRecording,
   TerminalInputEvent,
@@ -15,28 +25,20 @@ import type {
   TerminalInputWriteFailureEvent,
   TerminalOutputDeltaEvent,
   TerminalOutputEvent,
-  TerminalSelectionEvent,
-  WorkspaceSession
+  TerminalSelectionEvent
 } from '../types/workspace'
 import {
   deleteAgentCommandAllowlistEntry,
   deleteAiProviderConfig,
   deleteConnectionProfile,
-  deleteWorkspaceSession,
   listAgentCommandAllowlist,
   listAiProviderConfigs,
-  listAiConversationMessages,
-  listCommandHistory,
   listConnectionProfiles,
-  listWorkspaceSessions,
   saveAgentCommandAllowlistEntry,
-  saveAiConversationMessage,
   saveAiProviderConfig,
-  saveCommandHistoryRecord,
-  saveConnectionProfile,
-  saveWorkspaceSession
+  saveConnectionProfile
 } from '../lib/tauri'
-import type { AgentAllowlistEntry, AgentCaptureMode, AgentCommandHandle, AiPanelMode } from '../types/agent'
+import type { AgentAllowlistEntry, AgentCaptureMode, AgentCommandHandle } from '../types/agent'
 import { isSensitiveCommand } from '../lib/commandPrivacy'
 import ConnectionSidebar from './ConnectionSidebar.vue'
 import ContextMenu from './ContextMenu.vue'
@@ -45,45 +47,8 @@ import TerminalPane from './TerminalPane.vue'
 import WorkspacePanel from './WorkspacePanel.vue'
 import UiIcon from './UiIcon.vue'
 
-interface TerminalTab {
-  id: string
-  title: string
-  connectionId: string
-  profile?: ConnectionProfile
-  connectRequest: number
-  status: TerminalRuntimeStatus
-  connectionGeneration: number
-}
 
-const COMMAND_HISTORY_CACHE_LIMIT = 300
-const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
-const LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-density:v1'
-const WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY = 'ai-term:windows-terminal-size-correction:v1'
-const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
-const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
-const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
-const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
-const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, monospace'
-const WINDOWS_PLATFORM = isWindowsPlatform()
-const DEFAULT_TERMINAL_FONT_FAMILY = WINDOWS_PLATFORM ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY
-const DEFAULT_TERMINAL_FONT_SIZE = 13
-// Agent 任务预算(文档 9):步数上限防死循环,超时只是"要不要继续等"的询问点
-const DEFAULT_AGENT_STEP_LIMIT = 25
-const MIN_AGENT_STEP_LIMIT = 1
-const MAX_AGENT_STEP_LIMIT = 25
-const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
-const MIN_AGENT_COMMAND_TIMEOUT_SEC = 15
-const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
-const defaultUserSettings: AppUserSettings = {
-  terminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
-  terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
-  terminalTheme: 'midnight',
-  defaultShell: 'system',
-  // 只读检查命令自动执行,Agent 才能连续取证;写入/风险/敏感命令仍逐条审批(文档 10.2)
-  agentAutoExecReadonly: true,
-  agentStepLimit: DEFAULT_AGENT_STEP_LIMIT,
-  agentCommandTimeoutSec: DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
-}
+
 type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
   commandExecutionReadiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   executeCommand: (command: string) => boolean
@@ -104,44 +69,7 @@ type TerminalPaneInstance = InstanceType<typeof TerminalPane> & {
 type LeftPanelMode = 'connections' | 'settings'
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
-type ToastKind = 'success' | 'error' | 'warning' | 'info'
-type TerminalTheme = 'midnight' | 'matrix' | 'light'
-type AppTheme = 'dark' | 'light'
 type AboutSignalIcon = 'ai' | 'database' | 'network' | 'shield' | 'terminal'
-
-interface AppUserSettings {
-  terminalFontFamily: string
-  terminalFontSize: number
-  terminalTheme: TerminalTheme
-  defaultShell: string
-  /** Agent 模式:自动执行内置只读命令集的开关(默认开,见文档 10.2 ④)。 */
-  agentAutoExecReadonly: boolean
-  /** Agent 模式:每个任务的最大步数(1–25)。 */
-  agentStepLimit: number
-  /** Agent 模式:单条命令等待多久后询问用户(15–600 秒)。 */
-  agentCommandTimeoutSec: number
-}
-
-interface AppToast {
-  id: string
-  kind: ToastKind
-  title: string
-  message?: string
-}
-interface ContextMenuItem {
-  id: string
-  label: string
-  danger?: boolean
-  disabled?: boolean
-  action: () => void
-}
-
-interface ContextMenuState {
-  x: number
-  y: number
-  title?: string
-  items: ContextMenuItem[]
-}
 
 interface AboutSignal {
   icon: AboutSignalIcon
@@ -162,8 +90,6 @@ const defaultAiConfig: AiProviderConfig = {
   timeoutSeconds: 0
 }
 const LOCAL_CONNECTION_ID = 'local'
-const DEFAULT_AI_SESSION_ID = 'ai:default'
-const COMMAND_HISTORY_SESSION_ID = 'connection-history'
 const APP_VERSION = '0.1.0'
 const APP_CHANNEL = 'Stable'
 const APP_LICENSE = 'Apache-2.0'
@@ -200,56 +126,49 @@ const leftPanelMode = ref<LeftPanelMode>('connections')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
 const workspacePanelTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
-const terminalTabs = ref<TerminalTab[]>([
-  {
-    id: 'local-1',
-    title: '本地终端',
-    connectionId: LOCAL_CONNECTION_ID,
-    profile: undefined,
-    connectRequest: 0,
-    status: 'idle',
-    connectionGeneration: 0
-  }
-])
-const activeTerminalId = ref('local-1')
-const selectedTerminalIds = ref<string[]>(['local-1'])
-const pausedTerminalSyncIds = ref<string[]>([])
+const {
+  terminalTabs, activeTerminalId, activeTerminal, targetTerminalIds, targetConnectionIds,
+  multiTerminalInputEnabled, terminalTargetLabel, terminalTargetTitle, selectTerminalTab,
+  addTerminalTab, removeTerminalTab, updateTerminalStatus, isTerminalTargetSelected,
+  isTerminalSyncPaused, terminalTargetToggleTitle, toggleTerminalTarget, selectAllTerminalTargets,
+  resetTerminalTargetsToActive, pauseTerminalTargets, resumeTerminalSyncTarget
+} = useTerminalTabs()
 // shallowRef: component instances are only accessed imperatively; deep
 // reactivity would proxy every TerminalPane instance for no benefit.
 const terminalRefs = shallowRef<Record<string, TerminalPaneInstance | null>>({})
 const terminalSnapshots = ref<Record<string, string>>({})
 const terminalOutputEvents = ref<Record<string, TerminalOutputDeltaEvent>>({})
 const terminalSelections = ref<Record<string, TerminalSelectionEvent>>({})
-const workspaceSessions = ref<WorkspaceSession[]>([])
 const activeAiSessionId = ref('')
-const draftWorkspaceSessionIds = ref<Record<string, boolean>>({})
-const commandHistoryByConnection = ref<Record<string, CommandHistoryEntry[]>>({})
-const aiMessagesBySession = ref<Record<string, AiMessage[]>>({})
-const aiContextBySession = ref<Record<string, AiContextStatus>>({})
+const workspaceSessionState = useWorkspaceSessions({
+  onRenameError: (error) => { connectionError.value = formatError(error) }
+})
+const {
+  workspaceSessions, isDraftWorkspaceSession, workspaceSessionById, createDraftWorkspaceSession,
+  renameWorkspaceSession, updateWorkspaceSessionTitle, updateWorkspaceSessionContextSummary,
+  setWorkspaceSessionMode, loadWorkspaceSessionList
+} = workspaceSessionState
+const {
+  aiMessagesBySession, aiContextBySession, appendAiMessageToActiveTerminal, updateAiMessage,
+  setAiContextForTerminal, loadAiSessionState, deleteAiSession
+} = useAiMessages(workspaceSessionState)
+const { commandHistoryForConnection, loadCommandHistoryForConnection, recordCommandForConnection } = useCommandHistory()
 const scriptRecordingsByTerminal = ref<Record<string, ScriptRecording>>({})
-const loadedCommandHistoryConnections = ref<Record<string, boolean>>({})
-const loadedAiSessions = ref<Record<string, boolean>>({})
-const workspaceSessionListLoaded = ref(false)
-const contextMenu = ref<ContextMenuState | null>(null)
-const appSettings = ref<AppUserSettings>(loadUserSettings())
-const appTheme = ref<AppTheme>(loadAppTheme())
-const workspaceWidth = ref(loadWorkspaceWidth())
-const workspaceResizing = ref(false)
-const themeToggleButton = ref<HTMLButtonElement | null>(null)
-const sessionTabStrip = ref<HTMLDivElement | null>(null)
-const sessionTabButtons = shallowRef<Record<string, HTMLButtonElement | null>>({})
-const sessionTabScrollLeft = ref(0)
-const sessionTabClientWidth = ref(1)
-const sessionTabScrollWidth = ref(1)
-const toasts = ref<AppToast[]>([])
-let lastThemeToggleAt = 0
-let toastSequence = 0
+const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu()
+const { toasts, showToast, dismissToast } = useToasts()
+const { appSettings, updateUserSettings: saveUserSettings } = useUserSettings()
+const { appTheme, themeToggleButton, toggleAppTheme } = useAppTheme({
+  onThemeChange(theme) {
+    showToast('info', '主题已切换', theme === 'light' ? '已切换为白色主题。' : '已切换为深色主题。')
+  }
+})
+const {
+  sessionTabStrip, sessionTabOverflow, sessionTabThumbStyle, setSessionTabButton,
+  handleSessionTabScroll, handleSessionTabWheel, handleSessionTabScrollbarPointerDown,
+  handleSessionTabThumbPointerDown
+} = useTerminalTabScroll({ terminalTabs, activeTerminalId, leftCollapsed, rightCollapsed })
 let terminalOutputSequence = 0
 const COMMAND_EXECUTION_RETRY_DELAYS_MS = [0, 100, 250, 500, 1_000]
-let sessionTabResizeObserver: ResizeObserver | null = null
-let workspaceSessionListLoadPromise: Promise<void> | null = null
-const aiMessagePersistenceQueues = new Map<string, Promise<void>>()
-const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': `${workspaceWidth.value}px` }))
 const selectedProfile = computed(() => {
   if (!selectedProfileId.value) return undefined
   return profiles.value.find((profile) => profile.id === selectedProfileId.value)
@@ -259,33 +178,6 @@ const sidebarProfile = computed(() => {
   return connectionEditorOpen.value ? connectionDraft.value : selectedProfile.value
 })
 
-const activeTerminal = computed(() => {
-  return terminalTabs.value.find((tab) => tab.id === activeTerminalId.value) ?? terminalTabs.value[0]
-})
-
-const selectedTerminalIdSet = computed(() => new Set(selectedTerminalIds.value))
-const pausedTerminalSyncIdSet = computed(() => new Set(pausedTerminalSyncIds.value))
-
-const targetTerminalTabs = computed(() => {
-  const selected = terminalTabs.value.filter((tab) => selectedTerminalIdSet.value.has(tab.id))
-  if (selected.length > 0) return selected
-  return activeTerminal.value ? [activeTerminal.value] : []
-})
-
-const targetTerminalIds = computed(() => targetTerminalTabs.value.map((tab) => tab.id))
-const targetConnectionIds = computed(() => [...new Set(targetTerminalTabs.value.map((tab) => tab.connectionId))])
-const multiTerminalInputEnabled = computed(() => targetTerminalIds.value.length > 1)
-const activeTerminalTitle = computed(() => activeTerminal.value?.title ?? '当前终端')
-const terminalTargetLabel = computed(() => {
-  const count = targetTerminalIds.value.length
-  return count > 1 ? `同步 ${count} 个 · 当前 ${activeTerminalTitle.value}` : `当前 ${activeTerminalTitle.value}`
-})
-const terminalTargetTitle = computed(() => {
-  const targets = targetTerminalTabs.value.map((tab) => tab.title).join('、')
-  return multiTerminalInputEnabled.value
-    ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}`
-    : `当前 tab：${activeTerminalTitle.value}；仅发送到当前终端`
-})
 const connectionLabels = computed<Record<string, string>>(() => {
   const labels: Record<string, string> = {
     [LOCAL_CONNECTION_ID]: '本地终端'
@@ -297,18 +189,6 @@ const connectionLabels = computed<Record<string, string>>(() => {
     labels[profile.id] = profile.name && profile.name !== profile.id ? `${profile.name} · ${endpoint}` : endpoint
   })
   return labels
-})
-const sessionTabOverflow = computed(() => sessionTabScrollWidth.value - sessionTabClientWidth.value > 2)
-const sessionTabThumbStyle = computed(() => {
-  const clientWidth = Math.max(1, sessionTabClientWidth.value)
-  const scrollWidth = Math.max(clientWidth, sessionTabScrollWidth.value)
-  const scrollableWidth = Math.max(1, scrollWidth - clientWidth)
-  const widthPercent = Math.max(8, (clientWidth / scrollWidth) * 100)
-  const leftPercent = (sessionTabScrollLeft.value / scrollableWidth) * (100 - widthPercent)
-  return {
-    left: `${leftPercent}%`,
-    width: `${widthPercent}%`
-  }
 })
 
 const activeTerminalSnapshot = computed(() => {
@@ -327,11 +207,11 @@ const activeConnectionId = computed(() => activeTerminal.value?.connectionId ?? 
 const activeWorkspaceSessionId = computed(() => activeAiSessionId.value)
 
 const activeCommandHistory = computed(() => {
-  return commandHistoryByConnection.value[activeConnectionId.value] ?? []
+  return commandHistoryForConnection(activeConnectionId.value)
 })
 
 function commandHistoryForTab(tab: TerminalTab) {
-  return commandHistoryByConnection.value[tab.connectionId] ?? []
+  return commandHistoryForConnection(tab.connectionId)
 }
 const activeAiMessages = computed(() => {
   return aiMessagesBySession.value[activeAiSessionId.value] ?? []
@@ -357,6 +237,13 @@ const aboutRuntimeStats = computed(() => [
 ])
 
 const sftpWorkbenchActive = computed(() => !rightCollapsed.value && workspacePanelTab.value === 'sftp')
+const {
+  workspaceWidth,
+  workspaceResizing,
+  workspaceLayoutStyle,
+  beginWorkspaceResize,
+  handleWorkspaceResizeKeydown
+} = useWorkspaceResize({ leftCollapsed, rightCollapsed, sftpWorkbenchActive })
 
 const aiConfig = computed(() => {
   return aiConfigs.value.find((config) => config.id === selectedAiConfigId.value) ?? aiConfigs.value[0] ?? { ...defaultAiConfig }
@@ -465,157 +352,6 @@ function openLocalTerminal() {
   void createLocalTerminalTab()
 }
 
-function normalizedTerminalTargetIds(ids: string[], requiredId = activeTerminalId.value) {
-  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
-  const next = terminalTabs.value.map((tab) => tab.id).filter((id) => ids.includes(id) && validIds.has(id))
-  if (requiredId && validIds.has(requiredId) && !next.includes(requiredId)) next.push(requiredId)
-  if (next.length > 0) return next
-  return requiredId && validIds.has(requiredId) ? [requiredId] : []
-}
-
-function setTerminalTargets(ids: string[], requiredId = activeTerminalId.value) {
-  const next = normalizedTerminalTargetIds(ids, requiredId)
-  selectedTerminalIds.value = next
-  pausedTerminalSyncIds.value = pausedTerminalSyncIds.value.filter((id) => next.includes(id) && id !== requiredId)
-}
-
-function normalizeTerminalTargets(preferredId = activeTerminalId.value) {
-  setTerminalTargets(selectedTerminalIds.value, preferredId)
-}
-
-function selectTerminalTab(tabId: string) {
-  activeTerminalId.value = tabId
-  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
-  const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
-  if (current.length <= 1) {
-    setTerminalTargets([tabId], tabId)
-    return
-  }
-  setTerminalTargets(current, tabId)
-}
-
-function setSessionTabButton(tabId: string, element: unknown) {
-  sessionTabButtons.value[tabId] = element instanceof HTMLButtonElement ? element : null
-}
-
-function updateSessionTabScrollMetrics() {
-  const strip = sessionTabStrip.value
-  if (!strip) return
-  sessionTabScrollLeft.value = strip.scrollLeft
-  sessionTabClientWidth.value = Math.max(1, strip.clientWidth)
-  sessionTabScrollWidth.value = Math.max(1, strip.scrollWidth)
-}
-
-function handleSessionTabScroll() {
-  updateSessionTabScrollMetrics()
-}
-
-function handleSessionTabWheel(event: WheelEvent) {
-  const strip = sessionTabStrip.value
-  if (!strip || !sessionTabOverflow.value) return
-  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
-  if (!delta) return
-  const nextLeft = Math.max(0, Math.min(strip.scrollLeft + delta, strip.scrollWidth - strip.clientWidth))
-  if (nextLeft === strip.scrollLeft) return
-  event.preventDefault()
-  strip.scrollLeft = nextLeft
-  updateSessionTabScrollMetrics()
-}
-
-function handleSessionTabScrollbarPointerDown(event: PointerEvent) {
-  if (event.target !== event.currentTarget) return
-  const strip = sessionTabStrip.value
-  const track = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  if (!strip || !track || !sessionTabOverflow.value) return
-  const trackRect = track.getBoundingClientRect()
-  const widthRatio = sessionTabClientWidth.value / sessionTabScrollWidth.value
-  const thumbWidth = Math.max(28, trackRect.width * widthRatio)
-  const targetLeft = event.clientX - trackRect.left - thumbWidth / 2
-  const scrollableTrack = Math.max(1, trackRect.width - thumbWidth)
-  const scrollableContent = Math.max(1, strip.scrollWidth - strip.clientWidth)
-  strip.scrollLeft = Math.max(0, Math.min(targetLeft / scrollableTrack, 1)) * scrollableContent
-  updateSessionTabScrollMetrics()
-}
-
-function handleSessionTabThumbPointerDown(event: PointerEvent) {
-  const strip = sessionTabStrip.value
-  const thumb = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  const track = thumb?.parentElement
-  if (!strip || !thumb || !track || !sessionTabOverflow.value) return
-  event.preventDefault()
-  const startX = event.clientX
-  const startLeft = strip.scrollLeft
-  const trackWidth = track.clientWidth
-  const thumbWidth = thumb.clientWidth
-  const scrollableTrack = Math.max(1, trackWidth - thumbWidth)
-  const scrollableContent = Math.max(1, strip.scrollWidth - strip.clientWidth)
-  const scrollPerPixel = scrollableContent / scrollableTrack
-
-  const handlePointerMove = (moveEvent: PointerEvent) => {
-    const nextLeft = startLeft + (moveEvent.clientX - startX) * scrollPerPixel
-    strip.scrollLeft = Math.max(0, Math.min(nextLeft, scrollableContent))
-    updateSessionTabScrollMetrics()
-  }
-  const stopDragging = () => {
-    window.removeEventListener('pointermove', handlePointerMove)
-    window.removeEventListener('pointerup', stopDragging)
-    window.removeEventListener('pointercancel', stopDragging)
-  }
-
-  thumb.setPointerCapture?.(event.pointerId)
-  window.addEventListener('pointermove', handlePointerMove)
-  window.addEventListener('pointerup', stopDragging, { once: true })
-  window.addEventListener('pointercancel', stopDragging, { once: true })
-}
-
-function scrollActiveTerminalTabIntoView() {
-  void nextTick(() => {
-    sessionTabButtons.value[activeTerminalId.value]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'nearest',
-      inline: 'nearest'
-    })
-    updateSessionTabScrollMetrics()
-  })
-}
-
-function isTerminalTargetSelected(tabId: string) {
-  return selectedTerminalIdSet.value.has(tabId)
-}
-
-function isTerminalSyncPaused(tabId: string) {
-  return pausedTerminalSyncIdSet.value.has(tabId)
-}
-
-function terminalTargetToggleTitle(tabId: string) {
-  if (isTerminalSyncPaused(tabId)) return '键盘同步已暂停；各终端回到空提示符后会自动恢复'
-  if (tabId === activeTerminalId.value) return multiTerminalInputEnabled.value ? '仅同步当前终端' : '当前终端'
-  return isTerminalTargetSelected(tabId) ? '从同步目标移除' : '加入同步目标'
-}
-
-function toggleTerminalTarget(tabId: string) {
-  const validIds = new Set(terminalTabs.value.map((tab) => tab.id))
-  const current = selectedTerminalIds.value.filter((id) => validIds.has(id))
-  if (tabId === activeTerminalId.value) {
-    setTerminalTargets([tabId], tabId)
-    return
-  }
-  if (current.includes(tabId)) {
-    setTerminalTargets(current.filter((id) => id !== tabId))
-    return
-  }
-  setTerminalTargets([...current, tabId])
-}
-
-function selectAllTerminalTargets() {
-  pausedTerminalSyncIds.value = []
-  setTerminalTargets(terminalTabs.value.map((tab) => tab.id))
-}
-
-function resetTerminalTargetsToActive() {
-  pausedTerminalSyncIds.value = []
-  setTerminalTargets([activeTerminalId.value])
-}
 
 function openConnectionsPanel() {
   leftPanelMode.value = 'connections'
@@ -659,21 +395,6 @@ function isLeftPanelActive(mode: LeftPanelMode) {
 function leftPanelButtonTitle(mode: LeftPanelMode) {
   if (isLeftPanelActive(mode)) return mode === 'connections' ? '收起连接管理' : '收起设置中心'
   return mode === 'connections' ? '打开连接管理' : '打开设置中心'
-}
-
-function openContextMenu(event: MouseEvent, title: string, items: ContextMenuItem[]) {
-  const menuWidth = 220
-  const menuHeight = Math.min(320, 34 + items.length * 38)
-  contextMenu.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
-    title,
-    items
-  }
-}
-
-function closeContextMenu() {
-  contextMenu.value = null
 }
 
 function openConnectionContextMenu(event: MouseEvent, profileId: string) {
@@ -988,165 +709,12 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Agent 步数上限:非法值回落默认,并夹在 1–25(文档 9)。 */
-function clampAgentStepLimit(value: unknown): number {
-  const parsed = Math.round(Number(value))
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_STEP_LIMIT
-  return Math.max(MIN_AGENT_STEP_LIMIT, Math.min(MAX_AGENT_STEP_LIMIT, parsed))
-}
-
-/** Agent 命令超时(秒):非法值回落默认,并夹在 15–600。 */
-function clampAgentCommandTimeoutSec(value: unknown): number {
-  const parsed = Math.round(Number(value))
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AGENT_COMMAND_TIMEOUT_SEC
-  return Math.max(MIN_AGENT_COMMAND_TIMEOUT_SEC, Math.min(MAX_AGENT_COMMAND_TIMEOUT_SEC, parsed))
-}
-
-function loadUserSettings(): AppUserSettings {
-  try {
-    const raw = localStorage.getItem(USER_SETTINGS_STORAGE_KEY)
-    if (!raw) {
-      if (WINDOWS_PLATFORM && localStorage.getItem(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY)) {
-        localStorage.setItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1')
-      }
-      return { ...defaultUserSettings }
-    }
-    const parsed = JSON.parse(raw) as Partial<AppUserSettings>
-    const storedTerminalFontFamily = parsed.terminalFontFamily
-    const usesManagedDefault = !storedTerminalFontFamily
-      || storedTerminalFontFamily === SYSTEM_TERMINAL_FONT_FAMILY
-      || storedTerminalFontFamily === WINDOWS_TERMINAL_FONT_FAMILY
-      || storedTerminalFontFamily === LEGACY_WINDOWS_TERMINAL_FONT_FAMILY
-    const terminalFontFamily = usesManagedDefault ? DEFAULT_TERMINAL_FONT_FAMILY : storedTerminalFontFamily
-    const settings: AppUserSettings = {
-      ...defaultUserSettings,
-      ...parsed,
-      terminalFontFamily,
-      terminalFontSize: Math.max(11, Math.min(22, Number(parsed.terminalFontSize) || defaultUserSettings.terminalFontSize)),
-      agentStepLimit: clampAgentStepLimit(parsed.agentStepLimit),
-      agentCommandTimeoutSec: clampAgentCommandTimeoutSec(parsed.agentCommandTimeoutSec),
-      terminalTheme: 'midnight'
-    }
-    if (
-      WINDOWS_PLATFORM
-      && localStorage.getItem(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY)
-      && !localStorage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY)
-    ) {
-      if (settings.terminalFontSize === 15) {
-        settings.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
-        localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
-      }
-      localStorage.setItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1')
-    }
-    return settings
-  } catch {
-    return { ...defaultUserSettings }
-  }
-}
-
-function persistUserSettings(settings: AppUserSettings) {
-  localStorage.setItem(USER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
-}
-
-function loadAppTheme(): AppTheme {
-  try {
-    return localStorage.getItem(APP_THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark'
-  } catch {
-    return 'dark'
-  }
-}
-
-function persistAppTheme(theme: AppTheme) {
-  try {
-    localStorage.setItem(APP_THEME_STORAGE_KEY, theme)
-  } catch {
-    // Theme persistence is a convenience; the UI should still switch when storage is unavailable.
-  }
-  const root = document.documentElement
-  root.dataset.theme = theme
-  root.classList.toggle('theme-light', theme === 'light')
-  root.classList.toggle('theme-dark', theme === 'dark')
-}
-
-function loadWorkspaceWidth() {
-  try {
-    const value = Number(localStorage.getItem(WORKSPACE_WIDTH_STORAGE_KEY))
-    return Number.isFinite(value) ? Math.max(360, Math.min(560, value)) : 420
-  } catch {
-    return 420
-  }
-}
-
-function persistWorkspaceWidth() {
-  try {
-    localStorage.setItem(WORKSPACE_WIDTH_STORAGE_KEY, String(workspaceWidth.value))
-  } catch {
-    // Resizing remains available when storage is unavailable.
-  }
-}
-
-function beginWorkspaceResize(event: PointerEvent) {
-  if (event.button !== 0 || rightCollapsed.value || sftpWorkbenchActive.value) return
-  workspaceResizing.value = true
-  document.body.classList.add('workspace-resizing')
-  window.addEventListener('pointermove', handleWorkspaceResize)
-  window.addEventListener('pointerup', endWorkspaceResize)
-  window.addEventListener('pointercancel', endWorkspaceResize)
-  event.preventDefault()
-}
-
-function handleWorkspaceResize(event: PointerEvent) {
-  if (!workspaceResizing.value) return
-  const leftWidth = leftCollapsed.value ? 48 : 296
-  const maxForTerminal = Math.max(360, window.innerWidth - leftWidth - 560)
-  const maxWidth = Math.min(560, maxForTerminal)
-  workspaceWidth.value = Math.round(Math.max(360, Math.min(maxWidth, window.innerWidth - event.clientX)))
-}
-
-function endWorkspaceResize() {
-  if (!workspaceResizing.value) return
-  workspaceResizing.value = false
-  document.body.classList.remove('workspace-resizing')
-  window.removeEventListener('pointermove', handleWorkspaceResize)
-  window.removeEventListener('pointerup', endWorkspaceResize)
-  window.removeEventListener('pointercancel', endWorkspaceResize)
-  persistWorkspaceWidth()
-}
-
-function handleWorkspaceResizeKeydown(event: KeyboardEvent) {
-  let nextWidth = workspaceWidth.value
-  if (event.key === 'ArrowLeft') nextWidth += 20
-  else if (event.key === 'ArrowRight') nextWidth -= 20
-  else if (event.key === 'Home') nextWidth = 360
-  else if (event.key === 'End') nextWidth = 560
-  else return
-  event.preventDefault()
-  workspaceWidth.value = Math.max(360, Math.min(560, nextWidth))
-  persistWorkspaceWidth()
-}
-
-function toggleAppTheme() {
-  appTheme.value = appTheme.value === 'light' ? 'dark' : 'light'
-  showToast('info', '主题已切换', appTheme.value === 'light' ? '已切换为白色主题。' : '已切换为深色主题。')
-}
-function handleThemeTogglePointerDown(event: Event) {
-  event.preventDefault()
-  event.stopPropagation()
-  ;(event as Event & { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.()
-  const now = performance.now()
-  if (now - lastThemeToggleAt < 160) return
-  lastThemeToggleAt = now
-  toggleAppTheme()
-}
-
 function updateUserSettings(settings: AppUserSettings) {
-  // 面板已夹取一次,这里再夹一次:appSettings 是 Agent 预算的唯一来源
-  appSettings.value = {
-    ...settings,
-    agentStepLimit: clampAgentStepLimit(settings.agentStepLimit),
-    agentCommandTimeoutSec: clampAgentCommandTimeoutSec(settings.agentCommandTimeoutSec)
+  if (saveUserSettings(settings)) {
+    showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
+  } else {
+    showToast('warning', '设置已应用，但未保存', '本地存储不可用，重新打开应用后可能恢复原设置。')
   }
-  showToast('success', '设置已保存', '终端字体和字号已同步到当前终端。')
 }
 
 async function copyAboutInfo() {
@@ -1173,17 +741,6 @@ async function copyAboutInfo() {
   }
 }
 
-function showToast(kind: ToastKind, title: string, message = '') {
-  const id = `toast-${Date.now()}-${toastSequence++}`
-  const toastKey = `${kind}\u0000${title}\u0000${message}`
-  const nextToasts = toasts.value.filter((toast) => `${toast.kind}\u0000${toast.title}\u0000${toast.message ?? ''}` !== toastKey)
-  toasts.value = [...nextToasts, { id, kind, title, message }].slice(-3)
-  window.setTimeout(() => dismissToast(id), kind === 'error' ? 6200 : 3600)
-}
-
-function dismissToast(id: string) {
-  toasts.value = toasts.value.filter((toast) => toast.id !== id)
-}
 async function loadProfiles() {
   try {
     profiles.value = await listConnectionProfiles()
@@ -1328,59 +885,6 @@ async function deleteSelectedProfile(profileId: string) {
   }
 }
 
-function nowText() {
-  return new Date().toISOString()
-}
-
-function newWorkspaceSession(connectionId: string, name?: string, id?: string): WorkspaceSession {
-  const createdAt = nowText()
-  return {
-    id: id || `${connectionId}:session:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    connectionId,
-    name: name || 'Untitled',
-    summary: '',
-    createdAt,
-    updatedAt: createdAt
-  }
-}
-
-function markDraftWorkspaceSession(sessionId: string) {
-  draftWorkspaceSessionIds.value = {
-    ...draftWorkspaceSessionIds.value,
-    [sessionId]: true
-  }
-}
-
-function clearDraftWorkspaceSession(sessionId: string) {
-  const nextDrafts = { ...draftWorkspaceSessionIds.value }
-  delete nextDrafts[sessionId]
-  draftWorkspaceSessionIds.value = nextDrafts
-}
-
-function isDraftWorkspaceSession(sessionId: string) {
-  return Boolean(draftWorkspaceSessionIds.value[sessionId])
-}
-
-function workspaceSessionById(sessionId: string) {
-  return workspaceSessions.value.find((session) => session.id === sessionId)
-}
-
-function upsertWorkspaceSession(session: WorkspaceSession) {
-  workspaceSessions.value = [session, ...workspaceSessions.value.filter((item) => item.id !== session.id)]
-}
-
-function replaceWorkspaceSession(session: WorkspaceSession) {
-  workspaceSessions.value = workspaceSessions.value.map((item) => (item.id === session.id ? session : item))
-}
-
-function createDraftWorkspaceSession(connectionId: string, sessionId?: string, name = 'Untitled') {
-  const existing = sessionId ? workspaceSessionById(sessionId) : undefined
-  if (existing) return existing
-  const session = newWorkspaceSession(connectionId, name, sessionId)
-  markDraftWorkspaceSession(session.id)
-  upsertWorkspaceSession(session)
-  return session
-}
 
 async function ensureActiveAiSession(sourceConnectionId = activeConnectionId.value, name = 'Untitled') {
   await loadWorkspaceSessionList()
@@ -1401,27 +905,6 @@ async function createWorkspaceSession(connectionId = activeConnectionId.value, n
   return createDraftWorkspaceSession(connectionId, undefined, name)
 }
 
-async function ensurePersistedWorkspaceSession(connectionId: string, sessionId = activeAiSessionId.value || DEFAULT_AI_SESSION_ID, title?: string) {
-  await loadWorkspaceSessionList()
-  let session = workspaceSessionById(sessionId)
-  if (!session) {
-    session = createDraftWorkspaceSession(connectionId, sessionId, title || 'Untitled')
-  }
-  const nextTitle = title?.trim()
-  let changed = false
-  if (nextTitle && isAutoWorkspaceSessionName(session.name)) {
-    session = { ...session, name: nextTitle, updatedAt: nowText() }
-    replaceWorkspaceSession(session)
-    changed = true
-  }
-  if (!isDraftWorkspaceSession(session.id)) {
-    if (changed) await saveWorkspaceSession(session)
-    return session
-  }
-  await saveWorkspaceSession(session)
-  clearDraftWorkspaceSession(session.id)
-  return session
-}
 
 async function createWorkspaceSessionForActiveConnection() {
   try {
@@ -1432,63 +915,6 @@ async function createWorkspaceSessionForActiveConnection() {
   }
 }
 
-async function renameWorkspaceSession(sessionId: string, name: string) {
-  const session = workspaceSessionById(sessionId)
-  if (!session) return
-  const nextName = name.trim()
-  if (!nextName) return
-  const updated = { ...session, name: nextName, updatedAt: nowText() }
-  replaceWorkspaceSession(updated)
-  if (isDraftWorkspaceSession(sessionId)) return
-  try {
-    await saveWorkspaceSession(updated)
-  } catch (error) {
-    connectionError.value = formatError(error)
-  }
-}
-
-async function updateWorkspaceSessionTitle(connectionId: string, sessionId: string, title: string) {
-  const session = workspaceSessionById(sessionId)
-  if (!session || !isAutoWorkspaceSessionName(session.name)) return
-  const nextTitle = title.trim()
-  if (!nextTitle) return
-  const updated = { ...session, name: nextTitle, updatedAt: nowText() }
-  replaceWorkspaceSession(updated)
-  try {
-    await saveWorkspaceSession({ ...updated, connectionId: session.connectionId || connectionId })
-    clearDraftWorkspaceSession(sessionId)
-  } catch (error) {
-    console.error('failed to update AI generated session title', error)
-  }
-}
-
-async function updateWorkspaceSessionContextSummary(sessionId: string, summary: string, lastMessageId: string) {
-  const session = workspaceSessionById(sessionId)
-  if (!session) return
-  // Background compaction keeps updatedAt untouched so it never reorders the
-  // session list on its own.
-  const updated = { ...session, contextSummary: summary, contextSummaryLastMessageId: lastMessageId }
-  replaceWorkspaceSession(updated)
-  if (isDraftWorkspaceSession(sessionId)) return
-  try {
-    await saveWorkspaceSession(updated)
-  } catch (error) {
-    console.error('failed to persist AI conversation context summary', error)
-  }
-}
-
-async function setWorkspaceSessionMode(sessionId: string, mode: AiPanelMode) {
-  const session = workspaceSessionById(sessionId)
-  if (!session || (session.aiMode ?? 'chat') === mode) return
-  const updated = { ...session, aiMode: mode }
-  replaceWorkspaceSession(updated)
-  if (isDraftWorkspaceSession(sessionId)) return
-  try {
-    await saveWorkspaceSession(updated)
-  } catch (error) {
-    console.error('failed to persist AI session mode', error)
-  }
-}
 
 const agentAllowlist = ref<AgentAllowlistEntry[]>([])
 
@@ -1572,9 +998,6 @@ async function agentAvailabilityConfirm(): Promise<string> {
   return ''
 }
 
-function isAutoWorkspaceSessionName(name: string) {
-  return ['untitled', '无标题', '默认会话', '本地默认会话', '当前会话'].includes(name.trim().toLowerCase())
-}
 
 async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
   const sessions = workspaceSessions.value
@@ -1586,15 +1009,8 @@ async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
   if (!session) return
   if (!window.confirm(`删除 AI 会话 ${session.name}？该会话中的 AI 消息会被删除，命令历史不受影响。`)) return
   try {
-    if (!isDraftWorkspaceSession(sessionId)) {
-      await deleteWorkspaceSession(sessionId)
-    }
-    clearDraftWorkspaceSession(sessionId)
-    const remaining = sessions.filter((item) => item.id !== sessionId)
-    workspaceSessions.value = remaining
-    delete aiMessagesBySession.value[sessionId]
-    delete aiContextBySession.value[sessionId]
-    delete loadedAiSessions.value[sessionId]
+    if (!await deleteAiSession(sessionId)) return
+    const remaining = workspaceSessions.value
     if (activeWorkspaceSessionId.value === sessionId) {
       selectWorkspaceSession(remaining[0].id)
     }
@@ -1610,66 +1026,23 @@ function selectWorkspaceSession(sessionId: string) {
 }
 
 function createTerminalTab(profile?: ConnectionProfile) {
-  const id = `terminal-${Date.now()}-${terminalTabs.value.length + 1}`
-  const title = profile ? `${profile.target.username || 'user'}@${profile.target.host || profile.name}` : '本地终端'
-  const connectionId = profile?.id ?? LOCAL_CONNECTION_ID
-  terminalTabs.value.push({
-    id,
-    title,
-    connectionId,
-    profile: profile ? cloneConnectionProfile(profile) : undefined,
-    connectRequest: 1,
-    status: 'idle',
-    connectionGeneration: 0
-  })
-  activeTerminalId.value = id
-  setTerminalTargets([id], id)
-  void loadCommandHistoryForConnection(connectionId)
+  const tab = addTerminalTab(profile)
+  void loadCommandHistoryForConnection(tab.connectionId)
 }
 
 function closeTerminalTab(tabId: string) {
-  if (terminalTabs.value.length === 1) return
-  const index = terminalTabs.value.findIndex((tab) => tab.id === tabId)
-  terminalTabs.value = terminalTabs.value.filter((tab) => tab.id !== tabId)
+  if (!removeTerminalTab(tabId)) return
   delete terminalSnapshots.value[tabId]
   delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
   delete terminalRefs.value[tabId]
   delete scriptRecordingsByTerminal.value[tabId]
-  if (activeTerminalId.value === tabId) {
-    const nextTab = terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]
-    activeTerminalId.value = nextTab.id
-  }
-  normalizeTerminalTargets(activeTerminalId.value)
 }
 
 function setTerminalRef(tabId: string, instance: TerminalPaneInstance | null) {
   terminalRefs.value[tabId] = instance
 }
 
-function terminalStatusClass(status: TerminalRuntimeStatus) {
-  return {
-    live: status === 'local' || status === 'remote' || status === 'sftp',
-    connecting: status === 'connecting',
-    error: status === 'error',
-    preview: status === 'preview'
-  }
-}
-
-function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
-  terminalTabs.value = terminalTabs.value.map((tab) => {
-    if (tab.id !== terminalId) return tab
-    const wasConnected = tab.status === 'remote' || tab.status === 'sftp'
-    const isConnected = status === 'remote' || status === 'sftp'
-    return {
-      ...tab,
-      status,
-      connectionGeneration: !wasConnected && isConnected
-        ? tab.connectionGeneration + 1
-        : tab.connectionGeneration
-    }
-  })
-}
 
 function updateTerminalOutput(event: TerminalOutputEvent) {
   const previousSnapshot = terminalSnapshots.value[event.terminalId] ?? ''
@@ -1695,31 +1068,10 @@ function updateTerminalSelection(event: TerminalSelectionEvent) {
 }
 
 function recordCommand(event: CommandRecordedEvent) {
-  if (isSensitiveCommand(event.command)) return
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   const connectionId = tab?.connectionId ?? LOCAL_CONNECTION_ID
-  const nextIndex = (commandHistoryByConnection.value[connectionId]?.length ?? 0) + 1
-  const entry: CommandHistoryEntry = {
-    id: `${connectionId}-${event.terminalId}-${Date.now()}-${nextIndex}`,
-    connectionId,
-    workspaceSessionId: COMMAND_HISTORY_SESSION_ID,
-    terminalId: event.terminalId,
-    command: event.command,
-    createdAt: nowText(),
-    ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode })
-  }
-  commandHistoryByConnection.value = {
-    ...commandHistoryByConnection.value,
-    [connectionId]: [...(commandHistoryByConnection.value[connectionId] ?? []), entry].slice(-COMMAND_HISTORY_CACHE_LIMIT)
-  }
-  appendRecordingCommand(event.terminalId, event.command)
-  void saveCommandHistoryForTerminal(entry).catch((error) => {
-    console.error('failed to save command history', error)
-  })
-}
-
-async function saveCommandHistoryForTerminal(entry: CommandHistoryEntry) {
-  await saveCommandHistoryRecord(entry)
+  const entry = recordCommandForConnection(connectionId, event)
+  if (entry) appendRecordingCommand(event.terminalId, event.command)
 }
 
 function createIdleScriptRecording(terminalId: string): ScriptRecording {
@@ -1975,12 +1327,8 @@ function terminalInputStateIsEmptyPrompt(state: TerminalInputSyncState) {
 }
 
 function pauseTerminalSyncTargets(ids: string[], message: string, notify = true) {
-  const selected = new Set(targetTerminalIds.value)
-  const current = new Set(pausedTerminalSyncIds.value)
-  const added = ids.filter((id) => id !== activeTerminalId.value && selected.has(id) && !current.has(id))
+  const added = pauseTerminalTargets(ids)
   if (added.length === 0) return
-  added.forEach((id) => current.add(id))
-  pausedTerminalSyncIds.value = [...current]
   if (!notify) return
   showToast(
     'warning',
@@ -1989,10 +1337,6 @@ function pauseTerminalSyncTargets(ids: string[], message: string, notify = true)
   )
 }
 
-function resumeTerminalSyncTarget(terminalId: string) {
-  if (!pausedTerminalSyncIdSet.value.has(terminalId)) return
-  pausedTerminalSyncIds.value = pausedTerminalSyncIds.value.filter((id) => id !== terminalId)
-}
 
 function syncTerminalInputToTargets(event: TerminalInputEvent) {
   if (event.terminalId !== activeTerminalId.value) return
@@ -2002,7 +1346,7 @@ function syncTerminalInputToTargets(event: TerminalInputEvent) {
 
   if (event.data === '\x03') {
     const rejected: string[] = []
-    const interruptTargetIds = targetIds.filter((terminalId) => !pausedTerminalSyncIdSet.value.has(terminalId))
+    const interruptTargetIds = targetIds.filter((terminalId) => !isTerminalSyncPaused(terminalId))
     interruptTargetIds.forEach((terminalId) => {
       if (!terminalRefs.value[terminalId]?.writeSyncedTerminalInput(event.data, event.terminalId)) {
         rejected.push(terminalId)
@@ -2046,10 +1390,10 @@ function syncTerminalInputToTargets(event: TerminalInputEvent) {
     const pane = terminalRefs.value[terminalId]
     const targetState = pane?.terminalInputSyncState()
     if (!pane || !targetState || !terminalInputSyncStatesMatch(event.beforeState, targetState)) {
-      if (!pausedTerminalSyncIdSet.value.has(terminalId)) mismatched.push(terminalId)
+      if (!isTerminalSyncPaused(terminalId)) mismatched.push(terminalId)
       return
     }
-    if (pausedTerminalSyncIdSet.value.has(terminalId)) {
+    if (isTerminalSyncPaused(terminalId)) {
       if (!sourceAtEmptyPrompt || !terminalInputStateIsEmptyPrompt(targetState)) return
       resumeTerminalSyncTarget(terminalId)
     }
@@ -2101,175 +1445,6 @@ async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
     showToast('success', 'SSH \u8ba4\u8bc1\u5df2\u4fdd\u5b58', '\u4e0b\u6b21\u8fde\u63a5\u5c06\u81ea\u52a8\u8ba4\u8bc1')
   } catch (error) {
     showToast('error', '\u8fde\u63a5\u5237\u65b0\u5931\u8d25', formatError(error))
-  }
-}
-function queueAiMessagePersistence(message: AiMessage) {
-  const key = message.workspaceSessionId
-  const previous = aiMessagePersistenceQueues.get(key) ?? Promise.resolve()
-  const task = previous
-    .catch(() => undefined)
-    .then(() => persistWorkspaceSessionForMessage(message))
-  aiMessagePersistenceQueues.set(key, task)
-  void task
-    .catch((error) => {
-      console.error('failed to save AI conversation message', message.id, error)
-    })
-    .finally(() => {
-      if (aiMessagePersistenceQueues.get(key) === task) aiMessagePersistenceQueues.delete(key)
-    })
-}
-
-function appendAiMessageToActiveTerminal(message: AiMessage) {
-  const key = message.workspaceSessionId
-  aiMessagesBySession.value = {
-    ...aiMessagesBySession.value,
-    [key]: [...(aiMessagesBySession.value[key] ?? []), message].slice(-300)
-  }
-  if (message.streaming) return
-  queueAiMessagePersistence(message)
-}
-
-function updateAiMessage(message: AiMessage) {
-  const key = message.workspaceSessionId
-  const messages = aiMessagesBySession.value[key] ?? []
-  aiMessagesBySession.value = {
-    ...aiMessagesBySession.value,
-    [key]: messages.map((item) => (item.id === message.id ? message : item))
-  }
-  if (message.streaming) return
-  queueAiMessagePersistence(message)
-}
-
-function setAiContextForTerminal(_connectionId: string, workspaceSessionId: string, status: AiContextStatus) {
-  const key = workspaceSessionId
-  aiContextBySession.value = {
-    ...aiContextBySession.value,
-    [key]: status
-  }
-}
-
-async function persistWorkspaceSessionForMessage(message: AiMessage) {
-  const title = message.role === 'user' ? workspaceSessionTitleFromText(message.text) : undefined
-  const session = await ensurePersistedWorkspaceSession(message.connectionId, message.workspaceSessionId, title)
-  // Persist the conversation body before secondary session metadata. If the
-  // app is closed immediately after a reply, the latest turn is still durable.
-  await saveAiConversationMessage(message)
-  const updated = { ...session, updatedAt: message.createdAt || nowText() }
-  upsertWorkspaceSession(updated)
-  await saveWorkspaceSession(updated)
-}
-
-function workspaceSessionTitleFromText(text: string) {
-  const titleLine = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith('选中终端内容'))
-  return shortenWorkspaceSessionTitle(titleLine || text, '当前会话')
-}
-
-function shortenWorkspaceSessionTitle(value: string, fallback: string) {
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  if (!normalized) return fallback
-  return normalized.length > 60 ? `${normalized.slice(0, 57)}...` : normalized
-}
-
-async function loadWorkspaceSessionList() {
-  if (workspaceSessionListLoaded.value) return
-  if (workspaceSessionListLoadPromise) return workspaceSessionListLoadPromise
-  workspaceSessionListLoadPromise = (async () => {
-    try {
-      const sessions = await listWorkspaceSessions()
-      const drafts = workspaceSessions.value.filter((session) => isDraftWorkspaceSession(session.id))
-      sessions.forEach((session) => {
-        if (!isDraftWorkspaceSession(session.id)) return
-        clearDraftWorkspaceSession(session.id)
-        delete loadedAiSessions.value[session.id]
-      })
-      workspaceSessions.value = [
-        ...drafts.filter((draft) => !sessions.some((session) => session.id === draft.id)),
-        ...sessions
-      ]
-      workspaceSessionListLoaded.value = true
-      if (activeAiSessionId.value) void loadAiSessionState(activeAiSessionId.value)
-    } catch (error) {
-      console.error('failed to load global AI sessions', error)
-    }
-  })()
-  try {
-    await workspaceSessionListLoadPromise
-  } finally {
-    workspaceSessionListLoadPromise = null
-  }
-}
-
-async function loadCommandHistoryForConnection(connectionId: string) {
-  if (loadedCommandHistoryConnections.value[connectionId]) return
-  loadedCommandHistoryConnections.value = {
-    ...loadedCommandHistoryConnections.value,
-    [connectionId]: true
-  }
-  try {
-    const commands = await listCommandHistory(connectionId)
-    const localCommands = commandHistoryByConnection.value[connectionId] ?? []
-    const persistedIds = new Set(commands.map((entry) => entry.id))
-    commandHistoryByConnection.value = {
-      ...commandHistoryByConnection.value,
-      [connectionId]: [...commands, ...localCommands.filter((entry) => !persistedIds.has(entry.id))].slice(-COMMAND_HISTORY_CACHE_LIMIT)
-    }
-  } catch (error) {
-    const nextLoaded = { ...loadedCommandHistoryConnections.value }
-    delete nextLoaded[connectionId]
-    loadedCommandHistoryConnections.value = nextLoaded
-    console.error('failed to load connection command history', error)
-  }
-}
-
-async function loadAiSessionState(workspaceSessionId: string) {
-  if (!workspaceSessionId || loadedAiSessions.value[workspaceSessionId]) return
-  loadedAiSessions.value = {
-    ...loadedAiSessions.value,
-    [workspaceSessionId]: true
-  }
-  if (isDraftWorkspaceSession(workspaceSessionId)) {
-    aiMessagesBySession.value = {
-      ...aiMessagesBySession.value,
-      [workspaceSessionId]: aiMessagesBySession.value[workspaceSessionId] ?? []
-    }
-    return
-  }
-  try {
-    const messages = (await listAiConversationMessages(workspaceSessionId)).map(hydrateAiMessagePayload)
-    const localMessages = aiMessagesBySession.value[workspaceSessionId] ?? []
-    const persistedIds = new Set(messages.map((message) => message.id))
-    aiMessagesBySession.value = {
-      ...aiMessagesBySession.value,
-      [workspaceSessionId]: [...messages, ...localMessages.filter((message) => !persistedIds.has(message.id))].slice(-300)
-    }
-  } catch (error) {
-    const nextLoaded = { ...loadedAiSessions.value }
-    delete nextLoaded[workspaceSessionId]
-    loadedAiSessions.value = nextLoaded
-    console.error('failed to load AI conversation', error)
-  }
-}
-
-/** 把持久化的 payloadJson 还原为 agent 运行时字段;解析失败按纯文本消息降级。 */
-function hydrateAiMessagePayload(message: AiMessage): AiMessage {
-  const raw = message.payloadJson?.trim()
-  if (!raw) return message
-  try {
-    const payload = JSON.parse(raw) as Partial<Pick<AiMessage, 'mode' | 'agentSteps' | 'agentStatus'>>
-    if (payload.mode !== 'agent') return message
-    return {
-      ...message,
-      mode: 'agent',
-      agentSteps: Array.isArray(payload.agentSteps) ? payload.agentSteps : [],
-      agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
-        ? payload.agentStatus
-        : 'done'
-    }
-  } catch {
-    return message
   }
 }
 
@@ -2331,13 +1506,11 @@ function handleAppDragStart(event: DragEvent) {
 }
 
 function handleGlobalClick(event: MouseEvent) {
-  closeContextMenu()
   clearChromeSelection(event.target)
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    closeContextMenu()
     closeAboutPage()
   }
 }
@@ -2350,55 +1523,25 @@ onMounted(() => {
   void loadAgentAllowlist()
   window.addEventListener('click', handleGlobalClick)
   window.addEventListener('keydown', handleGlobalKeydown)
-  themeToggleButton.value?.addEventListener('pointerdown', handleThemeTogglePointerDown, true)
-  themeToggleButton.value?.addEventListener('mousedown', handleThemeTogglePointerDown, true)
-  themeToggleButton.value?.addEventListener('click', handleThemeTogglePointerDown, true)
   document.addEventListener('selectstart', handleAppSelectStart, true)
   document.addEventListener('dragstart', handleAppDragStart, true)
-  void nextTick(() => {
-    updateSessionTabScrollMetrics()
-    if (typeof ResizeObserver !== 'undefined' && sessionTabStrip.value) {
-      sessionTabResizeObserver = new ResizeObserver(updateSessionTabScrollMetrics)
-      sessionTabResizeObserver.observe(sessionTabStrip.value)
-    }
-  })
-  window.addEventListener('resize', updateSessionTabScrollMetrics)
 })
 
 watch(activeConnectionId, (connectionId) => {
   void loadCommandHistoryForConnection(connectionId)
 })
 
-watch(activeAiSessionId, (sessionId) => {
-  void loadAiSessionState(sessionId)
-})
-
 watch(
-  () => [activeTerminalId.value, terminalTabs.value.length],
-  scrollActiveTerminalTabIntoView
+  () => [activeAiSessionId.value, isDraftWorkspaceSession(activeAiSessionId.value)],
+  () => { void loadAiSessionState(activeAiSessionId.value) }
 )
 
-watch(
-  () => [leftCollapsed.value, rightCollapsed.value],
-  () => void nextTick(updateSessionTabScrollMetrics)
-)
 
-watch(appSettings, (settings) => {
-  persistUserSettings(settings)
-})
-watch(appTheme, (theme) => persistAppTheme(theme), { immediate: true })
 onBeforeUnmount(() => {
-  endWorkspaceResize()
   window.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
-  themeToggleButton.value?.removeEventListener('pointerdown', handleThemeTogglePointerDown, true)
-  themeToggleButton.value?.removeEventListener('mousedown', handleThemeTogglePointerDown, true)
-  themeToggleButton.value?.removeEventListener('click', handleThemeTogglePointerDown, true)
   document.removeEventListener('selectstart', handleAppSelectStart, true)
   document.removeEventListener('dragstart', handleAppDragStart, true)
-  window.removeEventListener('resize', updateSessionTabScrollMetrics)
-  sessionTabResizeObserver?.disconnect()
-  sessionTabResizeObserver = null
 })
 </script>
 
@@ -2561,8 +1704,8 @@ onBeforeUnmount(() => {
       aria-label="调整工作区宽度"
       aria-orientation="vertical"
       :aria-valuenow="workspaceWidth"
-      aria-valuemin="360"
-      aria-valuemax="560"
+      :aria-valuemin="MIN_WORKSPACE_WIDTH"
+      :aria-valuemax="MAX_WORKSPACE_WIDTH"
       @pointerdown="beginWorkspaceResize"
       @keydown="handleWorkspaceResizeKeydown"
     />

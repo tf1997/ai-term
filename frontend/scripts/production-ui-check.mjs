@@ -24,6 +24,58 @@ function sourceSection(source, startMarker, endMarker) {
 const packageJson = read('package.json')
 const packageManifest = JSON.parse(packageJson)
 const appShell = read('src/components/AppShell.vue')
+const workspaceSessionRules = read('src/lib/workspaceSessions.ts')
+const workspaceSessionState = read('src/composables/useWorkspaceSessions.ts')
+const aiMessageState = read('src/composables/useAiMessages.ts')
+const commandHistoryState = read('src/composables/useCommandHistory.ts')
+assert(
+  appShell.includes('const workspaceSessionState = useWorkspaceSessions({') &&
+    appShell.includes('} = useAiMessages(workspaceSessionState)') &&
+    appShell.includes('} = useCommandHistory()') &&
+    appShell.includes('const entry = recordCommandForConnection(connectionId, event)') &&
+    appShell.includes('if (entry) appendRecordingCommand(event.terminalId, event.command)') &&
+    appShell.includes('if (!await deleteAiSession(sessionId)) return') &&
+    appShell.includes('isDraftWorkspaceSession(activeAiSessionId.value)') &&
+    !appShell.includes('function queueAiMessagePersistence') &&
+    !appShell.includes('const commandHistoryByConnection = ref') &&
+    aiMessageState.includes('aiMessagePersistenceQueues') &&
+    aiMessageState.includes('await aiMessagePersistenceQueues.get(sessionId)') &&
+    aiMessageState.includes('blockedSessionIds.has(workspaceSessionId)') &&
+    aiMessageState.includes('localById.get(message.id) ?? message') &&
+    aiMessageState.includes('onBeforeUnmount') &&
+    workspaceSessionState.includes('pendingSessionSaves') &&
+    workspaceSessionState.includes('workspaceSessions.value.length - deletingSessionIds.size <= 1'),
+  'Workspace stores must own isolated caches and ordered persistence while AppShell retains terminal routing, recording and deletion confirmation.'
+)
+const terminalTabTypes = read('src/types/terminal.ts')
+const terminalTabState = read('src/composables/useTerminalTabs.ts')
+const terminalTabScroll = read('src/composables/useTerminalTabScroll.ts')
+assert(
+  appShell.includes('} = useTerminalTabs()') &&
+    appShell.includes('} = useTerminalTabScroll({ terminalTabs, activeTerminalId, leftCollapsed, rightCollapsed })') &&
+    appShell.includes('const tab = addTerminalTab(profile)') &&
+    appShell.includes('if (!removeTerminalTab(tabId)) return') &&
+    appShell.includes('const added = pauseTerminalTargets(ids)') &&
+    appShell.includes('v-show="tab.id === activeTerminalId"') &&
+    appShell.includes(':key="tab.id"') &&
+    terminalTabState.includes('terminalTabs: tabs') &&
+    terminalTabState.includes('activeTerminalId: readonly(activeTerminalId)') &&
+    terminalTabScroll.includes('onBeforeUnmount') &&
+    terminalTabScroll.includes('stopDragging?.()') &&
+    terminalTabScroll.includes('sessionTabButtons.delete(tabId)') &&
+    terminalTabScroll.includes("removeEventListener('resize', updateSessionTabScrollMetrics)") &&
+    !appShell.includes('function selectTerminalTab') &&
+    !appShell.includes('sessionTabResizeObserver'),
+  'Terminal state and scroll lifecycles must have explicit owners while AppShell preserves terminal instances and business cleanup.'
+)
+const settingsTypes = read('src/types/settings.ts')
+const userSettings = read('src/lib/userSettings.ts')
+const settingsStorage = read('src/lib/settingsStorage.ts')
+const userSettingsState = read('src/composables/useUserSettings.ts')
+const appThemeState = read('src/composables/useAppTheme.ts')
+const workspaceResize = read('src/composables/useWorkspaceResize.ts')
+const toastState = read('src/composables/useToasts.ts')
+const contextMenuState = read('src/composables/useContextMenu.ts')
 const main = read('src/main.ts')
 const terminalPane = read('src/components/TerminalPane.vue')
 const aiPanel = read('src/components/AiPanel.vue')
@@ -61,6 +113,45 @@ const tauriLib = read('../src-tauri/src/lib.rs')
 const windowsRootStyles = styles.match(/:root\[data-platform="windows"\]\s*\{([^}]*)\}/)?.[1] ?? ''
 
 assert(
+  appShell.includes('useToasts()') &&
+    appShell.includes('useContextMenu()') &&
+    !appShell.includes('function showToast') &&
+    !appShell.includes('function openContextMenu') &&
+    toastState.includes('toastTimers') &&
+    toastState.includes('onBeforeUnmount') &&
+    toastState.includes('window.clearTimeout') &&
+    contextMenuState.includes("removeEventListener('click', closeContextMenu)") &&
+    contextMenuState.includes("removeEventListener('keydown', handleContextMenuKeydown)") &&
+    contextMenu.includes("from '../types/overlays'") &&
+    contextMenu.includes('items: readonly ContextMenuItem[]') &&
+    contextMenu.includes('if (item.disabled) return') &&
+    contextMenu.includes('item.action()') &&
+    contextMenu.indexOf('if (item.disabled) return') < contextMenu.indexOf('item.action()') &&
+    contextMenu.indexOf('item.action()') < contextMenu.indexOf("emit('close')") &&
+    appShell.includes('clearChromeSelection(event.target)') &&
+    appShell.includes('closeAboutPage()'),
+  'Notifications and context-menu state must own their lifecycle cleanup while menu actions, disabled items, selection handling and About shortcuts retain their existing behavior.'
+)
+
+assert(
+  appShell.includes("from '../types/settings'") &&
+    settingsSidebar.includes("from '../types/settings'") &&
+    appShell.includes("from '../composables/useUserSettings'") &&
+    appShell.includes("from '../composables/useAppTheme'") &&
+    settingsSidebar.includes("from '../lib/userSettings'") &&
+    !appShell.includes('interface AppUserSettings') &&
+    !settingsSidebar.includes('interface AppUserSettings') &&
+    !appShell.includes('const DEFAULT_AGENT_STEP_LIMIT') &&
+    !settingsSidebar.includes('const DEFAULT_AGENT_STEP_LIMIT') &&
+    userSettingsState.includes('readonly(appSettings)') &&
+    appThemeState.includes('onBeforeUnmount') &&
+    appThemeState.includes("removeEventListener('pointerdown', handleThemeTogglePointerDown, true)") &&
+    appThemeState.includes("removeEventListener('mousedown', handleThemeTogglePointerDown, true)") &&
+    appThemeState.includes("removeEventListener('click', handleThemeTogglePointerDown, true)"),
+  'Settings types, defaults, validation and lifecycle ownership must stay shared instead of drifting back into AppShell and SettingsSidebar.'
+)
+
+assert(
   styles.includes('--font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC"') &&
     styles.includes('--font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"') &&
     styles.includes('--font-xs: 11px;') &&
@@ -79,10 +170,10 @@ assert(
     main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
     terminalPane.includes('lineHeight: 1.12') &&
-    appShell.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
-    settingsSidebar.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
-    appShell.includes('WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY') &&
-    appShell.includes('settings.terminalFontSize === 15') &&
+    userSettings.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
+    settingsSidebar.includes('createDefaultUserSettings(windowsPlatform)') &&
+    settingsStorage.includes('WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY') &&
+    settingsStorage.includes('settings.terminalFontSize === 15') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
   'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, compact terminal metrics, and real bundled terminal weights.'
@@ -110,12 +201,12 @@ assert(
     styles.includes('.message-body *') &&
     styles.includes('user-select: text;') &&
     appShell.includes('themeToggleButton') &&
-    appShell.includes('handleThemeTogglePointerDown') &&
-    appShell.includes("addEventListener('pointerdown', handleThemeTogglePointerDown, true)") &&
-    appShell.includes("addEventListener('mousedown', handleThemeTogglePointerDown, true)") &&
-    appShell.includes("addEventListener('click', handleThemeTogglePointerDown, true)") &&
-    appShell.includes('lastThemeToggleAt') &&
-    appShell.includes('stopImmediatePropagation') &&
+    appThemeState.includes('handleThemeTogglePointerDown') &&
+    appThemeState.includes("addEventListener('pointerdown', handleThemeTogglePointerDown, true)") &&
+    appThemeState.includes("addEventListener('mousedown', handleThemeTogglePointerDown, true)") &&
+    appThemeState.includes("addEventListener('click', handleThemeTogglePointerDown, true)") &&
+    appThemeState.includes('lastThemeToggleAt') &&
+    appThemeState.includes('stopImmediatePropagation') &&
     appShell.includes('selectableTextSelector') &&
     appShell.includes('handleAppSelectStart') &&
     appShell.includes("document.addEventListener('selectstart', handleAppSelectStart, true)") &&
@@ -509,9 +600,9 @@ assert(
 )
 
 assert(
-  appShell.includes('root.dataset.theme = theme') &&
-    appShell.includes("root.classList.toggle('theme-light', theme === 'light')") &&
-    appShell.includes("root.classList.toggle('theme-dark', theme === 'dark')") &&
+  appThemeState.includes('root.dataset.theme = theme') &&
+    appThemeState.includes("root.classList.toggle('theme-light', theme === 'light')") &&
+    appThemeState.includes("root.classList.toggle('theme-dark', theme === 'dark')") &&
     styles.includes(':root[data-theme="light"]') &&
     styles.includes(':root[data-theme="light"] body') &&
     styles.includes('color-scheme: light;') &&
@@ -534,7 +625,18 @@ assert(
 )
 
 assert(
-  appShell.includes("WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'") &&
+  settingsStorage.includes("WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'") &&
+    appShell.includes('useWorkspaceResize({ leftCollapsed, rightCollapsed, sftpWorkbenchActive })') &&
+    !appShell.includes('function beginWorkspaceResize') &&
+    !appShell.includes('function loadWorkspaceWidth') &&
+    workspaceResize.includes('getWorkspaceWidthForPointer(window.innerWidth, event.clientX, options.leftCollapsed.value)') &&
+    workspaceResize.includes('getWorkspaceWidthForKey(workspaceWidth.value, event.key)') &&
+    workspaceResize.includes('onBeforeUnmount(endWorkspaceResize)') &&
+    workspaceResize.includes("removeEventListener('pointermove', handleWorkspaceResize)") &&
+    workspaceResize.includes("removeEventListener('pointerup', endWorkspaceResize)") &&
+    workspaceResize.includes("removeEventListener('pointercancel', endWorkspaceResize)") &&
+    appShell.includes(':aria-valuemin="MIN_WORKSPACE_WIDTH"') &&
+    appShell.includes(':aria-valuemax="MAX_WORKSPACE_WIDTH"') &&
     appShell.includes('workspaceLayoutStyle') &&
     appShell.includes('beginWorkspaceResize') &&
     appShell.includes('handleWorkspaceResizeKeydown') &&
@@ -1277,10 +1379,7 @@ const appTerminalSyncBlock = appShell.slice(
   appShell.indexOf('function syncTerminalInputToTargets'),
   appShell.indexOf('function handleTerminalInputWriteFailure')
 )
-const appSelectTerminalBlock = appShell.slice(
-  appShell.indexOf('function selectTerminalTab'),
-  appShell.indexOf('function setSessionTabButton')
-)
+const appSelectTerminalBlock = sourceSection(terminalTabState, 'function selectTerminalTab', 'function addTerminalTab')
 
 assert(
   workspaceTypes.includes('export interface TerminalInputSyncState') &&
@@ -1309,10 +1408,10 @@ assert(
     !terminalTrackInputBlock.includes('inputCommandReliable = true') &&
     appShell.includes('terminalInputSyncStatesMatch') &&
     appShell.includes('pauseTerminalSyncTargets') &&
-    appShell.includes('pausedTerminalSyncIds') &&
+    terminalTabState.includes('pausedTerminalSyncIds') &&
     appTerminalSyncBlock.indexOf('event.terminalId !== activeTerminalId.value') <
       appTerminalSyncBlock.indexOf("event.data === '\\x03'") &&
-    appTerminalSyncBlock.includes('!pausedTerminalSyncIdSet.value.has(terminalId)') &&
+    appTerminalSyncBlock.includes('!isTerminalSyncPaused(terminalId)') &&
     !appSelectTerminalBlock.includes('pausedTerminalSyncIds.value = []') &&
     appShell.includes('@terminal-input-write-failed="handleTerminalInputWriteFailure"'),
   'Terminal input must use a ready-gated per-pane FIFO, mirror only successful active-pane writes, and pause unsafe or divergent targets.'
@@ -1369,7 +1468,7 @@ assert(
     terminalPane.includes('enterPreviewMode()') &&
     terminalPane.includes('enterLocalShellErrorMode(error)') &&
     terminalPane.includes('Local shell failed to start:') &&
-    appShell.includes('status: TerminalRuntimeStatus') &&
+    terminalTabTypes.includes('status: TerminalRuntimeStatus') &&
     appShell.includes('updateTerminalStatus') &&
     appShell.includes('@status-changed="updateTerminalStatus"') &&
     appShell.includes('terminalStatusClass(tab.status)') &&
@@ -1587,9 +1686,9 @@ assert(
 )
 
 assert(
-  appShell.includes('connectionGeneration: number') &&
-    appShell.includes('connectionGeneration: !wasConnected && isConnected') &&
-    appShell.includes('? tab.connectionGeneration + 1') &&
+  terminalTabTypes.includes('connectionGeneration: number') &&
+    terminalTabState.includes('connectionGeneration: !wasConnected && isConnected') &&
+    terminalTabState.includes('? tab.connectionGeneration + 1') &&
     appShell.includes(':terminal-status="activeTerminal?.status ?? \'idle\'"') &&
     appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
     workspacePanel.includes('terminalStatus:') &&
@@ -1746,17 +1845,17 @@ assert(
   'SFTP file and folder transfers must show clear local/remote targets, structured speed/size/ETA progress, final paths, and actions to locate or copy completed downloads/uploads.'
 )
 assert(
-  appShell.includes('draftWorkspaceSessionIds') &&
+  workspaceSessionState.includes('draftWorkspaceSessionIds') &&
     appShell.includes('createDraftWorkspaceSession') &&
     appShell.includes('ensureActiveAiSession') &&
-    appShell.includes('ensurePersistedWorkspaceSession') &&
-    appShell.includes('persistWorkspaceSessionForMessage') &&
-    appShell.includes('saveCommandHistoryForTerminal') &&
+    workspaceSessionState.includes('ensurePersistedWorkspaceSession') &&
+    aiMessageState.includes('persistWorkspaceSessionForMessage') &&
+    commandHistoryState.includes('recordCommandForConnection') &&
     appShell.includes('const tab = terminalTabs.value.find((item) => item.id === event.terminalId)') &&
-    appShell.includes('workspaceSessionId: COMMAND_HISTORY_SESSION_ID') &&
-    appShell.includes('commandHistoryByConnection') &&
+    commandHistoryState.includes('workspaceSessionId: COMMAND_HISTORY_SESSION_ID') &&
+    commandHistoryState.includes('commandHistoryByConnection') &&
     appShell.includes('loadCommandHistoryForConnection') &&
-    !appShell.includes('await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId') &&
+    !commandHistoryState.includes('await ensurePersistedWorkspaceSession(entry.connectionId, entry.workspaceSessionId') &&
     appShell.includes('connectProfileFromSidebar') &&
     !appShell.includes('const session = await createWorkspaceSession(profile.id)'),
   'Global AI sessions must start as frontend drafts while command history stays scoped to the emitting connection, independently of AI conversation selection.'
@@ -2137,7 +2236,7 @@ assert(
 )
 
 assert(
-  appShell.includes('terminalTabs = ref') &&
+  terminalTabState.includes('terminalTabs = ref') &&
     appShell.includes('activeTerminalId') &&
     appShell.includes('createTerminalTab') &&
     appShell.includes('closeTerminalTab') &&
@@ -2193,7 +2292,7 @@ assert(
     aiPanel.includes('maybeGenerateSessionTitle') &&
     aiPanel.includes("emit('updateSessionTitle'") &&
     appShell.includes('updateWorkspaceSessionTitle') &&
-    appShell.includes('isAutoWorkspaceSessionName') &&
+    workspaceSessionRules.includes('isAutoWorkspaceSessionName') &&
     workspacePanel.includes('CommandHistoryPanel') &&
     workspacePanel.includes('AiPanel'),
   'Right workspace must expose history, AI, SFTP, and AI session history controls.'
@@ -2259,15 +2358,15 @@ assert(
 )
 
 assert(
-  appShell.includes('selectedTerminalIds') &&
+  terminalTabState.includes('selectedTerminalIds') &&
     appShell.includes('targetTerminalIds') &&
     appShell.includes('multiTerminalInputEnabled') &&
-    appShell.includes('activeTerminalTitle') &&
+    terminalTabState.includes('activeTerminalTitle') &&
     appShell.includes('terminalTargetLabel') &&
     appShell.includes('terminalTargetTitle') &&
-    appShell.includes('normalizedTerminalTargetIds') &&
-    appShell.includes('setTerminalTargets') &&
-    !appShell.includes('selectedTerminalIds.value = [id]') &&
+    terminalTabState.includes('normalizedTerminalTargetIds') &&
+    terminalTabState.includes('setTerminalTargets') &&
+    !terminalTabState.includes('selectedTerminalIds.value = [id]') &&
     appShell.includes('toggleTerminalTarget') &&
     appShell.includes('selectAllTerminalTargets') &&
     appShell.includes('resetTerminalTargetsToActive') &&
@@ -2319,8 +2418,8 @@ assert(
     aiPanel.includes('pendingAiCommandCrossConnection') &&
     aiPanel.includes('executionTargetConnectionIds') &&
     appShell.includes('aiMessagesBySession') &&
-    appShell.includes('commandHistoryByConnection') &&
-    appShell.includes('const workspaceSessions = ref<WorkspaceSession[]>([])') &&
+    commandHistoryState.includes('commandHistoryByConnection') &&
+    workspaceSessionState.includes('const workspaceSessions = ref<WorkspaceSession[]>([])') &&
     appShell.includes("const activeAiSessionId = ref('')") &&
     appShell.includes('loadCommandHistoryForConnection') &&
     appShell.includes('loadAiSessionState') &&
@@ -2328,8 +2427,8 @@ assert(
     appShell.includes('createWorkspaceSession') &&
     appShell.includes('renameWorkspaceSession') &&
     appShell.includes('deleteWorkspaceSessionForActiveConnection') &&
-    appShell.includes('saveCommandHistoryRecord') &&
-    appShell.includes('saveAiConversationMessage') &&
+    commandHistoryState.includes('saveCommandHistoryRecord') &&
+    aiMessageState.includes('saveAiConversationMessage') &&
     tauri.includes("invoke<UpdateScript[]>('list_update_scripts'") &&
     tauri.includes("invoke<void>('save_update_script'") &&
     tauri.includes("invoke<boolean>('delete_update_script'") &&
@@ -2580,7 +2679,7 @@ assert(
     scriptPanel.includes('draftSourceConnectionId') &&
     scriptPanel.includes('sourceConnectionId?: string') &&
     workspacePanel.includes(':execution-target-connection-ids="executionTargetConnectionIds"') &&
-    appShell.includes('const targetConnectionIds = computed') &&
+    terminalTabState.includes('const targetConnectionIds = computed') &&
     sqlite.includes('pub fn list_workspace_sessions(&self)') &&
     sqlite.includes('WHERE EXISTS') &&
     sqlite.includes('ai_conversation_messages AS messages') &&
@@ -2663,7 +2762,7 @@ const appHistoryPinBlock = sourceSection(
   'async function writeInputToTargetTerminals'
 )
 const appNowTextBlock = sourceSection(
-  appShell,
+  workspaceSessionRules,
   'function nowText()',
   'function newWorkspaceSession'
 )
@@ -2768,12 +2867,12 @@ assert(
 )
 
 assert(
-  appShell.includes('const COMMAND_HISTORY_CACHE_LIMIT = 300') &&
-    appShell.includes('.slice(-COMMAND_HISTORY_CACHE_LIMIT)') &&
-    appShell.includes('createdAt: nowText()') &&
+  workspaceSessionRules.includes('const COMMAND_HISTORY_CACHE_LIMIT = 300') &&
+    commandHistoryState.includes('.slice(-COMMAND_HISTORY_CACHE_LIMIT)') &&
+    commandHistoryState.includes('createdAt: nowText()') &&
     appNowTextBlock.includes('return new Date().toISOString()') &&
-    appShell.includes('if (isSensitiveCommand(event.command)) return') &&
-    !appShell.includes('createdAt: new Date().toLocaleString()') &&
+    commandHistoryState.includes('if (isSensitiveCommand(event.command)) return') &&
+    !commandHistoryState.includes('createdAt: new Date().toLocaleString()') &&
     sqlite.includes('const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;') &&
     sqlite.includes('prune_command_history') &&
     sqlite.includes('DELETE FROM command_history') &&
@@ -3083,13 +3182,14 @@ assert(
     settingsSidebar.includes('settings-search') &&
     settingsSidebar.includes('settings-config-list') &&
     settingsSidebar.includes('\u6ca1\u6709\u5339\u914d\u7684 AI \u914d\u7f6e') &&
-    appShell.includes('USER_SETTINGS_STORAGE_KEY') &&
+    settingsStorage.includes('USER_SETTINGS_STORAGE_KEY') &&
+    appShell.includes('useUserSettings()') &&
     appShell.includes('updateUserSettings') &&
     appShell.includes('showToast') &&
     !appShell.includes('class="app-status-bar"') &&
     appShell.includes('class=\"toast-stack\"') &&
-    appShell.includes('toastKey') &&
-    appShell.includes('slice(-3)') &&
+    toastState.includes('toastKey') &&
+    toastState.includes('slice(-3)') &&
     terminalPane.includes('terminalSettings?: TerminalVisualSettings') &&
     terminalPane.includes('applyTerminalAppearance') &&
     terminalPane.includes('terminalThemeOptions') &&
@@ -3161,9 +3261,10 @@ assert(
 )
 
 assert(
-  appShell.includes("const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'") &&
-    appShell.includes("type AppTheme = 'dark' | 'light'") &&
-    appShell.includes('const appTheme = ref<AppTheme>(loadAppTheme())') &&
+  settingsStorage.includes("const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'") &&
+    settingsTypes.includes("type AppTheme = 'dark' | 'light'") &&
+    appThemeState.includes('const appTheme = ref<AppTheme>(loadAppTheme(options.storage))') &&
+    appShell.includes('useAppTheme({') &&
     appShell.includes('class="rail-button theme-toggle-button"') &&
     appShell.includes("'theme-light': appTheme === 'light'") &&
     appShell.includes(':app-theme="appTheme"') &&
@@ -3292,7 +3393,7 @@ assert(
     Number(/const PROTECTED_RECENT_TURNS = (\d+)/.exec(agentLoop)?.[1]) >= 6 &&
     Number(/const DEFAULT_STEP_LIMIT = (\d+)/.exec(agentLoop)?.[1]) >= 25 &&
     agentLoop.includes('COMPRESSED_OUTPUT_TAIL_CHARS') &&
-    /agentAutoExecReadonly: true/.test(appShell) &&
+    /agentAutoExecReadonly: true/.test(userSettings) &&
     agentBackend.includes('自主推进'),
   'Agent exploration budget contract: the frontend must compress below the backend turn limit, keep a wide protected window and output tails, auto-run read-only commands by default, and ship the self-directed system prompt.'
 )
@@ -3354,10 +3455,11 @@ assert(
     /commandTimeoutMs: props\.agentCommandTimeoutMs/.test(aiPanel) &&
     workspacePanel.includes(':agent-step-limit="agentStepLimit"') &&
     // 三处夹取:旧配置/脏数据、输入框、唯一来源兜底
-    (appShell.match(/clampAgentStepLimit\(/g) ?? []).length >= 3 &&
-    (appShell.match(/clampAgentCommandTimeoutSec\(/g) ?? []).length >= 3 &&
-    /clampNumber\(draft\.agentStepLimit/.test(settingsSidebar) &&
-    /clampNumber\(\s*draft\.agentCommandTimeoutSec/.test(settingsSidebar) &&
+    settingsStorage.includes('normalizeUserSettings(parsed, windowsPlatform)') &&
+    settingsSidebar.includes('normalizeUserSettings(draft, windowsPlatform)') &&
+    userSettingsState.includes('normalizeUserSettings(settings, windowsPlatform)') &&
+    userSettings.includes('agentStepLimit: clampAgentStepLimit(settings.agentStepLimit)') &&
+    userSettings.includes('agentCommandTimeoutSec: clampAgentCommandTimeoutSec(settings.agentCommandTimeoutSec)') &&
     styles.includes('.agent-budget-block'),
   'Agent task budget contract: the loop must derive its timeout hint from sampled peekOutput, and the step limit / command timeout must flow from settings into runAgentTask, clamped at every entry point.'
 )
