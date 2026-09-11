@@ -8,7 +8,7 @@ const domainRoot = path.join(sourceRoot, 'domains')
 const sourceExtensions = /\.(ts|vue)$/
 const publicEntryNames = new Set(['index', 'types', 'views', 'api'])
 const legacyRoots = ['components', 'composables', 'lib', 'types', 'utils']
-const allowedRootEntries = new Set(['app', 'domains', 'shared', 'styles', 'App.vue', 'main.ts', 'vite-env.d.ts'])
+const allowedRootEntries = new Set(['app', 'domains', 'shared', 'main.ts', 'vite-env.d.ts'])
 
 function sourceFiles(directory) {
   const files = []
@@ -74,6 +74,30 @@ test('domains do not depend on app and cross-domain imports use public entries',
         const targetName = path.basename(targetPath).replace(/\.[^.]+$/, '')
         if (!publicEntryNames.has(targetName)) {
           violations.push(`${path.relative(sourceRoot, filePath)} -> ${specifier} (private cross-domain import)`)
+        }
+      }
+    }
+  }
+  assert.deepEqual(violations, [])
+})
+
+test('domain and application layers keep their dependency direction', () => {
+  const violations = []
+  for (const filePath of sourceFiles(domainRoot)) {
+    const relativePath = path.relative(sourceRoot, filePath)
+    const source = fs.readFileSync(filePath, 'utf8')
+    const imports = importsFrom(source)
+    if (relativePath.includes(`${path.sep}domain${path.sep}`)) {
+      for (const specifier of imports) {
+        if (specifier.includes('/application/') || specifier.includes('/infrastructure/') || specifier.includes('/presentation/') || specifier.includes('/ui/')) {
+          violations.push(`${relativePath} -> ${specifier}`)
+        }
+      }
+    }
+    if (relativePath.includes(`${path.sep}application${path.sep}`)) {
+      for (const specifier of imports) {
+        if (specifier.includes('/presentation/') || (specifier.includes('/ui/') && !specifier.includes('/shared/ui/'))) {
+          violations.push(`${relativePath} -> ${specifier}`)
         }
       }
     }

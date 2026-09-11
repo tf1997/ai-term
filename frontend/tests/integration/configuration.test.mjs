@@ -3,8 +3,8 @@ import test from 'node:test'
 import { ref } from 'vue'
 import { useConnectionProfiles } from "../../src/domains/connections/application/useConnectionProfiles"
 import { useAiConfigs } from "../../src/domains/ai/application/useAiConfigs"
-import { defaultAiConfig } from "../../src/domains/ai/model/providerConfig"
-import { normalizeConnectionProfileForSave } from "../../src/domains/connections/model/profileConfig"
+import { defaultAiConfig } from "../../src/domains/ai/domain/providerConfig"
+import { normalizeConnectionProfileForSave } from "../../src/domains/connections/domain/profileConfig"
 
 function profile(id = 'host') {
   return { id, name: id, connectionRole: 'direct', gateway: { host: '', port: 22, username: '', authMode: 'auto' }, target: { host: ' host ', port: 22, username: ' root ', authMode: 'auto', credentialRef: 'keychain:host' }, jumpMode: 'direct', menuProfileId: '', fileTransferMode: 'auto' }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createStableRefRegistry } from "../../src/domains/terminal/model/stableRefRegistry"
+import { createStableRefRegistry } from "../../src/domains/terminal/domain/stableRefRegistry"
 
 test('同一终端在重复渲染时复用同一个 ref 回调', () => {
   const registry = createStableRefRegistry()

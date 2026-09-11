@@ -1,0 +1,158 @@
+/* Compact settings navigation and second-pass workspace cleanup. */
+.settings-center {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-content: normal;
+  gap: 8px;
+  overflow: hidden;
+  padding: 8px 10px 10px;
+}
+
+.settings-hub {
+  min-height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.settings-center > .settings-section {
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.settings-center > .settings-ai-list {
+  display: grid;
+  grid-template-rows: auto 30px minmax(0, 1fr);
+}
+
+.settings-center > .settings-controls {
+  overflow-y: auto;
+}
+
+.app-shell .settings-sidebar .settings-option {
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px;
+  box-shadow: none;
+}
+
+.app-shell .settings-sidebar .settings-option:hover,
+.app-shell .settings-sidebar .settings-option.active {
+  border-color: transparent;
+  background: var(--workbench-hover);
+  box-shadow: none;
+}
+
+.app-shell .settings-sidebar .settings-option-icon {
+  width: 18px;
+  height: 18px;
+  border-color: transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--workbench-muted);
+}
+
+.app-shell .settings-sidebar .settings-option.active .settings-option-icon {
+  border-color: transparent;
+  background: transparent;
+  color: var(--workbench-accent-strong);
+}
+
+.settings-option-copy span,
+.settings-option-status {
+  display: none;
+}
+
+.settings-option-copy strong {
+  color: var(--workbench-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-option.active .settings-option-copy strong {
+  color: var(--workbench-text-strong);
+}
+
+.settings-section-head {
+  padding: 2px 2px 5px;
+}
+
+.settings-search {
+  height: 30px;
+  border-color: var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel-strong);
+}
+
+.settings-config-list {
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  gap: 3px;
+}
+
+.app-shell .settings-sidebar .settings-card {
+  gap: 2px;
+  min-height: 0;
+  border-color: transparent;
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+/* 模型名与 URL 收成一条 11px 的副信息行:原先 12px + 12px 两行几乎和标题同重,
+   三行读起来分不出主次。 */
+.app-shell .settings-sidebar .settings-card span,
+.app-shell .settings-sidebar .settings-card small {
+  font-size: var(--font-xs);
+  line-height: 1.5;
+}
+
+/* hover 只提亮底色;选中态才上淡绿底 + 描边。inset 左边条会和圆角打架,
+   而且在浅色主题下那道深绿显得脏,因此选中态用整卡底色表达。 */
+.app-shell .settings-sidebar .settings-card:hover {
+  border-color: transparent;
+  background: var(--workbench-hover);
+  box-shadow: none;
+}
+
+.app-shell .settings-sidebar .settings-card.active {
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 10%, transparent);
+  box-shadow: none;
+}
+
+/* 卡片里的操作按钮压到 26px 并去掉描边:32px 的通用尺寸在这条窄侧栏里
+   和 13px 的配置名不成比例,两个方框也把标题挤到没地方。 */
+.app-shell .settings-sidebar .settings-card .icon-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* 按钮的 hover 底不能用 --workbench-hover:卡片 hover 时正是这个色,叠上去看不出来。 */
+.app-shell .settings-sidebar .settings-card .icon-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--workbench-text) 12%, transparent);
+}
+
+.app-shell .settings-sidebar .settings-card .card-actions {
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+
+.app-shell .settings-sidebar .settings-card:hover .card-actions,
+.app-shell .settings-sidebar .settings-card:focus-within .card-actions,
+.app-shell .settings-sidebar .settings-card.active .card-actions {
+  opacity: 1;
+}

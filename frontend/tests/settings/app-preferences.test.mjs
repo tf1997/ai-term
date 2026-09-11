@@ -3,8 +3,8 @@ import test from 'node:test'
 import { createRenderer, isReadonly, nextTick } from 'vue'
 import { useAppTheme } from "../../src/domains/settings/application/useAppTheme"
 import { useUserSettings } from "../../src/domains/settings/application/useUserSettings"
-import { APP_THEME_STORAGE_KEY, USER_SETTINGS_STORAGE_KEY } from "../../src/domains/settings/storage/settingsStorage"
-import { SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from "../../src/domains/settings/model/userSettings"
+import { APP_THEME_STORAGE_KEY, USER_SETTINGS_STORAGE_KEY } from "../../src/domains/settings/infrastructure/storage/settingsStorage"
+import { SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from "../../src/domains/settings/domain/userSettings"
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial))

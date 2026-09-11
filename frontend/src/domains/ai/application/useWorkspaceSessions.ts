@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
-import type { AiPanelMode } from '../model/agent'
-import type { WorkspaceSession } from '../model/conversation'
-import { listWorkspaceSessions, saveWorkspaceSession, deleteWorkspaceSession } from '../api'
-import { DEFAULT_AI_SESSION_ID, isAutoWorkspaceSessionName, newWorkspaceSession, nowText } from '../model/workspaceSessions'
+import type { AiPanelMode } from '../domain/agent'
+import type { WorkspaceSession } from '../domain/conversation'
+import { listWorkspaceSessions, saveWorkspaceSession, deleteWorkspaceSession } from '../infrastructure/api'
+import { DEFAULT_AI_SESSION_ID, isAutoWorkspaceSessionName, newWorkspaceSession, nowText } from '../domain/workspaceSessions'
 
 const defaultStorage = { listWorkspaceSessions, saveWorkspaceSession, deleteWorkspaceSession }
 

@@ -1,9 +1,9 @@
 import { ref, onBeforeUnmount } from 'vue'
-import type { AiPanelProps, AiPanelEmit } from '../model/aiPanel'
-import type { AiProviderConfig } from '../model/provider'
-import { MAX_AI_COMMAND_HISTORY, MAX_AI_CONVERSATION_MESSAGES, AI_CONTEXT_COMPACT_THRESHOLD, formatSessionDisplayTitle, isAutoSessionName, normalizeGeneratedSessionTitle } from '../model/aiConversation'
+import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
+import type { AiProviderConfig } from '../domain/provider'
+import { MAX_AI_COMMAND_HISTORY, MAX_AI_CONVERSATION_MESSAGES, AI_CONTEXT_COMPACT_THRESHOLD, formatSessionDisplayTitle, isAutoSessionName, normalizeGeneratedSessionTitle } from '../domain/aiConversation'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
-import * as tauri from '../api'
+import * as tauri from '../infrastructure/api'
 
 type ConversationSource = Pick<typeof tauri, 'generateAiSessionTitle' | 'compressAiConversation'>
 

@@ -1,10 +1,10 @@
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
-import type { AiProviderConfig } from '../model/provider'
+import type { AiProviderConfig } from '../domain/provider'
 import type { SaveState, ProfileStoreStatus } from '../../../shared/forms/configuration'
 import type { useToasts } from '../../../shared/ui/useToasts'
-import * as tauri from '../api'
-import { cloneAiConfig, defaultAiConfig } from '../model/providerConfig'
+import * as tauri from '../infrastructure/api'
+import { cloneAiConfig, defaultAiConfig } from '../domain/providerConfig'
 import { formatError } from '../../../shared/platform/errors'
 
 interface AiConfigOptions {

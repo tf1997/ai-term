@@ -1,9 +1,9 @@
 import { ref, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
-import type { ScriptPanelProps, ScriptChatMessage, ScriptPanelMode } from '../model/scriptPanel'
+import type { ScriptPanelProps, ScriptChatMessage, ScriptPanelMode } from '../domain/scriptPanel'
 import type { SaveState } from '../../../shared/forms/configuration'
-import { extractBashScript, displayAnswerWithoutScript, formatError } from '../model/scriptPresentation'
-import * as tauri from '../../ai/api'
+import { extractBashScript, displayAnswerWithoutScript, formatError } from '../domain/scriptPresentation'
+import * as tauri from '../../ai/infrastructure/api'
 
 interface ScriptGenerationOptions {
   props: Readonly<ScriptPanelProps>

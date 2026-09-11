@@ -1,0 +1,514 @@
+/* Shared AI composer geometry across AI and script workspaces. */
+.assistant-compose.unified-ai-compose {
+  --composer-pad-x: 8px;
+  --composer-pad-bottom: 8px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-top: 1px solid var(--workbench-line);
+  border-radius: 0;
+  background: var(--workbench-panel);
+  padding: 7px 8px 8px;
+}
+
+.assistant-compose.unified-ai-compose textarea {
+  min-width: 0;
+  width: 100%;
+  min-height: 52px;
+  height: auto;
+  max-height: 112px;
+  border-color: var(--workbench-line);
+  border-radius: 7px;
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-text);
+  padding: 7px 43px 33px 10px;
+  resize: none;
+  box-shadow: none;
+}
+
+.assistant-compose.unified-ai-compose:focus-within textarea {
+  border-color: var(--workbench-accent);
+  box-shadow: 0 0 0 2px var(--workbench-accent-soft);
+}
+
+.assistant-compose.unified-ai-compose .icon-button {
+  position: absolute;
+  right: 14px;
+  bottom: 13px;
+  width: 29px;
+  height: 29px;
+  border-color: var(--workbench-accent);
+  border-radius: 6px;
+  background: var(--workbench-accent);
+  color: #fff;
+  box-shadow: none;
+}
+
+.script-library > .script-preview > .unified-ai-compose {
+  margin: 0 -8px -8px;
+}
+
+/* Script editing and AI collaboration share one continuous workbench. */
+.script-panel > .script-generate,
+.script-panel > .script-library {
+  flex: 1 1 260px;
+}
+
+.script-panel > .script-generate {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.script-panel > .script-library.detail-view {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.script-panel > .script-generate .script-workbench {
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+:root .script-generate .script-draft-card textarea {
+  min-height: 0;
+}
+
+.script-conversation {
+  flex: 0 1 208px;
+  min-width: 0;
+  min-height: 116px;
+  max-height: min(240px, 34vh);
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-top: 1px solid var(--workbench-line);
+  border-radius: 0;
+  background: var(--workbench-panel);
+}
+
+.script-conversation-head {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--workbench-line-soft);
+  background: var(--workbench-panel);
+  padding: 0 9px 0 12px;
+}
+
+.script-conversation-head .script-replies-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--workbench-accent-strong);
+}
+
+.script-conversation-head .script-replies-title strong {
+  color: var(--workbench-text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.script-conversation-head .script-replies-title small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--workbench-muted);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-conversation-head .icon-button {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--workbench-muted);
+}
+
+.script-conversation-head .icon-button:hover:not(:disabled) {
+  border-color: rgba(223, 116, 124, .28);
+  background: rgba(223, 116, 124, .09);
+  color: #df747c;
+}
+
+.script-conversation .script-replies-list {
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden auto;
+  background: var(--workbench-panel);
+  padding: 0 12px 8px;
+  scrollbar-gutter: stable;
+}
+
+.script-conversation .script-reply-message {
+  flex: 0 0 auto;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  border-bottom: 1px solid var(--workbench-line-soft);
+  border-radius: 0;
+  background: transparent;
+  padding: 9px 0;
+  box-shadow: none;
+}
+
+.script-conversation .script-reply-message:last-of-type {
+  border-bottom-color: transparent;
+}
+
+.script-conversation .script-reply-message:not(.ai):not(.error) {
+  width: fit-content;
+  max-width: 88%;
+  align-self: flex-end;
+  margin-top: 8px;
+  border-bottom: 0;
+  border-radius: 7px 7px 2px 7px;
+  background: var(--workbench-hover);
+  padding: 7px 9px;
+}
+
+.script-conversation .script-reply-message:not(.ai):not(.error) .message-title {
+  display: none;
+}
+
+.script-conversation .script-reply-message:not(.ai):not(.error) .message-body {
+  margin: 0;
+  padding: 0;
+}
+
+.script-conversation .message-title {
+  min-height: 22px;
+}
+
+.script-conversation .message-identity {
+  grid-template-columns: 22px minmax(0, auto);
+  gap: 7px;
+}
+
+.script-conversation .message-avatar {
+  width: 22px;
+  height: 22px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+  font-size: 10px;
+}
+
+.script-conversation .message-title strong {
+  color: var(--workbench-text-strong);
+  font-size: 11px;
+}
+
+.script-conversation .message-duration,
+.script-conversation .streaming-dot {
+  color: var(--workbench-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.script-conversation .message-body {
+  margin-top: 5px;
+  padding-left: 29px;
+}
+
+.script-conversation .message-body p,
+.script-conversation .markdown-content {
+  color: var(--workbench-text);
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+.script-conversation .message-body p {
+  margin-block: 0 6px;
+}
+
+.script-conversation .script-reply-actions .text-button {
+  min-height: 24px;
+  height: 24px;
+  padding-inline: 7px;
+  border-color: var(--workbench-line);
+  border-radius: 5px;
+  background: transparent;
+  font-size: 10px;
+}
+
+.script-conversation .code-block {
+  margin-top: 7px;
+  border-color: var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-terminal);
+}
+
+.script-panel > .script-ai-compose {
+  flex: 0 0 auto;
+  border-top-color: var(--workbench-line-soft);
+  background: var(--workbench-panel);
+}
+
+.script-panel > .script-ai-compose textarea {
+  min-height: 58px;
+}
+
+/* Light theme color-only surface contract. */
+.app-shell.theme-light .assistant-panel {
+  background: #fff;
+  color: var(--light-text);
+}
+
+.app-shell.theme-light .assistant-panel .message.ai {
+  border-color: transparent;
+  background: transparent;
+}
+
+.app-shell.theme-light .assistant-panel .message.ai.error {
+  border-color: transparent;
+  background: transparent;
+}
+
+.app-shell.theme-light .context-summary-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--light-muted);
+}
+
+.app-shell.theme-light .workspace-tabs button.active {
+  border-color: transparent;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
+}
+
+.app-shell.theme-light .files-panel {
+  background: #fff;
+  color: var(--light-text);
+}
+
+.app-shell.theme-light .terminal-completion {
+  border-color: var(--light-border);
+  background: #fff;
+  color: var(--light-text);
+}
+
+.app-shell.theme-light .transfer-browser {
+  background: var(--light-border);
+}
+
+.app-shell.theme-light .script-risk-modal {
+  border-color: #dbe3ee;
+  background: #ffffff;
+  color: #172033;
+}
+
+.app-shell.theme-light .script-risk-ai {
+  border-color: #bfe9d3;
+  background: #f0fbf5;
+}
+
+.app-shell.theme-light .script-risk-preview {
+  border-color: #d7e0eb;
+  background: #f8fafc;
+  color: #172033;
+}
+
+.app-shell.theme-light .script-risk-chip.high {
+  border-color: #eea8b4;
+  background: #fff1f3;
+}
+
+.app-shell.theme-light .script-risk-line.flagged {
+  border-left-color: #e11d48;
+  background: #fff7f8;
+  color: #172033;
+}
+
+.app-shell.theme-light .script-risk-line-label {
+  background: #fff1f3;
+  color: #be123c;
+}
+
+.app-shell.theme-light .script-risk-actions {
+  border-top-color: #e5ebf2;
+  background: #fbfcfd;
+}
+
+.app-shell.theme-light .script-head .record-action {
+  border-color: #d7e1e7;
+  background: #f7f9fa;
+  color: #334155;
+}
+
+.app-shell.theme-light .script-recorder {
+  border-left-color: #27956b;
+  background: #f7faf9;
+}
+
+.app-shell.theme-light .script-recorder strong {
+  color: #334155;
+}
+
+.app-shell.theme-light .script-recorder small {
+  color: #718096;
+}
+
+.app-shell.theme-light .script-generate .script-draft-card,
+.app-shell.theme-light .script-library-editor,
+.app-shell.theme-light .script-editor-toolbar,
+.app-shell.theme-light .script-editor-shell,
+.app-shell.theme-light .script-editor-statusbar {
+  border-color: #dbe3e8;
+}
+
+.app-shell.theme-light .script-editor-toolbar,
+.app-shell.theme-light .script-editor-statusbar {
+  background: #f8fafb;
+}
+
+.app-shell.theme-light .script-file-tab {
+  border-color: transparent;
+  background: transparent;
+  color: #263445;
+}
+
+.app-shell.theme-light .script-file-icon {
+  background: #e7f5ee;
+  color: #177654;
+}
+
+.app-shell.theme-light .script-dirty-dot {
+  background: #d97706;
+}
+
+.app-shell.theme-light .script-readiness-status,
+.app-shell.theme-light .script-file-tab .script-editor-risk,
+.app-shell.theme-light .script-readiness-status.readiness-muted,
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-muted,
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-safe {
+  border-color: #d7e0e6;
+  background: #f5f7f9;
+  color: #617083;
+}
+
+.app-shell.theme-light .script-readiness-status.readiness-ready {
+  border-color: #b7dfcd;
+  background: #edf8f3;
+  color: #176b4d;
+}
+
+.app-shell.theme-light .script-readiness-status.readiness-pending {
+  border-color: #e8c984;
+  background: #fff8e8;
+  color: #925f0c;
+}
+
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-medium {
+  border-color: #e8c984;
+  background: #fff8e8;
+  color: #925f0c;
+}
+
+.app-shell.theme-light .script-file-tab .script-editor-risk.risk-high {
+  border-color: #e7a0ad;
+  background: #fff0f2;
+  color: #b4233d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button {
+  border-color: #9bd7bd;
+  background: #e7f6ef;
+  color: #176b4d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button:hover:not(:disabled) {
+  border-color: #73c6a2;
+  background: #dff2e9;
+  color: #105b40;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.medium-risk-run {
+  border-color: #dfbd72;
+  background: #fff7e5;
+  color: #8a5908;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.high-risk-run {
+  border-color: #e8a3af;
+  background: #fff0f2;
+  color: #b4233d;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button.high-risk-run:hover:not(:disabled) {
+  border-color: #db7f8f;
+  background: #ffe4e8;
+  color: #981b33;
+}
+
+.app-shell.theme-light .script-editor-shell {
+  background: #fbfcfd;
+}
+
+.app-shell.theme-light .script-line-rail {
+  border-right-color: #dfe6eb;
+  background: #f2f5f6;
+  color: #8290a0;
+}
+
+.app-shell.theme-light .shell-token.comment {
+  color: #5f6d7c;
+}
+
+.app-shell.theme-light .script-editor-statusbar {
+  color: #68778a;
+}
+
+.app-shell.theme-light .script-editor-statusbar .dirty {
+  color: #a86208;
+}
+
+.app-shell.theme-light .script-editor-shell textarea::-webkit-scrollbar-thumb {
+  background: #c5d0d8;
+}
+
+.app-shell.theme-dark .script-risk-modal {
+  border-color: #2a3446;
+  background: #0b1018;
+  color: #e5edf7;
+}
+
+.app-shell.theme-dark .script-risk-ai {
+  border-color: #1f6d4a;
+  background: #0d1f19;
+}
+
+.app-shell.theme-dark .script-risk-preview {
+  border-color: #253044;
+  background: #070b12;
+  color: #e2e8f0;
+}
+
+.app-shell.theme-dark .script-risk-line.flagged {
+  border-left-color: #fb7185;
+  background: #201119;
+  color: #f8fafc;
+}
+
+.app-shell.theme-dark .script-risk-actions {
+  border-top-color: #293246;
+  background: #090e16;
+}

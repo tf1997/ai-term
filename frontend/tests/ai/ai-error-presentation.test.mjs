@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { describeAiError, hasExtraErrorDetail } from "../../src/domains/ai/model/aiErrorPresentation"
+import { describeAiError, hasExtraErrorDetail } from "../../src/domains/ai/domain/aiErrorPresentation"
 
 test('HTTP 5xx 归类为服务端不可用且可重试', () => {
   const view = describeAiError('模型请求失败：HTTP 502\n模型未返回错误正文')

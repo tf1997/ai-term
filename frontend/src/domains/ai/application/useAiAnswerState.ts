@@ -1,5 +1,5 @@
 import { ref, onBeforeUnmount } from 'vue'
-import type { AiMessage } from '../model/conversation'
+import type { AiMessage } from '../domain/conversation'
 
 export function useAiAnswerState() {
   const STREAM_TIMER_INTERVAL_MS = 1000

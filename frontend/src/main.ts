@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
-import App from './App.vue'
-import "./styles/index.css"
+import App from './app/App.vue'
+import './app/styles/index.css'
 import { isWindowsPlatform } from './shared/platform/platform'
 
 async function bootstrap() {

@@ -1,5 +1,5 @@
-export { BUILTIN_READONLY_COMMANDS, isSuffixSafeForSentinel, validateAllowlistPattern } from './agent/agentAutoApprove'
-export { COMMAND_HISTORY_CACHE_LIMIT, COMMAND_HISTORY_SESSION_ID, DEFAULT_AI_SESSION_ID, nowText } from './model/workspaceSessions'
+export { BUILTIN_READONLY_COMMANDS, isSuffixSafeForSentinel, validateAllowlistPattern } from './domain/agentAutoApprove'
+export { COMMAND_HISTORY_CACHE_LIMIT, COMMAND_HISTORY_SESSION_ID, DEFAULT_AI_SESSION_ID, nowText } from './domain/workspaceSessions'
 export { useAiConfigs } from './application/useAiConfigs'
 export { useAiMessages } from './application/useAiMessages'
 export { useWorkspaceSessions } from './application/useWorkspaceSessions'

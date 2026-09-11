@@ -1,7 +1,7 @@
 import { nextTick, onBeforeUnmount } from 'vue'
 import type { ShallowRef } from 'vue'
-import type { TerminalPaneHandle as TerminalPaneInstance } from '../model/terminal'
-import type { TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent } from '../model/events'
+import type { TerminalPaneHandle as TerminalPaneInstance } from '../domain/terminal'
+import type { TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent } from '../domain/events'
 import type { useTerminalTabs } from './useTerminalTabs'
 import type { useToasts } from '../../../shared/ui/useToasts'
 

@@ -1,1 +1,1 @@
-export { default as SettingsSidebar } from './ui/SettingsSidebar.vue'
+export { default as SettingsSidebar } from './presentation/components/SettingsSidebar.vue'

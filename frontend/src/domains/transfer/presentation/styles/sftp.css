@@ -1,0 +1,150 @@
+/* Dark theme SFTP polish. */
+.app-shell.theme-dark .workspace-tabs button.active {
+  border-color: rgba(86, 230, 163, .46);
+  background: rgba(86, 230, 163, .12);
+  color: #bff8da;
+}
+.app-shell.theme-dark .workspace-tabs button.active::after {
+  background: #56e6a3;
+}
+.app-shell.theme-dark .files-panel,
+.app-shell.theme-dark .sftp-transfer-workbench {
+  background: #0a0f18;
+}
+.app-shell.theme-dark .transfer-browser {
+  background: #1b2636;
+}
+.app-shell.theme-dark .transfer-pane {
+  background: #0e1521;
+}
+.app-shell.theme-dark .transfer-pane-head {
+  border-bottom-color: #1f2a3b;
+  background: linear-gradient(180deg, rgba(17, 25, 38, .98), rgba(13, 20, 32, .98));
+}
+.app-shell.theme-dark .transfer-pane-head strong,
+.app-shell.theme-dark .transfer-pane-title strong {
+  color: #edf4ff;
+}
+.app-shell.theme-dark .transfer-pane-title span,
+.app-shell.theme-dark .transfer-pane-path {
+  color: #8fa1ba;
+}
+.app-shell.theme-dark .transfer-target-strip {
+  border-bottom-color: #1f2a3b;
+  background: #1b2636;
+}
+.app-shell.theme-dark .transfer-target-strip .transfer-route-item,
+.app-shell.theme-dark .local-pathbar,
+.app-shell.theme-dark .sftp-pathbar {
+  border-color: #1f2a3b;
+  background: #0f1724;
+  color: #94a6c0;
+}
+.app-shell.theme-dark .local-pathbar input,
+.app-shell.theme-dark .sftp-pathbar input {
+  border-color: #243246;
+  background: #0b111c;
+  color: #edf4ff;
+}
+.app-shell.theme-dark .local-pathbar button,
+.app-shell.theme-dark .sftp-pathbar button {
+  border-color: #263448;
+  background: #111a28;
+  color: #d9e5f7;
+}
+.app-shell.theme-dark .local-pathbar button:hover:not(:disabled),
+.app-shell.theme-dark .sftp-pathbar button:hover:not(:disabled) {
+  border-color: rgba(86, 230, 163, .42);
+  background: rgba(86, 230, 163, .1);
+  color: #bff8da;
+}
+.app-shell.theme-dark .file-list {
+  background: #0d1420;
+  scrollbar-color: #526173 #111827;
+}
+.app-shell.theme-dark .file-row {
+  border-bottom-color: rgba(123, 145, 176, .13);
+  background: #101927;
+}
+.app-shell.theme-dark .file-row.directory {
+  background: #111c2c;
+}
+.app-shell.theme-dark .file-row:hover {
+  background: #162235;
+}
+.app-shell.theme-dark .file-row.active,
+.app-shell.theme-dark .file-row.directory.active {
+  background: rgba(86, 230, 163, .13);
+  outline-color: rgba(86, 230, 163, .42);
+}
+.app-shell.theme-dark .file-row strong {
+  color: #f0f6ff;
+}
+.app-shell.theme-dark .file-row span,
+.app-shell.theme-dark .file-meta span {
+  color: #8da0bb;
+}
+.app-shell.theme-dark .file-actions .icon-button {
+  border-color: #263448;
+  background: #101928;
+  color: #aab8cb;
+}
+.app-shell.theme-dark .file-actions .icon-button:hover:not(:disabled) {
+  border-color: rgba(86, 230, 163, .42);
+  background: rgba(86, 230, 163, .1);
+  color: #bff8da;
+}
+.app-shell.theme-dark .file-actions .icon-button.danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, .44);
+  background: rgba(248, 113, 113, .1);
+  color: #fecaca;
+}
+.app-shell.theme-dark .file-type-icon {
+  border-color: #304058;
+  background: #111c2c;
+  color: #9fb1ca;
+}
+.app-shell.theme-dark .file-type-icon.folder {
+  border-color: rgba(86, 230, 163, .38);
+  background: rgba(86, 230, 163, .12);
+  color: #8ce7b5;
+}
+.app-shell.theme-dark .file-type-icon.file {
+  border-color: rgba(125, 148, 184, .34);
+  background: rgba(125, 148, 184, .12);
+  color: #aebdd2;
+}
+.app-shell.theme-dark .sftp-feedback {
+  border-bottom-color: #1f2a3b;
+  background: #0f1724;
+  color: #aebdd2;
+}
+.app-shell.theme-dark .transfer-progress {
+  border-color: rgba(86, 230, 163, .26);
+  background: #09111b;
+}
+.app-shell.theme-dark .transfer-progress span,
+.app-shell.theme-dark .transfer-progress.complete span {
+  background: linear-gradient(90deg, #56e6a3, #35c6d7);
+}
+.app-shell.theme-dark .transfer-task-stats span {
+  border-color: #243246;
+  background: #0b111c;
+  color: #aebdd2;
+}
+.app-shell.theme-dark .transfer-task-stats strong {
+  color: #bff8da;
+}
+.app-shell.theme-dark .transfer-task-paths span {
+  color: #8fa1ba;
+}
+.app-shell.theme-dark .transfer-task-actions button {
+  border-color: #263448;
+  background: #111a28;
+  color: #d9e5f7;
+}
+.app-shell.theme-dark .transfer-task-actions button:hover:not(:disabled) {
+  border-color: rgba(86, 230, 163, .42);
+  background: rgba(86, 230, 163, .1);
+  color: #bff8da;
+}

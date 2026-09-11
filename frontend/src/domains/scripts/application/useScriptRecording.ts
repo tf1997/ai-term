@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
-import type { ScriptRecording } from '../model/recording'
+import type { ScriptRecording } from '../domain/recording'
 import { DEFAULT_AI_SESSION_ID, nowText } from '../../ai/index'
 
 interface ScriptRecordingOptions {

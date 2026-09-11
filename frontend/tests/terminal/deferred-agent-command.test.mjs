@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDeferredAgentCommand } from "../../src/domains/terminal/model/deferredAgentCommand"
+import { createDeferredAgentCommand } from "../../src/domains/terminal/domain/deferredAgentCommand"
 
 function deferred() {
   let resolve

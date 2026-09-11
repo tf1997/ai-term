@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseAiTimeoutSeconds } from "../../src/domains/ai/model/aiTimeout"
+import { parseAiTimeoutSeconds } from "../../src/domains/ai/domain/aiTimeout"
 
 test('未设置、清空或输入 0 均表示不超时', () => {
   for (const value of [undefined, null, '', ' ', 0, '0']) {

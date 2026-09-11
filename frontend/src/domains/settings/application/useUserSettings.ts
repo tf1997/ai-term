@@ -1,8 +1,8 @@
 import { readonly, ref } from 'vue'
-import type { AppUserSettings } from '../model/settings'
-import { loadUserSettings, persistUserSettings } from '../storage/settingsStorage'
-import type { SettingsStorage } from '../storage/settingsStorage'
-import { normalizeUserSettings } from '../model/userSettings'
+import type { AppUserSettings } from '../domain/settings'
+import { loadUserSettings, persistUserSettings } from '../infrastructure/storage/settingsStorage'
+import type { SettingsStorage } from '../infrastructure/storage/settingsStorage'
+import { normalizeUserSettings } from '../domain/userSettings'
 import { isWindowsPlatform } from '../../../shared/platform/platform'
 
 export function useUserSettings(windowsPlatform = isWindowsPlatform(), storage?: SettingsStorage) {

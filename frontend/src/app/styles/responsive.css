@@ -1,0 +1,70 @@
+@media (max-width: 1280px) {
+  .app-shell {
+    --sidebar-width: 224px;
+    --workspace-width: min(var(--workspace-user-width, 380px), 390px);
+  }
+
+  .workspace-resizer {
+    right: calc(var(--workspace-width) - 3px);
+  }
+
+  .workspace-tabs button {
+    padding-inline: 5px;
+  }
+
+  .workspace-tabs button span {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .app-shell {
+    --workspace-width: 360px;
+  }
+
+  .app-shell,
+  .app-shell:not(.right-collapsed) {
+    grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) var(--workspace-width);
+  }
+
+  .app-shell.right-collapsed {
+    grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) 0;
+  }
+
+  .sidebar {
+    visibility: hidden;
+  }
+
+  .workspace-resizer {
+    display: none;
+  }
+
+  .titlebar,
+  .left-collapsed .titlebar {
+    grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  }
+
+  .brand {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .brand span:last-child {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .app-shell,
+  .app-shell:not(.right-collapsed),
+  .app-shell.right-collapsed,
+  .app-shell.left-collapsed,
+  .app-shell.left-collapsed.right-collapsed {
+    grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) 0;
+  }
+
+  .right-panel,
+  .workspace-resizer {
+    display: none;
+  }
+}

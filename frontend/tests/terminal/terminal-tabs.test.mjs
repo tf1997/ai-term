@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isReadonly } from 'vue'
-import { normalizedTerminalTargetIds, terminalStatusClass } from "../../src/domains/terminal/model/terminalTabs"
+import { normalizedTerminalTargetIds, terminalStatusClass } from "../../src/domains/terminal/domain/terminalTabs"
 import { useTerminalTabs } from "../../src/domains/terminal/application/useTerminalTabs"
 
 function profile(id = 'server') {

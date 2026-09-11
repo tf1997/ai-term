@@ -1,1 +1,1 @@
-export { default as ScriptPanel } from './ui/ScriptPanel.vue'
+export { default as ScriptPanel } from './presentation/components/ScriptPanel.vue'

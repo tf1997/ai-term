@@ -8,7 +8,7 @@ import {
   normalizeUserSettings,
   SYSTEM_TERMINAL_FONT_FAMILY,
   WINDOWS_TERMINAL_FONT_FAMILY
-} from "../../src/domains/settings/model/userSettings"
+} from "../../src/domains/settings/domain/userSettings"
 import {
   APP_THEME_STORAGE_KEY,
   LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY,
@@ -18,7 +18,7 @@ import {
   persistUserSettings,
   USER_SETTINGS_STORAGE_KEY,
   WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY
-} from "../../src/domains/settings/storage/settingsStorage"
+} from "../../src/domains/settings/infrastructure/storage/settingsStorage"
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial))

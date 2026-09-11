@@ -1,0 +1,259 @@
+/* Compact SFTP workbench: prioritize file scanning and active transfers. */
+.sftp-panel-head {
+  gap: 8px;
+}
+
+.sftp-panel-head .panel-actions {
+  gap: 4px;
+}
+
+.sftp-panel-head .panel-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.transfer-target-strip .transfer-route-item {
+  padding: 6px 8px;
+}
+
+.transfer-pane {
+  grid-template-rows: 36px auto minmax(0, 1fr);
+}
+
+.transfer-pane-head {
+  padding: 0 8px;
+}
+
+.transfer-pane-path {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
+}
+
+.transfer-pane-path::-webkit-scrollbar {
+  display: none;
+}
+
+.transfer-pane-path button {
+  flex: 0 0 auto;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #74849a;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  box-shadow: none;
+}
+
+.transfer-pane-path button + button::before {
+  content: '›';
+  margin-right: 5px;
+  color: #4f6076;
+}
+
+.transfer-pane-path button:hover:not(:disabled) {
+  border: 0;
+  background: rgba(86, 230, 163, .09);
+  color: #1b8f61;
+  box-shadow: none;
+  transform: none;
+}
+
+.local-pathbar {
+  grid-template-columns: repeat(3, 30px) minmax(72px, auto) minmax(0, 1fr) auto auto;
+  padding: 5px 8px;
+}
+
+.sftp-pathbar {
+  grid-template-columns: repeat(3, 30px) minmax(0, 1fr) auto auto;
+  padding: 5px 8px;
+}
+
+.root-directory-select {
+  width: auto;
+  min-width: 72px;
+  max-width: 112px;
+  height: 28px;
+  padding-block: 0;
+  padding-inline: 7px 24px;
+  line-height: 26px;
+}
+
+.file-row {
+  min-height: 46px;
+  padding: 6px 9px;
+}
+
+.file-main {
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.file-copy {
+  gap: 2px;
+}
+
+.file-type-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.file-type-icon .ui-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.file-actions {
+  opacity: .45;
+}
+
+.file-row.hidden-entry .file-type-icon,
+.file-row.hidden-entry .file-copy strong {
+  opacity: .5;
+}
+
+.file-row.hidden-entry.active .file-type-icon,
+.file-row.hidden-entry.active .file-copy strong {
+  opacity: 1;
+}
+
+.file-actions .icon-button {
+  width: 26px;
+  height: 26px;
+}
+
+.sftp-feedback.complete {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 10px;
+  padding: 6px 10px;
+}
+
+.sftp-feedback.complete .transfer-task-head {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.sftp-feedback.complete .transfer-progress {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 3px;
+  margin-top: 0;
+}
+
+.sftp-feedback.complete .transfer-task-stats,
+.sftp-feedback.complete .transfer-task-paths {
+  display: none;
+}
+
+.sftp-feedback.complete .transfer-task-actions {
+  grid-column: 2;
+  grid-row: 1;
+  margin-top: 0;
+}
+
+/* Keep script recording controls and the AI composer dimensionally stable. */
+.script-head .record-action,
+.script-head .panel-actions > .danger {
+  width: 106px;
+  margin-left: auto;
+  justify-content: center;
+}
+
+.script-recorder.idle .record-dot {
+  border-color: #526176;
+  background: #526176;
+  box-shadow: none;
+}
+
+.script-recorder.idle strong {
+  color: #9aa8ba;
+}
+
+.assistant-compose.script-compose textarea {
+  min-height: 50px;
+  max-height: 112px;
+  resize: none;
+}
+
+.script-recorder.idle {
+  opacity: .78;
+}
+
+.script-empty-guide {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 16px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.script-empty-guide small {
+  color: #5f6f84;
+  font-size: var(--font-xs);
+}
+
+.script-editor-tools .script-run-button:disabled {
+  border-color: #26303f;
+  background: transparent;
+  color: #5f6f84;
+  opacity: .8;
+}
+
+.theme-light .script-empty-guide small {
+  color: #8b98ab;
+}
+
+.app-shell.theme-light .script-editor-tools .script-run-button:disabled {
+  border-color: #d4dde8;
+  background: transparent;
+  color: #9aa8ba;
+}
+.app-shell.theme-dark .script-risk-actions .text-button.danger {
+  border-color: #be3b50;
+  background: #351520;
+  color: #fecdd3;
+}
+.app-shell.theme-dark .script-risk-actions .text-button.danger:hover {
+  border-color: #fb7185;
+  background: #4a1826;
+  color: #fff1f2;
+}
+.theme-light .modal-head .icon-button,
+.app-shell.theme-light .modal-head .icon-button {
+  border-color: #c7d3e2;
+  background: #edf3f8;
+  color: #243449;
+}
+.theme-light .modal-head .icon-button:hover:not(:disabled),
+.app-shell.theme-light .modal-head .icon-button:hover:not(:disabled),
+.theme-light .modal-head .icon-button:focus-visible,
+.app-shell.theme-light .modal-head .icon-button:focus-visible {
+  border-color: #9bdcbe;
+  background: var(--light-accent-soft);
+  color: var(--light-accent-strong);
+  outline-color: #9bdcbe;
+}
+.theme-light .ai-config .badge,
+.app-shell.theme-light .ai-config .badge {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+}
+.theme-light .ai-config .badge.ok,
+.app-shell.theme-light .ai-config .badge.ok {
+  border-color: #9bdcbe;
+  background: #e8f8ef;
+  color: #047857;
+}

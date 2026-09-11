@@ -1,9 +1,9 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
-import type { ActiveTask } from '../model/transfer'
-import type { SftpTransferEvent, SftpTransferResponse } from '../api'
-import { transferActionLabel, numericOr, formatError } from '../model/transferPresentation'
-import * as tauri from '../api'
+import type { ActiveTask } from '../domain/transfer'
+import type { SftpTransferEvent, SftpTransferResponse } from '../infrastructure/api'
+import { transferActionLabel, numericOr, formatError } from '../domain/transferPresentation'
+import * as tauri from '../infrastructure/api'
 
 interface TransferTaskOptions {
   loading: Ref<boolean>

@@ -1,1 +1,1 @@
-export type { ScriptRecording } from './model/recording'
+export type { ScriptRecording } from './domain/recording'

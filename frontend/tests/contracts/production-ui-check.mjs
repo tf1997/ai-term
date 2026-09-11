@@ -1,10 +1,21 @@
 ﻿import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..', '..')
 
 function read(path) {
   return readFileSync(resolve(root, path), 'utf8').replace(/\r\n?/g, '\n')
+}
+
+function readStylesheet(path, visited = new Set()) {
+  const absolutePath = resolve(root, path)
+  if (visited.has(absolutePath)) return ''
+  visited.add(absolutePath)
+  const source = readFileSync(absolutePath, 'utf8').replace(/\r\n?/g, '\n')
+  return source.replace(/@import\s+['"]([^'"]+)['"]\s*;/g, (_, importPath) => {
+    const importedPath = resolve(dirname(absolutePath), importPath)
+    return readStylesheet(importedPath.slice(root.length + 1), visited)
+  })
 }
 
 function assert(condition, message) {
@@ -26,42 +37,42 @@ const packageManifest = JSON.parse(packageJson)
 const appShell = read('src/app/ui/AppShell.vue')
 const aiChatState = read('src/domains/ai/application/useAiChat.ts')
 const scriptExecutionState = read('src/domains/scripts/application/useScriptExecution.ts')
-const terminalHandleTypes = read('src/domains/terminal/model/terminal.ts')
+const terminalHandleTypes = read('src/domains/terminal/domain/terminal.ts')
 const terminalCapture = read('src/domains/terminal/application/useTerminalCapture.ts')
 const terminalEvents = read('src/domains/terminal/application/useTerminalEvents.ts')
 const quickCommands = read('src/domains/terminal/application/useQuickCommands.ts')
-const aiPanelTypes = read('src/domains/ai/model/aiPanel.ts')
-const aiConversationRules = read('src/domains/ai/model/aiConversation.ts')
+const aiPanelTypes = read('src/domains/ai/domain/aiPanel.ts')
+const aiConversationRules = read('src/domains/ai/domain/aiConversation.ts')
 const aiConversationContext = read('src/domains/ai/application/useAiConversationContext.ts')
 const aiAnswer = read('src/domains/ai/application/useAiAnswerState.ts')
 const agentSession = read('src/domains/ai/application/useAgentSession.ts')
-const scriptPanelTypes = read('src/domains/scripts/model/scriptPanel.ts')
-const scriptEditorRules = read('src/domains/scripts/model/scriptEditor.ts')
-const scriptPresentation = read('src/domains/scripts/model/scriptPresentation.ts')
+const scriptPanelTypes = read('src/domains/scripts/domain/scriptPanel.ts')
+const scriptEditorRules = read('src/domains/scripts/domain/scriptEditor.ts')
+const scriptPresentation = read('src/domains/scripts/domain/scriptPresentation.ts')
 const scriptLibrary = read('src/domains/scripts/application/useScriptLibrary.ts')
 const scriptGeneration = read('src/domains/scripts/application/useScriptGeneration.ts')
-const scriptPreviewStorage = read('src/domains/scripts/storage/scriptPreviewStorage.ts')
-const transferTypes = read('src/domains/transfer/model/transfer.ts')
-const transferPaths = read('src/domains/transfer/model/transferPaths.ts')
-const terminalIdentity = read('src/domains/transfer/model/terminalIdentity.ts')
-const transferPresentation = read('src/domains/transfer/model/transferPresentation.ts')
+const scriptPreviewStorage = read('src/domains/scripts/infrastructure/storage/scriptPreviewStorage.ts')
+const transferTypes = read('src/domains/transfer/domain/transfer.ts')
+const transferPaths = read('src/domains/transfer/domain/transferPaths.ts')
+const terminalIdentity = read('src/domains/transfer/domain/terminalIdentity.ts')
+const transferPresentation = read('src/domains/transfer/domain/transferPresentation.ts')
 const transferTasks = read('src/domains/transfer/application/useTransferTasks.ts')
 const remoteFileEditor = read('src/domains/transfer/application/useRemoteFileEditor.ts')
-const aiApi = read('src/domains/ai/api.ts')
-const connectionApi = read('src/domains/connections/api.ts')
-const scriptApi = read('src/domains/scripts/api.ts')
-const transferApi = read('src/domains/transfer/api.ts')
+const aiApi = read('src/domains/ai/infrastructure/api.ts')
+const connectionApi = read('src/domains/connections/infrastructure/api.ts')
+const scriptApi = read('src/domains/scripts/infrastructure/api.ts')
+const transferApi = read('src/domains/transfer/infrastructure/api.ts')
 const taskApi = read('src/shared/platform/tasks.ts')
-const terminalEventTypes = read('src/domains/terminal/model/events.ts')
-const scriptRecordTypes = read('src/domains/scripts/model/recording.ts')
+const terminalEventTypes = read('src/domains/terminal/domain/events.ts')
+const scriptRecordTypes = read('src/domains/scripts/domain/recording.ts')
 const aboutDialog = read('src/app/ui/AboutDialog.vue')
 const chromeSelection = read('src/app/layout/useChromeSelection.ts')
 const scriptRecordingState = read('src/domains/scripts/application/useScriptRecording.ts')
 const terminalInputRouter = read('src/domains/terminal/application/useTerminalInputRouter.ts')
-const profileConfigRules = read('src/domains/connections/model/profileConfig.ts')
+const profileConfigRules = read('src/domains/connections/domain/profileConfig.ts')
 const aiConfigState = read('src/domains/ai/application/useAiConfigs.ts')
 const connectionProfileState = read('src/domains/connections/application/useConnectionProfiles.ts')
-const workspaceSessionRules = read('src/domains/ai/model/workspaceSessions.ts')
+const workspaceSessionRules = read('src/domains/ai/domain/workspaceSessions.ts')
 const workspaceSessionState = read('src/domains/ai/application/useWorkspaceSessions.ts')
 const aiMessageState = read('src/domains/ai/application/useAiMessages.ts')
 const commandHistoryState = read('src/domains/terminal/application/useCommandHistory.ts')
@@ -84,7 +95,7 @@ assert(
     workspaceSessionState.includes('workspaceSessions.value.length - deletingSessionIds.size <= 1'),
   'Workspace stores must own isolated caches and ordered persistence while AppShell retains terminal routing, recording and deletion confirmation.'
 )
-const terminalTabTypes = read('src/domains/terminal/model/terminal.ts')
+const terminalTabTypes = read('src/domains/terminal/domain/terminal.ts')
 const terminalTabState = read('src/domains/terminal/application/useTerminalTabs.ts')
 const terminalTabScroll = read('src/domains/terminal/application/useTerminalTabScroll.ts')
 assert(
@@ -105,37 +116,37 @@ assert(
     !appShell.includes('sessionTabResizeObserver'),
   'Terminal state and scroll lifecycles must have explicit owners while AppShell preserves terminal instances and business cleanup.'
 )
-const settingsTypes = read('src/domains/settings/model/settings.ts')
-const userSettings = read('src/domains/settings/model/userSettings.ts')
-const settingsStorage = read('src/domains/settings/storage/settingsStorage.ts')
+const settingsTypes = read('src/domains/settings/domain/settings.ts')
+const userSettings = read('src/domains/settings/domain/userSettings.ts')
+const settingsStorage = read('src/domains/settings/infrastructure/storage/settingsStorage.ts')
 const userSettingsState = read('src/domains/settings/application/useUserSettings.ts')
 const appThemeState = read('src/domains/settings/application/useAppTheme.ts')
 const workspaceResize = read('src/app/layout/useWorkspaceResize.ts')
 const toastState = read('src/shared/ui/useToasts.ts')
 const contextMenuState = read('src/shared/ui/useContextMenu.ts')
 const main = read('src/main.ts')
-const terminalPane = read('src/domains/terminal/ui/TerminalPane.vue')
-const aiPanel = read('src/domains/ai/ui/AiPanel.vue')
-const aiMarkdownMessage = read('src/domains/ai/ui/messages/AiMarkdownMessage.vue')
+const terminalPane = read('src/domains/terminal/presentation/components/TerminalPane.vue')
+const aiPanel = read('src/domains/ai/presentation/components/AiPanel.vue')
+const aiMarkdownMessage = read('src/domains/ai/presentation/components/messages/AiMarkdownMessage.vue')
 const aiMarkdown = read('src/shared/content/aiMarkdown.ts')
 const shellCommand = read('src/shared/shell/shellCommand.ts')
-const aiConfig = read('src/domains/ai/ui/AiConfigPanel.vue')
-const fileTransfer = read('src/domains/transfer/ui/FileTransferPanel.vue')
-const scriptPanel = read('src/domains/scripts/ui/ScriptPanel.vue')
-const scriptExecution = read('src/domains/scripts/model/scriptExecution.ts')
+const aiConfig = read('src/domains/ai/presentation/components/AiConfigPanel.vue')
+const fileTransfer = read('src/domains/transfer/presentation/components/FileTransferPanel.vue')
+const scriptPanel = read('src/domains/scripts/presentation/components/ScriptPanel.vue')
+const scriptExecution = read('src/domains/scripts/domain/scriptExecution.ts')
 const commandPrivacy = read('src/shared/security/commandPrivacy.ts')
 const commandPrivacyTest = read('tests/shared/command-privacy.test.mjs')
 const scriptRisk = read('src/shared/security/scriptRisk.ts')
-const scriptReadiness = read('src/domains/scripts/model/scriptReadiness.ts')
-const sidebar = read('src/domains/connections/ui/ConnectionSidebar.vue')
-const settingsSidebar = read('src/domains/settings/ui/SettingsSidebar.vue')
-const tauri = read('src/domains/terminal/api.ts')
+const scriptReadiness = read('src/domains/scripts/domain/scriptReadiness.ts')
+const sidebar = read('src/domains/connections/presentation/components/ConnectionSidebar.vue')
+const settingsSidebar = read('src/domains/settings/presentation/components/SettingsSidebar.vue')
+const tauri = read('src/domains/terminal/infrastructure/api.ts')
 const workspacePanel = read('src/app/ui/WorkspacePanel.vue')
-const workspaceTypes = read('src/domains/ai/model/conversation.ts')
-const commandHistoryPanel = read('src/domains/terminal/ui/CommandHistoryPanel.vue')
+const workspaceTypes = read('src/domains/ai/domain/conversation.ts')
+const commandHistoryPanel = read('src/domains/terminal/presentation/components/CommandHistoryPanel.vue')
 const uiIcon = read('src/shared/ui/UiIcon.vue')
 const contextMenu = read('src/shared/ui/ContextMenu.vue')
-const styles = read('src/styles/index.css')
+const styles = readStylesheet('src/app/styles/index.css')
 const indexHtml = read('index.html')
 const tauriConfig = read('../src-tauri/tauri.conf.json')
 const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
@@ -172,10 +183,10 @@ assert(
 
 assert(
   appShell.includes("from '../../domains/settings/types'") &&
-    settingsSidebar.includes("from '../model/settings'") &&
+    settingsSidebar.includes("from '../../domain/settings'") &&
     appShell.includes("import { useUserSettings } from '../../domains/settings/index'") &&
     appShell.includes("import { useAppTheme } from '../../domains/settings/index'") &&
-    settingsSidebar.includes("from '../model/userSettings'") &&
+    settingsSidebar.includes("from '../../domain/userSettings'") &&
     !appShell.includes('interface AppUserSettings') &&
     !settingsSidebar.includes('interface AppUserSettings') &&
     !appShell.includes('const DEFAULT_AGENT_STEP_LIMIT') &&
@@ -1947,7 +1958,7 @@ assert(
     scriptExecution.includes("language === 'powershell' || language === 'cmd') return source") &&
     scriptExecution.includes("!state.quote && state.arithmeticDepth === 0 && /^\\s*#/.test(line)") &&
     scriptExecution.includes('state.heredocs.push(...result.heredocs)') &&
-    scriptExecutionState.includes("import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../model/scriptExecution'") &&
+    scriptExecutionState.includes("import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../domain/scriptExecution'") &&
     scriptExecutionState.includes('prepareScriptForExecution(content, language)') &&
     scriptExecutionState.includes('buildBashScriptTerminalInput(prepared)') &&
     !scriptPanel.includes("bash -s <<'AI_TERM_SCRIPT'") &&
@@ -2501,8 +2512,8 @@ assert(
     aiPanel.includes('ref="messageList"') &&
     aiPanel.includes('thinking-row') &&
     appShell.includes('updateAiMessage') &&
-    aiPanel.includes("import AiMarkdownMessage from './messages/AiMarkdownMessage.vue'") &&
-    aiMarkdownMessage.includes("import { parseMessageParts, renderMarkdown } from '../../../../shared/content/aiMarkdown'") && aiMarkdownMessage.includes("import type { MessagePart }") &&
+    aiPanel.includes('AiMarkdownMessage from') &&
+    aiMarkdownMessage.includes("import { parseMessageParts, renderMarkdown } from '../../../../../shared/content/aiMarkdown'") && aiMarkdownMessage.includes("import type { MessagePart }") &&
     aiConversationRules.includes('parseMessageParts') &&
     aiMarkdownMessage.includes('renderMarkdown') &&
     aiMarkdown.includes('export function parseMessageParts') &&
@@ -2610,7 +2621,7 @@ assert(
     scriptGeneration.includes('cancelTask') &&
     scriptPanel.includes('stopScriptGeneration') &&
     scriptGeneration.includes('onAiChatStream') &&
-    scriptPanel.includes("import { parseMessageParts, renderMarkdown } from '../../../shared/content/aiMarkdown'") && scriptPanel.includes("import type { MessagePart }") &&
+    scriptPanel.includes("import { parseMessageParts, renderMarkdown } from '../../../../shared/content/aiMarkdown'") && scriptPanel.includes("import type { MessagePart }") &&
     scriptPanel.includes('answerElapsedSeconds') &&
     scriptPanel.includes('answerDurations') &&
     scriptPanelTypes.includes('durationSeconds') &&
@@ -2623,7 +2634,7 @@ assert(
     scriptPanel.includes("message.role === 'assistant' && message.streaming") &&
     scriptPanel.includes('@click="stopScriptGeneration"') &&
     scriptPanel.includes('name="stop"') &&
-    scriptPanel.includes("import { codeBlockLabel } from '../../../shared/shell/shellCommand'") && scriptPresentation.includes('shellCommandFromCodeBlock') &&
+    scriptPanel.includes("import { codeBlockLabel } from '../../../../shared/shell/shellCommand'") && scriptPresentation.includes('shellCommandFromCodeBlock') &&
     scriptPanel.includes('shellCommandForPart(part)') &&
     scriptPanel.includes('codeBlockLabel(part.language, part.content)') &&
     scriptPanel.includes('executeScriptContent(shellCommandForPart(part), message.sourceConnectionId') &&
@@ -3121,7 +3132,7 @@ assert(
 )
 
 function aiPanelUsesBackendModelCall() {
-  const aiPanel = read('src/domains/ai/ui/AiPanel.vue')
+  const aiPanel = read('src/domains/ai/presentation/components/AiPanel.vue')
   return (
     aiPanel.includes('chatWithAiProvider') &&
     aiApi.includes("invoke<AiChatResponse>('chat_with_ai_provider'") &&
@@ -3389,8 +3400,8 @@ assert(
     styles.includes('grid-template-rows: auto minmax(0, 1fr) auto auto;'),
   'Right workspace empty states, SFTP browser-preview feedback, and quick-command modal chrome must be polished across dark and light themes.'
 )
-const agentStepCard = read('src/domains/ai/ui/messages/AgentStepCard.vue')
-const agentAutoApprove = read('src/domains/ai/agent/agentAutoApprove.ts')
+const agentStepCard = read('src/domains/ai/presentation/components/messages/AgentStepCard.vue')
+const agentAutoApprove = read('src/domains/ai/domain/agentAutoApprove.ts')
 assert(
   /\.agent-step-output\s*\{[^}]*white-space:\s*pre;/.test(styles) &&
     !/\.agent-step-output\s*\{[^}]*white-space:\s*pre-wrap;/.test(styles) &&
@@ -3416,10 +3427,10 @@ assert(
 assert(
   agentAutoApprove.includes('suggestedPatterns') &&
     !/suggestedPattern\b(?!s)/.test(agentAutoApprove.replace(/suggestPatternForCommand|suggestFromSegments?/g, '')) &&
-    /for \(const pattern of suggestedPatterns\)/.test(read('src/domains/ai/agent/agentLoop.ts')),
+    /for \(const pattern of suggestedPatterns\)/.test(read('src/domains/ai/application/agent/agentLoop.ts')),
   'Always-allow must cover every uncovered command segment: the classifier reports all needed patterns and the loop persists each one.'
 )
-const agentLoop = read('src/domains/ai/agent/agentLoop.ts')
+const agentLoop = read('src/domains/ai/application/agent/agentLoop.ts')
 const agentBackend = readFileSync(resolve(root, '../src-tauri/src/domain/ai/agent.rs'), 'utf8')
 const frontendTurnBudget = Number(/DEFAULT_MAX_TURN_CHARS = ([\d_]+)/.exec(agentLoop)?.[1].replace(/_/g, ''))
 const backendTurnBudget = Number(/MAX_AGENT_TURN_CHARS: usize = ([\d_]+)/.exec(agentBackend)?.[1].replace(/_/g, ''))
@@ -3435,7 +3446,7 @@ assert(
   'Agent exploration budget contract: the frontend must compress below the backend turn limit, keep a wide protected window and output tails, auto-run read-only commands by default, and ship the self-directed system prompt.'
 )
 
-const sentinelCapture = read('src/domains/terminal/model/agentSentinelCapture.ts')
+const sentinelCapture = read('src/domains/terminal/domain/agentSentinelCapture.ts')
 assert(
   // 核心安全性质:nonce 走 %s 参数,组装后的标记不出现在命令文本里,回显无从误匹配
   /printf '\\\\n\$\{MARKER_PREFIX\}%s__\\\\n' \$\{nonce\}B/.test(sentinelCapture) &&

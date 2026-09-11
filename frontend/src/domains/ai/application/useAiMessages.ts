@@ -1,8 +1,8 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { AiContextStatus, AiMessage } from '../model/conversation'
+import type { AiContextStatus, AiMessage } from '../domain/conversation'
 import type { useWorkspaceSessions } from './useWorkspaceSessions'
-import { listAiConversationMessages, saveAiConversationMessage } from '../api'
-import { hydrateAiMessagePayload, nowText, workspaceSessionTitleFromText } from '../model/workspaceSessions'
+import { listAiConversationMessages, saveAiConversationMessage } from '../infrastructure/api'
+import { hydrateAiMessagePayload, nowText, workspaceSessionTitleFromText } from '../domain/workspaceSessions'
 
 const defaultStorage = { listAiConversationMessages, saveAiConversationMessage }
 

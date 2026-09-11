@@ -1,6 +1,6 @@
 import { ref } from 'vue'
-import type { CommandHistoryEntry, CommandRecordedEvent } from '../model/events'
-import { listCommandHistory, saveCommandHistoryRecord } from '../api'
+import type { CommandHistoryEntry, CommandRecordedEvent } from '../domain/events'
+import { listCommandHistory, saveCommandHistoryRecord } from '../infrastructure/api'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
 import { COMMAND_HISTORY_CACHE_LIMIT, COMMAND_HISTORY_SESSION_ID, nowText } from '../../ai/index'
 

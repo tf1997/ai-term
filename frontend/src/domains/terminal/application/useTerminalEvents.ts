@@ -1,5 +1,5 @@
 import { onBeforeUnmount } from 'vue'
-import * as tauri from '../api'
+import * as tauri from '../infrastructure/api'
 
 interface TerminalEventsOptions {
   sessionId: () => string

@@ -1,0 +1,52 @@
+.app-shell {
+  --rail-width: 56px;
+  --sidebar-width: clamp(260px, 21vw, 320px);
+  --workspace-width: clamp(380px, 28vw, 520px);
+  display: grid;
+  grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(0, 1fr) var(--workspace-width);
+  grid-template-rows: 58px 1fr;
+  height: 100vh;
+  background:     radial-gradient(circle at 18% 0, rgba(80, 90, 255, .12), transparent 280px),     radial-gradient(circle at 78% 8%, rgba(43, 189, 126, .08), transparent 320px),     #070a10;
+}
+.app-shell.left-collapsed {
+  grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) var(--workspace-width);
+}
+.app-shell.right-collapsed {
+  grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(0, 1fr) 0;
+}
+.app-shell.left-collapsed.right-collapsed {
+  grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) 0;
+}
+.app-rail {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  border-right: 1px solid #1b2130;
+  background: rgba(9, 13, 21, .88);
+  padding: 12px 8px;
+}
+.rail-button {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  border-radius: 8px;
+  color: #9ba8bd;
+}
+.rail-button.active {
+  border-color: rgba(86, 230, 163, .46);
+  background: rgba(86, 230, 163, .14);
+  color: #8ce7b5;
+}
+.sidebar {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 58px 62px minmax(0, 1fr);
+  border-right: 1px solid #1b2130;
+  background: rgba(13, 17, 25, .92);
+  overflow: hidden;
+}

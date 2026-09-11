@@ -1,11 +1,11 @@
 import { onBeforeUnmount } from 'vue'
-import type { AttachedShellIntegration } from '../model/shellIntegration'
+import type { AttachedShellIntegration } from '../domain/shellIntegration'
 import type { AgentCaptureMode, AgentCommandHandle, AgentCommandResult } from '../../ai/types'
-import type { TerminalPaneHandle } from '../model/terminal'
-import { createSentinelNonce, createSentinelScanner, wrapCommandWithSentinel, SENTINEL_PROBE_COMMAND, SENTINEL_PROBE_EXIT_CODE } from '../model/agentSentinelCapture'
-import type { SentinelScanner } from '../model/agentSentinelCapture'
+import type { TerminalPaneHandle } from '../domain/terminal'
+import { createSentinelNonce, createSentinelScanner, wrapCommandWithSentinel, SENTINEL_PROBE_COMMAND, SENTINEL_PROBE_EXIT_CODE } from '../domain/agentSentinelCapture'
+import type { SentinelScanner } from '../domain/agentSentinelCapture'
 import { isSuffixSafeForSentinel } from '../../ai/index'
-import { createDeferredAgentCommand } from '../model/deferredAgentCommand'
+import { createDeferredAgentCommand } from '../domain/deferredAgentCommand'
 import { formatError } from '../../../shared/platform/errors'
 
 interface TerminalCaptureOptions {

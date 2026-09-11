@@ -1,1 +1,1 @@
-export { default as ConnectionSidebar } from './ui/ConnectionSidebar.vue'
+export { default as ConnectionSidebar } from './presentation/components/ConnectionSidebar.vue'

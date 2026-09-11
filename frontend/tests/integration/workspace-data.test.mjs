@@ -4,7 +4,7 @@ import { createRenderer } from 'vue'
 import { useWorkspaceSessions } from "../../src/domains/ai/application/useWorkspaceSessions"
 import { useAiMessages } from "../../src/domains/ai/application/useAiMessages"
 import { useCommandHistory } from "../../src/domains/terminal/application/useCommandHistory"
-import { hydrateAiMessagePayload, isAutoWorkspaceSessionName, newWorkspaceSession, workspaceSessionTitleFromText } from "../../src/domains/ai/model/workspaceSessions"
+import { hydrateAiMessagePayload, isAutoWorkspaceSessionName, newWorkspaceSession, workspaceSessionTitleFromText } from "../../src/domains/ai/domain/workspaceSessions"
 
 function deferred() {
   let resolve, reject

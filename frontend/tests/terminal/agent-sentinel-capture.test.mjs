@@ -7,8 +7,8 @@ import {
   createSentinelScanner,
   sentinelBeginMarker,
   wrapCommandWithSentinel
-} from "../../src/domains/terminal/model/agentSentinelCapture"
-import { isSuffixSafeForSentinel } from "../../src/domains/ai/agent/agentAutoApprove"
+} from "../../src/domains/terminal/domain/agentSentinelCapture"
+import { isSuffixSafeForSentinel } from "../../src/domains/ai/domain/agentAutoApprove"
 
 const NONCE = 'a1b2c3d4'
 

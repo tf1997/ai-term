@@ -3,8 +3,8 @@ import { getEventListeners } from 'node:events'
 import test from 'node:test'
 import { createRenderer, isReadonly, ref } from 'vue'
 import { useWorkspaceResize } from "../../src/app/layout/useWorkspaceResize"
-import { getWorkspaceWidthForKey, getWorkspaceWidthForPointer, parseWorkspaceWidth } from "../../src/domains/settings/model/workspaceLayout"
-import { loadWorkspaceWidth, persistWorkspaceWidth, WORKSPACE_WIDTH_STORAGE_KEY } from "../../src/domains/settings/storage/settingsStorage"
+import { getWorkspaceWidthForKey, getWorkspaceWidthForPointer, parseWorkspaceWidth } from "../../src/domains/settings/domain/workspaceLayout"
+import { loadWorkspaceWidth, persistWorkspaceWidth, WORKSPACE_WIDTH_STORAGE_KEY } from "../../src/domains/settings/infrastructure/storage/settingsStorage"
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial))

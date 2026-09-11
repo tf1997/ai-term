@@ -1,0 +1,392 @@
+/* AI workspace final density pass. */
+.assistant-panel {
+  grid-template-rows: 52px auto minmax(0, 1fr) auto;
+}
+
+.ai-panel-head {
+  min-height: 52px;
+}
+
+.ai-context-strip {
+  min-height: 30px;
+  gap: 4px;
+  padding: 3px 8px;
+}
+
+.context-strip-main {
+  gap: 4px;
+}
+
+.context-summary-button {
+  width: auto;
+  max-width: 100%;
+  height: 24px;
+  flex: 0 1 auto;
+  gap: 5px;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  padding-inline: 4px;
+  font-size: 11px;
+}
+
+.assistant-panel .message-list {
+  padding: 10px 12px 16px;
+}
+
+.assistant-panel .message {
+  margin-bottom: 16px;
+}
+
+.assistant-panel .message-identity {
+  grid-template-columns: 22px minmax(0, auto);
+  gap: 6px;
+}
+
+.assistant-panel .message-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 10px;
+}
+
+.assistant-panel .message-title {
+  min-height: 22px;
+}
+
+.assistant-panel .message-body {
+  margin-top: 6px;
+  padding-left: 28px;
+}
+
+.assistant-panel .message-body p,
+.assistant-panel .markdown-content {
+  line-height: 1.58;
+}
+
+.assistant-panel .ai-markdown-message {
+  gap: 8px;
+}
+
+.assistant-panel .ai-code-head {
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
+}
+
+.assistant-panel .ai-code-meta {
+  gap: 5px;
+}
+
+.assistant-panel .ai-code-meta .command-risk-status {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-inline: 6px;
+  font-size: 10px;
+}
+
+.assistant-panel .ai-code-actions {
+  gap: 2px;
+}
+
+.assistant-panel .ai-code-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.assistant-panel .ai-code-run.text-button.primary-action {
+  height: 26px;
+  padding-inline: 8px;
+}
+
+.assistant-panel .ai-code-block pre {
+  padding: 9px 10px;
+  line-height: 1.45;
+}
+
+.assistant-panel .message-collapse-footer {
+  justify-content: flex-end;
+  margin: 4px 0 0 28px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.assistant-panel .message-collapse-footer .text-button {
+  height: 24px;
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 5px;
+  font-size: 11px;
+}
+
+.assistant-panel > .assistant-compose textarea,
+.assistant-compose.script-compose textarea {
+  min-height: 50px;
+  max-height: 112px;
+}
+
+/* Error turns use a compact, readable notice instead of browser defaults. */
+.assistant-panel {
+  container-type: inline-size;
+  container-name: assistant-panel;
+}
+
+.assistant-panel .message-title {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+}
+
+.assistant-panel .message-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.assistant-panel .message-source {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 128px;
+  margin-left: 0;
+}
+
+.assistant-panel .message-error-badge {
+  flex: 0 0 auto;
+}
+
+.ai-error-notice {
+  --error-indent: 25px;
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  border: 1px solid rgba(223, 116, 124, .28);
+  border-radius: 8px;
+  background: var(--workbench-danger-soft);
+  color: var(--workbench-text);
+  padding: 11px 12px 10px;
+  box-shadow: none;
+}
+
+.ai-error-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+}
+
+.ai-error-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--workbench-danger-strong);
+}
+
+.ai-error-title {
+  min-width: 0;
+  color: var(--workbench-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* 定高 chip 配 line-height 1.4 的标题，start 对齐会让 HTTP 502 比标题高一点。
+   下移 1px 让两者视觉基线对齐。 */
+.ai-error-code {
+  align-self: start;
+  height: 23px;
+  max-width: 100%;
+  transform: translateY(1px);
+  border-color: var(--workbench-line);
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-muted);
+  padding-inline: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.ai-error-hint {
+  min-width: 0;
+  margin: -1px 0 0 var(--error-indent);
+  color: var(--workbench-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 建议命令可能是几百字符的一整行，换行后高度远超按钮。
+   原来的三列 + align-items: center 会把「本地建议」和「执行」吊在代码块的
+   垂直中心，跟顶部标题对不上，代码也被挤成很窄的一条。
+   改成两行：标签独占一行，代码和按钮在下面对齐到顶部。 */
+.ai-error-suggestion {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 8px;
+  border: 1px solid var(--workbench-danger-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .03);
+  padding: 8px 9px;
+}
+
+.ai-error-suggestion-label {
+  grid-column: 1 / -1;
+  color: var(--workbench-danger-strong);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* overflow-wrap: anywhere 会在任意字符间断开，powercfg /devicequery 这类命令
+   被切成 "powercf|g"，可读性很差。改成优先在空白处断行，只有单个 token 本身
+   超宽时才强断（break-word 的语义），并且限高可滚动，避免一条长命令把整张
+   失败卡片顶开。 */
+.ai-error-suggestion code {
+  min-width: 0;
+  max-height: 88px;
+  overflow-y: auto;
+  overflow-wrap: break-word;
+  word-break: normal;
+  color: var(--workbench-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.ai-error-suggestion .text-button {
+  height: 26px;
+  align-self: start;
+  padding-inline: 10px;
+}
+
+.ai-error-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 1px;
+}
+
+.ai-error-actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  border-color: var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-text);
+  padding-inline: 9px;
+  font-size: 11px;
+}
+
+.ai-error-actions .text-button:hover:not(:disabled),
+.ai-error-actions .text-button:focus-visible {
+  border-color: var(--workbench-danger-line);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+}
+
+.ai-error-actions .ai-error-retry.primary-action {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent);
+  color: #ffffff;
+}
+
+.ai-error-actions .ai-error-retry.primary-action:hover:not(:disabled),
+.ai-error-actions .ai-error-retry.primary-action:focus-visible {
+  border-color: var(--workbench-accent-strong);
+  background: var(--workbench-accent-strong);
+  color: #ffffff;
+}
+
+.ai-error-actions .ai-error-retry:disabled {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+  opacity: .68;
+}
+
+.ai-error-detail {
+  min-width: 0;
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--workbench-line);
+  border-radius: 6px;
+  background: var(--workbench-panel-strong);
+  color: var(--workbench-text);
+  padding: 8px 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-error-detail code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.app-shell.theme-light .message-error-badge,
+.theme-light .message-error-badge {
+  color: var(--workbench-danger-strong);
+}
+
+.app-shell.theme-light .ai-error-suggestion,
+.theme-light .ai-error-suggestion {
+  background: #fffafb;
+}
+
+.app-shell.theme-light .ai-error-notice,
+.theme-light .ai-error-notice {
+  border-color: #f0d4d8;
+  background: #fffafb;
+  box-shadow: none;
+}
+
+@container assistant-panel (max-width: 430px) {
+  .assistant-panel .message-title {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .assistant-panel .message-meta {
+    justify-content: flex-start;
+    padding-left: 28px;
+  }
+
+  .ai-error-head {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+
+  /* .ai-error-suggestion 的两行布局已经是基础样式，这里不再需要覆盖。 */
+}
+
+@media (max-width: 560px) {
+  .assistant-panel .message-title {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .assistant-panel .message-meta {
+    justify-content: flex-start;
+    padding-left: 28px;
+  }
+}

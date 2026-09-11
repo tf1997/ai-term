@@ -1,2 +1,2 @@
-export type { AppUserSettings } from './model/settings'
-export type { SettingsStorage } from './storage/settingsStorage'
+export type { AppUserSettings } from './domain/settings'
+export type { SettingsStorage } from './infrastructure/storage/settingsStorage'

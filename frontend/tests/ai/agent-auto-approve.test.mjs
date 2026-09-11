@@ -5,7 +5,7 @@ import {
   classifyForAutoExec,
   suggestPatternForCommand,
   validateAllowlistPattern
-} from "../../src/domains/ai/agent/agentAutoApprove"
+} from "../../src/domains/ai/domain/agentAutoApprove"
 
 const builtinOnly = { userPatterns: [], includeBuiltin: true }
 

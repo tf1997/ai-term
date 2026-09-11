@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildBashScriptTerminalInput, prepareScriptForExecution } from "../../src/domains/scripts/model/scriptExecution"
+import { buildBashScriptTerminalInput, prepareScriptForExecution } from "../../src/domains/scripts/domain/scriptExecution"
 import { shellCommandFromCodeBlock } from "../../src/shared/shell/shellCommand"
 
 test('explicit shell code blocks preserve source comments for editing', () => {

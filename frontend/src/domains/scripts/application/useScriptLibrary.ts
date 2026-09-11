@@ -1,10 +1,10 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
-import type { ScriptChatMessage } from '../model/scriptPanel'
-import type { UpdateScript } from '../model/recording'
-import { formatError, isTauriUnavailableError, nowText } from '../model/scriptPresentation'
-import { createScriptPreviewStorage } from '../storage/scriptPreviewStorage'
-import * as tauri from '../api'
+import type { ScriptChatMessage } from '../domain/scriptPanel'
+import type { UpdateScript } from '../domain/recording'
+import { formatError, isTauriUnavailableError, nowText } from '../domain/scriptPresentation'
+import { createScriptPreviewStorage } from '../infrastructure/storage/scriptPreviewStorage'
+import * as tauri from '../infrastructure/api'
 
 interface ScriptLibraryOptions {
   panelError: Ref<string>

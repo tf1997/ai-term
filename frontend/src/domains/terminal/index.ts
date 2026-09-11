@@ -1,5 +1,5 @@
-export { createStableRefRegistry } from './model/stableRefRegistry'
-export { terminalStatusClass } from './model/terminalTabs'
+export { createStableRefRegistry } from './domain/stableRefRegistry'
+export { terminalStatusClass } from './domain/terminalTabs'
 export { useCommandHistory } from './application/useCommandHistory'
 export { useTerminalInputRouter } from './application/useTerminalInputRouter'
 export { useTerminalTabScroll } from './application/useTerminalTabScroll'

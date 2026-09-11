@@ -1,9 +1,9 @@
 import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
-import type { SftpFileEntry } from '../api'
-import type { RemoteEditorState, LoadDirectoryOptions } from '../model/transfer'
-import { formatSize, formatError } from '../model/transferPresentation'
-import * as tauri from '../api'
+import type { SftpFileEntry } from '../domain/transfer'
+import type { RemoteEditorState, LoadDirectoryOptions } from '../domain/transfer'
+import { formatSize, formatError } from '../domain/transferPresentation'
+import * as tauri from '../infrastructure/api'
 
 interface RemoteEditorOptions {
   props: { connectionId: string; terminalConnectionGeneration: number }

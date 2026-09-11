@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ShellIntegrationTracker, decodeCommandLinePayload } from "../../src/domains/terminal/model/shellIntegration"
+import { ShellIntegrationTracker, decodeCommandLinePayload } from "../../src/domains/terminal/domain/shellIntegration"
 
 function makeHost() {
   const state = {

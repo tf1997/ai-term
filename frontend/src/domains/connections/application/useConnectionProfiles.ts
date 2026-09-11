@@ -1,9 +1,9 @@
 import { computed, ref } from 'vue'
-import type { ConnectionProfile } from '../model/profile'
+import type { ConnectionProfile } from '../domain/profile'
 import type { SaveState, ProfileStoreStatus } from '../../../shared/forms/configuration'
 import type { useToasts } from '../../../shared/ui/useToasts'
-import * as tauri from '../api'
-import { cloneConnectionProfile, normalizeConnectionProfileForSave } from '../model/profileConfig'
+import * as tauri from '../infrastructure/api'
+import { cloneConnectionProfile, normalizeConnectionProfileForSave } from '../domain/profileConfig'
 import { formatError } from '../../../shared/platform/errors'
 
 interface ConnectionProfileOptions {

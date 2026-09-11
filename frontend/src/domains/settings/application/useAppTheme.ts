@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, readonly, ref, watch } from 'vue'
-import type { AppTheme } from '../model/settings'
-import { loadAppTheme, persistAppTheme } from '../storage/settingsStorage'
-import type { SettingsStorage } from '../storage/settingsStorage'
+import type { AppTheme } from '../domain/settings'
+import { loadAppTheme, persistAppTheme } from '../infrastructure/storage/settingsStorage'
+import type { SettingsStorage } from '../infrastructure/storage/settingsStorage'
 
 interface AppThemeOptions {
   storage?: SettingsStorage

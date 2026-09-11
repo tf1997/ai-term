@@ -1,7 +1,7 @@
 import { computed, readonly, ref } from 'vue'
 import type { ConnectionProfile } from '../../connections/types'
-import type { TerminalRuntimeStatus, TerminalTab } from '../model/terminal'
-import { normalizedTerminalTargetIds } from '../model/terminalTabs'
+import type { TerminalRuntimeStatus, TerminalTab } from '../domain/terminal'
+import { normalizedTerminalTargetIds } from '../domain/terminalTabs'
 
 export function useTerminalTabs() {
   const terminalTabs = ref<TerminalTab[]>([{

@@ -1,0 +1,414 @@
+/* Light theme settings-option active state needs to win over layout-layer
+   .app-shell .settings-sidebar .settings-option.active at line ~11300, which
+   resets icon background to transparent. This must come after that rule. */
+.app-shell.theme-light .settings-option.active {
+  border-color: #bfe9d3;
+  border-left-color: var(--light-accent);
+  background: #fff;
+}
+.app-shell.theme-light .settings-option.active .settings-option-icon {
+  border-color: #bfe9d3;
+  background: #e8f8ef;
+  color: var(--light-accent-strong);
+}
+
+/* End light theme color-only surface contract. */
+
+/* Script toolbar now nests primary buttons in .script-primary-actions; force flex so
+   legacy 4-column grid rules can never squeeze the group under the clear button. */
+.script-head .panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  grid-template-columns: none;
+}
+
+/* Stable draft layout with actionable readiness details. */
+.script-generate .script-draft-card.has-readiness-list {
+  grid-template-rows: auto auto minmax(280px, 1fr) 28px;
+}
+
+.script-generate .script-workbench {
+  min-height: 220px;
+}
+
+.script-readiness-list .readiness-line {
+  color: #f7c96f;
+  font-weight: 600;
+}
+
+.script-readiness-list .readiness-field {
+  color: #fff2cf;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.script-readiness-list .readiness-requirement {
+  max-width: 220px;
+  overflow: hidden;
+  color: #d7b879;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-replies-panel.expanded .script-replies-list {
+  max-height: min(210px, 28vh);
+}
+
+.script-reply-message.error {
+  border-color: rgba(220, 90, 106, .3);
+  background: rgba(74, 20, 31, .28);
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-line {
+  color: #a85b00;
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-field {
+  color: #78350f;
+}
+
+.app-shell.theme-light .script-readiness-list .readiness-requirement {
+  color: #8a5a18;
+}
+
+.app-shell.theme-light .script-reply-message.error {
+  border-color: #efc2ca;
+  background: #fff5f6;
+}
+
+/* Script AI input follows the same composer contract as the AI tab. */
+.assistant-compose.script-compose {
+  --composer-pad-x: 16px;
+  --composer-pad-bottom: 14px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-top: 1px solid #1b2130;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px var(--composer-pad-x) var(--composer-pad-bottom);
+}
+
+.assistant-compose.script-compose textarea {
+  grid-column: auto;
+  min-height: 88px;
+  max-height: 170px;
+  padding: 10px;
+  padding-right: calc(var(--icon-size) + 20px);
+  padding-bottom: calc(var(--icon-size) + 12px);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.assistant-compose.script-compose .icon-button {
+  position: absolute;
+  right: calc(var(--composer-pad-x) + 8px);
+  bottom: calc(var(--composer-pad-bottom) + 8px);
+  grid-column: auto;
+  grid-row: auto;
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.script-generate .script-draft-card {
+  grid-template-rows: auto minmax(0, 1fr) 28px;
+}
+
+/* Keep the transparent textarea and visible syntax layer pixel-aligned. */
+.script-editor-shell {
+  --script-editor-line-height: 18px;
+  --script-editor-scrollbar-gutter: 0px;
+}
+
+:root[data-platform="windows"] .script-editor-shell {
+  --script-editor-scrollbar-gutter: 10px;
+}
+
+.script-editor-shell .script-line-rail,
+.script-editor-shell .script-code-overlay,
+:root .script-editor-shell textarea {
+  box-sizing: border-box;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  font-style: normal;
+  font-weight: 400;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  line-height: var(--script-editor-line-height);
+  padding-top: 10px;
+  padding-bottom: 24px;
+  tab-size: 2;
+  text-indent: 0;
+  white-space: pre;
+}
+
+.script-editor-shell .script-line-rail {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.script-editor-shell .script-code-overlay,
+:root .script-editor-shell textarea {
+  border: 0;
+  padding-left: 10px;
+  padding-right: 24px;
+}
+
+.script-editor-shell textarea {
+  appearance: none;
+  -webkit-appearance: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.script-editor-shell .script-code-overlay code {
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+.script-editor-shell .script-code-overlay .shell-token {
+  font: inherit;
+  font-feature-settings: inherit;
+  font-kerning: inherit;
+  font-variant-ligatures: inherit;
+  letter-spacing: inherit;
+  text-decoration: none;
+}
+
+/* The textarea owns input while the synchronized layer renders syntax colors. */
+.script-editor-shell .script-code-overlay {
+  z-index: 0;
+  display: block;
+}
+
+.script-editor-shell textarea {
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: #8be8bb;
+}
+
+.script-editor-shell textarea::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: rgba(16, 185, 129, .3);
+}
+
+.app-shell.theme-light .script-editor-shell textarea {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: #087f5b;
+}
+
+.app-shell.theme-light .script-editor-shell textarea::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: rgba(16, 185, 129, .2);
+}
+
+/* Preserve script title space and remove redundant safe-state noise. */
+.script-file-tab strong {
+  flex: 1 1 120px;
+  min-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-file-tab .script-editor-risk.risk-safe,
+.script-file-tab .script-editor-risk.risk-muted {
+  display: none;
+}
+
+/* Compact enlarged-editor titlebar. */
+.script-preview-modal {
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+
+.script-preview-modal .modal-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 12px;
+}
+
+.script-preview-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.script-preview-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #dfe8f3;
+  font-size: var(--font-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-preview-mode {
+  flex: 0 0 auto;
+  color: #77869a;
+  font-size: 10px;
+}
+
+.script-preview-modal .modal-head .script-editor-tools {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+}
+
+.app-shell.theme-light .script-preview-title strong {
+  color: #1f2937;
+}
+
+.script-expanded-editor {
+  --expanded-line-height: 18px;
+}
+
+.script-expanded-editor .script-line-rail,
+.script-expanded-editor .script-code-overlay,
+:root .script-expanded-editor textarea {
+  padding-top: 10px;
+  padding-bottom: 24px;
+  font-size: 12px;
+  line-height: var(--expanded-line-height);
+}
+
+.script-expanded-editor .script-line-rail {
+  padding-inline: 8px;
+}
+
+.script-expanded-editor .script-code-overlay,
+:root .script-expanded-editor textarea {
+  padding-left: 10px;
+  padding-right: 24px;
+}
+
+/* Match the mirror layers' vertical scroll range to Windows textarea scrollbars. */
+.script-editor-shell .script-line-rail,
+.script-editor-shell .script-code-overlay {
+  padding-bottom: calc(24px + var(--script-editor-scrollbar-gutter));
+}
+
+/* Remote text editing stays in the SFTP workflow and preserves the terminal workspace behind it. */
+.remote-file-editor-backdrop {
+  z-index: 72;
+}
+
+.remote-file-editor-modal {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 0;
+}
+
+.remote-file-editor-modal .modal-head span {
+  max-width: min(760px, calc(100vw - 180px));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-editor-loading {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  color: #98a6b8;
+  font-size: var(--font-sm);
+}
+
+.remote-file-editor-textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: #090d13;
+  color: #dbe5f1;
+  padding: 14px 16px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.remote-file-editor-textarea:focus {
+  box-shadow: inset 0 0 0 1px #3b82f6;
+}
+
+.remote-file-editor-status {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border-top: 1px solid #1b2635;
+  color: #8190a4;
+  background: #0d131c;
+  padding: 0 14px;
+  font-size: var(--font-xs);
+}
+
+.remote-file-editor-status span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-file-editor-status.error {
+  color: #fca5a5;
+}
+
+.remote-file-editor-modal .modal-actions {
+  min-height: 52px;
+  align-items: center;
+  border-top: 1px solid #1b2130;
+}
+
+.app-shell.theme-light .remote-file-editor-textarea,
+.theme-light .remote-file-editor-textarea {
+  background: #f8fafc;
+  color: #172033;
+}
+
+.app-shell.theme-light .remote-file-editor-status,
+.theme-light .remote-file-editor-status {
+  border-color: #dbe3ee;
+  background: #eef3f8;
+  color: #5f6f82;
+}
+
+.app-shell.theme-light .remote-file-editor-status.error,
+.theme-light .remote-file-editor-status.error {
+  color: #b42318;
+}
+
+.app-shell.theme-light .remote-file-editor-modal,
+.theme-light .remote-file-editor-modal {
+  border-color: #cbd5e1;
+  background: #ffffff;
+}
+
+.app-shell.theme-light .modal-actions,
+.theme-light .modal-actions {
+  border-color: #dbe3ee;
+}

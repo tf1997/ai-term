@@ -4,7 +4,7 @@ import {
   SYSTEM_TERMINAL_CJK_FALLBACK,
   WINDOWS_TERMINAL_CJK_FALLBACK,
   withCjkFallback
-} from "../../src/domains/terminal/model/terminalFont"
+} from "../../src/domains/terminal/domain/terminalFont"
 
 /** 设置面板里的全部终端字体预设(SettingsSidebar.vue 的 option value)。 */
 const SETTINGS_PRESETS = [

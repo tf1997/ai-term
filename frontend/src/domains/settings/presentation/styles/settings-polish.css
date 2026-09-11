@@ -1,0 +1,418 @@
+/* Settings terminal appearance refinement. */
+.settings-option:hover {
+  border-color: rgba(54, 200, 117, .38);
+  background: rgba(18, 30, 28, .9);
+}
+.settings-option.active {
+  border-color: rgba(54, 200, 117, .52);
+  background: rgba(15, 36, 31, .92);
+  box-shadow: inset 3px 0 0 rgba(54, 200, 117, .68);
+}
+.settings-option.active .settings-option-icon {
+  border-color: rgba(54, 200, 117, .44);
+  background: rgba(54, 200, 117, .12);
+  color: #8ce7b5;
+}
+.terminal-settings-panel {
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 10px 12px;
+}
+.terminal-settings-panel .settings-section-head {
+  border-bottom: 1px solid #1c2534;
+  padding: 2px 0 8px;
+}
+.terminal-settings-form {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.terminal-settings-panel .settings-field {
+  border: 1px solid #1c2534;
+  border-radius: 10px;
+  background: rgba(12, 18, 27, .72);
+  gap: 8px;
+  padding: 10px;
+}
+.terminal-settings-panel .settings-field > span {
+  color: #e8eef8;
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+.terminal-settings-panel .settings-field.inline {
+  grid-template-columns: minmax(0, 1fr) 84px;
+  gap: 10px;
+}
+.terminal-settings-panel .settings-field input,
+.terminal-settings-panel .settings-field select {
+  height: 34px;
+}
+.terminal-settings-panel .settings-actions {
+  border-top: 1px solid #1c2534;
+  justify-content: flex-end;
+  padding-top: 10px;
+}
+.app-shell.theme-light .settings-option:hover {
+  border-color: #ccebdd;
+  background: #f8fffb;
+}
+.app-shell.theme-light .terminal-settings-panel {
+  background: #fff;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-section-head {
+  border-bottom-color: #e1e8f0;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-section-head span {
+  color: #64748b;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field {
+  border-color: #dbe4e9;
+  background: #fbfdfc;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field > span {
+  color: #26364a;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field small {
+  color: #69788e;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-field input,
+.app-shell.theme-light .terminal-settings-panel .settings-field select {
+  border-color: #ccd8e6;
+  background: #fff;
+  color: #172033;
+}
+.app-shell.theme-light .terminal-settings-panel .settings-actions {
+  border-top-color: #e1e8f0;
+}
+
+/* Light theme surface color base. */
+.app-shell.theme-light .assistant-panel, .app-shell.theme-light .history-panel, .app-shell.theme-light .script-panel, .app-shell.theme-light .files-panel, .app-shell.theme-light .settings-center, .app-shell.theme-light .settings-hub, .app-shell.theme-light .settings-section, .app-shell.theme-light .transfer-pane, .app-shell.theme-light .modal, .app-shell.theme-light .profile-editor-modal, .app-shell.theme-light .ai-config-modal, .app-shell.theme-light .quick-command-modal, .app-shell.theme-light .script-preview-modal, .app-shell.theme-light .script-risk-modal, .app-shell.theme-light .context-menu, .app-shell.theme-light .file-context-menu, .app-shell.theme-light .session-history-popover, .app-shell.theme-light .terminal-completion {
+  border-color: var(--light-border);
+  background: #fff;
+  color: var(--light-text);
+}
+.app-shell.theme-light .section-head, .app-shell.theme-light .panel-head, .app-shell.theme-light .workspace-section-head, .app-shell.theme-light .terminal-head, .app-shell.theme-light .modal-head, .app-shell.theme-light .history-toolbar, .app-shell.theme-light .local-pathbar, .app-shell.theme-light .sftp-pathbar {
+  border-color: var(--light-border);
+  background: #fbfcfd;
+}
+.app-shell.theme-light .message-list, .app-shell.theme-light .script-chat-list, .app-shell.theme-light .script-library-body, .app-shell.theme-light .settings-config-list {
+  background: #fff;
+}
+.app-shell.theme-light .history-list, .app-shell.theme-light .file-list {
+  background: #e7edf1;
+}
+.app-shell.theme-light .transfer-browser {
+  background: var(--light-border);
+}
+.app-shell.theme-light .quick-command-editor, .app-shell.theme-light .settings-editor, .app-shell.theme-light .profile-editor, .app-shell.theme-light .rename-field, .app-shell.theme-light .script-expanded-editor, .app-shell.theme-light .script-expanded-editor .script-editor-shell, .app-shell.theme-light .script-risk-preview, .app-shell.theme-light .terminal-transfer-panel, .app-shell.theme-light .terminal-transfer-note {
+  border-color: var(--light-border);
+  background: #fff;
+  color: var(--light-text);
+}
+.app-shell.theme-light .empty-state, .app-shell.theme-light .history-meta, .app-shell.theme-light .terminal-subtitle, .app-shell.theme-light .settings-card small, .app-shell.theme-light .settings-card span, .app-shell.theme-light .file-row span, .app-shell.theme-light .transfer-pane-head span {
+  color: var(--light-muted);
+}
+/* 上面那条把卡片里所有 span 刷成 muted,状态标签与未配置警示要单独捞回来。 */
+.app-shell.theme-light .settings-card .settings-card-current {
+  color: var(--workbench-accent);
+}
+.app-shell.theme-light .settings-card span.warning {
+  color: #b45309;
+}
+.app-shell.theme-light .markdown-content,
+.app-shell.theme-light .markdown-content p,
+.app-shell.theme-light .markdown-content li,
+.app-shell.theme-light .markdown-content h1,
+.app-shell.theme-light .markdown-content h2,
+.app-shell.theme-light .markdown-content h3,
+.app-shell.theme-light .markdown-content h4 {
+  color: var(--light-text);
+}
+.app-shell.theme-light .message-duration {
+  color: var(--light-muted);
+}
+.app-shell.theme-light .markdown-content a {
+  color: var(--light-accent-strong);
+}
+.app-shell.theme-light .markdown-content code {
+  border-color: var(--light-border);
+  background: #f2f5f4;
+  color: #17324d;
+}
+.app-shell.theme-light .markdown-content blockquote {
+  border-color: var(--light-border);
+  background: #f8fafb;
+  color: #344054;
+}
+.app-shell.theme-light .markdown-content hr {
+  background: var(--light-border);
+}
+.app-shell.theme-light .markdown-table-wrap {
+  border-color: var(--light-border);
+  background: #fff;
+}
+.app-shell.theme-light .markdown-table th {
+  border-bottom-color: var(--light-border);
+  background: #f2f5f4;
+  color: var(--light-text);
+}
+.app-shell.theme-light .markdown-table td {
+  border-bottom-color: var(--light-border);
+  color: var(--light-text);
+}
+.app-shell.theme-light .script-risk-modal {
+  border-color: #dbe3ee;
+  background: #ffffff;
+  color: #172033;
+}
+.app-shell.theme-light .script-risk-modal .modal-head {
+  border-bottom-color: #e1e8f0;
+  background: #fbfcfd;
+}
+.app-shell.theme-light .script-risk-modal .modal-head strong {
+  color: #9f1239;
+}
+.app-shell.theme-light .script-risk-modal .modal-head span {
+  color: #b4233a;
+}
+.app-shell.theme-light .script-risk-chip {
+  border-color: #f1c3cb;
+  background: #fff8f9;
+}
+.app-shell.theme-light .script-risk-chip.high {
+  border-color: #eea8b4;
+  background: #fff1f3;
+}
+.app-shell.theme-light .script-risk-chip.medium {
+  border-color: #f1d3a4;
+  background: #fff9ed;
+}
+.app-shell.theme-light .script-risk-chip strong {
+  color: #9f1239;
+}
+.app-shell.theme-light .script-risk-chip small {
+  color: #b4233a;
+}
+.app-shell.theme-light .script-risk-chip.medium strong {
+  color: #8a4b10;
+}
+.app-shell.theme-light .script-risk-chip.medium small {
+  color: #9a5b12;
+}
+.app-shell.theme-light .script-risk-ai {
+  border-color: #bfe9d3;
+  background: #f0fbf5;
+}
+.app-shell.theme-light .script-risk-ai strong {
+  color: #087a55;
+}
+.app-shell.theme-light .script-risk-ai span,
+.app-shell.theme-light .script-risk-ai-placeholder {
+  color: #475569;
+}
+.app-shell.theme-light .script-risk-ai-output {
+  border-top-color: #bfe9d3;
+  color: #172033;
+}
+.app-shell.theme-light .script-risk-thinking {
+  color: #087a55;
+}
+.app-shell.theme-light .script-risk-thinking span {
+  background: #0f8a63;
+}
+.app-shell.theme-light .script-risk-preview {
+  border-color: #d7e0eb;
+  background: #f8fafc;
+  color: #172033;
+}
+.app-shell.theme-light .script-risk-preview-head {
+  border-bottom-color: #e5ebf2;
+  background: #ffffff;
+}
+.app-shell.theme-light .script-risk-preview-head strong {
+  color: #172033;
+}
+.app-shell.theme-light .script-risk-preview-head span,
+.app-shell.theme-light .script-risk-action-hint {
+  color: #64748b;
+}
+.app-shell.theme-light .script-risk-preview-count {
+  border-color: #d7e0eb;
+  background: #f8fafc;
+  color: #475569;
+}
+.app-shell.theme-light .script-risk-lines {
+  background: #ffffff;
+}
+.app-shell.theme-light .script-risk-line {
+  border-bottom-color: #e5ebf2;
+  color: #172033;
+  background: #ffffff;
+}
+.app-shell.theme-light .script-risk-line.flagged,
+.app-shell.theme-light .script-risk-line.risk-delete,
+.app-shell.theme-light .script-risk-line.risk-reboot,
+.app-shell.theme-light .script-risk-line.risk-network,
+.app-shell.theme-light .script-risk-line.risk-disk {
+  border-left-color: #e11d48;
+  color: #172033;
+  background: #fff7f8;
+}
+.app-shell.theme-light .script-risk-line.risk-edit,
+.app-shell.theme-light .script-risk-line.risk-upgrade,
+.app-shell.theme-light .script-risk-line.risk-service,
+.app-shell.theme-light .script-risk-line.risk-permission {
+  border-left-color: #d97706;
+  color: #172033;
+  background: #fffaf0;
+}
+.app-shell.theme-light .script-risk-line code {
+  color: #172033;
+}
+.app-shell.theme-light .script-risk-line-no {
+  color: #748297;
+}
+.app-shell.theme-light .script-risk-line-label {
+  border-color: #f0b7c2;
+  background: #fff1f3;
+  color: #be123c;
+}
+.app-shell.theme-light .script-risk-actions {
+  border-top-color: #e5ebf2;
+  background: #fbfcfd;
+}
+.app-shell.theme-light .script-risk-actions .text-button.danger {
+  border-color: #f0a8b5;
+  background: #fff1f3;
+  color: #be123c;
+}
+.app-shell.theme-light .script-risk-actions .text-button.danger:hover {
+  border-color: #e11d48;
+  background: #ffe4e8;
+  color: #9f1239;
+}
+/* Dark theme risk modal color polish. */
+.app-shell.theme-dark .script-risk-modal {
+  border-color: #2a3446;
+  background: #0b1018;
+  color: #e5edf7;
+}
+.app-shell.theme-dark .script-risk-modal .modal-head {
+  border-bottom-color: #293246;
+  background: #0f1521;
+}
+.app-shell.theme-dark .script-risk-modal .modal-head strong {
+  color: #f8fafc;
+}
+.app-shell.theme-dark .script-risk-modal .modal-head span {
+  color: #fda4af;
+}
+.app-shell.theme-dark .script-risk-chip {
+  border-color: #7f2736;
+  background: #25121a;
+}
+.app-shell.theme-dark .script-risk-chip.high {
+  border-color: #be3b50;
+  background: #30131d;
+}
+.app-shell.theme-dark .script-risk-chip.medium {
+  border-color: #a16207;
+  background: #24180b;
+}
+.app-shell.theme-dark .script-risk-chip strong {
+  color: #ffe4e6;
+}
+.app-shell.theme-dark .script-risk-chip small {
+  color: #fda4af;
+}
+.app-shell.theme-dark .script-risk-chip.medium strong {
+  color: #fed7aa;
+}
+.app-shell.theme-dark .script-risk-chip.medium small {
+  color: #fbbf24;
+}
+.app-shell.theme-dark .script-risk-ai {
+  border-color: #1f6d4a;
+  background: #0d1f19;
+}
+.app-shell.theme-dark .script-risk-ai strong {
+  color: #a7f3d0;
+}
+.app-shell.theme-dark .script-risk-ai span,
+.app-shell.theme-dark .script-risk-ai-placeholder {
+  color: #9fb0c8;
+}
+.app-shell.theme-dark .script-risk-ai-output {
+  border-top-color: #1f6d4a;
+  color: #d1fae5;
+}
+.app-shell.theme-dark .script-risk-thinking {
+  color: #56e6a3;
+}
+.app-shell.theme-dark .script-risk-thinking span {
+  background: #56e6a3;
+}
+.app-shell.theme-dark .script-risk-preview {
+  border-color: #253044;
+  background: #070b12;
+  color: #e2e8f0;
+}
+.app-shell.theme-dark .script-risk-preview-head {
+  border-bottom-color: #253044;
+  background: #090f18;
+}
+.app-shell.theme-dark .script-risk-preview-head strong {
+  color: #e5edf7;
+}
+.app-shell.theme-dark .script-risk-preview-head span,
+.app-shell.theme-dark .script-risk-action-hint {
+  color: #8d9aaf;
+}
+.app-shell.theme-dark .script-risk-preview-count {
+  border-color: #253044;
+  background: #0f1724;
+  color: #aab8cc;
+}
+.app-shell.theme-dark .script-risk-lines {
+  background: #070b12;
+}
+.app-shell.theme-dark .script-risk-line {
+  border-bottom-color: #1c2534;
+  color: #e2e8f0;
+  background: #090f18;
+}
+.app-shell.theme-dark .script-risk-line.flagged,
+.app-shell.theme-dark .script-risk-line.risk-delete,
+.app-shell.theme-dark .script-risk-line.risk-reboot,
+.app-shell.theme-dark .script-risk-line.risk-network,
+.app-shell.theme-dark .script-risk-line.risk-disk {
+  border-left-color: #fb7185;
+  color: #f8fafc;
+  background: #201119;
+}
+.app-shell.theme-dark .script-risk-line.risk-edit,
+.app-shell.theme-dark .script-risk-line.risk-upgrade,
+.app-shell.theme-dark .script-risk-line.risk-service,
+.app-shell.theme-dark .script-risk-line.risk-permission {
+  border-left-color: #f59e0b;
+  color: #f8fafc;
+  background: #1f160d;
+}
+.app-shell.theme-dark .script-risk-line code {
+  color: #e2e8f0;
+}
+.app-shell.theme-dark .script-risk-line-no {
+  color: #7f8ca3;
+}
+.app-shell.theme-dark .script-risk-line-label {
+  border-color: #7f2736;
+  background: #351520;
+  color: #fecdd3;
+}
+.app-shell.theme-dark .script-risk-actions {
+  border-top-color: #293246;
+  background: #090e16;
+}

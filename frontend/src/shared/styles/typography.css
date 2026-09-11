@@ -1,0 +1,335 @@
+/* Long command/output lines keep their width and expose a bottom scrollbar. */
+.agent-step-code-block .agent-step-command {
+  overflow-x: scroll;
+  overflow-y: hidden;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--workbench-muted) var(--workbench-line-soft);
+  scrollbar-width: thin;
+}
+
+.agent-step-code-block .agent-step-command code {
+  min-width: max-content;
+}
+
+.agent-step-code-block .agent-step-output,
+.ai-result-value {
+  overflow-x: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--workbench-muted) var(--workbench-line-soft);
+  scrollbar-width: thin;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar,
+.ai-result-value::-webkit-scrollbar {
+  -webkit-appearance: none;
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-track,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-track,
+.ai-result-value::-webkit-scrollbar-track {
+  background: var(--workbench-line-soft);
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-thumb,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-thumb,
+.ai-result-value::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--workbench-muted);
+  background-clip: padding-box;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar-thumb:hover,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar-thumb:hover,
+.ai-result-value::-webkit-scrollbar-thumb:hover {
+  background: var(--workbench-accent);
+  background-clip: padding-box;
+}
+
+.agent-step-code-head .agent-step-expand {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-color: transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--workbench-muted);
+  padding: 0;
+}
+
+.agent-step-code-head .agent-step-expand:hover:not(:disabled),
+.agent-step-code-head .agent-step-expand:focus-visible {
+  border-color: var(--workbench-line);
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+}
+
+.agent-step-preview-backdrop {
+  z-index: 98;
+}
+
+.agent-step-preview-modal {
+  width: min(900px, calc(100vw - 36px));
+  height: min(680px, calc(100vh - 44px));
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+
+.agent-step-preview-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  background: var(--workbench-terminal);
+  color: var(--workbench-text);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.agent-step-preview-content code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.agent-step-preview-content::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 8px;
+  height: 8px;
+}
+
+.agent-step-preview-content::-webkit-scrollbar-track {
+  background: var(--workbench-line-soft);
+}
+
+.agent-step-preview-content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background: var(--workbench-muted);
+  background-clip: padding-box;
+}
+
+.agent-step-code-block .agent-step-command,
+.agent-step-code-block .agent-step-output,
+.ai-result-value,
+.agent-step-preview-content {
+  -webkit-overflow-scrolling: touch;
+}
+
+.app-shell.theme-light .agent-step-preview-content,
+.theme-light .agent-step-preview-content {
+  background: #f4f7fc;
+  color: #172033;
+}
+
+/* DOM-backed scrollbar stays visible even when the OS uses overlay scrollbars. */
+.agent-step-scrollbar {
+  position: relative;
+  height: 8px;
+  margin: 0 9px 7px;
+  border: 1px solid var(--workbench-line);
+  border-radius: 4px;
+  background: var(--workbench-line-soft);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.agent-step-scrollbar:active {
+  cursor: grabbing;
+}
+
+.agent-step-scrollbar.is-hidden {
+  height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-step-scrollbar-thumb {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  min-width: 24px;
+  border-radius: 3px;
+  background: var(--workbench-muted);
+}
+
+.agent-step-scrollbar:hover .agent-step-scrollbar-thumb,
+.agent-step-scrollbar:active .agent-step-scrollbar-thumb {
+  background: var(--workbench-accent);
+}
+
+.agent-step-preview-modal {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.agent-step-code-block .agent-step-command,
+.agent-step-code-block .agent-step-output,
+.agent-step-preview-content {
+  scrollbar-width: none;
+}
+
+.agent-step-code-block .agent-step-command::-webkit-scrollbar,
+.agent-step-code-block .agent-step-output::-webkit-scrollbar,
+.agent-step-preview-content::-webkit-scrollbar {
+  display: none;
+}
+
+.app-shell.theme-light .agent-step-scrollbar,
+.theme-light .agent-step-scrollbar {
+  border-color: #dbe3ee;
+  background: #e7edf3;
+}
+
+.app-shell.theme-light .agent-step-scrollbar-thumb,
+.theme-light .agent-step-scrollbar-thumb {
+  background: #94a3b8;
+}
+
+/* Windows glyph and icon alignment pass.
+
+   Three native differences drive the artifacts macOS never shows:
+   1. Cascadia/Consolas have no CJK coverage, so Chinese inside mono surfaces
+      falls back to a proportional face at a different cap height and baseline.
+   2. Segoe UI / Noto Sans SC sit lower in their em box than SF Pro, so an
+      `align-items: center` icon next to text reads one pixel high.
+   3. Windows rounds fractional stroke widths up, making 2px strokes on small
+      icons look heavier than the surrounding text.
+
+   Everything here stays scoped to :root[data-platform="windows"]. */
+
+:root[data-platform="windows"] {
+  --win-icon-stroke: 1.7;
+}
+
+/* Mixed CJK + ASCII inside mono blocks: let the CJK fallback do the CJK and
+   keep the Latin metrics from Cascadia, then normalize the seam. */
+:root[data-platform="windows"] .ai-error-title,
+:root[data-platform="windows"] .ai-error-hint,
+:root[data-platform="windows"] .agent-step-reason,
+:root[data-platform="windows"] .agent-step-empty-output,
+:root[data-platform="windows"] .agent-step-timeout-note,
+:root[data-platform="windows"] .agent-run-status {
+  font-family: var(--font-sans);
+  font-variant-ligatures: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Latin-only run inside a mono surface keeps mono; a mixed run should not
+   half-fall-back mid-string. Applies to the failure detail and step output. */
+:root[data-platform="windows"] .ai-error-detail,
+:root[data-platform="windows"] .ai-error-detail code,
+:root[data-platform="windows"] .agent-step-command,
+:root[data-platform="windows"] .agent-step-command code,
+:root[data-platform="windows"] .agent-step-output,
+:root[data-platform="windows"] .agent-step-output code,
+:root[data-platform="windows"] .agent-step-preview-content,
+:root[data-platform="windows"] .agent-step-preview-content code {
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0;
+  font-synthesis: none;
+}
+
+/* Icons: trim the stroke so 13–14px glyphs match the text weight beside them. */
+:root[data-platform="windows"] .ui-icon {
+  stroke-width: var(--win-icon-stroke);
+  shape-rendering: geometricPrecision;
+}
+
+/* The context chip: database icon, label, and caret on one optical baseline.
+   Segoe's lower baseline needs the icons nudged down, not the text up. */
+:root[data-platform="windows"] .context-summary-button {
+  align-items: center;
+  line-height: 1;
+}
+
+:root[data-platform="windows"] .context-summary-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
+}
+
+:root[data-platform="windows"] .context-summary-button > span {
+  line-height: 1.45;
+}
+
+/* Failure-notice actions: 重试 / 复制详情 / 查看详情.
+
+   Only 重试 and 查看详情 wrap their label in a <span>; 复制详情 is a bare text
+   node, so any label rule has to live on the button itself or it silently
+   skips one of the three. The button keeps a CJK-friendly line-height rather
+   than a tight one — YaHei and Noto Sans SC need the vertical room, and 11px
+   is below where DirectWrite hints Chinese cleanly, so these lift to 12px. */
+:root[data-platform="windows"] .ai-error-actions .text-button {
+  align-items: center;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+:root[data-platform="windows"] .ai-error-actions .text-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
+}
+
+:root[data-platform="windows"] .ai-error-head > .ai-error-icon {
+  align-self: start;
+  transform: translateY(.5px);
+}
+
+/* The rest of the 11px CJK surfaces, same reason as the action row above:
+   DirectWrite stops hinting Chinese cleanly below 12px, so these read muddy
+   next to Latin that looks fine at the same size. Latin-only 11px labels
+   (.script-line-rail line numbers, .script-editor-statusbar's "Shell · UTF-8
+   · LF", HTTP status codes) are left alone — they hint fine and moving them
+   would shift layout that is already correct. */
+:root[data-platform="windows"] .ai-error-suggestion-label,
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button,
+:root[data-platform="windows"] .settings-option-copy strong,
+:root[data-platform="windows"] .settings-sidebar .settings-tab .settings-option-copy strong,
+:root[data-platform="windows"] .script-conversation .message-title strong {
+  font-size: var(--font-sm);
+}
+
+/* .ai-error-code carries either a CJK word (配置 / 超时 / 网络 / 空响应) or an
+   ASCII "HTTP 429" from aiErrorPresentation, so it cannot be split by content. */
+:root[data-platform="windows"] .ai-error-code {
+  font-size: var(--font-sm);
+}
+
+/* Mixed CJK + Latin per line: "行 12，列 4" and "1,781 字符" sit beside the
+   Latin-only cell, so raise the whole bar to keep one baseline across it. */
+:root[data-platform="windows"] .script-editor-statusbar {
+  font-size: var(--font-sm);
+}
+
+/* Same span/bare-text asymmetry as the failure row: this label is wrapped,
+   but keep the metric on the button so it holds either way. */
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button {
+  align-items: center;
+  line-height: 1.5;
+}
+
+:root[data-platform="windows"] .assistant-panel .message-collapse-footer .text-button > .ui-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  transform: translateY(.5px);
+}

@@ -1,1 +1,1 @@
-export { default as FileTransferPanel } from './ui/FileTransferPanel.vue'
+export { default as FileTransferPanel } from './presentation/components/FileTransferPanel.vue'

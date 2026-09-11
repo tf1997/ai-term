@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { aiStreamPartialText, createAiStreamErrorMessage } from "../../src/domains/ai/model/aiStreamError"
+import { aiStreamPartialText, createAiStreamErrorMessage } from "../../src/domains/ai/domain/aiStreamError"
 
 const message = {
   id: 'assistant-1',

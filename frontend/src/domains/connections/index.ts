@@ -1,2 +1,2 @@
-export { normalizeConnectionProfileForSave } from './model/profileConfig'
+export { normalizeConnectionProfileForSave } from './domain/profileConfig'
 export { useConnectionProfiles } from './application/useConnectionProfiles'

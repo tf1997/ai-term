@@ -1,0 +1,219 @@
+:root {
+  color-scheme: dark;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  /* CJK 兜底排在 Latin 等宽之后、generic monospace 关键字之前。等宽栈里没有一张脸
+     带中文字形,不显式兜底就会穿透到 generic 关键字由系统挑:macOS 挑到 PingFang SC
+     还算能看,Windows 挑到 SimSun(衬线点阵脸,跟 Cascadia 完全不搭,11px 下尤其毛糙)。
+     写死才能两端一致。中文是全宽方块字,不参与 Latin 的列对齐,不影响等宽排版。 */
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "PingFang SC", monospace;
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  font-kerning: normal;
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-lg: 14px;
+  --font-xl: 16px;
+  --control-h: 32px;
+  --icon-size: 32px;
+  color: #f4f7fb;
+  background: #070a10;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 980px;
+  min-height: 100vh;
+  overflow: hidden;
+  font-size: var(--font-md);
+}
+
+:root[data-platform="windows"] {
+  --font-sans: "Noto Sans SC Variable", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  /* 兜底顺序的理由见 :root 的 --font-mono。Noto Sans SC Variable 由 main.ts 在 Windows
+     上打包加载,font-display: swap 首帧可能还没就绪,所以后面再垫一张系统自带的
+     Microsoft YaHei UI。 */
+  --font-mono: "Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans SC Variable", "Microsoft YaHei UI", monospace;
+  text-rendering: auto;
+}
+
+:root[data-platform="windows"] input:focus,
+:root[data-platform="windows"] select:focus,
+:root[data-platform="windows"] textarea:focus {
+  border-color: rgba(64, 196, 150, .68);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, .12), inset 0 1px 2px rgba(0, 0, 0, .12);
+}
+
+:root[data-platform="windows"] * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(137, 151, 174, .34) transparent;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(137, 151, 174, .34);
+  background-clip: padding-box;
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(164, 177, 198, .52);
+}
+
+:root[data-platform="windows"] *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-platform="windows"][data-theme="light"] * {
+  scrollbar-color: rgba(90, 105, 126, .32) transparent;
+}
+
+:root[data-platform="windows"][data-theme="light"] *::-webkit-scrollbar-thumb {
+  background-color: rgba(90, 105, 126, .32);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --light-bg: #f8faf9;
+  --light-surface: #ffffff;
+  --light-surface-soft: #f4f7f6;
+  --light-border: #e3e9ed;
+  --light-border-strong: #d6dee5;
+  --light-text: #111827;
+  --light-muted: #667085;
+  --light-faint: #98a2b3;
+  --light-accent: #0f8a63;
+  --light-accent-strong: #087a55;
+  --light-accent-soft: #e4f6ee;
+  --light-danger: #c2414b;
+  color: #111827;
+  background: #f6f8fc;
+}
+:root[data-theme="light"] body {
+  background: #f6f8fc;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  background: #070a10;
+}
+input {
+  min-width: 0;
+  height: var(--control-h);
+  border: 1px solid #242b38;
+  border-radius: 6px;
+  background: #0d1119;
+  color: #f4f7fb;
+  padding: 0 10px;
+  font: inherit;
+  outline: none;
+}
+select, textarea {
+  min-width: 0;
+  border: 1px solid #242b38;
+  border-radius: 6px;
+  background: #0d1119;
+  color: #f4f7fb;
+  padding: 7px 10px;
+  font: inherit;
+  outline: none;
+}
+select {
+  height: var(--control-h);
+}
+textarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.45;
+}
+button {
+  height: var(--control-h);
+  border: 1px solid #252d3b;
+  border-radius: 6px;
+  background: #111722;
+  color: #e9eef7;
+  padding: 0 12px;
+  font: inherit;
+  font-size: var(--font-md);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover {
+  border-color: #46515f;
+  background: #252b33;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+button,
+[role="button"],
+.icon-button,
+.text-button,
+.primary,
+.tab,
+.tab-close,
+.terminal-target-toggle,
+.terminal-target-summary,
+.rail-button,
+.workspace-tabs,
+.workspace-close,
+.context-menu,
+.chip,
+.panel-actions,
+.card-actions,
+.file-actions,
+.history-actions,
+.session-history-actions,
+.script-card-actions,
+.script-editor-tools,
+.script-reply-actions,
+.script-reply-code-actions,
+.terminal-tools,
+.quick-command-bar,
+.transfer-mode-tabs,
+.editor-mode-tabs,
+.transfer-task-actions,
+.modal-head,
+.modal-actions,
+.toast,
+.settings-actions {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+select,
+pre,
+code,
+[contenteditable="true"],
+.terminal-body,
+.terminal-body *,
+.xterm-host,
+.xterm-host *,
+.message-body,
+.message-body *,
+.script-risk-preview,
+.script-risk-preview *,
+.script-code-overlay,
+.script-code-overlay *,
+.script-preview-code,
+.script-preview-code * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.primary {
+  border-color: rgba(45, 212, 191, .56);
+  background: linear-gradient(135deg, #087f5b, #16a66a);
+  color: white;
+}

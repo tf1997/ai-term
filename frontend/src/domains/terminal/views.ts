@@ -1,2 +1,2 @@
-export { default as CommandHistoryPanel } from './ui/CommandHistoryPanel.vue'
-export { default as TerminalPane } from './ui/TerminalPane.vue'
+export { default as CommandHistoryPanel } from './presentation/components/CommandHistoryPanel.vue'
+export { default as TerminalPane } from './presentation/components/TerminalPane.vue'

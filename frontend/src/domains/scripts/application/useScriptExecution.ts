@@ -1,13 +1,13 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
-import { preparedScriptContent } from '../model/scriptPresentation'
-import type { ScriptPanelProps, ScriptPanelEmit, ScriptExecutionSource } from '../model/scriptPanel'
+import { preparedScriptContent } from '../domain/scriptPresentation'
+import type { ScriptPanelProps, ScriptPanelEmit, ScriptExecutionSource } from '../domain/scriptPanel'
 import { analyzeScriptRisks, buildScriptRiskPreviewLines, summarizeScriptRisks } from '../../../shared/security/scriptRisk'
-import { analyzeScriptReadiness } from '../model/scriptReadiness'
+import { analyzeScriptReadiness } from '../domain/scriptReadiness'
 import { detectShellScriptLanguage } from '../../../shared/shell/shellCommand'
-import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../model/scriptExecution'
-import { formatError } from '../model/scriptPresentation'
-import * as tauri from '../../ai/api'
+import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../domain/scriptExecution'
+import { formatError } from '../domain/scriptPresentation'
+import * as tauri from '../../ai/infrastructure/api'
 
 interface ScriptExecutionOptions {
   props: Readonly<ScriptPanelProps>

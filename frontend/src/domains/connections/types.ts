@@ -1,1 +1,1 @@
-export type { AuthEndpoint, ConnectionProfile } from './model/profile'
+export type { AuthEndpoint, ConnectionProfile } from './domain/profile'

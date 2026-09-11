@@ -5,7 +5,7 @@ import {
   describeTimeoutHint,
   looksLikeInteractivePrompt,
   runAgentTask
-} from "../../src/domains/ai/agent/agentLoop"
+} from "../../src/domains/ai/application/agent/agentLoop"
 
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms))
 

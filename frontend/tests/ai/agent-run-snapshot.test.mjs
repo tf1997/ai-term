@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAgentRunSnapshot } from "../../src/domains/ai/agent/agentRunSnapshot"
+import { createAgentRunSnapshot } from "../../src/domains/ai/domain/agentRunSnapshot"
 
 test('Agent 运行快照不受后续标签和配置变化影响', () => {
   const input = {

@@ -1,13 +1,13 @@
 import { ref, onBeforeUnmount } from 'vue'
-import type { AiMessage } from '../model/conversation'
+import type { AiMessage } from '../domain/conversation'
 import type { TerminalSelectionEvent } from '../../terminal/types'
-import type { AiProviderConfig } from '../model/provider'
-import type { AiPanelProps, AiPanelEmit } from '../model/aiPanel'
+import type { AiProviderConfig } from '../domain/provider'
+import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
 import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
-import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatAiError, extractPrimaryShellCommand } from '../model/aiConversation'
-import { createAiStreamErrorMessage } from '../model/aiStreamError'
-import * as tauri from '../api'
+import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatAiError, extractPrimaryShellCommand } from '../domain/aiConversation'
+import { createAiStreamErrorMessage } from '../domain/aiStreamError'
+import * as tauri from '../infrastructure/api'
 
 type ChatSource = Pick<typeof tauri, 'onAiChatStream' | 'chatWithAiProviderStream' | 'cancelTask'>
 interface AiChatOptions {

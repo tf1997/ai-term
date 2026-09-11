@@ -1,0 +1,16 @@
+/* Markdown-rendered AI outputs can include fenced code blocks outside chat cards, such as risk explanations. */
+.markdown-content .code-block {
+  margin: 0;
+}
+.markdown-content .code-block code {
+  display: block;
+  min-width: max-content;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  white-space: pre;
+}
+.script-risk-ai-output .markdown-content {
+  white-space: normal;
+}

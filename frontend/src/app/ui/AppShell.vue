@@ -28,8 +28,8 @@ import { useTerminalTabScroll } from '../../domains/terminal/index'
 import { terminalStatusClass } from '../../domains/terminal/index'
 import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
 
-import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntry } from '../../domains/ai/api'
-import { listConnectionProfiles, saveConnectionProfile } from '../../domains/connections/api'
+import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntry } from '../../domains/ai/infrastructure/api'
+import { listConnectionProfiles, saveConnectionProfile } from '../../domains/connections/infrastructure/api'
 import type { AgentAllowlistEntry, AgentCommandHandle, AgentCommandRunOptions } from '../../domains/ai/types'
 
 import { createStableRefRegistry } from '../../domains/terminal/index'
