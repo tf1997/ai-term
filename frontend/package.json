@@ -2,15 +2,18 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
-    "test:scripts": "tsx --test scripts/script-execution.test.mjs scripts/command-privacy.test.mjs scripts/path-privacy.test.mjs scripts/shell-integration.test.mjs scripts/terminal-font.test.mjs scripts/agent-loop.test.mjs scripts/agent-auto-approve.test.mjs scripts/agent-sentinel-capture.test.mjs scripts/ai-error-presentation.test.mjs scripts/ai-stream-error.test.mjs scripts/ai-timeout.test.mjs scripts/user-settings.test.mjs scripts/app-preferences.test.mjs scripts/workspace-resize.test.mjs scripts/app-overlays.test.mjs scripts/terminal-tabs.test.mjs scripts/terminal-tab-scroll.test.mjs scripts/workspace-data.test.mjs",
-    "test:settings": "tsx --test scripts/user-settings.test.mjs scripts/app-preferences.test.mjs",
-    "test:workspace": "tsx --test scripts/workspace-resize.test.mjs",
-    "test:overlays": "tsx --test scripts/app-overlays.test.mjs",
-    "test:tabs": "tsx --test scripts/terminal-tabs.test.mjs scripts/terminal-tab-scroll.test.mjs",
-    "test:workspace-data": "tsx --test scripts/workspace-data.test.mjs",
-    "test:workspace-browser": "node scripts/terminal-workspace.browser.mjs",
-    "test:ui": "node scripts/production-ui-check.mjs",
-    "tauri": "tauri"
+    "test:scripts": "tsx --test tests/scripts/script-execution.test.mjs tests/shared/command-privacy.test.mjs tests/shared/path-privacy.test.mjs tests/terminal/shell-integration.test.mjs tests/terminal/terminal-font.test.mjs tests/ai/agent-loop.test.mjs tests/ai/agent-auto-approve.test.mjs tests/terminal/agent-sentinel-capture.test.mjs tests/ai/ai-error-presentation.test.mjs tests/ai/ai-stream-error.test.mjs tests/ai/ai-timeout.test.mjs tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs tests/integration/workspace-resize.test.mjs tests/shared/app-overlays.test.mjs tests/terminal/terminal-tabs.test.mjs tests/terminal/terminal-tab-scroll.test.mjs tests/integration/workspace-data.test.mjs tests/ai/agent-run-snapshot.test.mjs tests/terminal/deferred-agent-command.test.mjs tests/terminal/stable-ref-registry.test.mjs tests/integration/configuration.test.mjs tests/integration/workspace-routing.test.mjs",
+    "test:settings": "tsx --test tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs",
+    "test:workspace": "tsx --test tests/integration/workspace-resize.test.mjs",
+    "test:overlays": "tsx --test tests/shared/app-overlays.test.mjs",
+    "test:tabs": "tsx --test tests/terminal/terminal-tabs.test.mjs tests/terminal/terminal-tab-scroll.test.mjs",
+    "test:workspace-data": "tsx --test tests/integration/workspace-data.test.mjs",
+    "test:workspace-browser": "node tests/browser/terminal-workspace.browser.mjs",
+    "test:ui": "node tests/contracts/production-ui-check.mjs",
+    "test:architecture": "node --test tests/contracts/domain-architecture.test.mjs",
+    "tauri": "tauri",
+    "test:configuration": "tsx --test tests/integration/configuration.test.mjs",
+    "test:routing": "tsx --test tests/integration/workspace-routing.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans-sc": "5.3.0",
