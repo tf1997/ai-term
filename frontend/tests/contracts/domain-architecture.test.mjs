@@ -8,6 +8,7 @@ const domainRoot = path.join(sourceRoot, 'domains')
 const sourceExtensions = /\.(ts|vue)$/
 const publicEntryNames = new Set(['index', 'types', 'views', 'api'])
 const legacyRoots = ['components', 'composables', 'lib', 'types', 'utils']
+const allowedRootEntries = new Set(['app', 'domains', 'shared', 'styles', 'App.vue', 'main.ts', 'vite-env.d.ts'])
 
 function sourceFiles(directory) {
   const files = []
@@ -37,6 +38,8 @@ function resolveImport(filePath, specifier) {
 }
 
 test('frontend uses domain-owned source roots instead of legacy technical layers', () => {
+  const unexpectedEntries = fs.readdirSync(sourceRoot).filter((entry) => !allowedRootEntries.has(entry))
+  assert.deepEqual(unexpectedEntries, [], `unexpected src root entries: ${unexpectedEntries.join(', ')}`)
   for (const directory of legacyRoots) {
     const absolute = path.join(sourceRoot, directory)
     if (!fs.existsSync(absolute)) continue
