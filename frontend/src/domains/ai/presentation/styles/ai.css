@@ -438,7 +438,7 @@
 }
 .assistant-panel .message {
   border-color: rgba(51, 65, 85, .58);
-  border-radius: 9px;
+  border-radius: var(--radius-card);
   background: rgba(11, 18, 27, .58);
   box-shadow: none;
 }

@@ -3,6 +3,9 @@
   --rail-width: 48px;
   --sidebar-width: 248px;
   --workspace-width: clamp(360px, var(--workspace-user-width, 420px), 560px);
+  --radius-panel: 4px;
+  --radius-card: 8px;
+  --radius-control: 6px;
   --workbench-bg: #0b0d10;
   --workbench-chrome: #101318;
   --workbench-panel: #0e1115;
@@ -26,6 +29,39 @@
   position: relative;
   grid-template-rows: 46px minmax(0, 1fr);
   background: var(--workbench-bg);
+}
+
+/* Shared workbench geometry: panel shells stay square, content cards and
+   controls use two predictable radii so the interface reads as one system. */
+.workspace-tabs,
+.workspace-close,
+.context-summary-button,
+.ai-mode-switch,
+.assistant-panel > .assistant-compose .icon-button,
+.assistant-panel .message,
+.assistant-panel .ai-result-block,
+.assistant-panel .ai-error-notice,
+.agent-step-card,
+.agent-step-command,
+.agent-step-output,
+.ai-error-suggestion,
+.ai-error-detail {
+  border-radius: var(--radius-card);
+}
+
+.workspace-tabs button,
+.workspace-close,
+.context-summary-button,
+.ai-mode-switch button,
+.assistant-panel > .assistant-compose textarea,
+.assistant-panel > .assistant-compose .icon-button,
+.assistant-panel .ai-code-actions .icon-button,
+.assistant-panel .ai-code-run,
+.assistant-panel .ai-code-block,
+.assistant-panel .message-collapse-footer .text-button,
+.agent-action,
+.ai-error-actions .text-button {
+  border-radius: var(--radius-control);
 }
 
 .app-shell.theme-light {

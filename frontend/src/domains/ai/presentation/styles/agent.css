@@ -8,7 +8,7 @@
   display: inline-flex;
   gap: 2px;
   border: 1px solid #263247;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   background: #111722;
   padding: 2px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, .24);
@@ -78,7 +78,7 @@
   gap: 6px;
   border: 1px solid #223048;
   border-left: 2px solid #33415c;
-  border-radius: 7px;
+  border-radius: var(--radius-card);
   background: rgba(12, 18, 30, .7);
   padding: 8px 9px;
 }
@@ -177,7 +177,7 @@
   min-width: 0;
   max-width: 100%;
   border: 1px solid #1e2942;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: #0b111c;
   padding: 7px 8px;
   font-family: var(--font-mono);
