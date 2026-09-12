@@ -100,11 +100,11 @@
 | # | 改动 | 位置 | 生效值 |
 | --- | --- | --- | --- |
 | ① | 系统提示词重写:从"规则"改为"工作方式",新增自主推进、不停在第一个看似合理的结果、能查到的别问用户、证据不足时继续查;保留全部安全条款并说明只读自动执行/危险命令等审批。工具描述同步 | `domain/ai/agent.rs` `build_agent_system_prompt` / `run_command_tool_definition` | 9 条 |
-| ② | 上下文预算放大 + 压缩策略改良:压缩后保留**退出码 + 输出尾部 300 字符**(原为整体丢弃),防膨胀保护保留 | `agent.rs` `MAX_AGENT_TURN_CHARS`;`lib/agentLoop.ts` `DEFAULT_MAX_TURN_CHARS` / `PROTECTED_RECENT_TURNS` / `COMPRESSED_OUTPUT_TAIL_CHARS` | 后端 80k、前端 72k、保护 6 轮、尾部 300 |
+| ② | 上下文预算放大 + 压缩策略改良:压缩后保留**退出码 + 输出尾部 300 字符**(原为整体丢弃),防膨胀保护保留 | `agent.rs` `MAX_AGENT_TURN_CHARS`;`lib/agentLoop.ts` `DEFAULT_MAX_TURN_CHARS` / `PROTECTED_RECENT_TURNS` / `COMPRESSED_OUTPUT_TAIL_CHARS` | 后端 80k、前端 24k 软预算、保护 6 轮、尾部 300 |
 | ③ | 步数上限提升,收尾文案提示可续跑 | `agentLoop.ts` `DEFAULT_STEP_LIMIT` | 10 → 25 |
 | ④ | 只读命令默认自动执行 | `AppShell.vue` `defaultUserSettings` | `agentAutoExecReadonly: true` |
 
-**前后端预算是一对约束**:前端 72k < 后端 80k,保证长任务由前端先压缩,而不是后端直接 bail 报"任务轮次过长"。`production-ui-check` 已加断言锁死这个不等式,连同保护轮次 ≥6、步数 ≥25、默认自动执行、提示词关键词一并校验。
+**前后端预算是一对约束**:前端 24k 软预算 < 后端 80k 硬上限,保证长任务由前端先压缩,而不是后端直接 bail 报"任务轮次过长"。`production-ui-check` 已加断言锁死这个不等式,连同保护轮次 ≥6、步数 ≥25、默认自动执行、提示词关键词一并校验。
 
 新增/更新测试:轮次压缩改测"保留退出码与尾部标记 TAIL-MARKER、最近 6 轮原样",新增"短输出不会因压缩而膨胀"(验证防膨胀保护);63 → 64。
 
@@ -186,7 +186,7 @@
 | A3 | 让任务持续到 10 步以上 | 不再在第 10 步停止;到 25 步才收尾并提示"可在下一条消息里让 Agent 接着排查" | ③ 未生效 |
 | A4 | 长任务(10+ 条命令、输出较大)跑到后期,问 Agent「你前面第一条命令看到了什么」 | 仍能答出早期发现(压缩保留了退出码与输出尾部) | ② 压缩过度或预算未生效 |
 | A5 | 同上长任务 | **不出现**"任务轮次过长"错误 | 前后端预算不等式被破坏(前端应先压缩) |
-| A6 | 观察 token 用量/网关账单 | 单轮请求明显变大属预期;若网关报单请求超限,需下调 `MAX_AGENT_TURN_CHARS` / `DEFAULT_MAX_TURN_CHARS`(保持前端 < 后端) | 已知风险,见设计文档 10.2 风险栏 |
+| A6 | 观察 token 用量/网关账单 | 前端以 24k 软预算压缩旧证据,后端保留 80k 硬上限;若网关报单请求超限,优先下调 `DEFAULT_MAX_TURN_CHARS`,必要时再下调 `MAX_AGENT_TURN_CHARS`(保持前端 < 后端) | 已知风险,见设计文档 10.2 风险栏 |
 
 ### 5.2 哨兵兜底(**需真机**)
 
@@ -249,7 +249,7 @@
 4. agent 消息的 `mode/agentSteps/agentStatus` 是运行时字段,仅 `payloadJson` 落库,靠 §3 的 hydrate 还原。
 5. Agent 模式的捕获走两条路径:有 OSC 133 语义标记(`sawMarkers`,本地 zsh/bash 自动注入)时走原路径;否则由 `ensureAgentCapture()` 探针决定是否启用哨兵兜底(见 §1.4)。两者都不可用时 `agentAvailabilityCheck` / `agentAvailabilityConfirm` 给出提示且不允许发起任务。
 6. Rust 侧依赖 serde 的 `rename_all_fields`(≥1.0.186),勿降级。
-7. **前后端轮次预算是一对约束**:前端 `DEFAULT_MAX_TURN_CHARS`(72k)必须小于后端 `MAX_AGENT_TURN_CHARS`(80k),否则长任务会由后端 bail 报错而非前端压缩。改动任一侧都要同步另一侧,`production-ui-check` 有断言把关。
+7. **前后端轮次预算是一对约束**:前端 `DEFAULT_MAX_TURN_CHARS`(24k 软预算)必须小于后端 `MAX_AGENT_TURN_CHARS`(80k 硬上限),否则长任务会由后端 bail 报错而非前端压缩。改动任一侧都要同步另一侧,`production-ui-check` 有断言把关。
 8. `agentAutoExecReadonly` 默认已改为 `true`。若本地 `localStorage` 里存过旧设置(值为 `false`),合并时会沿用旧值——验收 A2 不通过时先查设置中心开关。同理,本轮新增的 `agentStepLimit` / `agentCommandTimeoutSec` 对老配置缺失,`loadUserSettings` 会补默认值并夹取。
 9. 阶段 1.5 的 ⑤`update_plan` 工具**未实施**,按计划等 ①–④ 效果验证后再评估是否需要。
 10. **哨兵包装会让终端里回显的命令变长**(`printf …; <原命令>; printf …`),与步骤卡片上展示的干净命令不一致。这是哨兵方案的固有代价,用户看到的仍是真实执行的内容。仅在无 OSC 133 标记时发生。

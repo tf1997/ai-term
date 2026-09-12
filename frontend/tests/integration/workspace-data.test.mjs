@@ -101,6 +101,22 @@ test('Agent 载荷恢复合法连接代次，非法或旧值保留原消息的�
   }
 })
 
+test('消息载荷还原 token 用量:chat 与 agent 都恢复,非法用量忽略且不改变原对象', () => {
+  const usage = { requests: 1, inputTokens: 1200, outputTokens: 30, cachedInputTokens: 1024 }
+  const chat = hydrateAiMessagePayload(message('chat', { role: 'assistant', payloadJson: JSON.stringify({ usage }) }))
+  assert.deepEqual(chat.usage, usage)
+  assert.equal(chat.mode, undefined)
+  const agent = hydrateAiMessagePayload(message('agent', {
+    payloadJson: JSON.stringify({ mode: 'agent', agentStatus: 'done', agentSteps: [], usage: { ...usage, requests: 4 } })
+  }))
+  assert.equal(agent.mode, 'agent')
+  assert.equal(agent.usage.requests, 4)
+  const bad = message('bad', { payloadJson: JSON.stringify({ usage: { requests: 1 } }) })
+  assert.equal(hydrateAiMessagePayload(bad), bad)
+  const agentWithoutUsage = hydrateAiMessagePayload(message('agent', { payloadJson: JSON.stringify({ mode: 'agent', agentStatus: 'done', usage: 'x' }) }))
+  assert.equal('usage' in agentWithoutUsage, false)
+})
+
 test('会话存储加载 Agent 消息时恢复绑定的终端及连接代次', async context => {
   const storage = createStorage([session('one')])
   storage.listAiConversationMessages = async () => [message('agent', {

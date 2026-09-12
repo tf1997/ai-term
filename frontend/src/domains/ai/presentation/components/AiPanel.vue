@@ -8,6 +8,8 @@ import type { AiPanelProps, AiPanelEvents } from '../../domain/aiPanel'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { AiMessage, WorkspaceSession } from '../../domain/conversation'
+import type { AiMessageUsage } from '../../domain/tokenUsage'
+import { formatMessageUsageLabel, formatMessageUsageTitle, mergeMessageUsage } from '../../domain/tokenUsage'
 
 import { chatWithAiProviderStream, onAiChatStream } from '../../infrastructure/api'
 
@@ -130,6 +132,11 @@ const contextStatusLabel = computed(() => {
   const chars = formatCharacterCount(props.contextStatus.chars)
   return props.contextStatus.compressed ? `已压缩至 ${chars}` : `完整上下文 ${chars}`
 })
+// 本会话累计用量:只把网关上报过用量的消息加起来,看不到的不估算
+const sessionUsage = computed(() => props.messages.reduce<AiMessageUsage | undefined>(
+  (total, message) => mergeMessageUsage(total, message.usage),
+  undefined
+))
 
 const compactedConversationCount = computed(() => {
   const { summary, eligibleCount, unsummarized } = conversationContextParts(props.workspaceSessionId)
@@ -796,6 +803,7 @@ watch(
         <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ aiEligibleHistoryCount }} 条</span>
         <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
         <span><strong>上下文</strong>{{ contextStatusLabel }}</span>
+        <span v-if="sessionUsage" :title="formatMessageUsageTitle(sessionUsage)"><strong>Token</strong>{{ formatMessageUsageLabel(sessionUsage) }} · {{ sessionUsage.requests }} 次请求</span>
         <span v-if="compactedConversationCount > 0" title="更早的对话已由 AI 压缩为摘要，并继续作为背景提供给模型"><strong>历史压缩</strong>{{ compactedConversationCount }} 条早期消息已并入摘要</span>
       </div>
     </div>
@@ -819,6 +827,7 @@ watch(
           </span>
           <span class="message-meta">
             <span class="chip message-source" :title="`生成上下文：${messageSourceLabel(message)}`">来源 · {{ messageSourceLabel(message) }}</span>
+            <span v-if="message.usage" class="chip message-usage" :title="formatMessageUsageTitle(message.usage)">Token · {{ formatMessageUsageLabel(message.usage) }}</span>
             <span v-if="message.error" class="message-error-badge">请求失败</span>
           </span>
         </div>

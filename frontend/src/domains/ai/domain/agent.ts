@@ -1,4 +1,5 @@
 import type { AiProviderConfig } from './provider'
+import type { AiMessageUsage, AiTokenUsage } from './tokenUsage'
 import type { ScriptRiskMatch } from '../../../shared/security/scriptRisk'
 
 // Agent 模式共享类型。与后端 domain/ai/agent.rs 的 serde(camelCase)结构一一对应,
@@ -33,6 +34,8 @@ export interface AiAgentTurnResponse {
   toolCalls: AiToolCall[]
   contextCompressed: boolean
   contextChars: number
+  /** 本轮请求的 token 用量;网关未上报时缺省。 */
+  usage?: AiTokenUsage
 }
 
 /** runCommandAndCapture 的最终结果。超时由循环层控制,不在此枚举内。 */
@@ -112,6 +115,8 @@ export interface AgentRunState {
   stepLimit: number
   /** 单条命令等待多久后询问用户(与 deadlineAt 配合显示倒计时)。 */
   commandTimeoutMs: number
+  /** 本次运行内所有模型请求的累计用量;网关从未上报时缺省。 */
+  usage?: AiMessageUsage
   error?: string
   errorKind?: 'model' | 'tool' | 'protocol'
 }

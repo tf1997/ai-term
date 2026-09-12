@@ -37,10 +37,55 @@ pub(super) async fn wait_for_stream<T>(
     }
 }
 
-pub(super) async fn send_stream_request(
+/// 流式请求的建立结果:网关拒绝时状态码与错误正文已经读出,由调用方决定文案。
+pub(super) enum StreamStart {
+    Cancelled,
+    Rejected { status: u16, body: String },
+    Open(reqwest::Response),
+}
+
+/// 建立 SSE 流。网关不认识 `stream_options`(OpenAI 协议里请求携带 usage 的字段)
+/// 时会以 4xx 拒绝整个请求,此时去掉该字段重试一次:用量统计不能挡住回答本身。
+pub(super) async fn open_stream(
     endpoint: &str,
     api_key: &str,
-    payload: Value,
+    mut payload: Value,
+    timeout_seconds: u32,
+    cancel_token: Option<&AiCancelToken>,
+) -> Result<StreamStart> {
+    loop {
+        let Some(response) =
+            send_stream_request(endpoint, api_key, &payload, timeout_seconds, cancel_token).await?
+        else {
+            return Ok(StreamStart::Cancelled);
+        };
+        let status = response.status().as_u16();
+        if (200..300).contains(&status) {
+            return Ok(StreamStart::Open(response));
+        }
+        let body = stream_error_body(response, timeout_seconds, cancel_token).await;
+        if rejects_stream_options(&payload, &body) {
+            if let Some(object) = payload.as_object_mut() {
+                object.remove("stream_options");
+            }
+            continue;
+        }
+        return Ok(StreamStart::Rejected { status, body });
+    }
+}
+
+fn rejects_stream_options(payload: &Value, body: &str) -> bool {
+    if payload.get("stream_options").is_none() {
+        return false;
+    }
+    let lower = body.to_ascii_lowercase();
+    lower.contains("stream_options") || lower.contains("include_usage")
+}
+
+async fn send_stream_request(
+    endpoint: &str,
+    api_key: &str,
+    payload: &Value,
     timeout_seconds: u32,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<Option<reqwest::Response>> {
@@ -58,7 +103,7 @@ pub(super) async fn send_stream_request(
         .with_context(|| format!("AI 流式网络请求失败：{endpoint}"))
 }
 
-pub(super) async fn stream_error_body(
+async fn stream_error_body(
     response: reqwest::Response,
     timeout_seconds: u32,
     cancel_token: Option<&AiCancelToken>,
@@ -230,5 +275,26 @@ mod tests {
             sse_data_payloads("event: message\ndata: {\"value\":\ndata: 1}\n\ndata: [DONE]"),
             vec!["{\"value\":\n1}", "[DONE]"]
         );
+    }
+
+    #[test]
+    fn retries_without_stream_options_only_when_gateway_names_the_field() {
+        let with_usage =
+            serde_json::json!({"stream": true, "stream_options": {"include_usage": true}});
+        assert!(rejects_stream_options(
+            &with_usage,
+            r#"{"error":{"message":"Unrecognized request argument supplied: stream_options"}}"#
+        ));
+        assert!(rejects_stream_options(
+            &with_usage,
+            "400 Bad Request: include_usage is not supported"
+        ));
+        // 其他 4xx(鉴权、超长上下文)不能靠去掉字段重试掩盖
+        assert!(!rejects_stream_options(
+            &with_usage,
+            r#"{"error":{"message":"context_length_exceeded"}}"#
+        ));
+        let plain = serde_json::json!({"stream": true});
+        assert!(!rejects_stream_options(&plain, "stream_options rejected"));
     }
 }

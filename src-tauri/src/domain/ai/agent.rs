@@ -12,19 +12,19 @@ use crate::domain::ai::chat::{
     build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
     conversation_context_chars, conversation_context_was_compressed,
     conversation_messages_for_payload, extract_chat_answer, extract_stream_delta, is_cancelled,
-    parse_model_error, reject_html_response, truncate_for_prompt, AiCancelToken,
-    AiConversationRole, AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
+    parse_model_error, reject_html_response, stream_usage_options, truncate_for_prompt,
+    AiCancelToken, AiConversationRole, AiConversationTurn, ContextBundle,
+    MAX_CONVERSATION_SUMMARY_CHARS,
 };
 use crate::domain::ai::stream::{
-    is_stream_done, send_stream_request, sse_data_payloads, stream_error_body, wait_for_stream,
-    SseEventBuffer,
+    is_stream_done, open_stream, sse_data_payloads, wait_for_stream, SseEventBuffer, StreamStart,
 };
+use crate::domain::ai::usage::{merge_usage, usage_from_json, AiTokenUsage};
 use crate::domain::connection::models::AiProviderConfig;
 use crate::domain::text::Utf8StreamDecoder;
 
 /// 任务轮次的字符总量上限；超限直接报错，轮次压缩由前端负责（文档第 8 节）。
-/// 探索型任务需要保留较长的证据链：前端在 72k 处开始压缩，这里留 8k 余量，
-/// 使前端先压缩而不是后端直接拒绝（文档 10.2 阶段 1.5）。
+/// 前端在 24k 软预算处开始压缩旧证据;此处保留独立的协议硬上限。
 const MAX_AGENT_TURN_CHARS: usize = 80_000;
 /// 缺失工具结果时自动补发的 tool 消息内容（文档 5.3）。
 const SKIPPED_TOOL_RESULT_CONTENT: &str = r#"{"status":"skipped"}"#;
@@ -86,6 +86,9 @@ pub struct AiAgentTurnResponse {
     pub tool_calls: Vec<AiToolCall>,
     pub context_compressed: bool,
     pub context_chars: usize,
+    /// 本轮请求的 token 用量;网关不返回 usage 时为 None,不做估算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AiTokenUsage>,
 }
 
 pub async fn agent_turn_with_provider_stream<F>(
@@ -103,7 +106,7 @@ where
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_agent_payload(&request, &context, &conversation, true)?;
 
-    let (text, tool_calls) = send_agent_stream_request(
+    let (text, tool_calls, usage) = send_agent_stream_request(
         &endpoint,
         &request.api_key,
         payload,
@@ -120,6 +123,7 @@ where
             || summary_chars > 0
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
         context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
+        usage,
     })
 }
 
@@ -194,7 +198,7 @@ fn build_agent_payload(
     }));
     append_turn_messages(&mut messages, &request.turns)?;
 
-    Ok(json!({
+    let mut payload = json!({
         "model": request.config.model,
         "messages": messages,
         "tools": [run_command_tool_definition()],
@@ -202,23 +206,23 @@ fn build_agent_payload(
         "parallel_tool_calls": false,
         "temperature": 0.2,
         "stream": stream
-    }))
+    });
+    if stream {
+        payload["stream_options"] = stream_usage_options();
+    }
+    Ok(payload)
 }
 
 fn build_agent_system_prompt(custom_prompt: &str) -> String {
     [
         custom_prompt.trim(),
         "你是 AI Term 的终端操作 Agent,通过 run_command 工具在用户当前终端执行命令来完成用户任务。",
-        "工作方式:",
-        "1. 自主推进:先用只读命令把事实查清楚再下结论。只读检查命令通常会自动执行、不打扰用户,你可以连续多次调用;不要因为担心打扰而提前收尾。",
-        "2. 不要停在第一个看似合理的结果上。确认因果关系、检查反例,必要时从多个角度取证(进程、日志、配置、资源占用、最近变更)。",
-        "3. 能用命令查到的事实就不要问用户。只有在需要用户决策(选择方案、授权风险操作)或缺少只有用户才知道的信息时才发问。",
-        "4. 一次只调用一次 run_command,根据返回的输出和退出码决定下一步。",
-        "5. 任何破坏性操作(删除、覆盖、重启、服务变更)之前,必须先用只读命令确认目标存在且正确,并在 reason 里说明依据;这类命令会停下来等用户审批。",
-        "6. 命令必须完整可直接执行,不使用交互式编辑器(vim/nano)和分页器(如 less;用 cat/head/tail 替代),长输出主动加过滤或行数限制。",
-        "7. 用户可能跳过你的命令,工具结果会标注 skipped;此时换一种方式或询问用户,不要原样重发。",
-        "8. 只有当任务真正完成(结论有证据支撑)或确实无法继续时,才停止调用工具并输出结论:做了什么、依据是什么、结果如何、还遗留什么。证据不足时继续查,不要用猜测填补。",
-        "9. 始终以最新工具结果和终端内容为准,不要臆造未验证的状态。",
+        "工作方式:自主推进。先依据已有上下文定位缺口,用有针对性的只读检查验证;只读检查通常自动执行,可连续多次调用,不要因为担心打扰而提前收尾。证据足够即收尾,避免重复查询或与目标无关的全面巡检;证据不足时继续查,不要猜测。",
+        "每轮只调用一次 run_command,根据输出和退出码决定下一步。工具调用的 reason 用一句话说明目的,不再用正文重复计划或历史输出。",
+        "删除、覆盖、重启、服务变更等破坏性操作之前,必须先只读确认目标存在且正确,在 reason 说明依据,等待用户审批。",
+        "命令完整可直接执行,不用交互式编辑器(vim/nano)或分页器(less)。长输出用过滤、head/tail 或行数限制,优先获取与问题相关的片段。",
+        "结果标注 skipped 时不要原样重发;改用其他方法,或在需要用户决策、授权或补充无法查到的信息时询问。",
+        "以最新工具结果和终端内容为准;任务完成或确实无法继续时,简洁说明结果、关键证据和遗留问题。",
     ]
     .iter()
     .map(|item| item.trim())
@@ -332,7 +336,7 @@ fn flush_pending_tool_results(messages: &mut Vec<Value>, pending_tool_call_ids: 
 }
 
 /// 流循环结构与 chat 的 send_openai_compatible_stream_request 一致：
-/// 文本增量经 on_delta 外发，工具调用增量按 index 累积，
+/// 文本增量经 on_delta 外发，工具调用增量按 index 累积，usage 帧合并进用量，
 /// 全程无 SSE 增量时走非流式兜底。
 async fn send_agent_stream_request<F>(
     endpoint: &str,
@@ -341,24 +345,19 @@ async fn send_agent_stream_request<F>(
     timeout_seconds: u32,
     mut on_delta: F,
     cancel_token: Option<&AiCancelToken>,
-) -> Result<(String, Vec<AiToolCall>)>
+) -> Result<(String, Vec<AiToolCall>, Option<AiTokenUsage>)>
 where
     F: FnMut(String) + Send,
 {
-    let Some(response) =
-        send_stream_request(endpoint, api_key, payload, timeout_seconds, cancel_token).await?
-    else {
-        return Ok((String::new(), Vec::new()));
-    };
-
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        let raw = stream_error_body(response, timeout_seconds, cancel_token).await;
-        bail!(
-            "模型请求失败：HTTP {status}\n{}",
-            agent_model_error_detail(&raw)
-        );
-    }
+    let response =
+        match open_stream(endpoint, api_key, payload, timeout_seconds, cancel_token).await? {
+            StreamStart::Cancelled => return Ok((String::new(), Vec::new(), None)),
+            StreamStart::Rejected { status, body } => bail!(
+                "模型请求失败：HTTP {status}\n{}",
+                agent_model_error_detail(&body)
+            ),
+            StreamStart::Open(response) => response,
+        };
 
     let mut stream = response.bytes_stream();
     let mut decoder = Utf8StreamDecoder::default();
@@ -366,6 +365,7 @@ where
     let mut event_buffer = SseEventBuffer::default();
     let mut text = String::new();
     let mut accumulator: BTreeMap<u64, AiToolCall> = BTreeMap::new();
+    let mut usage = None;
     let mut saw_sse_delta = false;
 
     while let Some(chunk) = wait_for_stream(stream.next(), timeout_seconds, cancel_token)
@@ -373,7 +373,7 @@ where
         .flatten()
     {
         if is_cancelled(cancel_token) {
-            return Ok((text, finalize_tool_calls(accumulator)));
+            return Ok((text, finalize_tool_calls(accumulator), usage));
         }
         let chunk = chunk.context("AI 流式响应读取中断：网络连接或模型服务提前关闭了响应")?;
         let chunk_text = decoder.push(&chunk);
@@ -388,9 +388,9 @@ where
         event_buffer.push(&chunk_text);
 
         while let Some(event) = event_buffer.next_event() {
-            for delta in parse_agent_sse_event(&event, &mut accumulator)? {
+            for delta in parse_agent_sse_event(&event, &mut accumulator, &mut usage)? {
                 if is_cancelled(cancel_token) {
-                    return Ok((text, finalize_tool_calls(accumulator)));
+                    return Ok((text, finalize_tool_calls(accumulator), usage));
                 }
                 saw_sse_delta = true;
                 text.push_str(&delta);
@@ -401,19 +401,20 @@ where
                 if !saw_sse_delta {
                     bail!("模型返回为空");
                 }
-                return Ok((text, finalize_tool_calls(accumulator)));
+                return Ok((text, finalize_tool_calls(accumulator), usage));
             }
         }
     }
 
     if is_cancelled(cancel_token) {
-        return Ok((text, finalize_tool_calls(accumulator)));
+        return Ok((text, finalize_tool_calls(accumulator), usage));
     }
 
     if !event_buffer.remaining().trim().is_empty() {
-        for delta in parse_agent_sse_event(event_buffer.remaining(), &mut accumulator)? {
+        for delta in parse_agent_sse_event(event_buffer.remaining(), &mut accumulator, &mut usage)?
+        {
             if is_cancelled(cancel_token) {
-                return Ok((text, finalize_tool_calls(accumulator)));
+                return Ok((text, finalize_tool_calls(accumulator), usage));
             }
             saw_sse_delta = true;
             text.push_str(&delta);
@@ -423,7 +424,7 @@ where
     }
 
     if saw_sse_delta {
-        return Ok((text, finalize_tool_calls(accumulator)));
+        return Ok((text, finalize_tool_calls(accumulator), usage));
     }
 
     reject_html_response(&raw, endpoint)?;
@@ -431,13 +432,15 @@ where
     if !text.is_empty() {
         on_delta(text.clone());
     }
-    Ok((text, tool_calls))
+    Ok((text, tool_calls, usage_from_json(&raw)))
 }
 
-/// 解析一个 SSE 事件：返回文本增量，工具调用增量累积进 accumulator。
+/// 解析一个 SSE 事件：返回文本增量，工具调用增量累积进 accumulator，
+/// usage 快照合并进 usage。
 fn parse_agent_sse_event(
     event: &str,
     accumulator: &mut BTreeMap<u64, AiToolCall>,
+    usage: &mut Option<AiTokenUsage>,
 ) -> Result<Vec<String>> {
     let mut deltas = Vec::new();
 
@@ -455,6 +458,7 @@ fn parse_agent_sse_event(
             deltas.push(delta);
         }
         accumulate_tool_call_deltas(accumulator, &payload);
+        merge_usage(usage, &payload);
     }
 
     Ok(deltas)
@@ -667,14 +671,22 @@ mod tests {
     }
 
     fn apply_events(events: &[&str]) -> (String, BTreeMap<u64, AiToolCall>) {
+        let (text, accumulator, _) = apply_events_with_usage(events);
+        (text, accumulator)
+    }
+
+    fn apply_events_with_usage(
+        events: &[&str],
+    ) -> (String, BTreeMap<u64, AiToolCall>, Option<AiTokenUsage>) {
         let mut accumulator = BTreeMap::new();
+        let mut usage = None;
         let mut text = String::new();
         for event in events {
-            for delta in parse_agent_sse_event(event, &mut accumulator).unwrap() {
+            for delta in parse_agent_sse_event(event, &mut accumulator, &mut usage).unwrap() {
                 text.push_str(&delta);
             }
         }
-        (text, accumulator)
+        (text, accumulator, usage)
     }
 
     #[test]
@@ -700,6 +712,12 @@ mod tests {
         );
         assert_eq!(
             payload.pointer("/stream").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/stream_options/include_usage")
+                .and_then(Value::as_bool),
             Some(true)
         );
 
@@ -841,10 +859,26 @@ mod tests {
         let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
         let mut accumulator = BTreeMap::new();
         assert_eq!(
-            parse_agent_sse_event(event, &mut accumulator).unwrap(),
+            parse_agent_sse_event(event, &mut accumulator, &mut None).unwrap(),
             vec!["完成"]
         );
         assert!(accumulator.is_empty());
+    }
+
+    #[test]
+    fn merges_usage_frame_alongside_tool_call_deltas() {
+        let (text, accumulator, usage) = apply_events_with_usage(&[
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"run_command","arguments":"{\"command\":\"df -h\"}"}}]}}]}"#,
+            r#"data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":18,"total_tokens":1218,"prompt_tokens_details":{"cached_tokens":1024}}}"#,
+            "data: [DONE]",
+        ]);
+
+        assert_eq!(text, "");
+        assert_eq!(finalize_tool_calls(accumulator).len(), 1);
+        let usage = usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(1200));
+        assert_eq!(usage.cached_input_tokens, Some(1024));
+        assert_eq!(usage.output_tokens, Some(18));
     }
 
     #[test]
@@ -1022,10 +1056,13 @@ mod tests {
     #[test]
     fn surfaces_stream_error_events() {
         let mut accumulator = BTreeMap::new();
-        let error =
-            parse_agent_sse_event(r#"data: {"error":{"message":"boom"}}"#, &mut accumulator)
-                .unwrap_err()
-                .to_string();
+        let error = parse_agent_sse_event(
+            r#"data: {"error":{"message":"boom"}}"#,
+            &mut accumulator,
+            &mut None,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("模型流式返回错误：boom"));
     }
 

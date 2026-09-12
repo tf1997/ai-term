@@ -639,6 +639,71 @@ test('轮次压缩:短输出不会因压缩而膨胀', () => {
   assert.equal(compressed[0].content, original, '压缩占位更长时保持原样')
 })
 
+test('轮次压缩:幂等,完整保留的输出与跳过状态不会被标成"已省略"', () => {
+  const protectedTail = Array.from({ length: 6 }, () => ({ kind: 'assistant', text: 'p'.repeat(200), toolCalls: [] }))
+  const turns = [
+    { kind: 'toolResult', toolCallId: 'a', content: JSON.stringify({ exitCode: 0, durationMs: 5, truncated: true, output: 'x'.repeat(1000) + 'TAIL' }) },
+    { kind: 'toolResult', toolCallId: 'b', content: JSON.stringify({ exitCode: 1, durationMs: 5, truncated: false, output: 'permission denied for /etc/shadow' }) },
+    { kind: 'toolResult', toolCallId: 'c', content: JSON.stringify({ status: 'skipped_by_user' }) },
+    ...protectedTail
+  ]
+  const once = compressAgentTurns(turns, 100)
+  // 循环每轮都会在已压缩的轮次上重跑:第二遍不能再改动任何内容(标注不翻转,前缀缓存不失效)
+  const twice = compressAgentTurns(once, 100)
+  assert.deepEqual(twice, once)
+  assert.deepEqual(JSON.parse(once[0].content), { exitCode: 0, output: 'x'.repeat(296) + 'TAIL', note: '仅保留输出尾部' })
+  assert.deepEqual(JSON.parse(once[1].content), { exitCode: 1, output: 'permission denied for /etc/shadow' }, '完整输出只去掉耗时等字段,不带"已省略"')
+  assert.deepEqual(JSON.parse(once[2].content), { status: 'skipped_by_user' }, '跳过状态原样保留')
+})
+
+test('模型用量:逐轮累计到 state.usage,未上报用量的轮次不计次数', async () => {
+  const { callModel } = scriptedModel([
+    { ...turnResponse('看目录', [toolCall('c1', 'ls')]), usage: { inputTokens: 1000, outputTokens: 20, cachedInputTokens: 0 } },
+    turnResponse('看磁盘', [toolCall('c2', 'df -h')]),
+    { ...turnResponse('完成'), usage: { inputTokens: 2600, outputTokens: 40, cachedInputTokens: 2048 } }
+  ])
+  const { deps, states } = makeDeps({ callModel })
+  const state = await runAgentTask('检查', deps).done
+
+  assert.equal(state.status, 'done')
+  assert.deepEqual(state.usage, { inputTokens: 3600, outputTokens: 60, cachedInputTokens: 2048, requests: 2 })
+  assert.deepEqual(states.at(-1).usage, state.usage, '快照也带累计值,卡片可实时展示')
+})
+
+test('默认 24k 软预算降低长任务的累计回传量,保留最近输出和完整步骤卡片', async (t) => {
+  const output = 'x'.repeat(3_980) + 'TAIL-EVIDENCE';
+  const runSample = async (options) => {
+    const { calls, callModel } = scriptedModel([
+      ...Array.from({ length: 20 }, (_, i) => turnResponse(`检查 ${i}`, [toolCall(`c${i}`, `check-${i}`)])),
+      turnResponse('完成')
+    ]);
+    const { deps } = makeDeps({ callModel, startCommand: () => makeSimpleHandle({ output }) });
+    const state = await runAgentTask('诊断', deps, options).done;
+    assert.equal(state.status, 'done');
+    assert.equal(state.steps.length, 20);
+    assert.ok(state.steps.every((step) => step.output === output), '压缩只影响模型上下文,不修改步骤输出');
+    const totalChars = calls.reduce((sum, call) => sum + call.turns.reduce((n, turn) => n + (
+      turn.kind === 'assistant'
+        ? turn.text.length + turn.toolCalls.reduce((m, tool) => m + tool.arguments.length, 0)
+        : turn.content.length
+    ), 0), 0);
+    return { calls, totalChars };
+  };
+  const before = await runSample({ maxTurnChars: 72_000 });
+  const after = await runSample({});
+  t.diagnostic(`20-step replay characters: ${before.totalChars} -> ${after.totalChars}; reduction ${((1 - after.totalChars / before.totalChars) * 100).toFixed(1)}% (not billed tokens)`);
+  assert.ok(after.totalChars < before.totalChars * 0.6, '固定 20 步样本的轮次字符累计量至少下降 40%');
+  const finalTurns = after.calls.at(-1).turns;
+  assert.equal(finalTurns.length, 40, '工具调用/结果不删除,协议对应关系不变');
+  for (let i = 0; i < finalTurns.length; i += 2) {
+    assert.equal(finalTurns[i].toolCalls[0].id, finalTurns[i + 1].toolCallId);
+    assert.ok(JSON.parse(finalTurns[i + 1].content).output.endsWith('TAIL-EVIDENCE'));
+  }
+  for (const turn of finalTurns.slice(-6).filter((turn) => turn.kind === 'toolResult')) {
+    assert.equal(JSON.parse(turn.content).output, output, '最近三次命令输出完整保留');
+  }
+});
+
 // —— 超时体验(文档 10.3.2):倒计时字段、静默采样、启发提示 ——
 
 /** 结果长期挂起的句柄,用于逼出超时分支;peekOutput 可注入。 */

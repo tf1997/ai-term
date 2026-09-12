@@ -4,6 +4,7 @@ import type { AiProviderConfig } from '../domain/provider'
 
 import type { AgentAllowlistEntry, AiAgentTurnRequest, AiAgentTurnResponse } from '../domain/agent'
 import type { AiMessage, WorkspaceSession } from '../domain/conversation'
+import type { AiTokenUsage } from '../domain/tokenUsage'
 
 
 
@@ -41,6 +42,8 @@ export interface AiChatResponse {
   contextCompressed: boolean
   contextChars: number
   historyCount: number
+  /** 网关上报的 token 用量;未上报时缺省。 */
+  usage?: AiTokenUsage
 }
 
 export interface AiChatStreamEvent {

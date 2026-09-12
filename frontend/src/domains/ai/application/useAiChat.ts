@@ -7,6 +7,7 @@ import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatAiError, extractPrimaryShellCommand } from '../domain/aiConversation'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
+import { addTokenUsage } from '../domain/tokenUsage'
 import * as tauri from '../infrastructure/api'
 
 type ChatSource = Pick<typeof tauri, 'onAiChatStream' | 'chatWithAiProviderStream' | 'cancelTask'>
@@ -119,6 +120,8 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
       cancelStreamFlush()
       const answer = streamedAnswer || response.answer
       const command = extractPrimaryShellCommand(answer)
+      // 重试复用同一条消息:累计用量把之前的请求也算进去
+      const usage = addTokenUsage(assistantMessage.usage, response.usage)
       emit('setContextStatus', requestConnectionId, requestWorkspaceSessionId, {
         compressed: response.contextCompressed,
         chars: response.contextChars,
@@ -129,7 +132,9 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
         text: answer,
         command,
         error: false,
-        streaming: false
+        streaming: false,
+        usage,
+        payloadJson: usage ? JSON.stringify({ usage }) : assistantMessage.payloadJson
       })
       maybeGenerateSessionTitle(
         requestConnectionId,

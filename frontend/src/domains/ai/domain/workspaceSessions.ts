@@ -1,4 +1,5 @@
 import type { AiMessage, WorkspaceSession } from './conversation'
+import { normalizeMessageUsage } from './tokenUsage'
 
 export const DEFAULT_AI_SESSION_ID = 'ai:default'
 export const COMMAND_HISTORY_SESSION_ID = 'connection-history'
@@ -45,8 +46,9 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
       'mode' | 'agentSteps' | 'agentStatus' | 'terminalConnectionGeneration'
-    >>
-    if (payload.mode !== 'agent') return message
+    >> & { usage?: unknown }
+    const usage = normalizeMessageUsage(payload.usage)
+    if (payload.mode !== 'agent') return usage ? { ...message, usage } : message
     return {
       ...message,
       mode: 'agent',
@@ -56,7 +58,8 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
         : 'done',
       terminalConnectionGeneration: Number.isSafeInteger(payload.terminalConnectionGeneration) && payload.terminalConnectionGeneration! >= 0
         ? payload.terminalConnectionGeneration
-        : message.terminalConnectionGeneration
+        : message.terminalConnectionGeneration,
+      ...(usage ? { usage } : {})
     }
   } catch {
     return message

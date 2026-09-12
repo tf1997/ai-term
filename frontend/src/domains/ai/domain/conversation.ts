@@ -1,4 +1,5 @@
 import type { AgentStep } from './agent'
+import type { AiMessageUsage } from './tokenUsage'
 
 
 export interface WorkspaceSession {
@@ -43,5 +44,7 @@ export interface AiMessage {
   terminalConnectionGeneration?: number
   /** Agent 载荷序列化(与后端 payload_json 列对应)。 */
   payloadJson?: string
+  /** 生成该回复消耗的 token(运行时字段,持久化走 payloadJson);网关未上报时缺省。 */
+  usage?: AiMessageUsage
   createdAt: string
 }

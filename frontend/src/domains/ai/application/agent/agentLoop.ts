@@ -1,4 +1,5 @@
 import type { AgentApprovalDecision, AgentAutoExecClassification, AgentCommandHandle, AgentCommandResult, AgentRunState, AgentStep, AgentStepProposal, AgentTimeoutDecision, AgentTimeoutInfo, AiAgentTurn, AiAgentTurnResponse, AiToolCall } from '../../domain/agent'
+import { addTokenUsage } from '../../domain/tokenUsage'
 import type { ScriptRiskMatch } from '../../../../shared/security/scriptRisk'
 
 // Agent 循环编排器(任务 F3)。纯逻辑模块,不依赖 Vue/Tauri,全部外部能力经 AgentLoopDeps 注入。
@@ -41,8 +42,8 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
 const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2_000
 /** 超时提示里展示的部分输出尾部长度。 */
 const TIMEOUT_PARTIAL_OUTPUT_CHARS = 500
-/** 低于后端 MAX_AGENT_TURN_CHARS(80k),保证前端先压缩而不是后端拒绝(文档 10.2)。 */
-const DEFAULT_MAX_TURN_CHARS = 72_000
+/** 软预算:提早压缩重复回传的旧证据,后端 80k 仍是协议硬上限。 */
+const DEFAULT_MAX_TURN_CHARS = 24_000
 /** 压缩时最近保留的完整轮次数(文档 8);探索任务依赖较长证据链。 */
 const PROTECTED_RECENT_TURNS = 6
 /** 压缩时 Assistant 文本保留的字符数。 */
@@ -91,32 +92,34 @@ function turnChars(turn: AiAgentTurn): number {
 /**
  * 压缩单条工具结果:尽力保留退出码与输出尾部(报错多在尾部),
  * 整体丢弃会让模型忘记前面查到了什么,探索型任务尤其致命。
+ * 每轮都会在已压缩的轮次上重跑,所以必须幂等:完整保留的输出不标"已省略",
+ * 已截过尾部的结果保持"仅保留输出尾部",skipped 等结构化状态原样保留。
  */
 function compressToolResultContent(content: string): string {
-  let exitCode: number | undefined
-  let output: string | undefined
+  let record: Record<string, unknown> | undefined
   try {
     const parsed: unknown = JSON.parse(content)
-    if (parsed && typeof parsed === 'object') {
-      const record = parsed as { exitCode?: unknown; output?: unknown }
-      if (typeof record.exitCode === 'number') exitCode = record.exitCode
-      if (typeof record.output === 'string') output = record.output
-    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) record = parsed as Record<string, unknown>
   } catch {
     // 原 content 不是 JSON:退化为仅保留省略说明
   }
+  if (!record) return JSON.stringify({ note: OMITTED_OUTPUT_NOTE })
 
-  const tail = output && output.length > COMPRESSED_OUTPUT_TAIL_CHARS
-    ? output.slice(output.length - COMPRESSED_OUTPUT_TAIL_CHARS)
-    : output
   const payload: Record<string, unknown> = {}
-  if (exitCode !== undefined) payload.exitCode = exitCode
-  if (tail) {
-    payload.output = tail
-    payload.note = tail === output ? OMITTED_OUTPUT_NOTE : TRUNCATED_OUTPUT_NOTE
-  } else {
-    payload.note = OMITTED_OUTPUT_NOTE
+  if (typeof record.status === 'string') payload.status = record.status
+  if (typeof record.exitCode === 'number') payload.exitCode = record.exitCode
+  if (typeof record.output === 'string') {
+    if (record.output.length > COMPRESSED_OUTPUT_TAIL_CHARS) {
+      payload.output = record.output.slice(record.output.length - COMPRESSED_OUTPUT_TAIL_CHARS)
+      payload.note = TRUNCATED_OUTPUT_NOTE
+    } else {
+      payload.output = record.output
+      if (record.note === TRUNCATED_OUTPUT_NOTE) payload.note = TRUNCATED_OUTPUT_NOTE
+    }
+  } else if (typeof record.note === 'string') {
+    payload.note = record.note
   }
+  if (Object.keys(payload).length === 0) payload.note = OMITTED_OUTPUT_NOTE
   return JSON.stringify(payload)
 }
 
@@ -667,6 +670,7 @@ export function runAgentTask(
           return
         }
         const response = modelOutcome.value
+        state.usage = addTokenUsage(state.usage, response.usage)
         if (response.toolCalls.length === 0) {
           // 模型不再请求工具:text 即最终总结
           finishRun(() => {

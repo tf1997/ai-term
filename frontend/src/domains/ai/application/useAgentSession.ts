@@ -12,6 +12,7 @@ import { classifyForAutoExec } from '../domain/agentAutoApprove'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { createAgentRunSnapshot } from '../domain/agentRunSnapshot'
+import { mergeMessageUsage } from '../domain/tokenUsage'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatSelectedLineRange, formatAiError, createMessage, isSensitiveAgentCommand } from '../domain/aiConversation'
 import * as tauri from '../infrastructure/api'
 
@@ -287,6 +288,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       const status = agentStatusFromRun(state)
       const terminal = status !== 'running'
       const failed = status === 'error'
+      // 重试复用同一条消息:累计用量要把上一次尝试的请求也算进去
+      const usage = mergeMessageUsage(assistantMessage.usage, state.usage)
       const updated: AiMessage = {
         ...assistantMessage,
         mode: 'agent',
@@ -296,12 +299,14 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         terminalConnectionGeneration: boundConnectionGeneration,
         error: failed,
         streaming: !terminal,
+        usage,
         payloadJson: terminal
           ? JSON.stringify({
               mode: 'agent',
               agentSteps: persistableAgentSteps(state.steps),
               agentStatus: status,
-              terminalConnectionGeneration: boundConnectionGeneration
+              terminalConnectionGeneration: boundConnectionGeneration,
+              usage
             })
           : undefined
       }

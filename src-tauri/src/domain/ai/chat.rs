@@ -10,16 +10,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::ai::stream::{
-    is_stream_done, send_stream_request, sse_data_payloads, stream_error_body, wait_for_stream,
-    SseEventBuffer,
+    is_stream_done, open_stream, sse_data_payloads, wait_for_stream, SseEventBuffer, StreamStart,
 };
+use crate::domain::ai::usage::{merge_usage, usage_from_json, AiTokenUsage};
 use crate::domain::connection::models::AiProviderConfig;
-use crate::domain::text::Utf8StreamDecoder;
+use crate::domain::text::{strip_terminal_control_sequences, Utf8StreamDecoder};
 
 const MAX_CONTEXT_CHARS: usize = 12_000;
 const TERMINAL_HEAD_CHARS: usize = 2_000;
 const TERMINAL_TAIL_CHARS: usize = 8_000;
 const MAX_HISTORY_COMMANDS: usize = 80;
+const MAX_HISTORY_CHARS: usize = 2_000;
+const MAX_KEY_CONTEXT_CHARS: usize = 1_500;
 const MAX_CONVERSATION_MESSAGES: usize = 16;
 const MAX_CONVERSATION_CHARS: usize = 8_000;
 const MAX_CONVERSATION_MESSAGE_CHARS: usize = 3_000;
@@ -70,6 +72,9 @@ pub struct AiChatResponse {
     pub context_compressed: bool,
     pub context_chars: usize,
     pub history_count: usize,
+    /// 网关上报的 token 用量;网关不返回 usage 时为 None,不做估算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AiTokenUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,6 +152,7 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
     )
     .await?;
     let answer = extract_chat_answer(&response_text)?;
+    let usage = usage_from_json(&response_text);
 
     Ok(AiChatResponse {
         answer,
@@ -155,6 +161,7 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
         context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
         history_count: context.history.len(),
+        usage,
     })
 }
 
@@ -173,7 +180,7 @@ where
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = build_chat_payload(&request, &context, &conversation, true);
 
-    let answer = send_openai_compatible_stream_request(
+    let (answer, usage) = send_openai_compatible_stream_request(
         &endpoint,
         &request.api_key,
         payload,
@@ -190,6 +197,7 @@ where
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
         context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
         history_count: context.history.len(),
+        usage,
     })
 }
 
@@ -197,18 +205,17 @@ pub async fn generate_session_title(
     request: AiSessionTitleRequest,
 ) -> Result<AiSessionTitleResponse> {
     validate_title_request(&request)?;
-    let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
     let endpoint = chat_completions_endpoint(&request.config.base_url);
     let payload = json!({
         "model": request.config.model,
         "messages": [
             {
                 "role": "system",
-                "content": "你是 AI Term 的会话命名助手。根据用户问题、AI 回复和终端上下文，为当前终端助手会话生成一个简短标题。只输出标题本身，不要解释，不要加引号，不要 Markdown。中文不超过 12 个字；英文不超过 6 个词。"
+                "content": "你是 AI Term 的会话命名助手。根据用户问题和 AI 回复，为当前终端助手会话生成一个简短标题。只输出标题本身，不要解释，不要加引号，不要 Markdown。中文不超过 12 个字；英文不超过 6 个词。"
             },
             {
                 "role": "user",
-                "content": build_title_prompt(&request, &context)
+                "content": build_title_prompt(&request)
             }
         ],
         "temperature": 0.1,
@@ -408,12 +415,22 @@ fn build_chat_payload(
         "content": build_user_context_prompt(&request.question, context)
     }));
 
-    json!({
+    let mut payload = json!({
         "model": request.config.model,
         "messages": messages,
         "temperature": 0.2,
         "stream": stream
-    })
+    });
+    if stream {
+        payload["stream_options"] = stream_usage_options();
+    }
+    payload
+}
+
+/// OpenAI 协议下流式响应默认不带 usage,需要显式请求;不认识该字段的网关由
+/// `open_stream` 去掉后重试。
+pub(crate) fn stream_usage_options() -> Value {
+    json!({ "include_usage": true })
 }
 
 fn validate_chat_request(request: &AiChatRequest) -> Result<()> {
@@ -477,12 +494,18 @@ pub(crate) fn build_context_bundle(
     terminal_snapshot: &str,
     command_history: &[String],
 ) -> ContextBundle {
+    // 快照是 PTY 原始字节流:先去掉转义序列,再按可见文本计预算
+    let terminal_snapshot = strip_terminal_control_sequences(terminal_snapshot);
+    let terminal_snapshot = terminal_snapshot.as_str();
     let history = compress_history(command_history);
-    let key_points = extract_key_context(terminal_snapshot, &history);
-    let history_chars = history
+    let history_chars = history.join("\n").chars().count();
+    let source_history = command_history
         .iter()
-        .map(|item| item.chars().count())
-        .sum::<usize>();
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let history_compressed =
+        source_history != history.iter().map(String::as_str).collect::<Vec<_>>();
     let terminal_chars = terminal_snapshot.chars().count();
     let total_chars = terminal_chars + history_chars;
 
@@ -490,14 +513,20 @@ pub(crate) fn build_context_bundle(
         return ContextBundle {
             terminal: terminal_snapshot.to_string(),
             history,
-            key_points,
-            compressed: false,
+            // 完整终端和历史已包含这些行,不再复制进摘要。
+            key_points: Vec::new(),
+            compressed: history_compressed,
             chars: total_chars,
         };
     }
 
-    let terminal = compress_terminal_snapshot(terminal_snapshot);
-    let chars = terminal.chars().count() + history_chars;
+    // 为被省略区域的关键证据预留空间;摘要和历史也必须计入预算。
+    let terminal = compress_terminal_snapshot(
+        terminal_snapshot,
+        MAX_CONTEXT_CHARS - history_chars - MAX_KEY_CONTEXT_CHARS,
+    );
+    let key_points = extract_key_context(terminal_snapshot, &terminal);
+    let chars = terminal.chars().count() + history_chars + key_points.join("\n").chars().count();
     ContextBundle {
         terminal,
         history,
@@ -525,38 +554,53 @@ fn build_system_prompt(custom_prompt: &str) -> String {
     .join("\n")
 }
 
-fn compress_terminal_snapshot(snapshot: &str) -> String {
+fn compress_terminal_snapshot(snapshot: &str, max_chars: usize) -> String {
     let chars = snapshot.chars().collect::<Vec<_>>();
-    if chars.len() <= TERMINAL_HEAD_CHARS + TERMINAL_TAIL_CHARS {
+    if chars.len() <= max_chars {
         return snapshot.to_string();
     }
 
-    let head = chars.iter().take(TERMINAL_HEAD_CHARS).collect::<String>();
+    let note = "\n\n[AI Term 已压缩终端上下文：中间内容已省略，保留开头和最近输出。]\n\n";
+    let available = max_chars.saturating_sub(note.chars().count());
+    let head_chars = TERMINAL_HEAD_CHARS.min(available / 3);
+    let tail_chars = TERMINAL_TAIL_CHARS.min(available - head_chars);
+    let head = chars.iter().take(head_chars).collect::<String>();
     let tail = chars
         .iter()
-        .skip(chars.len().saturating_sub(TERMINAL_TAIL_CHARS))
+        .skip(chars.len() - tail_chars)
         .collect::<String>();
-    let omitted = chars
-        .len()
-        .saturating_sub(TERMINAL_HEAD_CHARS + TERMINAL_TAIL_CHARS);
-
-    format!(
-        "{head}\n\n[AI Term 已压缩终端上下文：中间省略 {omitted} 个字符，保留开头和最近输出。]\n\n{tail}"
-    )
+    format!("{head}{note}{tail}")
 }
 
 fn compress_history(command_history: &[String]) -> Vec<String> {
-    command_history
+    let mut selected = Vec::new();
+    let mut remaining = MAX_HISTORY_CHARS;
+    for command in command_history
         .iter()
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
         .rev()
         .take(MAX_HISTORY_COMMANDS)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(ToOwned::to_owned)
-        .collect()
+    {
+        let separator = usize::from(!selected.is_empty());
+        let count = command.chars().count();
+        if count + separator > remaining {
+            // 超长的最新命令仍保留一个明确标注的片段,旧命令不截成可执行命令。
+            if selected.is_empty() {
+                let note = " [历史命令已截断，不可直接执行]";
+                let prefix: String = command
+                    .chars()
+                    .take(remaining - note.chars().count())
+                    .collect();
+                selected.push(format!("{prefix}{note}"));
+            }
+            break;
+        }
+        selected.push(command.to_string());
+        remaining -= count + separator;
+    }
+    selected.reverse();
+    selected
 }
 
 pub(crate) fn conversation_messages_for_payload(
@@ -628,7 +672,7 @@ fn conversation_summary_chars(request: &AiChatRequest) -> usize {
         .unwrap_or(0)
 }
 
-fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<String> {
+fn extract_key_context(terminal_snapshot: &str, retained_terminal: &str) -> Vec<String> {
     let mut points = Vec::new();
     let keywords = [
         "error",
@@ -657,9 +701,13 @@ fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<Strin
         "ssh",
     ];
 
-    for line in terminal_snapshot.lines() {
+    // 仅补充压缩终端中不再可见的关键行,优先保留较新的证据。
+    for line in terminal_snapshot.lines().rev() {
         let normalized = line.trim();
-        if normalized.is_empty() || normalized.len() > 500 {
+        if normalized.is_empty()
+            || normalized.chars().count() > 500
+            || retained_terminal.contains(normalized)
+        {
             continue;
         }
         let lower = normalized.to_lowercase();
@@ -667,45 +715,17 @@ fn extract_key_context(terminal_snapshot: &str, history: &[String]) -> Vec<Strin
             push_unique_limited(&mut points, format!("terminal: {normalized}"));
         }
     }
-
-    for line in terminal_snapshot
-        .lines()
-        .rev()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !looks_like_shell_prompt(line))
-        .take(12)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        push_unique_limited(&mut points, format!("recent-output: {line}"));
-    }
-
-    for command in history
-        .iter()
-        .rev()
-        .take(20)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        push_unique_limited(&mut points, format!("history: {command}"));
-    }
-
+    points.reverse();
     points
 }
 
-fn looks_like_shell_prompt(line: &str) -> bool {
-    line.ends_with('$')
-        || line.ends_with('#')
-        || line.ends_with('%')
-        || line.contains(" $ ")
-        || line.contains(" # ")
-        || line.contains(" % ")
-}
-
 fn push_unique_limited(points: &mut Vec<String>, value: String) {
-    if points.len() >= MAX_KEY_LINES || points.iter().any(|item| item == &value) {
+    let used = points.join("\n").chars().count();
+    let separator = usize::from(!points.is_empty());
+    if points.len() >= MAX_KEY_LINES
+        || points.iter().any(|item| item == &value)
+        || used + separator + value.chars().count() > MAX_KEY_CONTEXT_CHARS
+    {
         return;
     }
     points.push(value);
@@ -717,7 +737,7 @@ pub(crate) fn build_user_context_prompt(question: &str, context: &ContextBundle)
         format!(
             "上下文状态：{}",
             if context.compressed {
-                "终端内容过长，已压缩，保留开头和最近输出"
+                "终端内容或命令历史已压缩；省略处有标注，历史仅保留最近记录"
             } else {
                 "完整上下文"
             }
@@ -750,20 +770,16 @@ pub(crate) fn build_user_context_prompt(question: &str, context: &ContextBundle)
     .join("\n\n")
 }
 
-fn build_title_prompt(request: &AiSessionTitleRequest, context: &ContextBundle) -> String {
+fn build_title_prompt(request: &AiSessionTitleRequest) -> String {
+    // 命名只需问题和结论,不再为短标题重发终端日志和命令历史。
     [
-        format!("用户问题：{}", request.user_message.trim()),
         format!(
-            "AI 回复：{}",
-            truncate_for_prompt(request.assistant_message.trim(), 1200)
+            "用户问题：{}",
+            truncate_for_prompt(request.user_message.trim(), 600)
         ),
         format!(
-            "关键上下文摘要：\n{}",
-            if context.key_points.is_empty() {
-                "-".to_string()
-            } else {
-                context.key_points.join("\n")
-            }
+            "AI 回复：{}",
+            truncate_for_prompt(request.assistant_message.trim(), 900)
         ),
     ]
     .join("\n\n")
@@ -855,27 +871,25 @@ async fn send_openai_compatible_stream_request<F>(
     timeout_seconds: u32,
     mut on_delta: F,
     cancel_token: Option<&AiCancelToken>,
-) -> Result<String>
+) -> Result<(String, Option<AiTokenUsage>)>
 where
     F: FnMut(String) + Send,
 {
-    let Some(response) =
-        send_stream_request(endpoint, api_key, payload, timeout_seconds, cancel_token).await?
-    else {
-        return Ok(String::new());
-    };
-
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        let raw = stream_error_body(response, timeout_seconds, cancel_token).await;
-        bail!("模型请求失败：HTTP {status}\n{}", parse_model_error(&raw));
-    }
+    let response =
+        match open_stream(endpoint, api_key, payload, timeout_seconds, cancel_token).await? {
+            StreamStart::Cancelled => return Ok((String::new(), None)),
+            StreamStart::Rejected { status, body } => {
+                bail!("模型请求失败：HTTP {status}\n{}", parse_model_error(&body))
+            }
+            StreamStart::Open(response) => response,
+        };
 
     let mut stream = response.bytes_stream();
     let mut decoder = Utf8StreamDecoder::default();
     let mut raw = String::new();
     let mut event_buffer = SseEventBuffer::default();
     let mut answer = String::new();
+    let mut usage = None;
     let mut saw_sse_delta = false;
 
     while let Some(chunk) = wait_for_stream(stream.next(), timeout_seconds, cancel_token)
@@ -883,7 +897,7 @@ where
         .flatten()
     {
         if is_cancelled(cancel_token) {
-            return Ok(answer);
+            return Ok((answer, usage));
         }
         let chunk = chunk.context("AI 流式响应读取中断：网络连接或模型服务提前关闭了响应")?;
         let text = decoder.push(&chunk);
@@ -898,9 +912,9 @@ where
         event_buffer.push(&text);
 
         while let Some(event) = event_buffer.next_event() {
-            for delta in parse_sse_event_deltas(&event)? {
+            for delta in parse_sse_event_deltas(&event, &mut usage)? {
                 if is_cancelled(cancel_token) {
-                    return Ok(answer);
+                    return Ok((answer, usage));
                 }
                 saw_sse_delta = true;
                 answer.push_str(&delta);
@@ -910,19 +924,19 @@ where
                 if !saw_sse_delta {
                     bail!("模型返回为空");
                 }
-                return Ok(answer);
+                return Ok((answer, usage));
             }
         }
     }
 
     if is_cancelled(cancel_token) {
-        return Ok(answer);
+        return Ok((answer, usage));
     }
 
     if !event_buffer.remaining().trim().is_empty() {
-        for delta in parse_sse_event_deltas(event_buffer.remaining())? {
+        for delta in parse_sse_event_deltas(event_buffer.remaining(), &mut usage)? {
             if is_cancelled(cancel_token) {
-                return Ok(answer);
+                return Ok((answer, usage));
             }
             saw_sse_delta = true;
             answer.push_str(&delta);
@@ -931,7 +945,7 @@ where
     }
 
     if saw_sse_delta {
-        return Ok(answer);
+        return Ok((answer, usage));
     }
 
     reject_html_response(&raw, endpoint)?;
@@ -939,7 +953,7 @@ where
     if !answer.is_empty() {
         on_delta(answer.clone());
     }
-    Ok(answer)
+    Ok((answer, usage_from_json(&raw)))
 }
 
 pub(crate) fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
@@ -948,7 +962,9 @@ pub(crate) fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
         .unwrap_or(false)
 }
 
-fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {
+/// 解析一个 SSE 事件的文本增量;usage 事件(通常是 [DONE] 前 choices 为空的
+/// 一帧)合并进 `usage`,不产生增量。
+fn parse_sse_event_deltas(event: &str, usage: &mut Option<AiTokenUsage>) -> Result<Vec<String>> {
     let mut deltas = Vec::new();
 
     for data in sse_data_payloads(event) {
@@ -964,6 +980,7 @@ fn parse_sse_event_deltas(event: &str) -> Result<Vec<String>> {
         if let Some(delta) = extract_stream_delta(&payload) {
             deltas.push(delta);
         }
+        merge_usage(usage, &payload);
     }
 
     Ok(deltas)
@@ -1202,28 +1219,96 @@ mod tests {
     }
 
     #[test]
-    fn extracts_key_context_from_terminal_and_history() {
-        let snapshot = [
-            "normal output",
-            "Permission denied while reading /var/log/app.log",
-            "service failed to start",
-            "last useful line",
-        ]
-        .join("\n");
-        let context = build_context_bundle(&snapshot, &["systemctl status app".into()]);
+    fn avoids_repeating_retained_terminal_and_history_in_key_context() {
+        let snapshot = "Permission denied while reading /var/log/app.log\nservice failed to start";
+        let context = build_context_bundle(snapshot, &["systemctl status app".into()]);
+        let prompt = build_user_context_prompt("诊断", &context);
+        assert!(context.key_points.is_empty());
+        assert!(!context.compressed);
+        assert_eq!(prompt.matches("Permission denied").count(), 1);
+        assert_eq!(prompt.matches("service failed").count(), 1);
+        assert_eq!(prompt.matches("systemctl status app").count(), 1);
+    }
 
+    #[test]
+    fn retains_omitted_evidence_without_repeating_visible_lines() {
+        let snapshot = format!(
+            "{}\nPermission denied in omitted region\n{}\nservice failed at end",
+            "a".repeat(6_000),
+            "b".repeat(10_000)
+        );
+        let context = build_context_bundle(&snapshot, &[]);
+        assert!(context.compressed);
+        assert!(!context.terminal.contains("Permission denied"));
         assert!(context
             .key_points
             .iter()
             .any(|line| line.contains("Permission denied")));
-        assert!(context
+        assert!(!context
             .key_points
             .iter()
-            .any(|line| line.contains("service failed")));
-        assert!(context
-            .key_points
-            .iter()
-            .any(|line| line.contains("history: systemctl status app")));
+            .any(|line| line.contains("service failed at end")));
+        assert!(context.chars <= MAX_CONTEXT_CHARS);
+    }
+
+    #[test]
+    fn bounds_all_context_sections_including_long_lines_and_commands() {
+        let snapshot = format!(
+            "{}\n{}",
+            "error: diagnostic message\n".repeat(1_000),
+            "终".repeat(30_000)
+        );
+        let context = build_context_bundle(&snapshot, &["长命令".repeat(20_000)]);
+        assert!(context.chars <= MAX_CONTEXT_CHARS);
+        assert!(context.key_points.join("\n").chars().count() <= MAX_KEY_CONTEXT_CHARS);
+        assert!(context.history.join("\n").chars().count() <= MAX_HISTORY_CHARS);
+        assert!(context.history[0].contains("不可直接执行"));
+        assert_eq!(
+            context.chars,
+            context.terminal.chars().count()
+                + context.history.join("\n").chars().count()
+                + context.key_points.join("\n").chars().count()
+        );
+    }
+
+    #[test]
+    fn history_budget_keeps_a_recent_suffix_without_reordering_repeated_commands() {
+        let commands = vec![
+            "x".repeat(1_990),
+            "pwd".into(),
+            "git status".into(),
+            "pwd".into(),
+        ];
+        let context = build_context_bundle("", &commands);
+        assert_eq!(context.history, vec!["pwd", "git status", "pwd"]);
+        assert!(context.compressed);
+    }
+
+    #[test]
+    fn bounds_key_evidence_and_prefers_recent_omitted_lines() {
+        let snapshot = (0..100)
+            .map(|index| format!("error-{index}: {}", "细节".repeat(60)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let points = extract_key_context(&snapshot, "");
+        assert!(points.join("\n").chars().count() <= MAX_KEY_CONTEXT_CHARS);
+        assert!(points.last().unwrap().contains("error-99:"));
+        assert!(!points.iter().any(|line| line.contains("error-0:")));
+    }
+
+    #[test]
+    fn session_title_uses_bounded_exchange_without_terminal_logs() {
+        let request = AiSessionTitleRequest {
+            config: compact_test_config(),
+            api_key: "test-key".into(),
+            user_message: "问题".repeat(10_000),
+            assistant_message: "结论".repeat(10_000),
+            terminal_snapshot: "DO_NOT_REPEAT_LOGS".repeat(10_000),
+            command_history: vec!["DO_NOT_REPEAT_HISTORY".into()],
+        };
+        let prompt = build_title_prompt(&request);
+        assert!(prompt.chars().count() < 1_550);
+        assert!(!prompt.contains("DO_NOT_REPEAT"));
     }
 
     #[test]
@@ -1273,7 +1358,7 @@ mod tests {
         .join("\n\n");
 
         assert_eq!(
-            parse_sse_event_deltas(&event).unwrap(),
+            parse_sse_event_deltas(&event, &mut None).unwrap(),
             vec!["hello".to_string(), " world".to_string()]
         );
     }
@@ -1281,7 +1366,62 @@ mod tests {
     #[test]
     fn ignores_data_after_stream_done() {
         let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
-        assert_eq!(parse_sse_event_deltas(event).unwrap(), vec!["完成"]);
+        assert_eq!(
+            parse_sse_event_deltas(event, &mut None).unwrap(),
+            vec!["完成"]
+        );
+    }
+
+    #[test]
+    fn merges_stream_usage_snapshots_without_emitting_deltas() {
+        let mut usage = None;
+        let events = [
+            r#"data: {"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":40,"completion_tokens":1}}"#,
+            r#"data: {"choices":[],"usage":{"prompt_tokens":40,"completion_tokens":3,"total_tokens":43,"prompt_tokens_details":{"cached_tokens":32}}}"#,
+            "data: [DONE]",
+        ];
+        let deltas = events
+            .iter()
+            .flat_map(|event| parse_sse_event_deltas(event, &mut usage).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(deltas, vec!["hi"]);
+        let usage = usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(40));
+        assert_eq!(usage.output_tokens, Some(3));
+        assert_eq!(usage.total_tokens, Some(43));
+        assert_eq!(usage.cached_input_tokens, Some(32));
+    }
+
+    #[test]
+    fn requests_stream_usage_only_for_streaming_payloads() {
+        let request = chat_request_with_summary(None);
+        let context = build_context_bundle("", &[]);
+        let streaming = build_chat_payload(&request, &context, &[], true);
+        assert_eq!(
+            streaming.pointer("/stream_options/include_usage"),
+            Some(&Value::Bool(true))
+        );
+        let blocking = build_chat_payload(&request, &context, &[], false);
+        assert!(blocking.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn context_bundle_budgets_visible_text_not_control_bytes() {
+        let snapshot = format!(
+            "\u{1b}]133;A\u{7}\u{1b}[32muser@host\u{1b}[0m:~$ ls\r\n{}\r\n",
+            "\u{1b}[1;34mlogs\u{1b}[0m  \u{1b}[1;34mbin\u{1b}[0m"
+        );
+        let context = build_context_bundle(&snapshot, &[]);
+        assert_eq!(context.terminal, "user@host:~$ ls\nlogs  bin\n");
+        assert_eq!(context.chars, context.terminal.chars().count());
+        assert!(!context.compressed);
+
+        // 进度条的每一帧都在原始快照里,预算只按最后一帧计
+        let progress = format!("{}\r下载 100%\r\n", "下载 1%\r".repeat(5_000));
+        let context = build_context_bundle(&progress, &[]);
+        assert_eq!(context.terminal, "下载 100%\n");
+        assert!(!context.compressed);
     }
 
     #[test]
