@@ -4,6 +4,9 @@
 :root {
   --ai-card-radius: 8px;
   --ai-card-gap: 10px;
+  --ai-card-border: 1px;
+  --ai-card-pad-x: 10px;
+  --ai-card-pad-y: 10px;
 }
 
 .assistant-panel .message-list {
@@ -45,6 +48,22 @@
 .script-draft-card,
 .script-assistant-section {
   border-radius: var(--ai-card-radius);
+  box-sizing: border-box;
+}
+
+/* Every AI-owned card occupies the same content column. Components can still
+   grow vertically with their content, but width, edge and padding stay stable
+   across normal replies, errors, results and Agent steps. */
+.assistant-panel .message.ai,
+.assistant-panel .message.error,
+.assistant-panel .ai-result-block,
+.assistant-panel .ai-error-notice,
+.assistant-panel .agent-steps,
+.assistant-panel .ai-markdown-message,
+.agent-step-card {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .assistant-panel .message.ai {
@@ -59,6 +78,11 @@
   background: var(--workbench-panel-strong);
 }
 
+.assistant-panel .ai-result-block {
+  gap: 8px;
+  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
+}
+
 /* Result cards used to have a heavier left rule. A balanced border keeps
    status information visible without making the card look misaligned. */
 .ai-result-block {
@@ -67,11 +91,18 @@
 
 .assistant-panel .ai-error-notice {
   border-width: 1px;
+  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
 }
 
 .agent-step-card {
   gap: 8px;
-  padding: 9px 10px;
+  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
+}
+
+.assistant-panel .message.error .message-body {
+  /* Error turns use the notice as their visible card; keep its edge aligned
+     with result and Agent cards instead of inheriting the avatar indent. */
+  padding-left: 0;
 }
 
 .agent-step-status,
