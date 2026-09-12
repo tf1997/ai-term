@@ -65,21 +65,21 @@
 }
 
 .app-shell.theme-light {
-  --workbench-bg: #f3f5f7;
+  --workbench-bg: #eef2f4;
   --workbench-chrome: #ffffff;
   --workbench-panel: #ffffff;
   --workbench-panel-strong: #f8fafb;
-  --workbench-terminal: #fbfcfd;
-  --workbench-line: #d9e0e5;
-  --workbench-line-soft: #e9edf0;
-  --workbench-text: #26313d;
+  --workbench-terminal: #f8fafb;
+  --workbench-line: #cbd5dc;
+  --workbench-line-soft: #e2e8ec;
+  --workbench-text: #1f2b36;
   --workbench-text-strong: #111923;
-  --workbench-muted: #6b7785;
-  --workbench-quiet: #929ca7;
-  --workbench-hover: #f3f6f8;
-  --workbench-accent: #12895a;
-  --workbench-accent-strong: #0b754c;
-  --workbench-accent-soft: #e8f6ef;
+  --workbench-muted: #596b7a;
+  --workbench-quiet: #71808d;
+  --workbench-hover: #eef5f2;
+  --workbench-accent: #0b7f57;
+  --workbench-accent-strong: #086342;
+  --workbench-accent-soft: #e4f5ec;
   --workbench-blue: #416f9f;
   --workbench-danger: #b42332;
   --workbench-danger-strong: #a61f2d;
@@ -736,6 +736,44 @@ body.workspace-resizing * {
 .theme-light .workspace-tabs button.active::after,
 .app-shell.theme-dark .workspace-tabs button.active::after {
   display: none;
+}
+
+/* Light theme surface hierarchy: the terminal sits on a cool inset canvas,
+   while the connection and AI workspaces remain white and readable. */
+.app-shell.theme-light .terminal-stack,
+.app-shell.theme-light .terminal-pane,
+.app-shell.theme-light .terminal-wrap {
+  background: var(--workbench-bg);
+}
+
+.app-shell.theme-light .terminal-frame {
+  background: var(--workbench-terminal);
+  border-color: var(--workbench-line);
+}
+
+.app-shell.theme-light .assistant-panel .message-list {
+  background: #f7fafb;
+}
+
+.app-shell.theme-light .assistant-panel .message.ai {
+  border-color: #c7ddd3;
+  background: #ffffff;
+}
+
+.app-shell.theme-light .assistant-panel .message:not(.ai):not(.error) {
+  background: #edf2f5;
+}
+
+.app-shell.theme-light .agent-step-card {
+  border-color: #cbd8d3;
+  background: #fbfdfc;
+}
+
+.app-shell.theme-light .agent-step-command,
+.app-shell.theme-light .agent-step-output,
+.app-shell.theme-light .ai-code-block {
+  border-color: #d4dee3;
+  background: #f7fafb;
 }
 
 .workspace-close,
