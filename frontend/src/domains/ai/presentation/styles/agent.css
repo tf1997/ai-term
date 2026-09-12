@@ -77,24 +77,24 @@
   display: grid;
   gap: 6px;
   border: 1px solid #223048;
-  border-left: 2px solid #33415c;
+  border-left: 1px solid #223048;
   border-radius: var(--radius-card);
   background: rgba(12, 18, 30, .7);
   padding: 8px 9px;
 }
 .agent-step-card.agent-step-running {
-  border-left-color: rgba(91, 111, 255, .8);
+  border-color: rgba(91, 111, 255, .65);
 }
 .agent-step-card.agent-step-completed {
-  border-left-color: rgba(64, 200, 140, .7);
+  border-color: rgba(64, 200, 140, .58);
 }
 .agent-step-card.agent-step-skipped {
-  border-left-color: #3a4761;
+  border-color: #3a4761;
   opacity: .78;
 }
 .agent-step-card.agent-step-timeout,
 .agent-step-card.agent-step-failed {
-  border-left-color: rgba(255, 118, 118, .7);
+  border-color: rgba(255, 118, 118, .62);
 }
 .agent-step-head {
   display: flex;

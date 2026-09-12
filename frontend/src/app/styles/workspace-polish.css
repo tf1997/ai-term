@@ -735,12 +735,7 @@ body.workspace-resizing * {
 .workspace-tabs button.active::after,
 .theme-light .workspace-tabs button.active::after,
 .app-shell.theme-dark .workspace-tabs button.active::after {
-  right: 8px;
-  bottom: -1px;
-  left: 8px;
-  height: 3px;
-  border-radius: 2px 2px 0 0;
-  background: var(--workbench-accent);
+  display: none;
 }
 
 .workspace-close,
@@ -910,9 +905,10 @@ body.workspace-resizing * {
 }
 
 .assistant-panel .message.ai {
-  border: 0;
-  border-left: 3px solid var(--workbench-accent);
-  background: transparent;
+  border: 1px solid rgba(16, 185, 129, .3);
+  border-radius: var(--radius-card);
+  background: rgba(8, 20, 20, .42);
+  padding: 10px 11px;
 }
 
 /* Failed turns keep the normal message rhythm; the weight lives in the
