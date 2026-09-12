@@ -6,7 +6,7 @@
   grid-template-columns: var(--rail-width) var(--sidebar-width) minmax(0, 1fr) var(--workspace-width);
   grid-template-rows: 58px 1fr;
   height: 100vh;
-  background:     radial-gradient(circle at 18% 0, rgba(80, 90, 255, .12), transparent 280px),     radial-gradient(circle at 78% 8%, rgba(43, 189, 126, .08), transparent 320px),     #070a10;
+  background:     radial-gradient(circle at 18% 0, color-mix(in srgb, var(--workbench-accent) 12%, transparent), transparent 280px),     radial-gradient(circle at 78% 8%, rgba(43, 189, 126, .08), transparent 320px),     #070a10;
 }
 .app-shell.left-collapsed {
   grid-template-columns: var(--rail-width) 0 minmax(0, 1fr) var(--workspace-width);

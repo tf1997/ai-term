@@ -133,8 +133,8 @@
   box-shadow: 0 0 0 3px rgba(220, 63, 85, .14);
 }
 .app-shell.theme-light .status-dot.preview {
-  background: #4866ff;
-  box-shadow: 0 0 0 3px rgba(72, 102, 255, .13);
+  background: var(--workbench-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workbench-accent) 13%, transparent);
 }
 /* Command history preview modal. */
 .history-preview-backdrop {

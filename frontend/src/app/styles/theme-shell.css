@@ -68,8 +68,8 @@
   padding-right: 32px;
 }
 .history-toolbar input:focus {
-  border-color: rgba(91, 111, 255, .58);
-  box-shadow: 0 0 0 3px rgba(91, 111, 255, .12);
+  border-color: color-mix(in srgb, var(--workbench-accent) 58%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workbench-accent) 12%, transparent);
 }
 .history-search-clear {
   position: absolute;
@@ -113,11 +113,11 @@
 }
 .history-row:hover {
   border-bottom-color: rgba(120, 139, 169, .22);
-  background: rgba(91, 111, 255, .07);
+  background: color-mix(in srgb, var(--workbench-accent) 7%, transparent);
 }
 .history-row:focus-within {
-  border-bottom-color: rgba(91, 111, 255, .38);
-  background: rgba(91, 111, 255, .08);
+  border-bottom-color: color-mix(in srgb, var(--workbench-accent) 38%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 8%, transparent);
 }
 .history-command-cell {
   gap: 5px;
@@ -150,12 +150,12 @@
   color: #aebbd2;
 }
 .history-actions .icon-button:hover:not(:disabled) {
-  border-color: rgba(91, 111, 255, .52);
-  background: rgba(91, 111, 255, .14);
+  border-color: color-mix(in srgb, var(--workbench-accent) 52%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 14%, transparent);
   color: #edf1ff;
 }
 .history-preview-trigger {
-  color: #b8c1ff;
+  color: var(--workbench-accent-strong);
 }
 .history-actions .history-action-fill {
   border-color: rgba(82, 201, 143, .32);
@@ -164,7 +164,7 @@
 .history-actions .history-action-fill:hover:not(:disabled) {
   border-color: rgba(82, 201, 143, .58);
   background: rgba(35, 145, 93, .16);
-  color: #b9f4d4;
+  color: var(--workbench-accent-strong);
 }
 .history-status {
   flex: 0 0 auto;

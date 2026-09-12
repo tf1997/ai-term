@@ -125,7 +125,7 @@
 }
 .app-shell.theme-dark .transfer-progress span,
 .app-shell.theme-dark .transfer-progress.complete span {
-  background: linear-gradient(90deg, #56e6a3, #35c6d7);
+  background: linear-gradient(90deg, #56e6a3, #35c6a0);
 }
 .app-shell.theme-dark .transfer-task-stats span {
   border-color: #243246;

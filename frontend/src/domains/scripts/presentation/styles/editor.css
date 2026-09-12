@@ -350,7 +350,7 @@
 }
 
 .remote-file-editor-textarea:focus {
-  box-shadow: inset 0 0 0 1px #3b82f6;
+  box-shadow: inset 0 0 0 1px var(--workbench-accent);
 }
 
 .remote-file-editor-status {

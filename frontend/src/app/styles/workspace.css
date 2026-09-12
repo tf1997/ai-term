@@ -28,9 +28,9 @@
   white-space: nowrap;
 }
 .workspace-tabs button.active {
-  border-color: rgba(91, 111, 255, .5);
-  background: rgba(91, 111, 255, .14);
-  color: #b8b2ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 14%, transparent);
+  color: var(--workbench-accent-strong);
 }
 .workspace-close {
   border-color: #263246;
@@ -50,16 +50,16 @@
   width: 34px;
   min-height: 92px;
   padding: 8px 6px;
-  border-color: rgba(91, 111, 255, .45);
+  border-color: color-mix(in srgb, var(--workbench-accent) 45%, transparent);
   background: rgba(18, 24, 36, .96);
-  color: #d4d8ff;
+  color: var(--workbench-accent-strong);
   box-shadow: 0 14px 42px rgba(0, 0, 0, .32);
   transform: translateY(-50%);
   writing-mode: vertical-rl;
   text-orientation: mixed;
 }
 .workspace-open-handle:hover {
-  border-color: rgba(91, 111, 255, .85);
+  border-color: color-mix(in srgb, var(--workbench-accent) 85%, transparent);
   background: rgba(28, 35, 56, .98);
 }
 .assistant-panel, .files-panel, .script-panel, .history-panel {
@@ -156,8 +156,8 @@
   line-height: 1.45;
 }
 .message.ai {
-  border-color: rgba(80, 124, 255, .28);
-  background: rgba(80, 124, 255, .08);
+  border-color: color-mix(in srgb, var(--workbench-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 8%, transparent);
 }
 .message.error {
   border-color: rgba(255, 104, 104, .32);
@@ -231,7 +231,7 @@
   font-size: var(--font-sm);
 }
 .text-button:hover {
-  border-color: rgba(91, 111, 255, .55);
+  border-color: color-mix(in srgb, var(--workbench-accent) 55%, transparent);
   color: #eef1ff;
 }
 .message-body {
@@ -287,7 +287,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #8fd5ff;
+  color: var(--workbench-accent-strong);
   font-family: var(--font-mono);
   font-size: var(--font-xs);
   white-space: nowrap;

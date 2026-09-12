@@ -1,6 +1,6 @@
 /* AI and script assistant polish */
 .assistant-panel, .script-panel {
-  background:     linear-gradient(180deg, rgba(91, 111, 255, .045), transparent 34%),     #0b1018;
+  background:     linear-gradient(180deg, color-mix(in srgb, var(--workbench-accent) 4.5%, transparent), transparent 34%),     #0b1018;
 }
 .assistant-panel {
   grid-template-rows: 64px auto minmax(0, 1fr) auto;
@@ -28,23 +28,23 @@
   height: 42px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid rgba(111, 124, 255, .4);
+  border: 1px solid color-mix(in srgb, var(--workbench-accent) 40%, transparent);
   border-radius: 8px;
-  background: rgba(111, 124, 255, .12);
-  color: #bfc8ff;
+  background: color-mix(in srgb, var(--workbench-accent) 12%, transparent);
+  color: var(--workbench-accent-strong);
   font-weight: 600;
   letter-spacing: 0;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
 }
 .script-glyph {
-  color: #b6d2ff;
+  color: var(--workbench-accent-strong);
   font-family: var(--font-mono);
   font-size: var(--font-md);
 }
 .ai-session-head strong, .script-title-head strong {
   min-width: 0;
   overflow: hidden;
-  color: #f1f6ff;
+  color: #f4f7fb;
   font-size: var(--font-xl);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -71,7 +71,7 @@
 }
 .message-list {
   gap: 10px;
-  background:     linear-gradient(180deg, rgba(91, 111, 255, .035), transparent 38%),     #090e16;
+  background:     linear-gradient(180deg, color-mix(in srgb, var(--workbench-accent) 3.5%, transparent), transparent 38%),     #090e16;
   padding: 12px;
 }
 .message {
@@ -82,8 +82,8 @@
   padding: 10px;
 }
 .message.ai {
-  border-color: rgba(102, 137, 255, .36);
-  background: linear-gradient(180deg, rgba(19, 31, 54, .98), rgba(13, 22, 38, .98));
+  border-color: color-mix(in srgb, var(--workbench-accent) 36%, transparent);
+  background: linear-gradient(180deg, rgba(18, 34, 27, .98), rgba(12, 24, 19, .98));
 }
 .message.error {
   border-color: rgba(255, 118, 118, .42);
@@ -104,16 +104,16 @@
   height: 30px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid rgba(111, 124, 255, .42);
+  border: 1px solid color-mix(in srgb, var(--workbench-accent) 42%, transparent);
   border-radius: 7px;
-  background: rgba(111, 124, 255, .2);
+  background: color-mix(in srgb, var(--workbench-accent) 20%, transparent);
   color: #e8ebff;
   font-size: var(--font-sm);
   font-weight: 600;
 }
 .message:not(.ai) .message-avatar {
-  border-color: rgba(109, 168, 255, .36);
-  background: rgba(109, 168, 255, .14);
+  border-color: color-mix(in srgb, var(--workbench-accent) 36%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 14%, transparent);
 }
 .message-title strong {
   color: #f0f5ff;
@@ -196,7 +196,7 @@
   white-space: break-spaces;
 }
 .markdown-content a {
-  color: #8fb3ff;
+  color: var(--workbench-accent-strong);
   text-decoration: none;
 }
 .markdown-content a:hover {
@@ -269,7 +269,7 @@
   padding: 5px 8px;
 }
 .code-head span {
-  color: #9ed7ff;
+  color: var(--workbench-accent-strong);
 }
 .code-block pre {
   max-height: min(340px, 44vh);
@@ -343,7 +343,7 @@
   gap: 3px;
 }
 .script-preview-head strong, .script-assistant-head strong {
-  color: #f1f6ff;
+  color: #f4f7fb;
   font-size: var(--font-lg);
 }
 .script-preview-head span, .script-assistant-head span:not(.chip) {
@@ -401,7 +401,7 @@
   overflow: auto;
 }
 .script-draft-card textarea:focus {
-  box-shadow: inset 0 0 0 1px rgba(91, 111, 255, .22);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--workbench-accent) 22%, transparent);
 }
 .script-editor-statusbar {
   min-width: 0;
@@ -467,14 +467,14 @@
   color: #748299;
 }
 .assistant-compose:focus-within textarea {
-  border-color: rgba(91, 111, 255, .72);
-  box-shadow: 0 0 0 1px rgba(91, 111, 255, .2);
+  border-color: color-mix(in srgb, var(--workbench-accent) 72%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--workbench-accent) 20%, transparent);
 }
 .assistant-compose .icon-button {
   right: calc(var(--composer-pad-x) + 8px);
   bottom: calc(var(--composer-pad-bottom) + 8px);
-  border-color: rgba(91, 111, 255, .62);
-  background: rgba(91, 111, 255, .24);
+  border-color: color-mix(in srgb, var(--workbench-accent) 62%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 24%, transparent);
   color: #f6f7ff;
   box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
 }

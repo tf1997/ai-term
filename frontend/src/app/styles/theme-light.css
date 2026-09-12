@@ -17,11 +17,11 @@
   color: #dc2626;
 }
 .theme-light .message-list, .theme-light .script-chat-list, .theme-light .script-library-body, .theme-light .file-list {
-  background:     linear-gradient(180deg, rgba(72, 102, 255, .045), transparent 36%),     #f7f9fd;
+  background:     linear-gradient(180deg, color-mix(in srgb, var(--workbench-accent) 4.5%, transparent), transparent 36%),     #f7f9fd;
 }
 .theme-light .message.ai {
-  border-color: rgba(72, 102, 255, .25);
-  background: #f1f5ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 25%, transparent);
+  background: var(--workbench-accent-soft);
 }
 .theme-light .message.error {
   border-color: rgba(220, 38, 38, .26);
@@ -34,7 +34,7 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .98));
 }
 .theme-light .message.ai.collapsed .message-body::after {
-  background: linear-gradient(180deg, rgba(241, 245, 255, 0), rgba(241, 245, 255, .98));
+  background: linear-gradient(180deg, transparent, var(--workbench-accent-soft));
 }
 .theme-light .assistant-compose {
   border-top-color: #d9e2ef;
@@ -75,7 +75,7 @@
   color: #64748b;
 }
 .theme-light .context-menu button:hover {
-  background: #eef3ff;
+  background: var(--workbench-accent-soft);
 }
 .theme-light .script-risk-modal {
   border-color: rgba(220, 38, 38, .26);
@@ -92,8 +92,8 @@
   color: #be123c;
 }
 .theme-light .primary:hover:not(:disabled), .theme-light .text-button.primary-action:hover:not(:disabled) {
-  border-color: rgba(72, 102, 255, .72);
-  background: linear-gradient(135deg, #4058f5, #128f5d);
+  border-color: color-mix(in srgb, var(--workbench-accent) 72%, transparent);
+  background: var(--workbench-accent-strong);
   color: #ffffff;
 }
 /* Light theme workspace history fixes. */
@@ -119,7 +119,7 @@
   background: #ffffff;
 }
 .theme-light .history-row:hover {
-  background: #f1f6ff;
+  background: var(--workbench-accent-soft);
 }
 .theme-light .history-row code {
   color: #17324d;
@@ -133,9 +133,9 @@
   color: #42536d;
 }
 .theme-light .history-actions .icon-button:hover, .theme-light .history-actions .text-button:hover {
-  border-color: rgba(72, 102, 255, .48);
-  background: #eef3ff;
-  color: #284bd1;
+  border-color: color-mix(in srgb, var(--workbench-accent) 48%, transparent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 .theme-light .app-status-bar {
   border-color: #d1dbea;
@@ -160,9 +160,9 @@
   --light-text: #111827;
   --light-muted: #667085;
   --light-faint: #98a2b3;
-  --light-accent: #0f8a63;
-  --light-accent-strong: #087a55;
-  --light-accent-soft: #e4f6ee;
+  --light-accent: var(--workbench-accent);
+  --light-accent-strong: var(--workbench-accent-strong);
+  --light-accent-soft: var(--workbench-accent-soft);
   --light-danger: #c2414b;
   color: var(--light-text);
   background:     radial-gradient(circle at 4% 0, rgba(15, 138, 99, .075), transparent 300px),     linear-gradient(180deg, #fbfcfc 0%, var(--light-bg) 48%, #f3f6f5 100%);
@@ -335,7 +335,7 @@
 }
 .theme-light .terminal-body::-webkit-scrollbar-thumb:hover,
 .app-shell.theme-light .xterm-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: rgba(71, 85, 105, .58);
+  background: rgba(53, 183, 121, .58);
   background-clip: content-box;
 }
 .theme-light .quick-command-bar {
@@ -989,13 +989,13 @@
   color: #047857;
 }
 .theme-light .shell-token.variable {
-  color: #2563eb;
+  color: var(--workbench-accent-strong);
 }
 .theme-light .shell-token.operator {
   color: #b45309;
 }
 .theme-light .shell-token.command {
-  color: #1d4ed8;
+  color: var(--workbench-accent-strong);
 }
 .theme-light .command-risk-status, .theme-light .script-editor-risk, .theme-light .target-probe-state {
   border-color: var(--light-border);

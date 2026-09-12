@@ -24,12 +24,12 @@
   font-size: var(--font-sm);
 }
 .ai-mode-switch button:hover:not(:disabled) {
-  background: rgba(91, 111, 255, .14);
-  color: #cdd6e6;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 .ai-mode-switch button.active {
-  background: rgba(91, 111, 255, .28);
-  color: #eef2f8;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 .ai-mode-switch button:disabled {
   opacity: .5;
@@ -83,7 +83,7 @@
   padding: 8px 9px;
 }
 .agent-step-card.agent-step-running {
-  border-color: rgba(91, 111, 255, .65);
+  border-color: color-mix(in srgb, var(--workbench-accent) 65%, transparent);
 }
 .agent-step-card.agent-step-completed {
   border-color: rgba(64, 200, 140, .58);
@@ -111,8 +111,8 @@
   font-size: var(--font-xs);
 }
 .agent-step-status.running {
-  border-color: rgba(91, 111, 255, .5);
-  color: #a9b8ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 50%, transparent);
+  color: var(--workbench-accent-strong);
 }
 .agent-step-status.completed {
   border-color: rgba(64, 200, 140, .45);
@@ -253,7 +253,7 @@
   white-space: nowrap;
 }
 .agent-action:hover {
-  border-color: rgba(91, 111, 255, .55);
+  border-color: color-mix(in srgb, var(--workbench-accent) 55%, transparent);
   color: #eef2f8;
 }
 /* 允许列表 pattern 可能很长,单独给它收缩权并省略号截断(完整值在 title)。
@@ -284,8 +284,8 @@
 }
 .agent-action.primary {
   flex: 0 0 auto;
-  border-color: rgba(91, 111, 255, .55);
-  background: rgba(91, 111, 255, .22);
+  border-color: color-mix(in srgb, var(--workbench-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 22%, transparent);
   color: #e7ecff;
 }
 .agent-action.primary.agent-action-risk {
@@ -430,8 +430,8 @@
 }
 .app-shell.theme-light .ai-mode-switch button.active,
 .theme-light .ai-mode-switch button.active {
-  background: rgba(72, 102, 255, .16);
-  color: #142033;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 .app-shell.theme-light .agent-mode-notice,
 .theme-light .agent-mode-notice {
@@ -465,22 +465,21 @@
 .app-shell.theme-light .agent-allowlist-entries li,
 .theme-light .agent-allowlist-entries li {
   border-color: #d6dfed;
-  border-left-color: #c3cede;
   background: rgba(255, 255, 255, .92);
 }
 .app-shell.theme-light .agent-step-card.agent-step-completed,
 .theme-light .agent-step-card.agent-step-completed {
-  border-left-color: #4fb98a;
+  border-color: #4fb98a;
 }
 .app-shell.theme-light .agent-step-card.agent-step-running,
 .theme-light .agent-step-card.agent-step-running {
-  border-left-color: #4866ff;
+  border-color: var(--workbench-accent);
 }
 .app-shell.theme-light .agent-step-card.agent-step-timeout,
 .theme-light .agent-step-card.agent-step-timeout,
 .app-shell.theme-light .agent-step-card.agent-step-failed,
 .theme-light .agent-step-card.agent-step-failed {
-  border-left-color: #d9534f;
+  border-color: #d9534f;
 }
 .app-shell.theme-light .agent-step-status,
 .theme-light .agent-step-status {
@@ -489,8 +488,8 @@
 }
 .app-shell.theme-light .agent-step-status.running,
 .theme-light .agent-step-status.running {
-  border-color: #b3c1f5;
-  color: #3550c8;
+  border-color: var(--workbench-accent);
+  color: var(--workbench-accent-strong);
 }
 .app-shell.theme-light .agent-step-status.completed,
 .theme-light .agent-step-status.completed {
@@ -573,9 +572,9 @@
 }
 .app-shell.theme-light .agent-action.primary,
 .theme-light .agent-action.primary {
-  border-color: #b3c1f5;
-  background: rgba(72, 102, 255, .14);
-  color: #22317a;
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 .app-shell.theme-light .agent-action.danger:hover,
 .theme-light .agent-action.danger:hover {

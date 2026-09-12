@@ -1,5 +1,9 @@
 :root {
   color-scheme: dark;
+  /* Root-level interaction colors also reach dialogs teleported to body. */
+  --workbench-accent: #35b779;
+  --workbench-accent-strong: #58d493;
+  --workbench-accent-soft: rgba(53, 183, 121, .11);
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   /* CJK 兜底排在 Latin 等宽之后、generic monospace 关键字之前。等宽栈里没有一张脸
      带中文字形,不显式兜底就会穿透到 generic 关键字由系统挑:macOS 挑到 PingFang SC
@@ -83,6 +87,12 @@ body {
 :root[data-platform="windows"][data-theme="light"] *::-webkit-scrollbar-thumb {
   background-color: rgba(90, 105, 126, .32);
 }
+:root[data-theme="light"],
+.theme-light {
+  --workbench-accent: #0b7f57;
+  --workbench-accent-strong: #086342;
+  --workbench-accent-soft: #e4f5ec;
+}
 :root[data-theme="light"] {
   color-scheme: light;
   --light-bg: #f8faf9;
@@ -93,9 +103,9 @@ body {
   --light-text: #111827;
   --light-muted: #667085;
   --light-faint: #98a2b3;
-  --light-accent: #0f8a63;
-  --light-accent-strong: #087a55;
-  --light-accent-soft: #e4f6ee;
+  --light-accent: var(--workbench-accent);
+  --light-accent-strong: var(--workbench-accent-strong);
+  --light-accent-soft: var(--workbench-accent-soft);
   --light-danger: #c2414b;
   color: #111827;
   background: #f6f8fc;

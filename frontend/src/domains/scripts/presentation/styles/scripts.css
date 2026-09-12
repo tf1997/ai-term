@@ -326,9 +326,9 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid rgba(92, 190, 255, .24);
+  border: 1px solid color-mix(in srgb, var(--workbench-accent) 24%, transparent);
   border-radius: 6px;
-  background: rgba(92, 190, 255, .08);
+  background: color-mix(in srgb, var(--workbench-accent) 8%, transparent);
   color: #b8dced;
   padding: 7px 9px;
   font-size: var(--font-sm);
@@ -354,8 +354,8 @@ code {
   padding-bottom: calc(var(--icon-size) + 12px);
 }
 .assistant-compose:focus-within textarea {
-  border-color: rgba(91, 111, 255, .64);
-  box-shadow: 0 0 0 1px rgba(91, 111, 255, .18);
+  border-color: color-mix(in srgb, var(--workbench-accent) 64%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--workbench-accent) 18%, transparent);
 }
 .assistant-compose .icon-button {
   position: absolute;

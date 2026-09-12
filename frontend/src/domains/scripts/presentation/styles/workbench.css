@@ -1,6 +1,6 @@
 /* Prototype-aligned script assistant workbench */
 .script-panel {
-  background:     linear-gradient(180deg, rgba(91, 111, 255, .055), transparent 30%),     #0a101b;
+  background:     linear-gradient(180deg, color-mix(in srgb, var(--workbench-accent) 5.5%, transparent), transparent 30%),     #0a101b;
 }
 .workspace-section-head.script-head {
   min-height: 86px;
@@ -18,9 +18,9 @@
 .script-title-head .panel-glyph {
   width: 54px;
   height: 54px;
-  border-color: rgba(91, 111, 255, .58);
-  background: rgba(91, 111, 255, .16);
-  color: #b9c3ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 58%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 16%, transparent);
+  color: var(--workbench-accent-strong);
   font-size: var(--font-xl);
 }
 .script-title-head strong {
@@ -197,9 +197,9 @@
 .script-assistant-title .panel-glyph {
   width: 36px;
   height: 36px;
-  border-color: rgba(91, 111, 255, .42);
-  background: rgba(91, 111, 255, .16);
-  color: #d7d2ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 16%, transparent);
+  color: var(--workbench-accent-strong);
   font-size: var(--font-md);
 }
 .script-chat-list {
@@ -216,7 +216,7 @@
   padding: 13px 16px;
 }
 .script-chat-list .message.ai {
-  background:     linear-gradient(180deg, rgba(91, 111, 255, .055), transparent 90px),     rgba(14, 22, 37, .92);
+  background:     linear-gradient(180deg, color-mix(in srgb, var(--workbench-accent) 5.5%, transparent), transparent 90px),     rgba(14, 22, 37, .92);
 }
 .script-chat-list .message-title {
   min-height: 38px;
@@ -229,7 +229,7 @@
   width: 38px;
   height: 38px;
   border-radius: 7px;
-  background: rgba(91, 111, 255, .28);
+  background: color-mix(in srgb, var(--workbench-accent) 28%, transparent);
 }
 .script-chat-list .message-body {
   margin-top: 0;
@@ -246,7 +246,7 @@
 }
 .assistant-compose.script-compose textarea {
   min-height: 98px;
-  border-color: rgba(91, 111, 255, .46);
+  border-color: color-mix(in srgb, var(--workbench-accent) 46%, transparent);
   background: #0b1220;
   padding: 14px calc(var(--icon-size) + 26px) calc(var(--icon-size) + 18px) 16px;
   resize: none;
@@ -254,8 +254,8 @@
 .assistant-compose.script-compose .icon-button {
   right: calc(var(--composer-pad-x) + 8px);
   bottom: calc(var(--composer-pad-bottom) + 8px);
-  border-color: rgba(91, 111, 255, .82);
-  background: rgba(91, 111, 255, .86);
+  border-color: color-mix(in srgb, var(--workbench-accent) 82%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 86%, transparent);
 }
 @media (max-width: 1280px) {
   .workspace-section-head.script-head,   .script-preview-head,   .script-assistant-head {
@@ -638,7 +638,7 @@
   padding: 7px 10px;
 }
 .script-library-row.active {
-  box-shadow: inset 2px 0 0 rgba(91, 111, 255, .72);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--workbench-accent) 72%, transparent);
 }
 .script-library-row strong {
   font-size: var(--font-sm);
@@ -732,8 +732,8 @@
   color: #dfe9f8;
 }
 .script-editor-tools .icon-button:focus-visible {
-  border-color: rgba(91, 111, 255, .72);
-  box-shadow: 0 0 0 2px rgba(91, 111, 255, .16);
+  border-color: color-mix(in srgb, var(--workbench-accent) 72%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--workbench-accent) 16%, transparent);
 }
 /* Script library detail editor. */
 .script-library-editor {
@@ -769,7 +769,7 @@
   overflow: auto;
 }
 .script-library-editor textarea:focus {
-  box-shadow: inset 0 0 0 1px rgba(91, 111, 255, .22);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--workbench-accent) 22%, transparent);
 }
 /* Expanded script preview modal. */
 .script-preview-backdrop {
@@ -1174,7 +1174,7 @@
 }
 .script-editor-shell textarea::selection {
   color: transparent;
-  background: rgba(91, 111, 255, .34);
+  background: color-mix(in srgb, var(--workbench-accent) 34%, transparent);
 }
 .script-expanded-editor .script-code-overlay {
   padding: 12px 14px;

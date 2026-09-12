@@ -103,7 +103,7 @@
   white-space: nowrap;
 }
 .transfer-task-head span {
-  color: #8fb4ff;
+  color: var(--workbench-accent-strong);
   font-family: var(--font-mono);
   font-size: var(--font-xs);
 }
@@ -122,7 +122,7 @@
   width: 0;
   min-width: 18px;
   border-radius: inherit;
-  background: linear-gradient(90deg, #5b6fff, #34d6a6);
+  background: linear-gradient(90deg, var(--workbench-accent), #34d6a6);
   transition: width .2s ease;
 }
 .transfer-progress.indeterminate span {
@@ -434,8 +434,8 @@
   outline: none;
 }
 .target-list article.active {
-  border-color: rgba(91, 111, 255, .7);
-  background: rgba(91, 111, 255, .16);
+  border-color: color-mix(in srgb, var(--workbench-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--workbench-accent) 16%, transparent);
 }
 .target-list article > div {
   min-width: 0;
@@ -464,8 +464,8 @@
   white-space: nowrap;
 }
 .target-probe-state.probing {
-  border-color: rgba(91, 111, 255, .42);
-  color: #c8c4ff;
+  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
+  color: var(--workbench-accent-strong);
 }
 .target-probe-state.ok {
   border-color: rgba(54, 200, 117, .42);
@@ -525,7 +525,7 @@
 .progress span {
   display: block;
   height: 100%;
-  background: #46c7d8;
+  background: var(--workbench-accent);
 }
 .visually-hidden {
   position: absolute;
@@ -619,7 +619,7 @@
   inset-block: 0;
   min-width: 28px;
   border-radius: inherit;
-  background: linear-gradient(90deg, #37d99e, #60a5fa);
+  background: linear-gradient(90deg, #37d99e, var(--workbench-accent));
   box-shadow: 0 0 16px rgba(86, 230, 163, .28);
   cursor: grab;
   touch-action: none;
@@ -728,8 +728,8 @@
   box-shadow: 0 0 0 3px rgba(241, 109, 122, .14);
 }
 .status-dot.preview {
-  background: #7aa7ff;
-  box-shadow: 0 0 0 3px rgba(122, 167, 255, .14);
+  background: var(--workbench-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workbench-accent) 14%, transparent);
 }
 .persistence-status {
   position: fixed;
