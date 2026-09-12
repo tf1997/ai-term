@@ -26,6 +26,7 @@ defineProps<{
   executionTargetTitle: string
   executionTargetConnectionIds: string[]
   selectedAiConfigId: string
+  aiConfigs?: AiProviderConfig[]
   aiConfig: AiProviderConfig
   apiKey: string
   terminalSnapshot: string
@@ -45,6 +46,9 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
+  selectAiConfig: [configId: string]
+  configureAi: []
+  clearTerminalSelection: []
   close: []
   workspaceTabChanged: [tab: 'history' | 'ai' | 'scripts' | 'sftp']
   selectWorkspaceSession: [sessionId: string]
@@ -154,6 +158,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :execution-target-title="executionTargetTitle"
       :execution-target-connection-ids="executionTargetConnectionIds"
       :selected-config-id="selectedAiConfigId"
+      :configs="aiConfigs"
       :config="aiConfig"
       :api-key="apiKey"
       :terminal-snapshot="terminalSnapshot"
@@ -169,6 +174,10 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       :agent-step-limit="agentStepLimit"
       :agent-command-timeout-ms="agentCommandTimeoutMs"
       @select-session="emit('selectWorkspaceSession', $event)"
+      @select-config="emit('selectAiConfig', $event)"
+      @configure-ai="emit('configureAi')"
+      @clear-selection="emit('clearTerminalSelection')"
+      @focus-terminal="emit('focusTerminal')"
       @create-session="emit('createWorkspaceSession')"
       @rename-session="(sessionId, name) => emit('renameWorkspaceSession', sessionId, name)"
       @delete-session="emit('deleteWorkspaceSession', $event)"

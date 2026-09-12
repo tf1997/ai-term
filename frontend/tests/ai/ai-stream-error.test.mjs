@@ -41,8 +41,8 @@ test('重试后不显示旧的部分正文', () => {
   assert.equal(retried.payloadJson, undefined)
 })
 
-test('Agent 错误保留任务步骤与中断文本', () => {
-  const payload = { mode: 'agent', agentStatus: 'error', agentSteps: [{ id: 'step-1' }] }
+test('Agent 错误保留错误类别、任务步骤与中断文本', () => {
+  const payload = { mode: 'agent', agentStatus: 'error', errorKind: 'tool', agentSteps: [{ id: 'step-1', executionPhase: 'not-started', failureReason: 'Shell 未就绪' }] }
   const failed = createAiStreamErrorMessage({ ...message, payloadJson: JSON.stringify(payload) }, '断流', '正在分析')
   assert.deepEqual(JSON.parse(failed.payloadJson), { ...payload, partialText: '正在分析' })
 })

@@ -375,8 +375,7 @@
   min-height: 0;
 }
 .history-list > .empty-state,
-.file-list > .empty-state,
-.assistant-panel .message-list > .empty-state {
+.file-list > .empty-state {
   display: grid;
   place-items: center;
   min-height: calc(100% - 16px);
@@ -396,12 +395,6 @@
 .file-list > .empty-state {
   align-self: stretch;
   min-height: 180px;
-}
-.assistant-panel .message-list > .empty-state {
-  flex: 1 1 auto;
-  height: auto;
-  min-height: 220px;
-  margin: 0;
 }
 .quick-command-backdrop {
   padding: 18px;
@@ -458,8 +451,7 @@
   min-height: 54px;
 }
 .app-shell.theme-light .history-list > .empty-state,
-.app-shell.theme-light .file-list > .empty-state,
-.app-shell.theme-light .assistant-panel .message-list > .empty-state {
+.app-shell.theme-light .file-list > .empty-state {
   border-color: #dbe7e2;
   background: #f8fbfa;
   color: var(--light-muted);

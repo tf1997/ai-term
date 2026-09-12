@@ -231,6 +231,8 @@ export function runAgentTask(
     ? {
         ...structuredClone(options.retryStep),
         status: 'pending' as const,
+        executionPhase: 'not-started' as const,
+        failureReason: undefined,
         output: undefined,
         exitCode: undefined,
         durationMs: undefined,
@@ -285,9 +287,12 @@ export function runAgentTask(
     resolveDone(structuredClone(state))
   }
 
-  const finishStopped = () => {
+  const finishStopped = (reason?: string) => {
     finishRun(() => {
       state.status = 'stopped'
+      state.stopReason = reason ?? (state.steps.some((step) => step.status === 'running' || step.status === 'timeout')
+        ? '任务已停止；已发出的命令可能仍在终端运行。'
+        : '用户已停止任务。')
     })
   }
 
@@ -304,6 +309,7 @@ export function runAgentTask(
       const note = `已达到 ${stepLimit} 步上限,任务未确认完成;可在下一条消息里让 Agent 接着排查`
       state.finalText = state.finalText ? `${state.finalText}\n${note}` : note
       state.status = 'stopped'
+      state.stopReason = note
     })
   }
 
@@ -388,9 +394,10 @@ export function runAgentTask(
   const executeStep = async (step: AgentStep, toolCallId: string): Promise<'continue' | 'ended'> => {
     setStatus('executing')
     step.status = 'running'
+    step.executionPhase = 'dispatching'
     notify()
 
-    const startPromise = Promise.resolve(deps.startCommand(step.command))
+    const startPromise = Promise.resolve().then(() => deps.startCommand(step.command))
     const startOutcome = await raceWithStop(startPromise)
     if (startOutcome.kind === 'stopped') {
       // stop() 时句柄可能尚未返回:拿到后补一次 cancel,放弃输出等待
@@ -400,7 +407,9 @@ export function runAgentTask(
     }
     if (startOutcome.kind === 'error') {
       step.status = 'failed'
-      finishError(`命令启动失败:${errorMessage(startOutcome.error)}`, 'tool')
+      step.executionPhase = 'not-started'
+      step.failureReason = `命令启动失败:${errorMessage(startOutcome.error)}`
+      finishError(step.failureReason, 'tool')
       return 'ended'
     }
     const handle = startOutcome.value
@@ -421,6 +430,10 @@ export function runAgentTask(
       if (partial.length !== lastOutputLength) {
         lastOutputLength = partial.length
         lastOutputAt = Date.now()
+      }
+      if (partial && step.executionPhase === 'dispatching') {
+        step.executionPhase = 'running'
+        notify()
       }
       return partial
     }
@@ -443,7 +456,8 @@ export function runAgentTask(
         if (outcome.kind === 'error') {
           step.status = 'failed'
           step.deadlineAt = undefined
-          finishError(`等待命令结果异常:${errorMessage(outcome.error)}`, 'tool')
+          step.failureReason = `等待命令结果异常:${errorMessage(outcome.error)}`
+          finishError(step.failureReason, 'tool')
           return 'ended'
         }
         if (outcome.kind === 'timeout') {
@@ -488,7 +502,7 @@ export function runAgentTask(
           // 已捕获的部分输出留在卡片上,否则超时步骤只剩一条命令
           if (!step.output && partialOutput) step.output = partialOutput
           notify()
-          finishStopped()
+          finishStopped('已停止等待命令结果；命令可能仍在终端运行。')
           return 'ended'
         }
 
@@ -501,21 +515,27 @@ export function runAgentTask(
         }
         if (result.status === 'dispatch-failed') {
           step.status = 'failed'
+          step.executionPhase = 'not-started'
+          step.failureReason = `命令派发失败:${result.failureReason ?? '未知原因'}`
           notify()
-          finishError(`命令派发失败:${result.failureReason ?? '未知原因'}`, 'tool')
+          finishError(step.failureReason, 'tool')
           return 'ended'
         }
         if (result.commandMismatch) {
           // 完成的命令与派发命令不一致:用户手动输入串扰(6.2),停止任务并交还终端
           step.status = 'failed'
+          step.executionPhase = 'finished'
+          step.failureReason = '检测到用户手动输入与 Agent 命令串扰,任务已停止并交还终端'
           notify()
           finishRun(() => {
             state.status = 'stopped'
-            state.error = '检测到用户手动输入与 Agent 命令串扰,任务已停止并交还终端'
+            state.stopReason = step.failureReason
+            state.error = step.failureReason
           })
           return 'ended'
         }
         step.status = 'completed'
+        step.executionPhase = 'finished'
         step.output = result.output
         step.exitCode = result.exitCode
         step.durationMs = result.durationMs
@@ -577,7 +597,8 @@ export function runAgentTask(
       reason: parsed.reason,
       risks: classification.risks,
       sensitive: classification.sensitive,
-      status: 'pending'
+      status: 'pending',
+      executionPhase: 'not-started'
     }
     state.steps.push(step)
     notify()

@@ -101,6 +101,44 @@ test('Agent 载荷恢复合法连接代次，非法或旧值保留原消息的�
   }
 })
 
+test('Agent 载荷还原错误类别、执行阶段和停止原因', () => {
+  const step = { id: 'step-1', status: 'failed', executionPhase: 'not-started', failureReason: '终端未就绪' }
+  for (const errorKind of ['model', 'tool', 'protocol']) {
+    const hydrated = hydrateAiMessagePayload(message('agent', {
+      error: true,
+      payloadJson: JSON.stringify({ mode: 'agent', agentStatus: 'error', agentSteps: [step], errorKind })
+    }))
+    assert.equal(hydrated.errorKind, errorKind)
+    assert.equal(hydrated.agentSteps[0].executionPhase, 'not-started')
+    assert.equal(hydrated.agentSteps[0].failureReason, '终端未就绪')
+  }
+  const stopped = hydrateAiMessagePayload(message('stopped', {
+    payloadJson: JSON.stringify({ mode: 'agent', agentStatus: 'stopped', stopReason: '检测到命令串扰，已交还终端' })
+  }))
+  assert.equal(stopped.stopReason, '检测到命令串扰，已交还终端')
+  assert.equal(stopped.errorKind, undefined)
+})
+
+test('旧的派发失败记录可识别未启动，未知失败不猜测执行阶段', () => {
+  const payloadJson = JSON.stringify({ mode: 'agent', agentStatus: 'error', agentSteps: [{ id: 'step-1', status: 'failed' }] })
+  const legacy = hydrateAiMessagePayload(message('legacy', { error: true, text: '命令派发失败:Shell 未就绪', payloadJson }))
+  assert.equal(legacy.errorKind, 'tool')
+  assert.equal(legacy.agentSteps[0].executionPhase, 'not-started')
+  assert.equal(legacy.agentSteps[0].failureReason, legacy.text)
+  const unknown = hydrateAiMessagePayload(message('unknown', { error: true, text: '等待结果失败', payloadJson }))
+  assert.equal(unknown.agentSteps[0].executionPhase, undefined)
+})
+
+test('非法状态字段不会作为可信错误类别和执行阶段使用', () => {
+  const hydrated = hydrateAiMessagePayload(message('agent', {
+    payloadJson: JSON.stringify({ mode: 'agent', errorKind: 'unknown', stopReason: 2, agentSteps: [{ status: 'failed', executionPhase: 'invented', failureReason: {} }] })
+  }))
+  assert.equal(hydrated.errorKind, undefined)
+  assert.equal(hydrated.stopReason, undefined)
+  assert.equal(hydrated.agentSteps[0].executionPhase, undefined)
+  assert.equal(hydrated.agentSteps[0].failureReason, undefined)
+})
+
 test('消息载荷还原 token 用量:chat 与 agent 都恢复,非法用量忽略且不改变原对象', () => {
   const usage = { requests: 1, inputTokens: 1200, outputTokens: 30, cachedInputTokens: 1024 }
   const chat = hydrateAiMessagePayload(message('chat', { role: 'assistant', payloadJson: JSON.stringify({ usage }) }))

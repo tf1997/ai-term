@@ -602,6 +602,10 @@ function updateTerminalSelection(event: TerminalSelectionEvent) {
   }
 }
 
+function clearTerminalSelection() {
+  delete terminalSelections.value[activeTerminalId.value]
+}
+
 function recordCommand(event: CommandRecordedEvent) {
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   const connectionId = tab?.connectionId ?? LOCAL_CONNECTION_ID
@@ -844,6 +848,7 @@ onBeforeUnmount(() => {
       :execution-target-label="terminalTargetLabel"
       :execution-target-title="terminalTargetTitle"
       :execution-target-connection-ids="targetConnectionIds"
+      :ai-configs="aiConfigs"
       :selected-ai-config-id="selectedAiConfigId"
       :ai-config="aiConfig"
       :api-key="activeAiRuntimeApiKey"
@@ -862,6 +867,9 @@ onBeforeUnmount(() => {
       :agent-step-limit="appSettings.agentStepLimit"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
       @close="rightCollapsed = true"
+      @select-ai-config="selectAiConfig"
+      @configure-ai="editAiConfig()"
+      @clear-terminal-selection="clearTerminalSelection"
       @select-workspace-session="selectWorkspaceSession"
       @create-workspace-session="createWorkspaceSessionForActiveConnection"
       @rename-workspace-session="renameWorkspaceSession"

@@ -296,6 +296,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         text: failed ? state.error || '任务出错' : state.finalText,
         agentSteps: state.steps,
         agentStatus: status,
+        errorKind: failed ? state.errorKind : undefined,
+        stopReason: status === 'stopped' ? state.stopReason : undefined,
         terminalConnectionGeneration: boundConnectionGeneration,
         error: failed,
         streaming: !terminal,
@@ -305,6 +307,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
               mode: 'agent',
               agentSteps: persistableAgentSteps(state.steps),
               agentStatus: status,
+              errorKind: failed ? state.errorKind : undefined,
+              stopReason: status === 'stopped' ? state.stopReason : undefined,
               terminalConnectionGeneration: boundConnectionGeneration,
               usage
             })

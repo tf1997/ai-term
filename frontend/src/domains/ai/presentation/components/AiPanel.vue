@@ -26,6 +26,7 @@ import { aiStreamPartialText } from '../../domain/aiStreamError'
 import AiMarkdownMessage from './messages/AiMarkdownMessage.vue'
 import AiErrorNotice from './messages/AiErrorNotice.vue'
 import AgentStepCard from './messages/AgentStepCard.vue'
+import AiMessageItem from './messages/AiMessageItem.vue'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
 
@@ -44,6 +45,10 @@ const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useA
 const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
 const collapsedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
+const followingLatest = ref(true)
+const hasNewContent = ref(false)
+const messageContent = ref<HTMLElement | null>(null)
+let contentResizeObserver: ResizeObserver | undefined
 const historyPopover = ref<HTMLElement | null>(null)
 const historyButton = ref<HTMLButtonElement | null>(null)
 const composerInput = ref<HTMLTextAreaElement | null>(null)
@@ -105,8 +110,8 @@ const composerBusy = computed(() => agentPreparing.value || isAsking.value || ag
 
 const composerPlaceholder = computed(() => {
   if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
-  if (!hasUsableConfig.value) return '请先在左侧配置菜单完善 AI Base URL、Model 和 API Key'
-  if (panelMode.value === 'agent') return '描述任务目标,Agent 将提出命令并按审批执行'
+  if (!hasUsableConfig.value) return '选择或配置模型'
+  if (panelMode.value === 'agent') return '描述任务目标...'
   return '输入问题'
 })
 
@@ -122,7 +127,7 @@ const selectedTerminalContext = computed(() => {
 const aiModelLabel = computed(() => props.config.model.trim() || props.selectedConfigId || '未选择模型')
 const aiEligibleHistoryCount = computed(() => props.commandHistory.filter((entry) => !isSensitiveCommand(entry.command)).length)
 const aiContextHistoryCount = computed(() => Math.min(aiEligibleHistoryCount.value, MAX_AI_COMMAND_HISTORY))
-const assistantContextSummary = computed(() => `模型 ${aiModelLabel.value}`)
+const modelOptions = computed(() => props.configs?.length ? props.configs : [props.config])
 const contextSummaryLabel = computed(() => {
   const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
   return `${currentConnectionLabel.value} · 上下文 ${formatCharacterCount(props.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
@@ -204,6 +209,7 @@ async function sendMessage() {
   const assistantMessage = createMessage(requestConnectionId, requestWorkspaceSessionId, requestTerminalId, 'assistant', '', '', false, true)
   emit('appendMessage', assistantMessage)
   askText.value = ''
+  scrollMessagesToLatest()
   await runChatTurn(assistantMessage, text, selectedContext, userMessage.id)
 }
 
@@ -289,7 +295,7 @@ function failedAgentStep(message: AiMessage) {
 }
 
 function retryButtonLabel(message: AiMessage) {
-  return failedAgentStep(message) ? '重试命令' : '重试'
+  return failedAgentStep(message) ? '重试命令' : '重试请求'
 }
 
 function retryButtonTitle(message: AiMessage) {
@@ -332,6 +338,8 @@ async function retryMessage(message: AiMessage) {
     text: '',
     command: '',
     error: false,
+    errorKind: undefined,
+    stopReason: undefined,
     streaming: true,
     agentSteps: agentMode ? completedSteps : undefined,
     agentStatus: agentMode ? 'running' : undefined,
@@ -366,13 +374,44 @@ function focusComposer() {
 }
 
 function scrollMessagesToLatest() {
+  followingLatest.value = true
+  hasNewContent.value = false
+  followMessageContent()
+}
+
+function handleMessageScroll() {
+  const list = messageList.value
+  if (!list) return
+  followingLatest.value = list.scrollHeight - list.scrollTop - list.clientHeight < 48
+  if (followingLatest.value) hasNewContent.value = false
+}
+
+function followMessageContent() {
   void nextTick(() => {
     requestAnimationFrame(() => {
       const list = messageList.value
-      if (!list) return
+      if (!list || !followingLatest.value) return
       list.scrollTop = list.scrollHeight
     })
   })
+}
+
+function resizeComposer() {
+  const input = composerInput.value
+  if (!input) return
+  input.style.height = 'auto'
+  input.style.height = `${Math.min(144, Math.max(56, input.scrollHeight))}px`
+}
+
+function stepOwnsError(message: AiMessage) {
+  return Boolean(message.error && failedAgentStep(message) && (!message.errorKind || message.errorKind === 'tool'))
+}
+
+function taskSummary(message: AiMessage) {
+  if (!message.agentStatus || message.agentStatus === 'running') return ''
+  if (!message.agentSteps?.length && message.agentStatus === 'done') return ''
+  const label = message.agentStatus === 'done' ? '任务已结束' : message.agentStatus === 'stopped' ? '任务已停止' : '任务中断'
+  return `${label}${message.agentSteps?.length ? ` · ${message.agentSteps.length} 个步骤` : ''}`
 }
 
 function buildAiRiskExplanationPrompt(command: string) {
@@ -551,6 +590,7 @@ function closeAiCommandRiskConfirm() {
 }
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
+  if (historyOpen.value) void nextTick(() => historyPopover.value?.querySelector('input')?.focus())
 }
 
 function handleDocumentPointerDown(event: PointerEvent) {
@@ -614,17 +654,32 @@ function sessionTimeLabel(session: WorkspaceSession) {
 }
 
 watch(
-  () => props.messages.map((message) => `${message.id}:${message.text.length}:${message.streaming ? '1' : '0'}`).join('|'),
-  scrollMessagesToLatest,
+  () => props.messages.map((message) => `${message.id}:${message.text.length}:${message.streaming ? '1' : '0'}:${message.agentSteps?.map(step => `${step.status}:${step.output?.length}`).join(',')}`).join('|'),
+  () => {
+    if (!followingLatest.value) hasNewContent.value = true
+    followMessageContent()
+  },
   { flush: 'post' }
 )
 
+watch(() => props.workspaceSessionId, scrollMessagesToLatest, { flush: 'post' })
+watch(askText, resizeComposer, { flush: 'post' })
+
 onMounted(() => {
   document.addEventListener('pointerdown', handleDocumentPointerDown, true)
+  contentResizeObserver = new ResizeObserver(() => {
+    // A completed step may grow when expanded. Keep the AI header anchored; only
+    // active streaming/agent runs should follow the newest content.
+    if (isAsking.value || agentRunActive.value) followMessageContent()
+  })
+  if (messageContent.value) contentResizeObserver.observe(messageContent.value)
+  scrollMessagesToLatest()
+  resizeComposer()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
+  contentResizeObserver?.disconnect()
   if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
   stopAnswerTimer()
 })
@@ -639,21 +694,14 @@ watch(
 </script>
 
 <template>
-  <section class="assistant-panel">
-    <div class="panel-head ai-panel-head">
-      <div class="ai-session-head">
-        <span class="panel-glyph ai-glyph" aria-hidden="true"><UiIcon name="ai" size="16" /></span>
-        <div>
-          <strong>{{ activeSessionTitle }}</strong>
-          <span>{{ assistantContextSummary }}</span>
-        </div>
+  <section class="assistant-panel ai-chat-panel">
+    <div class="chat-head">
+      <strong class="chat-session-title" :title="activeSessionTitle">{{ activeSessionTitle }}</strong>
+      <div class="chat-head-actions">
+        <button ref="historyButton" class="chat-icon" type="button" title="会话列表" aria-label="会话列表" :aria-expanded="historyOpen" @click="toggleHistory"><UiIcon name="history" /></button>
+        <button class="chat-icon" type="button" title="新建会话" aria-label="新建会话" @click="createSession"><UiIcon name="plus" /></button>
       </div>
-      <div class="panel-actions ai-panel-actions">
-        <span v-if="isAsking" class="ai-live-pill">回答中 {{ formatAnswerDuration(answerElapsedSeconds) }}</span>
-        <button ref="historyButton" class="icon-button" type="button" title="会话列表" aria-label="会话列表" @click="toggleHistory"><UiIcon name="list" /></button>
-        <button class="icon-button" type="button" title="新建会话" aria-label="新建会话" @click="createSession"><UiIcon name="plus" /></button>
-      </div>
-      <div v-if="historyOpen" ref="historyPopover" class="session-history-popover">
+      <div v-if="historyOpen" ref="historyPopover" class="session-history-popover" @keydown.esc.stop="historyOpen = false; historyButton?.focus()">
         <div class="session-search">
           <span><UiIcon name="search" size="14" /></span>
           <input v-model="sessionSearch" placeholder="搜索会话..." aria-label="搜索会话" />
@@ -788,17 +836,16 @@ watch(
         </div>
       </section>
     </div>
-    <div class="context-strip ai-context-strip" :class="{ expanded: contextOpen }">
-      <div class="context-strip-main">
-        <button class="context-summary-button" type="button" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
-          <UiIcon name="database" />
-          <span>{{ contextSummaryLabel }}</span>
-          <UiIcon v-if="contextOpen" name="arrow-up" />
-          <UiIcon v-else name="arrow-down" />
+    <div class="chat-context" :class="{ expanded: contextOpen }">
+      <div class="chat-context-main">
+        <span class="chat-target" :title="executionTargetTitle || currentConnectionLabel"><UiIcon name="terminal" size="13" /><span>{{ executionTargetLabel || currentConnectionLabel }}</span></span>
+        <button class="chat-context-toggle" type="button" :title="contextSummaryLabel" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
+          <span>上下文 {{ terminalSnapshot.length.toLocaleString('zh-CN') }} 字符</span>
+          <UiIcon :name="contextOpen ? 'arrow-up' : 'arrow-down'" size="12" />
         </button>
-        <span v-if="aiCommandExecutionNotice" class="chip command-risk-status risk-safe ai-command-notice" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</span>
       </div>
-      <div v-if="contextOpen" class="ai-context-detail">
+      <p v-if="aiCommandExecutionNotice" class="chat-inline-notice" role="status" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</p>
+      <div v-if="contextOpen" class="chat-context-detail">
         <span><strong>终端</strong>{{ formatCharacterCount(terminalSnapshot.length) }}</span>
         <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ aiEligibleHistoryCount }} 条</span>
         <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
@@ -807,45 +854,27 @@ watch(
         <span v-if="compactedConversationCount > 0" title="更早的对话已由 AI 压缩为摘要，并继续作为背景提供给模型"><strong>历史压缩</strong>{{ compactedConversationCount }} 条早期消息已并入摘要</span>
       </div>
     </div>
-    <div ref="messageList" class="message-list">
-      <p v-if="!hasUsableConfig" class="empty-state">暂无可用 AI 配置，请在左侧配置菜单中新建或完善配置。</p>
-      <p v-else-if="messages.length === 0" class="empty-state">当前 AI 会话暂无对话</p>
-      <article
+    <div class="chat-viewport">
+    <div ref="messageList" class="chat-message-list" tabindex="0" aria-label="对话记录" @scroll="handleMessageScroll">
+    <div ref="messageContent" class="chat-message-content">
+      <div v-if="!hasUsableConfig" class="chat-empty">
+        <UiIcon name="settings" size="24" />
+        <span>尚未配置模型</span>
+        <button class="chat-button" type="button" @click="emit('configureAi')">配置模型</button>
+      </div>
+      <div v-else-if="messages.length === 0" class="chat-empty"><UiIcon name="ai" size="24" /><span>新对话</span></div>
+      <AiMessageItem
         v-for="message in messages"
         :key="message.id"
-        class="message"
-        :class="{ ai: message.role === 'assistant', error: message.error, collapsed: isMessageCollapsed(message) }"
+        :message="message"
+        :source="messageSourceLabel(message)"
+        :duration="messageAnswerDuration(message) ? formatAnswerDuration(messageAnswerDuration(message)) : ''"
       >
-        <div class="message-title">
-          <span class="message-identity">
-            <span class="message-avatar">{{ message.role === 'assistant' ? 'AI' : '我' }}</span>
-            <strong>
-              {{ message.role === 'assistant' ? 'AI' : '我' }}
-              <span v-if="message.streaming" class="streaming-dot">等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
-              <span v-else-if="messageAnswerDuration(message)" class="message-duration">耗时 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</span>
-            </strong>
-          </span>
-          <span class="message-meta">
-            <span class="chip message-source" :title="`生成上下文：${messageSourceLabel(message)}`">来源 · {{ messageSourceLabel(message) }}</span>
-            <span v-if="message.usage" class="chip message-usage" :title="formatMessageUsageTitle(message.usage)">Token · {{ formatMessageUsageLabel(message.usage) }}</span>
-            <span v-if="message.error" class="message-error-badge">请求失败</span>
-          </span>
-        </div>
-        <div class="message-body">
-          <div v-if="message.streaming && !message.text && !messageHasAgentBody(message)" class="thinking-row">
-            <span />
-            <span />
-            <span />
-            正在回复，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}
+          <div v-if="message.streaming && !messageHasAgentBody(message)" class="chat-progress" role="status">
+            <span class="chat-progress-dot" />
+            {{ message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
-          <div v-if="message.mode === 'agent' && (message.agentSteps?.length || message.agentStatus)" class="agent-steps">
-            <div
-              v-if="message.agentStatus && message.agentStatus !== 'running' && !message.error && !message.agentSteps?.length"
-              class="agent-run-status"
-              :class="message.agentStatus"
-            >
-              {{ agentRunStatusLabel(message) }}
-            </div>
+          <div v-if="message.mode === 'agent' && message.agentSteps?.length" class="chat-tool-steps">
             <AgentStepCard
               v-for="step in message.agentSteps ?? []"
               :key="step.id"
@@ -856,6 +885,11 @@ watch(
               :timeout-info="agentPendingTimeout?.info"
               :now-ms="agentNowMs"
               :high-risk-armed="agentHighRiskArmed"
+              :target-label="messageSourceLabel(message)"
+              :failure-detail="stepOwnsError(message) && step.id === failedAgentStep(message)?.id ? message.text : ''"
+              :can-retry="stepOwnsError(message) && step.id === failedAgentStep(message)?.id && canRetryMessage(message)"
+              :retry-disabled-reason="retryBlockedReason(message)"
+              :observation-stopped="message.agentStatus === 'stopped'"
               @execute="resolveAgentApproval('execute')"
               @review-risk="openAgentRiskReview"
               @execute-and-allow="resolveAgentApproval('execute-and-allow')"
@@ -863,15 +897,19 @@ watch(
               @stop="resolveAgentApproval('stop')"
               @wait="resolveAgentTimeout('wait')"
               @timeout-stop="resolveAgentTimeout('stop')"
+              @retry="retryMessage(message)"
+              @focus-terminal="emit('focusTerminal')"
             />
-            <div v-if="message.id === agentRunMessageId && agentStreamText && !message.error" class="agent-stream-text">{{ agentStreamText }}</div>
           </div>
+          <p v-if="message.id === agentRunMessageId && agentStreamText && !message.error" class="chat-progress">{{ agentStreamText }}</p>
+          <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
+          <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>
           <template v-if="aiStreamPartialText(message)">
-            <p class="ai-error-hint">回复中断，以下是已收到的不完整内容：</p>
+            <p class="chat-inline-notice">回复已中断，已保留收到的内容。</p>
             <AiMarkdownMessage :content="aiStreamPartialText(message)" :interactive-commands="false" />
           </template>
           <AiErrorNotice
-            v-if="message.error"
+            v-if="message.error && !stepOwnsError(message)"
             :detail="message.text"
             :suggested-command="message.mode === 'agent' ? '' : message.command || ''"
             :can-retry="canRetryMessage(message)"
@@ -881,28 +919,33 @@ watch(
             @retry="retryMessage(message)"
             @execute-command="executeGeneratedCommand($event, message)"
           />
+          <p v-if="message.text && !message.error && isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
           <AiMarkdownMessage
-            v-else-if="message.text"
+            v-else-if="message.text && !message.error"
             :content="message.text"
             :interactive-commands="message.role === 'assistant' && message.mode !== 'agent'"
             @execute-command="executeGeneratedCommand($event, message)"
           />
-        </div>
-        <div v-if="shouldCollapseMessage(message)" class="message-collapse-footer">
-          <button class="text-button" type="button" @click="toggleMessage(message.id)">
+        <div v-if="!message.error && shouldCollapseMessage(message)" class="chat-collapse-footer">
+          <button class="chat-text-button" type="button" :aria-expanded="isMessageExpanded(message)" @click="toggleMessage(message.id)">
             <span>{{ isMessageExpanded(message) ? '收起回复' : '展开完整回复' }}</span>
             <UiIcon v-if="isMessageExpanded(message)" name="arrow-up" size="13" />
             <UiIcon v-else name="arrow-down" size="13" />
           </button>
         </div>
-      </article>
+      </AiMessageItem>
     </div>
-    <div class="assistant-compose unified-ai-compose" @pointerdown="focusComposer">
-      <div v-if="selectedTerminalContext" class="selected-terminal-note">
-        <strong>选中终端内容</strong>
+    </div>
+    <button v-if="!followingLatest" class="chat-latest chat-icon" type="button" :title="hasNewContent ? '有新内容，回到最新' : '回到最新'" aria-label="回到最新" @click="scrollMessagesToLatest"><UiIcon name="arrow-down" size="16" /></button>
+    </div>
+    <div class="chat-composer">
+      <div v-if="selectedTerminalContext" class="chat-selection">
+        <UiIcon name="terminal" size="14" />
         <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ formatCharacterCount(selectedTerminalContext.text.length) }}</span>
+        <button class="chat-icon" type="button" title="移除选中上下文" aria-label="移除选中上下文" @click="emit('clearSelection')"><UiIcon name="close" size="13" /></button>
       </div>
-      <div v-if="panelMode === 'agent' && agentModeNotice" class="agent-mode-notice">{{ agentModeNotice }}</div>
+      <div v-if="panelMode === 'agent' && agentModeNotice" class="chat-mode-notice">{{ agentModeNotice }}</div>
+      <div class="chat-input-shell">
       <textarea
         ref="composerInput"
         v-model="askText"
@@ -914,11 +957,11 @@ watch(
         @focus="historyOpen = false"
         @keydown="handleComposerKeydown"
       />
-      <div class="ai-mode-switch" role="tablist" aria-label="AI 模式">
+      <div class="chat-composer-toolbar">
+      <div class="chat-mode-switch" role="group" aria-label="AI 模式">
         <button
           type="button"
-          role="tab"
-          :aria-selected="panelMode === 'chat'"
+          :aria-pressed="panelMode === 'chat'"
           :class="{ active: panelMode === 'chat' }"
           :disabled="composerBusy"
           title="普通对话:AI 回答问题并给出可点击执行的命令"
@@ -926,23 +969,31 @@ watch(
         >对话</button>
         <button
           type="button"
-          role="tab"
-          :aria-selected="panelMode === 'agent'"
+          :aria-pressed="panelMode === 'agent'"
           :class="{ active: panelMode === 'agent' }"
           :disabled="composerBusy"
           title="Agent:AI 循环提出命令,经审批在当前终端执行并观察结果"
           @click="selectPanelMode('agent')"
         >Agent</button>
       </div>
+      <select class="chat-model-select" :value="selectedConfigId" :disabled="composerBusy" :title="aiModelLabel" aria-label="选择模型" @change="emit('selectConfig', ($event.target as HTMLSelectElement).value)">
+        <option v-for="option in modelOptions" :key="option.id" :value="option.id">{{ option.model || option.id }}</option>
+      </select>
+      <button class="chat-icon" type="button" title="配置模型" aria-label="配置模型" @click="emit('configureAi')"><UiIcon name="settings" size="14" /></button>
       <button
-        class="icon-button"
+        class="chat-icon chat-send"
+        type="button"
         :title="composerBusy ? (agentPreparing || agentRunActive ? '停止任务' : '停止回答') : 'Ctrl+Enter / ⌘+Enter 发送'"
         :aria-label="composerBusy ? '停止' : '发送'"
-        :disabled="!composerBusy && !canSendMessage"
+        :disabled="!composerBusy && (!canSendMessage || !askText.trim())"
         @click="composerPrimaryAction()"
       >
-        <UiIcon v-if="composerBusy" name="stop" /><UiIcon v-else name="arrow-right" />
+        <UiIcon v-if="composerBusy" name="stop" /><UiIcon v-else name="arrow-up" />
       </button>
+      </div>
+      </div>
     </div>
   </section>
 </template>
+
+<style src="../styles/ai-final.css" scoped></style>

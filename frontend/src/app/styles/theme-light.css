@@ -216,10 +216,10 @@
   border-bottom-color: var(--light-border);
   background: rgba(255, 255, 255, .86);
 }
-.theme-light .section-title, .theme-light .ai-session-head strong, .theme-light .script-title-head strong, .theme-light .workspace-section-head strong, .theme-light .transfer-pane-head strong, .theme-light .server-main strong {
+.theme-light .section-title, .theme-light .script-title-head strong, .theme-light .workspace-section-head strong, .theme-light .transfer-pane-head strong, .theme-light .server-main strong {
   color: var(--light-text);
 }
-.theme-light .ai-session-head span:not(.panel-glyph), .theme-light .script-title-head span:not(.panel-glyph), .theme-light .workspace-section-head span, .theme-light .transfer-pane-head span, .theme-light .server-meta, .theme-light .server-meta span, .theme-light .file-row span, .theme-light .empty-state {
+.theme-light .script-title-head span:not(.panel-glyph), .theme-light .workspace-section-head span, .theme-light .transfer-pane-head span, .theme-light .server-meta, .theme-light .server-meta span, .theme-light .file-row span, .theme-light .empty-state {
   color: var(--light-muted);
 }
 .theme-light input, .theme-light select, .theme-light textarea {

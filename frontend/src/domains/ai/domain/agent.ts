@@ -80,6 +80,10 @@ export type AgentStepStatus =
   | 'timeout'
   | 'failed'
 
+export type AgentErrorKind = 'model' | 'tool' | 'protocol'
+
+export type AgentExecutionPhase = 'not-started' | 'dispatching' | 'running' | 'finished'
+
 export interface AgentStep {
   /** 即 tool_call_id。 */
   id: string
@@ -89,6 +93,9 @@ export interface AgentStep {
   sensitive: boolean
   autoApproved?: boolean
   status: AgentStepStatus
+  /** Missing on older records when the actual execution phase is unknown. */
+  executionPhase?: AgentExecutionPhase
+  failureReason?: string
   output?: string
   exitCode?: number
   durationMs?: number
@@ -118,7 +125,9 @@ export interface AgentRunState {
   /** 本次运行内所有模型请求的累计用量;网关从未上报时缺省。 */
   usage?: AiMessageUsage
   error?: string
-  errorKind?: 'model' | 'tool' | 'protocol'
+  errorKind?: AgentErrorKind
+  /** Stopping observation does not terminate a command in the terminal. */
+  stopReason?: string
 }
 
 export type AgentApprovalDecision = 'execute' | 'execute-and-allow' | 'skip' | 'stop'

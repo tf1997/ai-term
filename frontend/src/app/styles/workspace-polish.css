@@ -31,33 +31,12 @@
 /* Shared workbench geometry: panel shells stay square, content cards and
    controls use two predictable radii so the interface reads as one system. */
 .workspace-tabs,
-.workspace-close,
-.context-summary-button,
-.ai-mode-switch,
-.assistant-panel > .assistant-compose .icon-button,
-.assistant-panel .message,
-.assistant-panel .ai-result-block,
-.assistant-panel .ai-error-notice,
-.agent-step-card,
-.agent-step-command,
-.agent-step-output,
-.ai-error-suggestion,
-.ai-error-detail {
+.workspace-close {
   border-radius: var(--radius-card);
 }
 
 .workspace-tabs button,
-.workspace-close,
-.context-summary-button,
-.ai-mode-switch button,
-.assistant-panel > .assistant-compose textarea,
-.assistant-panel > .assistant-compose .icon-button,
-.assistant-panel .ai-code-actions .icon-button,
-.assistant-panel .ai-code-run,
-.assistant-panel .ai-code-block,
-.assistant-panel .message-collapse-footer .text-button,
-.agent-action,
-.ai-error-actions .text-button {
+.workspace-close {
   border-radius: var(--radius-control);
 }
 
@@ -240,8 +219,7 @@
 
 .session-tab-actions .icon-button,
 .terminal-tools .icon-button,
-.workspace-close,
-.ai-panel-actions .icon-button {
+.workspace-close {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -249,8 +227,7 @@
 
 .session-tab-actions .icon-button:hover:not(:disabled),
 .terminal-tools .icon-button:hover:not(:disabled),
-.workspace-close:hover:not(:disabled),
-.ai-panel-actions .icon-button:hover:not(:disabled) {
+.workspace-close:hover:not(:disabled) {
   border-color: transparent;
   background: var(--workbench-hover);
   color: var(--workbench-text-strong);
@@ -745,31 +722,6 @@ body.workspace-resizing * {
   border-color: var(--workbench-line);
 }
 
-.app-shell.theme-light .assistant-panel .message-list {
-  background: #f7fafb;
-}
-
-.app-shell.theme-light .assistant-panel .message.ai {
-  border-color: #c7ddd3;
-  background: #ffffff;
-}
-
-.app-shell.theme-light .assistant-panel .message:not(.ai):not(.error) {
-  background: #edf2f5;
-}
-
-.app-shell.theme-light .agent-step-card {
-  border-color: #cbd8d3;
-  background: #fbfdfc;
-}
-
-.app-shell.theme-light .agent-step-command,
-.app-shell.theme-light .agent-step-output,
-.app-shell.theme-light .ai-code-block {
-  border-color: #d4dee3;
-  background: #f7fafb;
-}
-
 .workspace-close,
 .theme-light .workspace-close {
   width: 30px;
@@ -826,195 +778,6 @@ body.workspace-resizing * {
   transform: translateY(-50%);
 }
 
-.assistant-panel,
-.theme-light .assistant-panel {
-  grid-template-rows: 56px auto minmax(0, 1fr) auto;
-  background: var(--workbench-panel);
-}
-
-.ai-panel-head,
-.theme-light .ai-panel-head {
-  min-height: 56px;
-  border-bottom-color: var(--workbench-line-soft);
-  background: var(--workbench-panel);
-  padding: 0 8px 0 12px;
-}
-
-.ai-session-head {
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 9px;
-}
-
-.ai-session-head .panel-glyph,
-.theme-light .ai-session-head .panel-glyph {
-  width: 30px;
-  height: 30px;
-  border-color: transparent;
-  border-radius: 6px;
-  background: var(--workbench-accent-soft);
-  color: var(--workbench-accent-strong);
-}
-
-.ai-session-head strong,
-.theme-light .ai-session-head strong {
-  color: var(--workbench-text-strong);
-  font-size: 13px;
-}
-
-.ai-session-head span:not(.panel-glyph),
-.theme-light .ai-session-head span:not(.panel-glyph) {
-  color: var(--workbench-muted);
-  font-size: 10px;
-}
-
-.ai-panel-actions {
-  gap: 1px;
-}
-
-.ai-panel-actions .icon-button {
-  width: 29px;
-  height: 29px;
-  color: var(--workbench-muted);
-}
-
-.ai-context-strip,
-.theme-light .ai-context-strip {
-  min-height: 34px;
-  max-height: 92px;
-  border-bottom-color: var(--workbench-line-soft);
-  background: var(--workbench-panel);
-  padding: 4px 9px;
-}
-
-.context-summary-button,
-.theme-light .context-summary-button {
-  height: 25px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--workbench-muted);
-  padding-inline: 4px;
-}
-
-.context-summary-button:hover,
-.theme-light .context-summary-button:hover {
-  border-color: transparent;
-  background: var(--workbench-hover);
-  color: var(--workbench-text);
-}
-
-.assistant-panel .message-list {
-  gap: 0;
-  background: var(--workbench-panel);
-  padding: 12px 13px 20px;
-}
-
-.assistant-panel .message {
-  margin-bottom: 18px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-  box-shadow: none;
-  overflow: visible;
-}
-
-.assistant-panel .message:not(.ai):not(.error) {
-  width: fit-content;
-  max-width: 84%;
-  align-self: flex-end;
-  border-radius: 7px 7px 2px 7px;
-  background: var(--workbench-hover);
-  padding: 8px 10px;
-}
-
-.assistant-panel .message:not(.ai):not(.error) .message-title {
-  display: none;
-}
-
-.assistant-panel .message:not(.ai):not(.error) .message-body {
-  margin: 0;
-  padding: 0;
-}
-
-.assistant-panel .message.ai {
-  border: 1px solid rgba(16, 185, 129, .3);
-  border-radius: var(--radius-card);
-  background: rgba(8, 20, 20, .42);
-  padding: 10px 11px;
-}
-
-/* Failed turns keep the normal message rhythm; the weight lives in the
-   .ai-error-notice card inside the body instead of a full-width tinted block. */
-.assistant-panel .message.error {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-}
-
-.assistant-panel .message.error .message-avatar {
-  border-color: var(--workbench-danger-line);
-  background: var(--workbench-danger-soft);
-  color: var(--workbench-danger-strong);
-}
-
-.message-error-badge {
-  flex: 0 0 auto;
-  border: 1px solid var(--workbench-danger-line);
-  border-radius: 999px;
-  padding: 2px 7px;
-  color: var(--workbench-danger-strong);
-  background: var(--workbench-danger-soft);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.app-shell.theme-light .assistant-panel .message.error .message-avatar {
-  border-color: #f1b8bd;
-  background: #ffe0e3;
-}
-
-.app-shell.theme-light .message-error-badge {
-  border-color: #e7a2a9;
-  background: #ffe1e4;
-}
-
-.assistant-panel .message-title {
-  min-height: 24px;
-}
-
-.assistant-panel .message-identity {
-  grid-template-columns: 24px minmax(0, auto);
-  gap: 7px;
-}
-
-.assistant-panel .message-avatar {
-  width: 24px;
-  height: 24px;
-  border-color: transparent;
-  border-radius: 6px;
-  background: var(--workbench-accent-soft);
-  color: var(--workbench-accent-strong);
-  font-size: 10px;
-}
-
-.assistant-panel .message-title strong {
-  color: var(--workbench-text-strong);
-  font-size: 12px;
-}
-
-.assistant-panel .message-source {
-  min-width: 0;
-  max-width: 52%;
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-}
-
 .script-message-source {
   min-width: 0;
   max-width: 34%;
@@ -1025,37 +788,6 @@ body.workspace-resizing * {
   font-size: 10px;
 }
 
-.assistant-panel .message-body {
-  margin-top: 7px;
-  padding-left: 31px;
-}
-
-.assistant-panel .message-body p,
-.assistant-panel .markdown-content {
-  color: var(--workbench-text);
-  font-size: 13px;
-  line-height: 1.62;
-}
-
-.assistant-panel .code-block,
-.assistant-panel .ai-code-block {
-  border-color: var(--workbench-line);
-  border-radius: 7px;
-  background: var(--workbench-terminal);
-}
-
-.assistant-panel .code-head,
-.assistant-panel .ai-code-head {
-  border-bottom-color: var(--workbench-line-soft);
-  background: var(--workbench-panel-strong);
-}
-
-.assistant-panel .message.collapsed .message-body::after,
-.assistant-panel .message.ai.collapsed .message-body::after {
-  background: linear-gradient(180deg, rgba(14, 17, 21, 0), var(--workbench-panel));
-}
-
-.assistant-panel > .assistant-compose,
 .assistant-compose.script-compose {
   --composer-pad-x: 8px;
   --composer-pad-bottom: 8px;
@@ -1064,7 +796,6 @@ body.workspace-resizing * {
   padding: 8px;
 }
 
-.assistant-panel > .assistant-compose textarea,
 .assistant-compose.script-compose textarea {
   min-height: 52px;
   height: auto;
@@ -1078,13 +809,11 @@ body.workspace-resizing * {
   box-shadow: none;
 }
 
-.assistant-panel > .assistant-compose:focus-within textarea,
 .assistant-compose.script-compose:focus-within textarea {
   border-color: var(--workbench-accent);
   box-shadow: 0 0 0 2px var(--workbench-accent-soft);
 }
 
-.assistant-panel > .assistant-compose .icon-button,
 .assistant-compose.script-compose .icon-button {
   right: 14px;
   bottom: 14px;
@@ -1097,7 +826,6 @@ body.workspace-resizing * {
   box-shadow: none;
 }
 
-.assistant-panel > .assistant-compose .icon-button:hover:not(:disabled),
 .assistant-compose.script-compose .icon-button:hover:not(:disabled) {
   border-color: var(--workbench-accent-strong);
   background: var(--workbench-accent-strong);

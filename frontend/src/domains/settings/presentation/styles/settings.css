@@ -14,23 +14,6 @@
   padding: 0 14px;
   border-bottom: 1px solid #1b2130;
 }
-.ai-session-head {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-.ai-session-head strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #eef2f8;
-  font-size: var(--font-lg);
-  white-space: nowrap;
-}
-.ai-session-head span {
-  color: #687482;
-  font-size: var(--font-xs);
-}
 .session-history-popover {
   position: absolute;
   top: 48px;

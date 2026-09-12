@@ -1,4 +1,4 @@
-import type { AgentStep } from './agent'
+import type { AgentErrorKind, AgentStep } from './agent'
 import type { AiMessageUsage } from './tokenUsage'
 
 
@@ -34,12 +34,14 @@ export interface AiMessage {
   text: string
   command?: string
   error?: boolean
+  errorKind?: AgentErrorKind
   streaming?: boolean
   /** 产生该消息的模式;缺省视为 chat。 */
   mode?: 'chat' | 'agent'
   /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */
   agentSteps?: AgentStep[]
   agentStatus?: 'running' | 'done' | 'stopped' | 'error'
+  stopReason?: string
   /** Agent 启动时绑定的终端连接代次；用于阻止重连后误执行旧任务。 */
   terminalConnectionGeneration?: number
   /** Agent 载荷序列化(与后端 payload_json 列对应)。 */

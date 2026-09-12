@@ -23,12 +23,10 @@
 @import './workspace-polish.css';
 @import './responsive.css';
 @import '../../domains/settings/presentation/styles/settings-final.css';
-@import '../../domains/ai/presentation/styles/ai-final.css';
 @import '../../domains/scripts/presentation/styles/workbench-final.css';
 @import '../../domains/ai/presentation/styles/composer.css';
 @import '../../domains/scripts/presentation/styles/editor.css';
 @import '../../domains/ai/presentation/styles/agent.css';
 @import '../../domains/settings/presentation/styles/settings-layout.css';
-@import '../../domains/ai/presentation/styles/results.css';
 @import '../../domains/ai/presentation/styles/ai-cards.css';
 @import '../../shared/styles/typography.css';

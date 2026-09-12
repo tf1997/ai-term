@@ -268,26 +268,6 @@
 }
 
 /* Light theme color-only surface contract. */
-.app-shell.theme-light .assistant-panel {
-  background: #fff;
-  color: var(--light-text);
-}
-
-.app-shell.theme-light .assistant-panel .message.ai {
-  border-color: transparent;
-  background: transparent;
-}
-
-.app-shell.theme-light .assistant-panel .message.ai.error {
-  border-color: transparent;
-  background: transparent;
-}
-
-.app-shell.theme-light .context-summary-button {
-  border-color: transparent;
-  background: transparent;
-  color: var(--light-muted);
-}
 
 .app-shell.theme-light .workspace-tabs button.active {
   border-color: transparent;

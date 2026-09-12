@@ -1,49 +1,8 @@
-/* Shared AI card system.
-   Conversation turns, tool results and Agent steps are different components,
-   but they should read as one workspace: the same edge, radius and spacing. */
+/* Shared framing for script drafts and Agent configuration entries. */
 :root {
   --ai-card-radius: 8px;
-  --ai-card-gap: 10px;
-  --ai-card-border: 1px;
-  --ai-card-pad-x: 10px;
-  --ai-card-pad-y: 10px;
 }
 
-.assistant-panel .message-list {
-  gap: var(--ai-card-gap);
-}
-
-.assistant-panel .message {
-  margin-bottom: 0;
-}
-
-/* Errors are conversation cards too. Keep the alert content inside the same
-   outer frame instead of shrinking it to the indented message body. */
-.assistant-panel .message.error,
-.theme-light .assistant-panel .message.error {
-  border: 1px solid var(--workbench-danger-line);
-  border-radius: var(--ai-card-radius);
-  background: var(--workbench-danger-soft);
-  padding: 10px;
-}
-
-.assistant-panel .message.error .message-body {
-  margin-top: 8px;
-  padding-left: 0;
-}
-
-.assistant-panel .message.error .ai-error-notice {
-  width: 100%;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-}
-
-.assistant-panel .message.ai,
-.assistant-panel .ai-result-block,
-.assistant-panel .ai-error-notice,
-.agent-step-card,
 .agent-allowlist-entries li,
 .script-draft-card,
 .script-assistant-section {
@@ -51,88 +10,15 @@
   box-sizing: border-box;
 }
 
-/* Every AI-owned card occupies the same content column. Components can still
-   grow vertically with their content, but width, edge and padding stay stable
-   across normal replies, errors, results and Agent steps. */
-.assistant-panel .message.ai,
-.assistant-panel .message.error,
-.assistant-panel .ai-result-block,
-.assistant-panel .ai-error-notice,
-.assistant-panel .agent-steps,
-.assistant-panel .ai-markdown-message,
-.agent-step-card {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.assistant-panel .message.ai {
-  border: 1px solid color-mix(in srgb, var(--workbench-accent) 32%, var(--workbench-line));
-  background: color-mix(in srgb, var(--workbench-panel-strong) 88%, var(--workbench-accent-soft));
-}
-
-.assistant-panel .ai-result-block,
-.agent-step-card,
 .agent-allowlist-entries li {
   border: 1px solid var(--workbench-line);
   background: var(--workbench-panel-strong);
 }
 
-.assistant-panel .ai-result-block {
-  gap: 8px;
-  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
-}
-
-/* Result cards used to have a heavier left rule. A balanced border keeps
-   status information visible without making the card look misaligned. */
-.ai-result-block {
-  border-left-width: 1px;
-}
-
-.assistant-panel .ai-error-notice {
-  border-width: 1px;
-  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
-}
-
-.agent-step-card {
-  gap: 8px;
-  padding: var(--ai-card-pad-y) var(--ai-card-pad-x);
-}
-
-.assistant-panel .message.error .message-body {
-  /* Error turns use the notice as their visible card; keep its edge aligned
-     with result and Agent cards instead of inheriting the avatar indent. */
-  padding-left: 0;
-}
-
-.agent-step-status,
-.agent-run-status,
-.chip.agent-step-auto,
-.chip.agent-step-risk,
 .command-risk-status {
   border-radius: 999px;
 }
 
-.assistant-panel .ai-code-block,
-.assistant-panel .code-block,
-.agent-step-code-block {
-  border-radius: 7px;
-}
-
-.assistant-panel .ai-result-value {
-  line-height: 1.55;
-}
-
-.app-shell.theme-light .assistant-panel .message.ai,
-.theme-light .assistant-panel .message.ai {
-  border-color: color-mix(in srgb, var(--workbench-accent) 28%, var(--workbench-line));
-  background: var(--workbench-panel);
-}
-
-.app-shell.theme-light .assistant-panel .ai-result-block,
-.theme-light .assistant-panel .ai-result-block,
-.app-shell.theme-light .agent-step-card,
-.theme-light .agent-step-card,
 .app-shell.theme-light .agent-allowlist-entries li,
 .theme-light .agent-allowlist-entries li {
   border-color: var(--workbench-line);

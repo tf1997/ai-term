@@ -1,78 +1,50 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed } from 'vue'
 import { parseMessageParts, renderMarkdown } from '../../../../../shared/content/aiMarkdown'
 import type { MessagePart } from '../../../../../shared/content/aiMarkdown'
 import { codeBlockLabel, normalizeCodeLanguage, shellCommandFromCodeBlock } from '../../../../../shared/shell/shellCommand'
 import { scriptRiskStatusForContent } from '../../../../../shared/security/scriptRisk'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
+import AiCodeBlock from './AiCodeBlock.vue'
 
 const props = withDefaults(defineProps<{
   content: string
   interactiveCommands?: boolean
-}>(), {
-  interactiveCommands: false
-})
+}>(), { interactiveCommands: false })
 
-const emit = defineEmits<{
-  executeCommand: [command: string]
-}>()
+const emit = defineEmits<{ executeCommand: [command: string] }>()
+const parts = computed(() => parseMessageParts(props.content).map((part) => {
+  if (part.type !== 'code') return { ...part, command: '', label: '', risk: null, plainResult: false }
+  const command = shellCommandFromCodeBlock(part.language, part.content)
+  const plainResult = isPlainTextResult(part, command)
+  return {
+    ...part,
+    command,
+    label: plainResult ? resultLabel(part) : displayCodeLabel(part, command),
+    risk: command ? scriptRiskStatusForContent(command) : null,
+    plainResult
+  }
+}))
 
-const copied = ref(false)
-const previewBlock = ref<{
-  label: string
-  content: string
-  command: string
-} | null>(null)
-let copiedTimer: number | undefined
-
-const parts = computed(() => parseMessageParts(props.content))
-
-function shellCommandForPart(part: MessagePart) {
-  if (part.type !== 'code') return ''
-  return shellCommandFromCodeBlock(part.language, part.content)
-}
-
-function commandRiskStatus(command: string) {
-  return scriptRiskStatusForContent(command)
-}
-
-function commandRiskLabel(command: string) {
-  const status = commandRiskStatus(command)
-  return status.level === 'safe' ? '安全' : status.label
-}
-
-function shouldShowCodePreview(part: MessagePart) {
-  if (part.type !== 'code') return false
-  const content = part.content.trim()
-  return content.length > 100 || content.split('\n').length > 1
-}
-
-function displayCodeLabel(part: MessagePart) {
+function displayCodeLabel(part: MessagePart, command: string) {
   if (part.type !== 'code') return 'text'
-  const command = shellCommandForPart(part)
   if (!command) return codeBlockLabel(part.language, part.content)
   const normalized = normalizeCodeLanguage(part.language)
-  const inferred = inferCommandShellLabel(command)
-  if (!normalized || normalized === 'shell' || normalized === 'bash' || normalized === 'sh') return inferred
+  if (!normalized || normalized === 'shell' || normalized === 'bash' || normalized === 'sh') return inferCommandShellLabel(command)
   return codeBlockLabel(part.language, part.content)
 }
 
-function isPlainTextResult(part: MessagePart) {
-  if (part.type !== 'code') return false
-  if (shellCommandForPart(part)) return false
+function isPlainTextResult(part: MessagePart, command: string) {
+  if (part.type !== 'code' || command) return false
   const language = normalizeCodeLanguage(part.language)
-  const label = codeBlockLabel(part.language, part.content)
   const content = part.content.trim()
-  if (!content) return false
-  if (language && !['text', 'plain', 'plaintext', 'txt'].includes(language)) return false
-  const lines = content.split('\n').filter((line) => line.trim())
-  return label === 'text' && content.length <= 220 && lines.length <= 5
+  if (!content || (language && !['text', 'plain', 'plaintext', 'txt'].includes(language))) return false
+  return codeBlockLabel(part.language, part.content) === 'text' && content.length <= 220 && content.split('\n').filter((line) => line.trim()).length <= 5
 }
 
 function resultLabel(part: MessagePart) {
   const firstLine = part.type === 'code' ? part.content.trim().split('\n')[0]?.trim() ?? '' : ''
-  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(firstLine)) return 'IPv4 地址'
-  return '结果'
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(firstLine) ? 'IPv4 地址' : '结果'
 }
 
 function inferCommandShellLabel(command: string) {
@@ -81,144 +53,43 @@ function inferCommandShellLabel(command: string) {
   if (/^(?:wmic|ipconfig|netsh|tasklist|taskkill|reg|sc|dir|copy|del|type|xcopy|robocopy)\b/i.test(trimmed)) return 'cmd'
   return 'shell'
 }
-
-function openPreview(part: MessagePart) {
-  if (part.type !== 'code') return
-  previewBlock.value = {
-    label: displayCodeLabel(part),
-    content: part.content,
-    command: shellCommandForPart(part)
-  }
-}
-
-function closePreview() {
-  previewBlock.value = null
-}
-
-async function copyText(value: string) {
-  if (!value.trim()) return
-  try {
-    await navigator.clipboard.writeText(value)
-  } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = value
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    textarea.remove()
-  }
-  copied.value = true
-  if (copiedTimer) window.clearTimeout(copiedTimer)
-  copiedTimer = window.setTimeout(() => {
-    copied.value = false
-  }, 1400)
-}
-
-function executeCommand(command: string) {
-  const value = command.trim()
-  if (!value) return
-  emit('executeCommand', value)
-  closePreview()
-}
-
-onBeforeUnmount(() => {
-  if (copiedTimer) window.clearTimeout(copiedTimer)
-})
 </script>
 
 <template>
-  <div class="ai-markdown-message">
+  <div class="chat-markdown">
     <template v-for="(part, index) in parts" :key="index">
-      <div
-        v-if="part.type === 'text' && part.content.trim()"
-        class="markdown-content"
-        v-html="renderMarkdown(part.content)"
-      />
-      <div v-else-if="isPlainTextResult(part)" class="ai-result-block">
-        <div class="ai-result-head">
-          <span class="ai-result-label">{{ resultLabel(part) }}</span>
-        </div>
-        <div class="agent-step-code-block ai-result-output-block">
-          <div class="agent-step-code-head">
-            <span>输出</span>
-            <button class="icon-button ai-result-copy" type="button" :title="copied ? '已复制' : '复制结果'" :aria-label="copied ? '已复制' : '复制结果'" @click="copyText(part.content)">
-              <UiIcon name="copy" size="14" />
-            </button>
-          </div>
-          <pre class="ai-result-value"><code>{{ part.content.trim() }}</code></pre>
-        </div>
-      </div>
-      <div v-else-if="part.type === 'code'" class="code-block ai-code-block" :class="{ 'has-command': shellCommandForPart(part) }">
-        <div class="code-head ai-code-head">
-          <div class="ai-code-meta">
-            <span class="ai-code-language">{{ displayCodeLabel(part) }}</span>
-            <span
-              v-if="shellCommandForPart(part)"
-              class="command-risk-status"
-              :class="`risk-${commandRiskStatus(shellCommandForPart(part)).level}`"
-              :title="commandRiskStatus(shellCommandForPart(part)).message"
-            >
-              <UiIcon v-if="commandRiskStatus(shellCommandForPart(part)).level === 'safe'" name="shield" size="11" />
-              <span>{{ commandRiskLabel(shellCommandForPart(part)) }}</span>
-            </span>
-          </div>
-          <div class="ai-code-actions">
-            <button class="icon-button" type="button" :title="copied ? '已复制' : '复制代码'" :aria-label="copied ? '已复制' : '复制代码'" @click="copyText(part.content)">
-              <UiIcon name="copy" size="14" />
-            </button>
-            <button v-if="shouldShowCodePreview(part)" class="icon-button" type="button" title="预览完整代码" aria-label="预览完整代码" @click="openPreview(part)">
-              <UiIcon name="maximize" size="14" />
-            </button>
-            <button
-              v-if="props.interactiveCommands && shellCommandForPart(part)"
-              class="text-button primary-action ai-code-run"
-              type="button"
-              @click="executeCommand(shellCommandForPart(part))"
-            >
-              <UiIcon name="play" size="13" />
-              <span>执行</span>
-            </button>
-          </div>
-        </div>
-        <pre><code>{{ part.content }}</code></pre>
-      </div>
-    </template>
-
-    <div v-if="previewBlock" class="modal-backdrop ai-code-preview-backdrop" role="presentation">
-      <section class="modal ai-code-preview-modal" role="dialog" aria-modal="true" aria-label="代码预览">
-        <div class="modal-head">
-          <div>
-            <strong>代码预览</strong>
-            <span>{{ previewBlock.label }}</span>
-          </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closePreview">
-            <UiIcon name="close" />
-          </button>
-        </div>
-        <div class="ai-code-preview-toolbar">
-          <span
-            v-if="previewBlock.command"
-            class="command-risk-status"
-            :class="`risk-${commandRiskStatus(previewBlock.command).level}`"
-            :title="commandRiskStatus(previewBlock.command).message"
-          >
-            {{ commandRiskStatus(previewBlock.command).label }}
+      <div v-if="part.type === 'text' && part.content.trim()" class="markdown-content" v-html="renderMarkdown(part.content)" />
+      <AiCodeBlock v-else-if="part.type === 'code'" :content="part.content" :label="part.label" :kind="part.command ? 'command' : part.plainResult ? 'output' : 'code'">
+        <template #meta>
+          <span v-if="part.risk" class="chat-code-risk" :class="`is-${part.risk.level}`" :title="part.risk.message">
+            <UiIcon name="shield" size="11" />{{ part.risk.label }}
           </span>
-          <button class="text-button" type="button" @click="copyText(previewBlock.content)">复制</button>
-          <button
-            v-if="props.interactiveCommands && previewBlock.command"
-            class="text-button primary-action ai-code-run"
-            type="button"
-            @click="executeCommand(previewBlock.command)"
-          >
-            <UiIcon name="play" size="13" />
-            <span>执行</span>
-          </button>
-        </div>
-        <pre class="ai-code-preview-content"><code>{{ previewBlock.content }}</code></pre>
-      </section>
-    </div>
+        </template>
+        <template #actions>
+          <button v-if="interactiveCommands && part.command" class="chat-code-run" type="button" title="发送到终端执行" @click="emit('executeCommand', part.command.trim())"><UiIcon name="play" size="12" />执行</button>
+        </template>
+        <template #preview-actions="{ close }">
+          <button v-if="interactiveCommands && part.command" class="chat-code-run" type="button" title="发送到终端执行" @click="close(); emit('executeCommand', part.command.trim())"><UiIcon name="play" size="12" />执行</button>
+        </template>
+      </AiCodeBlock>
+    </template>
   </div>
 </template>
+
+<style scoped>
+.chat-markdown { display: grid; gap: 10px; min-width: 0; width: 100%; color: var(--chat-text, var(--workbench-text)); }
+.chat-markdown > .markdown-content { min-width: 0; margin: 0; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.chat-markdown :deep(.markdown-content > :first-child) { margin-top: 0; }
+.chat-markdown :deep(.markdown-content > :last-child) { margin-bottom: 0; }
+.chat-markdown :deep(.markdown-content table) { display: block; width: 100%; max-width: 100%; overflow-x: auto; }
+.chat-markdown :deep(.markdown-content h1) { font-size: 20px; line-height: 1.5; }
+.chat-markdown :deep(.markdown-content h2) { font-size: 17px; line-height: 1.5; }
+.chat-markdown :deep(.markdown-content h3) { font-size: 15px; line-height: 1.6; }
+.chat-code-risk { display: inline-flex; align-items: center; align-self: center; gap: 3px; height: 18px; color: var(--chat-muted, var(--workbench-muted)); font-size: 10px; line-height: 1; white-space: nowrap; transform: translateY(1px); }
+.chat-code-risk .ui-icon { display: block; width: 11px; height: 11px; flex: 0 0 11px; }
+.chat-code-risk.is-medium { color: var(--chat-warning, #996015); }
+.chat-code-risk.is-high { color: var(--chat-danger, #c24150); }
+.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 3px 7px; background: var(--chat-button, var(--workbench-accent)); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1.5; }
+.chat-code-run:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
+.chat-code-run:hover { filter: brightness(.94); }
+</style>

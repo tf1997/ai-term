@@ -14,6 +14,7 @@ export interface AiPanelProps {
   executionTargetTitle: string
   executionTargetConnectionIds: string[]
   selectedConfigId: string
+  configs?: AiProviderConfig[]
   config: AiProviderConfig
   apiKey: string
   terminalSnapshot: string
@@ -34,6 +35,10 @@ export interface AiPanelProps {
 }
 
 export interface AiPanelEvents {
+  selectConfig: [configId: string]
+  configureAi: []
+  clearSelection: []
+  focusTerminal: []
   appendMessage: [message: AiMessage]
   updateMessage: [message: AiMessage]
   setContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]

@@ -127,6 +127,11 @@ const contextMenuState = read('src/shared/ui/useContextMenu.ts')
 const main = read('src/main.ts')
 const terminalPane = read('src/domains/terminal/presentation/components/TerminalPane.vue')
 const aiPanel = read('src/domains/ai/presentation/components/AiPanel.vue')
+const aiPanelStyles = read('src/domains/ai/presentation/styles/ai-final.css')
+const aiMessageItem = read('src/domains/ai/presentation/components/messages/AiMessageItem.vue')
+const aiCodeBlock = read('src/domains/ai/presentation/components/messages/AiCodeBlock.vue')
+const agentStepCard = read('src/domains/ai/presentation/components/messages/AgentStepCard.vue')
+const aiCopyFeedback = read('src/domains/ai/presentation/components/messages/useCopyFeedback.ts')
 const aiMarkdownMessage = read('src/domains/ai/presentation/components/messages/AiMarkdownMessage.vue')
 const aiMarkdown = read('src/shared/content/aiMarkdown.ts')
 const shellCommand = read('src/shared/shell/shellCommand.ts')
@@ -700,14 +705,14 @@ assert(
     aiConversationRules.includes('return `${title} 命令`') &&
     styles.includes('/* Quiet workspace redesign: terminal-first geometry with restrained operational chrome. */') &&
     styles.includes('/* Compact settings navigation and second-pass workspace cleanup. */') &&
-    styles.includes('/* AI workspace final density pass. */') &&
+    aiPanelStyles.includes('.assistant-panel.ai-chat-panel') &&
     styles.includes('.app-shell .settings-sidebar {\n  grid-template-rows: 46px minmax(0, 1fr);') &&
     styles.includes('.settings-center > .settings-section') &&
     styles.includes('flex: 1 1 auto;') &&
-    styles.includes('.assistant-panel .message:not(.ai):not(.error)') &&
-    styles.includes('.assistant-panel .ai-code-meta .command-risk-status') &&
-    styles.includes('.assistant-panel .message-collapse-footer') &&
-    styles.includes('.app-shell.theme-light .assistant-panel .message.ai') &&
+    aiMessageItem.includes('.chat-turn-user') &&
+    aiMarkdownMessage.includes('.chat-code-risk') &&
+    aiPanelStyles.includes('.chat-collapse-footer') &&
+    aiPanelStyles.includes('.theme-light .ai-chat-panel') &&
     styles.includes('.tab:hover .terminal-target-toggle') &&
     styles.includes('.terminal-target-summary.active') &&
     styles.includes('.workspace-tabs button.active::after') &&
@@ -741,14 +746,14 @@ assert(
 )
 
 assert(
-  styles.includes('/* AI panel reading rhythm polish. */') &&
-    styles.includes('.assistant-panel .message {') &&
-    styles.includes('.assistant-panel .message.ai {') &&
-    styles.includes('.assistant-panel .message.error {') &&
-    styles.includes('.app-shell.theme-light .assistant-panel .message.ai {') &&
-    styles.includes('.ai-code-run.text-button.primary-action:hover') &&
-    styles.includes('.app-shell.theme-light .ai-code-run.text-button.primary-action:hover'),
-  'AI assistant panel must keep compact message rhythm, neutral cards, green command actions, and matching light-theme surfaces.'
+  aiPanel.includes('<AiMessageItem') &&
+    aiMessageItem.includes('class="chat-turn"') &&
+    aiMessageItem.includes('width: 100%;') &&
+    !aiMessageItem.includes('class="message"') &&
+    aiPanelStyles.includes('--chat-gutter: 16px;') &&
+    aiPanelStyles.includes('.theme-light .ai-chat-panel') &&
+    aiMarkdownMessage.includes('.chat-code-run:hover'),
+  'AI replies and failures must share one message shell and content gutter, with component-owned command actions and theme tokens.'
 )
 
 const lightThemeLayoutParityPairs = [
@@ -902,14 +907,11 @@ assertLastCssDeclarations(
   'History command preview must wrap long commands inside the modal without breaking the list layout',
   { afterMarker: '/* Command history preview modal. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
 )
-assertLastCssDeclarations(
-  '.app-shell.theme-light .assistant-panel',
-  {
-    background: '#fff',
-    color: 'var(--light-text)',
-  },
-  'Light theme AI panel must not retain dark workspace surfaces',
-  { afterMarker: '/* Light theme color-only surface contract. */' }
+assert(
+  /\.theme-light \.ai-chat-panel\s*\{[^}]*--chat-surface:\s*#ffffff;[^}]*--chat-text:\s*#22272d;/.test(aiPanelStyles) &&
+    aiMessageItem.includes('var(--chat-text)') &&
+    aiCodeBlock.includes('var(--chat-surface,'),
+  'Light theme AI panel and tool surfaces must use the shared light chat tokens.'
 )
 
 assertLastCssDeclarations(
@@ -1066,42 +1068,54 @@ assertLastCssDeclarations(
   { afterMarker: '/* Light theme color-only surface contract. */' }
 )
 
-assertCssRuleIncludes(
-  '.assistant-panel',
-  ['flex: 1 1 auto;', 'min-height: 0;', 'overflow: hidden;'],
+assert(
+  /\.assistant-panel\.ai-chat-panel\s*\{[^}]*flex: 1 1 auto;[^}]*min-height: 0;[^}]*overflow: hidden;/.test(aiPanelStyles),
   'AI assistant panel must constrain the message list so long chats scroll instead of stretching the workspace.'
 )
 
-assertCssRuleIncludes(
-  '.message-list',
-  ['overflow-y: auto;', 'overflow-x: hidden;', 'overscroll-behavior: contain;'],
+assert(
+  /\.chat-message-list\s*\{[^}]*height: 100%;[^}]*overflow: hidden auto;/.test(aiPanelStyles) &&
+    aiPanel.includes('@scroll="handleMessageScroll"'),
   'AI message list must own vertical scrolling and keep long chats readable.'
 )
 
-assertCssRuleIncludes(
-  '.message-list',
-  ['display: flex;', 'flex-direction: column;'],
+assert(
+  /\.chat-message-content\s*\{[^}]*display: flex;[^}]*flex-direction: column;/.test(aiPanelStyles),
   'AI message list must stack messages by content height so extra messages overflow into scrolling instead of shrinking each card.'
 )
 
-assertCssRuleIncludes(
-  '.message',
-  ['flex: 0 0 auto;', 'height: auto;'],
+assert(
+  /\.chat-turn\s*\{[^}]*width: 100%;/.test(aiMessageItem) &&
+    !/\.chat-turn\s*\{[^}]*(?:height:|max-height:)/.test(aiMessageItem),
   'AI message cards must keep their natural height when the conversation grows.'
 )
 
 assert(
   aiPanel.includes('collapsedMessages') &&
     aiPanel.includes('function isMessageCollapsed') &&
-    aiPanel.includes('collapsed: isMessageCollapsed(message)') &&
+    aiPanel.includes('shouldCollapseMessage(message) && Boolean(collapsedMessages.value[message.id])') &&
+    aiPanel.includes('class="chat-response-preview"') &&
+    aiPanel.includes(':aria-expanded="isMessageExpanded(message)"') &&
     !aiPanel.includes('collapsed: !isMessageExpanded(message)'),
   'AI messages must be expanded by default; only messages collapsed by the user should be compact.'
 )
 
 assert(
+  aiPanel.includes('if (!list || !followingLatest.value) return') &&
+    aiPanel.includes('if (!followingLatest.value) hasNewContent.value = true') &&
+    aiPanel.includes('v-if="!followingLatest"') &&
+    aiPanel.includes('contentResizeObserver = new ResizeObserver(() =>') &&
+    aiPanel.includes('if (isAsking.value || agentRunActive.value) followMessageContent()') &&
+    aiPanel.includes('contentResizeObserver?.disconnect()') &&
+    aiPanel.includes('message.error && !stepOwnsError(message)') &&
+    aiPanel.includes('message.stopReason && message.stopReason !== message.text'),
+  'Streaming updates must respect the reading position, provide return-to-latest, clean up observation, and avoid duplicate step errors or stop reasons.'
+)
+
+assert(
   !aiPanel.includes('executeGeneratedCommand()') &&
     !aiPanel.includes('executableCommands(message)') &&
-    aiMarkdownMessage.includes('shellCommandForPart(part)') &&
+    aiMarkdownMessage.includes('v-if="interactiveCommands && part.command"') &&
     aiMarkdownMessage.includes('codeBlockLabel(part.language, part.content)') &&
     aiMarkdownMessage.includes("shellCommandFromCodeBlock(part.language, part.content)") &&
     shellCommand.includes('explicitShellLanguages') &&
@@ -2450,7 +2464,7 @@ assert(
     aiPanel.includes('selectedTerminalContext') &&
     aiPanel.includes('formatSelectedLineRange') &&
     aiConversationRules.includes('buildQuestionWithSelectedTerminalText') &&
-    aiPanel.includes('selected-terminal-note') &&
+    aiPanel.includes('chat-selection') &&
     !aiPanel.includes('selected-context-chip') &&
     !styles.includes('.selected-context-chip') &&
     aiConversationContext.includes('function aiCommandHistory()') &&
@@ -2510,7 +2524,7 @@ assert(
     aiPanel.includes('event.isComposing') &&
     aiPanel.includes('scrollMessagesToLatest') &&
     aiPanel.includes('ref="messageList"') &&
-    aiPanel.includes('thinking-row') &&
+    aiPanel.includes('class="chat-progress" role="status"') &&
     appShell.includes('updateAiMessage') &&
     aiPanel.includes('AiMarkdownMessage from') &&
     aiMarkdownMessage.includes("import { parseMessageParts, renderMarkdown } from '../../../../../shared/content/aiMarkdown'") && aiMarkdownMessage.includes("import type { MessagePart }") &&
@@ -2528,7 +2542,8 @@ assert(
     aiMarkdownMessage.includes('v-html="renderMarkdown(part.content)"') &&
     aiPanel.includes('answerElapsedSeconds') &&
     aiPanel.includes('formatAnswerDuration') &&
-    aiPanel.includes('message-duration') &&
+    aiMessageItem.includes('chat-duration') &&
+    aiPanel.includes(':duration="messageAnswerDuration(message)') &&
     styles.includes('.markdown-content') &&
     styles.includes('.markdown-table-wrap') &&
     styles.includes('.markdown-table th') &&
@@ -2536,29 +2551,29 @@ assert(
     styles.includes('.message-duration') &&
     aiPanel.includes('contextSummaryLabel') &&
     aiPanel.includes('contextOpen') &&
-    aiPanel.includes('ai-context-strip') &&
-    aiMarkdownMessage.includes('ai-code-preview-modal') &&
-    aiMarkdownMessage.includes('预览完整代码') &&
-    aiMarkdownMessage.includes('shouldShowCodePreview') &&
-    aiMarkdownMessage.includes('commandRiskLabel') &&
+    aiPanel.includes('chat-context') &&
+    aiMarkdownMessage.includes('<AiCodeBlock') &&
+    aiCodeBlock.includes('class="tool-preview-dialog"') &&
+    aiCodeBlock.includes('class="tool-preview-content"') &&
+    aiMarkdownMessage.includes('scriptRiskStatusForContent(command)') &&
     aiMarkdownMessage.includes('isPlainTextResult') &&
-    aiMarkdownMessage.includes('ai-result-block') &&
-    aiPanel.includes("message.role === 'assistant' ? 'AI' : '我'") &&
+    aiMarkdownMessage.includes("part.plainResult ? 'output' : 'code'") &&
+    aiMessageItem.includes("message.role === 'user' ? 'chat-turn-user' : 'chat-turn-assistant'") &&
     aiPanel.includes('展开完整回复') &&
-    styles.includes('.ai-code-preview-modal') &&
-    styles.includes('.ai-context-strip') &&
-    styles.includes('.ai-result-block') &&
-    styles.includes('.message-collapse-footer') &&
+    aiCodeBlock.includes('.tool-preview-dialog') &&
+    aiPanelStyles.includes('.chat-context') &&
+    aiCodeBlock.includes('.tool-code-content') &&
+    aiPanelStyles.includes('.chat-collapse-footer') &&
     aiConversationRules.includes('extractPrimaryShellCommand') &&
     aiPanel.includes('../../../shared/security/scriptRisk') &&
     aiPanel.includes('aiCommandRiskConfirmOpen') &&
     aiPanel.includes('pendingAiCommandExecution') &&
-    aiMarkdownMessage.includes('commandRiskStatus') &&
+    aiMarkdownMessage.includes('part.risk.level') &&
     aiPanel.includes('executeGeneratedCommand') &&
-    aiMarkdownMessage.includes('shellCommandForPart(part)') &&
+    aiMarkdownMessage.includes('interactiveCommands && part.command') &&
     aiMarkdownMessage.includes('codeBlockLabel(part.language, part.content)') &&
     aiPanel.includes('confirmPendingAiCommandExecution') &&
-    aiMarkdownMessage.includes('class="command-risk-status"') &&
+    aiMarkdownMessage.includes('class="chat-code-risk"') &&
     aiPanel.includes('script-risk-modal') &&
     !aiPanel.includes('isDangerousCommand') &&
     !aiPanel.includes('window.confirm') &&
@@ -3282,8 +3297,8 @@ assert(
     uiIcon.includes("'pin'") &&
     aiPanel.includes('import UiIcon') &&
     aiPanel.includes('title="会话列表"') &&
-    aiPanel.includes('name="list"') &&
-    aiPanel.includes('name="arrow-right"') &&
+    aiPanel.includes('name="history"') &&
+    aiPanel.includes('name="arrow-up"') &&
     scriptPanel.includes('import UiIcon') &&
     scriptPanel.includes('name="save"') &&
     scriptPanel.includes('name="copy"') &&
@@ -3391,7 +3406,8 @@ assert(
     styles.includes('/* Workspace empty-state and quick command modal polish. */') &&
     styles.includes('.history-list > .empty-state') &&
     styles.includes('.file-list > .empty-state') &&
-    styles.includes('.assistant-panel .message-list > .empty-state') &&
+    aiPanelStyles.includes('.chat-empty') &&
+    aiPanel.includes('@click="emit(\'configureAi\')"') &&
     styles.includes('.quick-command-modal .modal-head') &&
     styles.includes('.theme-light .quick-command-modal .modal-head') &&
     terminalPane.includes('quickCommandSettingsButton') &&
@@ -3400,29 +3416,44 @@ assert(
     styles.includes('grid-template-rows: auto minmax(0, 1fr) auto auto;'),
   'Right workspace empty states, SFTP browser-preview feedback, and quick-command modal chrome must be polished across dark and light themes.'
 )
-const agentStepCard = read('src/domains/ai/presentation/components/messages/AgentStepCard.vue')
 const agentAutoApprove = read('src/domains/ai/domain/agentAutoApprove.ts')
 assert(
-  /\.agent-step-output\s*\{[^}]*white-space:\s*pre;/.test(styles) &&
-    !/\.agent-step-output\s*\{[^}]*white-space:\s*pre-wrap;/.test(styles) &&
-    !/\.agent-step-output\s*\{[^}]*word-break:/.test(styles) &&
-    /\.agent-step-output\s*\{[^}]*overflow:\s*auto;/.test(styles) &&
-    /\.agent-step-command,\n\.agent-step-output\s*\{[^}]*min-width:\s*0;/.test(styles) &&
-    styles.includes('.agent-step-meta') &&
-    styles.includes('.agent-step-empty-output') &&
-    agentStepCard.includes('hasRun') &&
+  /\.tool-code-content,\s*\.tool-preview-content\s*\{[^}]*overflow:\s*auto;[^}]*white-space:\s*pre;/.test(aiCodeBlock) &&
+    !/\.tool-code-output[^}]*\{[^}]*white-space:\s*pre-wrap;/.test(aiCodeBlock) &&
+    aiCodeBlock.includes('<pre v-if="content" class="tool-code-content"') &&
+    aiCodeBlock.includes('<code>{{ content }}</code>') &&
+    /\.tool-code\s*\{[^}]*min-width:\s*0;[^}]*width:\s*100%;/.test(aiCodeBlock) &&
+    agentStepCard.includes('label="输出" kind="output"') &&
+    agentStepCard.includes('class="tool-step-meta"') &&
+    agentStepCard.includes("!didNotStart.value &&") &&
     agentStepCard.includes('durationLabel'),
   'Agent step output must keep raw column alignment (white-space: pre + own scroll container, never wrapped), and step cards must separate exit code/duration metadata from status chips.'
 )
 assert(
-  /\.agent-action\s*\{[^}]*text-overflow:\s*ellipsis;/.test(styles) &&
-    /\.agent-action\s*\{[^}]*min-width:\s*0;/.test(styles) &&
-    /\.agent-step-actions\s*\{[^}]*flex-wrap:\s*wrap;/.test(styles) &&
+  /\.tool-step-allow code\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/.test(agentStepCard) &&
+    /\.tool-step-actions\s*\{[^}]*flex-wrap:\s*wrap;/.test(agentStepCard) &&
     /\.markdown-content li\s*\{[^}]*min-width:\s*0;/.test(styles) &&
-    /\.agent-step-reason\s*\{[^}]*overflow-wrap:\s*anywhere;/.test(styles) &&
-    agentStepCard.includes('allowTitle') &&
+    /\.tool-step-title\s*\{[^}]*overflow-wrap:\s*anywhere;/.test(agentStepCard) &&
+    agentStepCard.includes("allowPatterns.join('、')") &&
     aiPanel.includes('AgentStepCard'),
-  'Agent approval actions must wrap and elide long allowlist patterns instead of overflowing the panel, and long text must stay inside message bounds.'
+  'Agent approval actions and allowlist patterns must wrap inside the panel, while the full pattern remains accessible in the title.'
+)
+assert(
+  agentStepCard.includes("hasRisk ? emit('reviewRisk') : emit('execute')") &&
+    aiPanel.includes('@review-risk="openAgentRiskReview"') &&
+    aiPanel.includes('confirmPendingAiCommandExecution') &&
+    aiMarkdownMessage.includes('interactiveCommands: false') &&
+    !/v-else-if="aiRiskExplanation"[^>]*:interactive-commands="true"/.test(aiPanel) &&
+    aiCodeBlock.includes('<Teleport to="body">') &&
+    aiCodeBlock.includes('aria-modal="true"') &&
+    aiCodeBlock.includes("event.key === 'Escape'") &&
+    aiCodeBlock.includes("event.key !== 'Tab'") &&
+    aiCodeBlock.includes('returnFocus.focus({ preventScroll: true })') &&
+    aiCodeBlock.includes('onBeforeUnmount') &&
+    !aiCodeBlock.includes('executeCommand') &&
+    aiCopyFeedback.includes('onBeforeUnmount') &&
+    aiCopyFeedback.includes('clearTimeout'),
+  'Risky commands must enter review before execution, code preview must stay read-only with keyboard focus recovery, and copy feedback timers must be cleaned up.'
 )
 assert(
   agentAutoApprove.includes('suggestedPatterns') &&
@@ -3481,11 +3512,10 @@ assert(
     /agentClockTimer = window\.setInterval/.test(agentSession) &&
     /onBeforeUnmount\(\(\) => \{\s*if \(agentClockTimer !== undefined\)/.test(agentSession) &&
     // 超时块要给出依据与已捕获的部分输出,而不是一句固定文案
-    agentStepCard.includes("props.timeoutInfo?.hint") &&
-    agentStepCard.includes('agent-timeout-partial') &&
-    styles.includes('.agent-step-countdown') &&
-    styles.includes('.theme-light .agent-step-countdown') &&
-    styles.includes('.agent-timeout-partial') &&
+    agentStepCard.includes('timeoutInfo?.hint') &&
+    agentStepCard.includes('props.timeoutInfo?.partialOutput') &&
+    agentStepCard.includes(':content="outputContent"') &&
+    agentStepCard.includes('v-if="countdownLabel"') &&
     // deadlineAt 是运行态字段:结算即清除,且 payload 只在终态写入,历史消息不会残留倒计时
     /step\.deadlineAt = undefined/.test(agentLoop) &&
     /payloadJson: terminal\s*\?\s*JSON\.stringify/.test(agentSession),

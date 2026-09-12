@@ -76,6 +76,7 @@ test('两步任务 happy path:toolResult 逐轮回传给模型', async () => {
   assert.equal(state.steps.length, 2)
   assert.deepEqual(state.steps.map((step) => step.status), ['completed', 'completed'])
   assert.equal(state.steps[0].output, 'file-a')
+  assert.equal(state.steps[0].executionPhase, 'finished')
   assert.equal(state.steps[1].command, 'df -h')
 
   assert.equal(calls.length, 3)
@@ -442,7 +443,38 @@ test('失败工具重试仍失败时不请求模型', async () => {
   assert.equal(state.status, 'error')
   assert.equal(state.errorKind, 'tool')
   assert.equal(state.steps[0].status, 'failed')
+  assert.equal(state.steps[0].executionPhase, 'not-started')
+  assert.equal(state.steps[0].failureReason, state.error)
   assert.match(state.error, /终端不可用/)
+})
+
+test('同步启动异常保留工具错误类别且标记命令未启动', async () => {
+  const { callModel } = scriptedModel([turnResponse('执行', [toolCall('c1', 'echo hi')])])
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => { throw new Error('Shell 未就绪') }
+  })
+  const state = await runAgentTask('测试', deps).done
+
+  assert.equal(state.errorKind, 'tool')
+  assert.equal(state.steps[0].executionPhase, 'not-started')
+  assert.equal(state.steps[0].failureReason, '命令启动失败:Shell 未就绪')
+  assert.equal(state.steps[0].output, undefined)
+})
+
+test('非零退出码表示执行已结束并继续回传模型', async () => {
+  const { calls, callModel } = scriptedModel([
+    turnResponse('执行', [toolCall('c1', 'test -e missing')]),
+    turnResponse('文件不存在')
+  ])
+  const { deps } = makeDeps({ callModel, startCommand: () => makeSimpleHandle({ exitCode: 1, output: '' }) })
+  const state = await runAgentTask('检查文件', deps).done
+
+  assert.equal(state.status, 'done')
+  assert.equal(state.steps[0].status, 'completed')
+  assert.equal(state.steps[0].executionPhase, 'finished')
+  assert.equal(state.steps[0].exitCode, 1)
+  assert.equal(JSON.parse(calls[1].turns[1].content).exitCode, 1)
 })
 
 test('非 failed 步骤不会被自动重新执行', async () => {
@@ -558,6 +590,7 @@ test('超时后选择停止:handle.cancel 被调、步骤 timeout、任务 stopp
   assert.equal(state.status, 'stopped')
   assert.equal(cancelCalls, 1)
   assert.equal(state.steps[0].status, 'timeout')
+  assert.match(state.stopReason, /命令可能仍在终端运行/)
 })
 
 test('commandMismatch:按串扰处理,任务 stopped 并带说明', async () => {
@@ -573,6 +606,8 @@ test('commandMismatch:按串扰处理,任务 stopped 并带说明', async () => 
   assert.equal(state.status, 'stopped')
   assert.equal(state.steps[0].status, 'failed')
   assert.ok(state.error && state.error.includes('串扰'))
+  assert.equal(state.stopReason, state.error)
+  assert.equal(state.steps[0].failureReason, state.stopReason)
 })
 
 test('轮次压缩:最旧 toolResult 保留退出码与输出尾部,最近 6 轮保留', () => {

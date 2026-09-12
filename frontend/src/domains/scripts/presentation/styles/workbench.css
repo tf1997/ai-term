@@ -1128,11 +1128,6 @@
 .context-strip .command-risk-status {
   max-width: min(360px, 100%);
 }
-.context-strip .ai-command-notice {
-  flex: 0 0 auto;
-  max-width: 96px;
-  padding-inline: 9px;
-}
 /* Native-feeling shell script editor layer. */
 .script-editor-shell {
   position: relative;
