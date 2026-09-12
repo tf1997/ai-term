@@ -738,7 +738,8 @@ body.workspace-resizing * {
   right: 8px;
   bottom: -1px;
   left: 8px;
-  height: 2px;
+  height: 3px;
+  border-radius: 2px 2px 0 0;
   background: var(--workbench-accent);
 }
 
@@ -910,6 +911,7 @@ body.workspace-resizing * {
 
 .assistant-panel .message.ai {
   border: 0;
+  border-left: 3px solid var(--workbench-accent);
   background: transparent;
 }
 
