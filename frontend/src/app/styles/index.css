@@ -30,4 +30,5 @@
 @import '../../domains/ai/presentation/styles/agent.css';
 @import '../../domains/settings/presentation/styles/settings-layout.css';
 @import '../../domains/ai/presentation/styles/results.css';
+@import '../../domains/ai/presentation/styles/ai-cards.css';
 @import '../../shared/styles/typography.css';

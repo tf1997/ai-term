@@ -1,0 +1,86 @@
+/* Shared AI card system.
+   Conversation turns, tool results and Agent steps are different components,
+   but they should read as one workspace: the same edge, radius and spacing. */
+:root {
+  --ai-card-radius: 8px;
+  --ai-card-gap: 10px;
+}
+
+.assistant-panel .message-list {
+  gap: var(--ai-card-gap);
+}
+
+.assistant-panel .message {
+  margin-bottom: 0;
+}
+
+.assistant-panel .message.ai,
+.assistant-panel .ai-result-block,
+.assistant-panel .ai-error-notice,
+.agent-step-card,
+.agent-allowlist-entries li,
+.script-draft-card,
+.script-assistant-section {
+  border-radius: var(--ai-card-radius);
+}
+
+.assistant-panel .message.ai {
+  border: 1px solid color-mix(in srgb, var(--workbench-accent) 32%, var(--workbench-line));
+  background: color-mix(in srgb, var(--workbench-panel-strong) 88%, var(--workbench-accent-soft));
+}
+
+.assistant-panel .ai-result-block,
+.agent-step-card,
+.agent-allowlist-entries li {
+  border: 1px solid var(--workbench-line);
+  background: var(--workbench-panel-strong);
+}
+
+/* Result cards used to have a heavier left rule. A balanced border keeps
+   status information visible without making the card look misaligned. */
+.ai-result-block {
+  border-left-width: 1px;
+}
+
+.assistant-panel .ai-error-notice {
+  border-width: 1px;
+}
+
+.agent-step-card {
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.agent-step-status,
+.agent-run-status,
+.chip.agent-step-auto,
+.chip.agent-step-risk,
+.command-risk-status {
+  border-radius: 999px;
+}
+
+.assistant-panel .ai-code-block,
+.assistant-panel .code-block,
+.agent-step-code-block {
+  border-radius: 7px;
+}
+
+.assistant-panel .ai-result-value {
+  line-height: 1.55;
+}
+
+.app-shell.theme-light .assistant-panel .message.ai,
+.theme-light .assistant-panel .message.ai {
+  border-color: color-mix(in srgb, var(--workbench-accent) 28%, var(--workbench-line));
+  background: var(--workbench-panel);
+}
+
+.app-shell.theme-light .assistant-panel .ai-result-block,
+.theme-light .assistant-panel .ai-result-block,
+.app-shell.theme-light .agent-step-card,
+.theme-light .agent-step-card,
+.app-shell.theme-light .agent-allowlist-entries li,
+.theme-light .agent-allowlist-entries li {
+  border-color: var(--workbench-line);
+  background: var(--workbench-panel);
+}
