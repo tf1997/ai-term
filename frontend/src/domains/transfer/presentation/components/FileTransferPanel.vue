@@ -140,7 +140,7 @@ const sortedLocalEntries = computed(() => {
   })
 })
 const sftpHeaderSummary = computed(() => {
-  if (transferMode.value === 'terminal') return `终端通道 · 单文件 ${formatSize(INLINE_TRANSFER_LIMIT)} 内`
+  if (transferMode.value === 'terminal') return `终端传输 · 单文件 ${formatSize(INLINE_TRANSFER_LIMIT)} 内`
   if (!remoteConnectionAvailable.value) return '未连接远程终端'
   if (isBastionConnection.value && !terminalSessionConnected.value) return '终端连接已断开'
   if (isBastionConnection.value && requiresExplicitBastionProbe.value) return '需要检测当前终端 SFTP'
@@ -1506,14 +1506,10 @@ function saveBase64File(base64: string, name: string) {
       </div>
       <div class="transfer-mode-tabs" role="tablist" aria-label="传输模式">
         <button type="button" :class="{ active: transferMode === 'sftp' }" role="tab" :aria-selected="transferMode === 'sftp'" @click="selectTransferMode('sftp')">SFTP</button>
-        <button type="button" :class="{ active: transferMode === 'terminal' }" role="tab" :aria-selected="transferMode === 'terminal'" @click="selectTransferMode('terminal')">终端通道</button>
+        <button type="button" :class="{ active: transferMode === 'terminal' }" role="tab" :aria-selected="transferMode === 'terminal'" @click="selectTransferMode('terminal')">终端传输</button>
       </div>
       <div class="panel-actions">
-        <button class="text-button sftp-terminal-switch" type="button" title="切换到当前终端" aria-label="切换到当前终端" @click="emit('focusTerminal')">
-          <UiIcon name="terminal" size="14" />
-          <span>切换到终端</span>
-        </button>
-        <button v-if="isBastionConnection" class="icon-button" type="button" title="检测当前终端 SFTP" aria-label="检测当前终端 SFTP" :disabled="!terminalDetectionReady || remoteBusy || taskInProgress" @click="openCurrentTerminalSftp()"><UiIcon name="terminal" /></button>
+        <button v-if="isBastionConnection" class="text-button" type="button" title="检测当前终端 SFTP" aria-label="检测当前终端 SFTP" :disabled="!terminalDetectionReady || remoteBusy || taskInProgress" @click="openCurrentTerminalSftp()"><UiIcon name="terminal" size="14" /><span>检测目标</span></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || remoteBusy" @click="createDirectory"><UiIcon name="folder" /></button>
         <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || remoteBusy || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
@@ -1549,8 +1545,8 @@ function saveBase64File(base64: string, name: string) {
           <span><strong>完成</strong>{{ transferCompletionLabel(activeTransferTask) }}</span>
         </div>
         <div class="transfer-task-paths">
-          <span>{{ activeTransferTask.sourcePath }}</span>
-          <span>{{ activeTransferTask.targetPath }}</span>
+          <span :title="activeTransferTask.sourcePath">{{ activeTransferTask.sourcePath }}</span>
+          <span :title="activeTransferTask.targetPath">{{ activeTransferTask.targetPath }}</span>
         </div>
       </template>
       <template v-else-if="lastTransfer">
@@ -1568,8 +1564,8 @@ function saveBase64File(base64: string, name: string) {
           <span><strong>完成</strong>{{ transferCompletionLabel(lastTransfer) }}</span>
         </div>
         <div class="transfer-task-paths">
-          <span>{{ lastTransfer.sourcePath }}</span>
-          <span>{{ lastTransfer.targetPath || lastTransfer.progressText }}</span>
+          <span :title="lastTransfer.sourcePath">{{ lastTransfer.sourcePath }}</span>
+          <span :title="lastTransfer.targetPath || lastTransfer.progressText">{{ lastTransfer.targetPath || lastTransfer.progressText }}</span>
         </div>
         <div v-if="lastTransfer.status === 'done'" class="transfer-task-actions">
           <button type="button" @click="openLastTransferLocation">{{ lastTransfer.direction === 'download' ? '打开位置' : '打开远端目录' }}</button>
@@ -1595,7 +1591,7 @@ function saveBase64File(base64: string, name: string) {
         <button type="button" :disabled="remoteBusy" @click="clearSelectedTarget">清除目标</button>
       </div>
       <button v-if="probeStateFor(selectedTarget) && !probeStateFor(selectedTarget)?.available" class="terminal-fallback-button" type="button" @click="switchToTerminalMode">
-        切到终端通道
+        使用终端传输
       </button>
     </div>
 
@@ -1648,7 +1644,7 @@ function saveBase64File(base64: string, name: string) {
               <option value="" disabled>根目录</option>
               <option v-for="root in localRoots" :key="root" :value="root">{{ rootLabel(root) }}</option>
             </select>
-            <input v-model="localPathDraft" :disabled="localLoading" placeholder="用户目录" @keydown.enter="loadLocalDirectory(localPathDraft)" />
+            <input v-model="localPathDraft" :disabled="localLoading" aria-label="本地目录路径" placeholder="用户目录" @keydown.enter="loadLocalDirectory(localPathDraft)" />
             <button type="button" :disabled="localLoading" @click="loadLocalDirectory(localPathDraft)">打开</button>
             <button type="button" :disabled="localLoading || !localHome" @click="loadLocalDirectory(localHome)">用户目录</button>
           </div>
@@ -1660,8 +1656,12 @@ function saveBase64File(base64: string, name: string) {
               :key="entry.path"
               class="file-row"
               :class="{ directory: entry.isDir, active: selectedLocalEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
+              tabindex="0"
+              :aria-label="`${entry.isDir ? '本地目录' : '本地文件'} ${entry.name}`"
               @click="selectLocalEntry(entry)"
               @dblclick="openLocalEntry(entry)"
+              @keydown.enter.self.prevent="openLocalEntry(entry)"
+              @keydown.space.self.prevent="selectLocalEntry(entry)"
               @contextmenu.prevent.stop="openLocalContextMenu($event, entry)"
             >
               <div class="file-main">
@@ -1708,7 +1708,7 @@ function saveBase64File(base64: string, name: string) {
             <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex <= 0" @click="goRemoteBack"><UiIcon name="arrow-left" /></button>
             <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex >= remotePathHistory.length - 1" @click="goRemoteForward"><UiIcon name="arrow-right" /></button>
             <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || remoteBusy" @click="goParent"><UiIcon name="arrow-up" /></button>
-            <input v-model="pathDraft" :disabled="!remoteReady || remoteBusy" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
+            <input v-model="pathDraft" :disabled="!remoteReady || remoteBusy" aria-label="远程目录路径" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
             <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(pathDraft)">打开</button>
             <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory('.')">主目录</button>
           </div>
@@ -1718,7 +1718,11 @@ function saveBase64File(base64: string, name: string) {
               <strong>释放后上传到远端目录</strong>
               <span>{{ currentPath }}</span>
             </div>
-            <p v-if="!remoteConnectionAvailable" class="empty-state">SFTP 需要打开一个远程连接。</p>
+            <div v-if="!remoteConnectionAvailable" class="sftp-empty-state" role="status">
+              <UiIcon name="folder" size="28" />
+              <strong>选择一个远程会话</strong>
+              <p>在左侧打开 SSH 连接，或切换到已连接的终端，即可浏览远程文件。</p>
+            </div>
             <p v-else-if="isBastionConnection && !terminalSessionConnected" class="empty-state">终端连接已断开，当前 SFTP 目标已失效。</p>
             <p v-else-if="!remoteReady" class="empty-state">请点击顶部的“检测当前终端 SFTP”。</p>
             <p v-else-if="directoryLoading && entries.length === 0" class="empty-state" role="status" aria-live="polite">正在加载 SFTP 目录...</p>
@@ -1728,8 +1732,12 @@ function saveBase64File(base64: string, name: string) {
               :key="entry.path"
               class="file-row"
               :class="{ directory: entry.isDir, active: selectedRemoteEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
+              tabindex="0"
+              :aria-label="`${entry.isDir ? '远程目录' : '远程文件'} ${entry.name}`"
               @click="selectRemoteEntry(entry)"
               @dblclick="openEntry(entry)"
+              @keydown.enter.self.prevent="openEntry(entry)"
+              @keydown.space.self.prevent="selectRemoteEntry(entry)"
               @contextmenu.prevent.stop="openRemoteContextMenu($event, entry)"
             >
               <div class="file-main">

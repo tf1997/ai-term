@@ -1,0 +1,103 @@
+/* The main view belongs to the session; auxiliary tools retain their own state. */
+.app-shell {
+  grid-template-rows: 46px 42px minmax(0, 1fr);
+}
+
+.app-shell > .app-rail,
+.app-shell > .sidebar {
+  grid-row: 2 / 4;
+}
+
+.app-shell > .terminal-stack,
+.app-shell > .right-panel {
+  grid-row: 3;
+}
+
+.app-shell > .workspace-resizer {
+  top: 88px;
+}
+
+.session-view-bar {
+  grid-column: 3 / 5;
+  grid-row: 2;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--workbench-line-soft);
+  background: var(--workbench-chrome);
+}
+
+.session-view-tabs {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.session-view-tabs button,
+.session-tools-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--workbench-muted);
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  box-shadow: none;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.session-view-tabs button:hover:not(:disabled),
+.session-tools-toggle:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--workbench-hover);
+  color: var(--workbench-text-strong);
+  box-shadow: none;
+  transform: none;
+}
+
+.session-view-tabs button.active {
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+  font-weight: 600;
+}
+
+.session-view-tabs button:focus-visible,
+.session-tools-toggle:focus-visible {
+  outline: 2px solid var(--workbench-accent);
+  outline-offset: 2px;
+}
+
+.session-tools-toggle {
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+.session-files-view {
+  grid-column: 3 / 5;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--workbench-panel);
+}
+
+.app-shell .workspace-tabs {
+  grid-template-columns: repeat(3, minmax(54px, 1fr));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-view-tabs button,
+  .session-tools-toggle {
+    transition: none;
+  }
+}

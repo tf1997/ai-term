@@ -1,150 +1,425 @@
-/* Dark theme SFTP polish. */
-.app-shell.theme-dark .workspace-tabs button.active {
-  border-color: rgba(86, 230, 163, .46);
-  background: rgba(86, 230, 163, .12);
-  color: #bff8da;
+/* Neutral file-workspace colors also reach the editor and menus teleported to body. */
+:root {
+  --sftp-canvas: #141414;
+  --sftp-surface: #191919;
+  --sftp-raised: #202020;
+  --sftp-input: #151515;
+  --sftp-hover: #292929;
+  --sftp-line: #383838;
+  --sftp-line-soft: #2b2b2b;
+  --sftp-ink: #ededeb;
+  --sftp-muted: #adafac;
+  --sftp-subtle: #898d88;
+  --sftp-accent: var(--workbench-accent-strong);
+  --sftp-selected: color-mix(in srgb, var(--workbench-accent) 13%, var(--sftp-surface));
+  --sftp-danger: #f1a0a4;
+  --sftp-danger-bg: #2a1d1e;
 }
-.app-shell.theme-dark .workspace-tabs button.active::after {
-  background: #56e6a3;
+
+:root[data-theme="light"] {
+  --sftp-canvas: #f5f7f6;
+  --sftp-surface: #ffffff;
+  --sftp-raised: #f3f5f4;
+  --sftp-input: #ffffff;
+  --sftp-hover: #eef2ef;
+  --sftp-line: #cdd5cf;
+  --sftp-line-soft: #e3e8e4;
+  --sftp-ink: #202923;
+  --sftp-muted: #5e6b62;
+  --sftp-subtle: #6b796f;
+  --sftp-selected: #e6f3eb;
+  --sftp-danger: #ad303e;
+  --sftp-danger-bg: #fff0f1;
 }
-.app-shell.theme-dark .files-panel,
-.app-shell.theme-dark .sftp-transfer-workbench {
-  background: #0a0f18;
+
+.app-shell .files-panel {
+  background: var(--sftp-canvas);
+  color: var(--sftp-ink);
 }
-.app-shell.theme-dark .transfer-browser {
-  background: #1b2636;
+
+.app-shell.sftp-workbench-active .session-view-bar {
+  border-color: var(--sftp-line-soft);
+  background: var(--sftp-raised);
 }
-.app-shell.theme-dark .transfer-pane {
-  background: #0e1521;
+
+.app-shell.sftp-workbench-active .session-view-tabs button {
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .transfer-pane-head {
-  border-bottom-color: #1f2a3b;
-  background: linear-gradient(180deg, rgba(17, 25, 38, .98), rgba(13, 20, 32, .98));
+
+.app-shell.sftp-workbench-active .session-view-tabs button.active {
+  background: var(--sftp-selected);
+  color: var(--sftp-accent);
 }
-.app-shell.theme-dark .transfer-pane-head strong,
-.app-shell.theme-dark .transfer-pane-title strong {
-  color: #edf4ff;
+
+.app-shell .files-panel .transfer-browser {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
 }
-.app-shell.theme-dark .transfer-pane-title span,
-.app-shell.theme-dark .transfer-pane-path {
-  color: #8fa1ba;
+
+.app-shell .files-panel :is(.sftp-panel-head, .transfer-pane-head, .sftp-feedback, .terminal-target-card, .bastion-targets) {
+  border-color: var(--sftp-line-soft);
+  background: var(--sftp-raised);
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .transfer-target-strip {
-  border-bottom-color: #1f2a3b;
-  background: #1b2636;
+
+.app-shell .files-panel :is(.sftp-title-copy strong, .transfer-pane-head strong, .terminal-target-card strong, .selected-target strong, .transfer-task-head strong) {
+  color: var(--sftp-ink);
 }
-.app-shell.theme-dark .transfer-target-strip .transfer-route-item,
-.app-shell.theme-dark .local-pathbar,
-.app-shell.theme-dark .sftp-pathbar {
-  border-color: #1f2a3b;
-  background: #0f1724;
-  color: #94a6c0;
+
+.app-shell .files-panel :is(.sftp-title-copy span, .transfer-pane-title span, .transfer-pane-path, .terminal-target-card span, .terminal-target-card small, .selected-target, .terminal-transfer-note, .terminal-transfer-panel label span) {
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .local-pathbar input,
-.app-shell.theme-dark .sftp-pathbar input {
-  border-color: #243246;
-  background: #0b111c;
-  color: #edf4ff;
+
+.app-shell .files-panel :is(.sftp-transfer-workbench, .transfer-pane, .file-list, .terminal-transfer-panel) {
+  background: var(--sftp-surface);
 }
-.app-shell.theme-dark .local-pathbar button,
-.app-shell.theme-dark .sftp-pathbar button {
-  border-color: #263448;
-  background: #111a28;
-  color: #d9e5f7;
+
+.app-shell .files-panel :is(.transfer-browser, .transfer-target-strip) {
+  background: var(--sftp-line-soft);
 }
-.app-shell.theme-dark .local-pathbar button:hover:not(:disabled),
-.app-shell.theme-dark .sftp-pathbar button:hover:not(:disabled) {
-  border-color: rgba(86, 230, 163, .42);
-  background: rgba(86, 230, 163, .1);
-  color: #bff8da;
+
+.app-shell .files-panel .transfer-target-strip {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-color: var(--sftp-line-soft);
 }
-.app-shell.theme-dark .file-list {
-  background: #0d1420;
-  scrollbar-color: #526173 #111827;
+
+.app-shell .files-panel .transfer-route-item {
+  background: var(--sftp-raised);
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .file-row {
-  border-bottom-color: rgba(123, 145, 176, .13);
-  background: #101927;
+
+.app-shell .files-panel .transfer-route-item :is(strong, em) {
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .file-row.directory {
-  background: #111c2c;
+
+.app-shell .files-panel .transfer-route-item .ui-icon {
+  color: var(--sftp-accent);
 }
-.app-shell.theme-dark .file-row:hover {
-  background: #162235;
+
+.app-shell .files-panel :is(.local-pathbar, .sftp-pathbar) {
+  border-color: var(--sftp-line-soft);
+  background: var(--sftp-surface);
 }
-.app-shell.theme-dark .file-row.active,
-.app-shell.theme-dark .file-row.directory.active {
-  background: rgba(86, 230, 163, .13);
-  outline-color: rgba(86, 230, 163, .42);
+
+.app-shell .files-panel :is(input, select, textarea) {
+  border-color: var(--sftp-line);
+  background: var(--sftp-input);
+  color: var(--sftp-ink);
+  box-shadow: none;
 }
-.app-shell.theme-dark .file-row strong {
-  color: #f0f6ff;
+
+.app-shell .files-panel input::placeholder {
+  color: var(--sftp-muted);
+  opacity: 1;
 }
-.app-shell.theme-dark .file-row span,
-.app-shell.theme-dark .file-meta span {
-  color: #8da0bb;
+
+.app-shell .files-panel :is(input, select, textarea):focus {
+  border-color: var(--sftp-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sftp-accent) 16%, transparent);
 }
-.app-shell.theme-dark .file-actions .icon-button {
-  border-color: #263448;
-  background: #101928;
-  color: #aab8cb;
+
+.app-shell .files-panel button {
+  border-color: var(--sftp-line);
+  background: var(--sftp-raised);
+  color: var(--sftp-ink);
+  box-shadow: none;
+  transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out;
 }
-.app-shell.theme-dark .file-actions .icon-button:hover:not(:disabled) {
-  border-color: rgba(86, 230, 163, .42);
-  background: rgba(86, 230, 163, .1);
-  color: #bff8da;
+
+.app-shell .files-panel button:hover:not(:disabled) {
+  border-color: var(--sftp-subtle);
+  background: var(--sftp-hover);
+  color: var(--sftp-ink);
+  box-shadow: none;
+  transform: none;
 }
-.app-shell.theme-dark .file-actions .icon-button.danger:hover:not(:disabled) {
-  border-color: rgba(248, 113, 113, .44);
-  background: rgba(248, 113, 113, .1);
-  color: #fecaca;
+
+.app-shell .files-panel button:focus-visible {
+  outline: 2px solid var(--sftp-accent);
+  outline-offset: 2px;
 }
-.app-shell.theme-dark .file-type-icon {
-  border-color: #304058;
-  background: #111c2c;
-  color: #9fb1ca;
+
+.app-shell .files-panel .transfer-mode-tabs {
+  border-color: var(--sftp-line-soft);
+  background: var(--sftp-canvas);
 }
-.app-shell.theme-dark .file-type-icon.folder {
-  border-color: rgba(86, 230, 163, .38);
-  background: rgba(86, 230, 163, .12);
-  color: #8ce7b5;
+
+.app-shell .files-panel .transfer-mode-tabs button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .file-type-icon.file {
-  border-color: rgba(125, 148, 184, .34);
-  background: rgba(125, 148, 184, .12);
-  color: #aebdd2;
+
+.app-shell .files-panel .transfer-mode-tabs button.active {
+  border-color: color-mix(in srgb, var(--sftp-accent) 32%, var(--sftp-line));
+  background: var(--sftp-selected);
+  color: var(--sftp-accent);
 }
-.app-shell.theme-dark .sftp-feedback {
-  border-bottom-color: #1f2a3b;
-  background: #0f1724;
-  color: #aebdd2;
+
+.app-shell .files-panel .transfer-pane-path button {
+  border: 0;
+  background: transparent;
+  color: var(--sftp-muted);
 }
-.app-shell.theme-dark .transfer-progress {
-  border-color: rgba(86, 230, 163, .26);
-  background: #09111b;
+
+.app-shell .files-panel .transfer-pane-path button + button::before {
+  color: var(--sftp-subtle);
 }
-.app-shell.theme-dark .transfer-progress span,
-.app-shell.theme-dark .transfer-progress.complete span {
-  background: linear-gradient(90deg, #56e6a3, #35c6a0);
+
+.app-shell .files-panel .transfer-pane-path button:hover:not(:disabled) {
+  border: 0;
+  background: var(--sftp-hover);
+  color: var(--sftp-ink);
 }
-.app-shell.theme-dark .transfer-task-stats span {
-  border-color: #243246;
-  background: #0b111c;
-  color: #aebdd2;
+
+.app-shell .files-panel .transfer-pane-path button:last-child {
+  color: var(--sftp-ink);
 }
-.app-shell.theme-dark .transfer-task-stats strong {
-  color: #bff8da;
+
+.app-shell .files-panel .file-list {
+  scrollbar-color: var(--sftp-line) transparent;
 }
-.app-shell.theme-dark .transfer-task-paths span {
-  color: #8fa1ba;
+
+.app-shell .files-panel .file-row,
+.app-shell .files-panel .file-row.directory {
+  border-bottom-color: var(--sftp-line-soft);
+  background: var(--sftp-surface);
 }
-.app-shell.theme-dark .transfer-task-actions button {
-  border-color: #263448;
-  background: #111a28;
-  color: #d9e5f7;
+
+.app-shell .files-panel .file-row:hover,
+.app-shell .files-panel .file-row:focus-within {
+  background: var(--sftp-hover);
 }
-.app-shell.theme-dark .transfer-task-actions button:hover:not(:disabled) {
-  border-color: rgba(86, 230, 163, .42);
-  background: rgba(86, 230, 163, .1);
-  color: #bff8da;
+
+.app-shell .files-panel .file-row.active,
+.app-shell .files-panel .file-row.directory.active {
+  background: var(--sftp-selected);
+  outline-color: color-mix(in srgb, var(--sftp-accent) 50%, transparent);
+}
+
+.app-shell .files-panel .file-row:focus-visible {
+  outline: 2px solid var(--sftp-accent);
+  outline-offset: -2px;
+}
+
+.app-shell .files-panel .file-copy strong {
+  color: var(--sftp-ink);
+  font-weight: 500;
+}
+
+.app-shell .files-panel .file-row .file-meta,
+.app-shell .files-panel .file-row .file-meta span {
+  color: var(--sftp-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-shell .files-panel .file-type-icon {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-muted);
+  box-shadow: none;
+}
+
+.app-shell .files-panel .file-type-icon.folder,
+.app-shell .files-panel .file-row:hover .file-type-icon.folder,
+.app-shell .files-panel .file-row.active .file-type-icon.folder {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-accent);
+}
+
+.app-shell .files-panel .file-type-icon.file,
+.app-shell .files-panel .file-row:hover .file-type-icon.file,
+.app-shell .files-panel .file-row.active .file-type-icon.file {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-muted);
+}
+
+.app-shell .files-panel .file-row.hidden-entry .file-copy strong {
+  color: var(--sftp-muted);
+  opacity: 1;
+}
+
+.app-shell .files-panel .file-row.hidden-entry .file-type-icon {
+  opacity: 1;
+}
+
+.app-shell .files-panel .file-row.hidden-entry.active .file-copy strong {
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel .file-actions .icon-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-muted);
+}
+
+.app-shell .files-panel .file-actions .icon-button:hover:not(:disabled) {
+  border-color: var(--sftp-line);
+  background: var(--sftp-raised);
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel button.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--sftp-danger) 45%, transparent);
+  background: var(--sftp-danger-bg);
+  color: var(--sftp-danger);
+}
+
+.app-shell .files-panel .sftp-feedback.error {
+  border-color: color-mix(in srgb, var(--sftp-danger) 24%, var(--sftp-line-soft));
+  background: var(--sftp-danger-bg);
+  color: var(--sftp-danger);
+}
+
+.app-shell .files-panel .transfer-progress {
+  height: 4px;
+  border: 0;
+  background: var(--sftp-line-soft);
+}
+
+.app-shell .files-panel .transfer-progress span,
+.app-shell .files-panel .transfer-progress.complete span {
+  background: var(--workbench-accent);
+  transition: none;
+}
+
+.app-shell .files-panel .sftp-feedback:not(.complete) .transfer-task-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 6px;
+}
+
+.app-shell .files-panel .transfer-task-stats span {
+  height: auto;
+  border: 0;
+  background: transparent;
+  color: var(--sftp-muted);
+  padding: 0;
+}
+
+.app-shell .files-panel .transfer-task-stats strong {
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel .transfer-task-paths {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 5px;
+}
+
+.app-shell .files-panel .transfer-task-paths span {
+  color: var(--sftp-muted);
+}
+
+.app-shell .files-panel .remote-drop-overlay {
+  border-color: var(--sftp-accent);
+  background: color-mix(in srgb, var(--sftp-surface) 96%, transparent);
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel .remote-drop-overlay :is(strong, span) {
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel .remote-drop-overlay .ui-icon {
+  color: var(--sftp-accent);
+}
+
+.app-shell .files-panel :is(.terminal-transfer-note, .target-list article, .target-probe-state) {
+  border-color: var(--sftp-line);
+  background: var(--sftp-raised);
+  color: var(--sftp-muted);
+}
+
+.app-shell .files-panel :is(.empty-state, .sftp-empty-state) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sftp-muted);
+  box-shadow: none;
+}
+
+.app-shell .files-panel .sftp-empty-state strong {
+  color: var(--sftp-ink);
+}
+
+.app-shell .files-panel .sftp-empty-state .ui-icon {
+  color: var(--sftp-subtle);
+}
+
+/* Teleports inherit these root tokens instead of depending on .app-shell. */
+:root .file-context-menu,
+:root .remote-file-editor-modal {
+  border-color: var(--sftp-line);
+  background: var(--sftp-surface);
+  color: var(--sftp-ink);
+}
+
+:root .file-context-menu > strong,
+:root .remote-file-editor-modal .modal-head strong {
+  color: var(--sftp-ink);
+}
+
+:root .file-context-menu button,
+:root .remote-file-editor-modal button {
+  border-color: var(--sftp-line);
+  background: var(--sftp-raised);
+  color: var(--sftp-ink);
+}
+
+:root .file-context-menu button {
+  border-color: transparent;
+  background: transparent;
+}
+
+:root .file-context-menu button:hover:not(:disabled),
+:root .remote-file-editor-modal button:hover:not(:disabled) {
+  background: var(--sftp-hover);
+  color: var(--sftp-ink);
+}
+
+:root .file-context-menu button.danger {
+  color: var(--sftp-danger);
+}
+
+:root .file-context-menu button:focus-visible,
+:root .remote-file-editor-modal button:focus-visible {
+  outline: 2px solid var(--sftp-accent);
+  outline-offset: -2px;
+}
+
+:root .remote-file-editor-modal :is(.modal-head, .modal-actions, .remote-file-editor-status) {
+  border-color: var(--sftp-line-soft);
+  background: var(--sftp-raised);
+  color: var(--sftp-muted);
+}
+
+:root .remote-file-editor-modal .modal-head span,
+:root .remote-file-editor-loading {
+  color: var(--sftp-muted);
+}
+
+:root .remote-file-editor-textarea {
+  border-color: var(--sftp-line);
+  background: var(--sftp-input);
+  color: var(--sftp-ink);
+  box-shadow: none;
+  caret-color: var(--sftp-accent);
+}
+
+:root .remote-file-editor-textarea:focus {
+  border-color: var(--sftp-accent);
+  outline: 1px solid var(--sftp-accent);
+  outline-offset: -1px;
+}
+
+:root .remote-file-editor-status.error {
+  color: var(--sftp-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell .files-panel button {
+    transition: none;
+  }
 }

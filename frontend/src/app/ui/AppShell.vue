@@ -15,6 +15,8 @@ import type { AppUserSettings } from '../../domains/settings/types'
 import { useUserSettings } from '../../domains/settings/index'
 import { useAppTheme } from '../../domains/settings/index'
 import { useWorkspaceResize } from '../layout/useWorkspaceResize'
+import { useSessionView } from '../layout/useSessionView'
+import type { SessionView } from '../layout/useSessionView'
 import { useToasts } from '../../shared/ui/useToasts'
 import { useContextMenu } from '../../shared/ui/useContextMenu'
 import { useCommandHistory } from '../../domains/terminal/index'
@@ -35,6 +37,7 @@ import { ConnectionSidebar } from '../../domains/connections/views'
 import ContextMenu from '../../shared/ui/ContextMenu.vue'
 import { SettingsSidebar } from '../../domains/settings/views'
 import { TerminalPane, TerminalTabsBar } from '../../domains/terminal/views'
+import { FileTransferPanel } from '../../domains/transfer/views'
 import WorkspacePanel from './WorkspacePanel.vue'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
@@ -45,7 +48,7 @@ const aboutOpen = ref(false)
 const leftPanelMode = ref<LeftPanelMode>('connections')
 const leftCollapsed = ref(false)
 const rightCollapsed = ref(false)
-const workspacePanelTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
+const workspacePanelTab = ref<'history' | 'ai' | 'scripts'>('ai')
 const terminalTabState = useTerminalTabs()
 const {
   terminalTabs, activeTerminalId, activeTerminal, targetTerminalIds, targetConnectionIds,
@@ -54,6 +57,7 @@ const {
   pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
   resetTerminalTargetsToActive
 } = terminalTabState
+const { activeView, filesVisited, selectView } = useSessionView({ activeTerminalId, terminalTabs })
 // SFTP tabs open a workspace without establishing a live SSH session.
 const connectedProfileIds = computed(() => [...new Set(
   terminalTabs.value.filter((tab) => tab.profile && tab.status === 'remote').map((tab) => tab.connectionId)
@@ -137,7 +141,7 @@ const aboutRuntimeStats = computed(() => [
   { label: '主题', value: appTheme.value === 'light' ? 'Light' : 'Dark' }
 ])
 
-const sftpWorkbenchActive = computed(() => !rightCollapsed.value && workspacePanelTab.value === 'sftp')
+const sftpWorkbenchActive = computed(() => activeView.value === 'files')
 const {
   workspaceWidth,
   workspaceResizing,
@@ -158,10 +162,6 @@ async function connectProfileFromSidebar(profileId: string) {
     profileStoreStatus.value = 'ready'
     await ensureActiveAiSession(profile.id)
     createTerminalTab(profile)
-    if (isSftpProfile(profile)) {
-      workspacePanelTab.value = 'sftp'
-      rightCollapsed.value = false
-    }
     profiles.value = await listConnectionProfiles()
     selectedProfileId.value = profile.id
   } catch (error) {
@@ -170,10 +170,6 @@ async function connectProfileFromSidebar(profileId: string) {
   } finally {
     connectingProfileId.value = ''
   }
-}
-
-function isSftpProfile(profile: ConnectionProfile) {
-  return profile.fileTransferMode === 'sftp-direct' || profile.fileTransferMode === 'sftp-gateway'
 }
 
 async function createLocalTerminalTab() {
@@ -621,7 +617,30 @@ function closeTerminalTabsToRight(tabId: string) {
 }
 
 function focusActiveTerminal() {
-  void nextTick(() => terminalRefs.value[activeTerminalId.value]?.focusTerminal())
+  const terminalId = activeTerminalId.value
+  void nextTick(() => {
+    if (activeView.value === 'terminal' && activeTerminalId.value === terminalId) {
+      terminalRefs.value[terminalId]?.focusTerminal()
+    }
+  })
+}
+
+function selectSessionView(view: SessionView) {
+  selectView(view)
+  if (view === 'terminal') focusActiveTerminal()
+}
+
+function handleSessionViewKeydown(event: KeyboardEvent) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tabs = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  const currentIndex = tabs.indexOf(event.target as HTMLButtonElement)
+  if (currentIndex < 0) return
+  event.preventDefault()
+  const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+    : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+  selectView(nextIndex === 0 ? 'terminal' : 'files')
+  tabs[nextIndex]?.focus({ preventScroll: true })
 }
 
 function updateTerminalOutput(event: TerminalOutputEvent) {
@@ -669,10 +688,7 @@ function terminalOutputDelta(previousSnapshot: string, nextSnapshot: string) {
 }
 
 function focusActiveTerminalFromWorkspace() {
-  rightCollapsed.value = true
-  requestAnimationFrame(() => {
-    terminalRefs.value[activeTerminalId.value]?.focusTerminal()
-  })
+  selectSessionView('terminal')
 }
 
 async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
@@ -831,7 +847,50 @@ onBeforeUnmount(() => {
       @save-ai-config="saveAiConfig"
       @update-settings="updateUserSettings"
     />
-    <section class="terminal-stack" @contextmenu.prevent="openTerminalAreaContextMenu">
+    <div class="session-view-bar">
+      <nav class="session-view-tabs" role="tablist" aria-label="当前会话视图" @keydown="handleSessionViewKeydown">
+        <button
+          id="session-view-terminal"
+          type="button"
+          role="tab"
+          :aria-selected="activeView === 'terminal'"
+          aria-controls="session-terminal-view"
+          :tabindex="activeView === 'terminal' ? 0 : -1"
+          :class="{ active: activeView === 'terminal' }"
+          @click="selectSessionView('terminal')"
+        >
+          <UiIcon name="terminal" size="15" />
+          <span>终端</span>
+        </button>
+        <button
+          id="session-view-files"
+          type="button"
+          role="tab"
+          :aria-selected="activeView === 'files'"
+          aria-controls="session-files-view"
+          :tabindex="activeView === 'files' ? 0 : -1"
+          :class="{ active: activeView === 'files' }"
+          @click="selectSessionView('files')"
+        >
+          <UiIcon name="folder" size="15" />
+          <span>文件</span>
+        </button>
+      </nav>
+      <button
+        v-if="activeView === 'terminal'"
+        class="session-tools-toggle"
+        type="button"
+        :aria-expanded="!rightCollapsed"
+        aria-controls="session-workspace-tools"
+        :title="rightCollapsed ? '打开 AI、历史与脚本' : '收起辅助工具'"
+        @click="rightCollapsed = !rightCollapsed"
+      >
+        <UiIcon name="ai" size="14" />
+        <span>辅助工具</span>
+        <UiIcon :name="rightCollapsed ? 'arrow-left' : 'arrow-right'" size="12" />
+      </button>
+    </div>
+    <section id="session-terminal-view" v-show="activeView === 'terminal'" class="terminal-stack" role="tabpanel" aria-labelledby="session-view-terminal" @contextmenu.prevent="openTerminalAreaContextMenu">
       <TerminalPane
         v-for="tab in terminalTabs"
         v-show="tab.id === activeTerminalId"
@@ -841,7 +900,7 @@ onBeforeUnmount(() => {
         role="tabpanel"
         :aria-labelledby="`terminal-tab-${tab.id}`"
         :terminal-id="tab.id"
-        :active="tab.id === activeTerminalId"
+        :active="tab.id === activeTerminalId && activeView === 'terminal'"
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         :command-history="commandHistoryForTab(tab)"
@@ -854,6 +913,22 @@ onBeforeUnmount(() => {
         @command-recorded="recordCommand"
         @status-changed="updateTerminalStatus"
         @profile-updated="refreshConnectionProfilesAfterTerminalAuth"
+      />
+    </section>
+    <section id="session-files-view" v-show="activeView === 'files'" class="session-files-view" role="tabpanel" aria-labelledby="session-view-files">
+      <FileTransferPanel
+        v-if="filesVisited"
+        :terminal-id="activeTerminalId"
+        :connection-id="activeConnectionId"
+        :profile="activeTerminal?.profile"
+        :terminal-status="activeTerminal?.status ?? 'idle'"
+        :terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"
+        :active="activeView === 'files'"
+        :activation-sequence="1"
+        :terminal-snapshot="activeTerminalSnapshot"
+        :terminal-output-event="activeTerminalOutputEvent"
+        @write-terminal-input="writeInputToTargetTerminals"
+        @focus-terminal="focusActiveTerminalFromWorkspace"
       />
     </section>
     <div
@@ -870,7 +945,8 @@ onBeforeUnmount(() => {
       @keydown="handleWorkspaceResizeKeydown"
     />
     <WorkspacePanel
-      :collapsed="rightCollapsed"
+      id="session-workspace-tools"
+      :collapsed="rightCollapsed || activeView === 'files'"
       :terminal-id="activeTerminalId"
       :connection-id="activeConnectionId"
       :connection-profile="activeTerminal?.profile"
@@ -926,16 +1002,6 @@ onBeforeUnmount(() => {
       @clear-script-recording="clearScriptRecording"
       @workspace-tab-changed="workspacePanelTab = $event"
     />
-    <button
-      v-if="rightCollapsed"
-      class="workspace-open-handle"
-      type="button"
-      title="打开工作区"
-      aria-label="打开工作区"
-      @click="rightCollapsed = false"
-    >
-      <UiIcon name="arrow-left" size="15" />
-    </button>
     <AboutDialog v-if="aboutOpen" :app-theme="appTheme" :right-collapsed="rightCollapsed" :workspace-panel-tab="workspacePanelTab" :about-runtime-stats="aboutRuntimeStats" :terminal-count="terminalTabs.length" :profile-count="profiles.length" :session-count="activeWorkspaceSessions.length" @close="closeAboutPage" @toast="showToast" />
     <div v-if="toasts.length" class="toast-stack" aria-live="polite" aria-atomic="false">
       <article v-for="toast in toasts" :key="toast.id" class="app-toast" :class="toast.kind">

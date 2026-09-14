@@ -2306,7 +2306,7 @@ function focusTerminal() {
 }
 
 function focusTerminalUnlessNavigatingTabs() {
-  if (!props.active || document.activeElement?.closest('.session-tabs')) return
+  if (!props.active || document.activeElement?.closest('.session-tabs, .session-view-tabs')) return
   focusTerminal()
 }
 

@@ -92,7 +92,7 @@ async function click(selector, button = 'left') {
 async function press(key, modifiers = 0) {
   const keyCodes = { Escape: 27, Tab: 9, Enter: 13, Home: 36, End: 35, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Delete: 46, a: 65 }
   const params = { key, code: key === 'a' ? 'KeyA' : key, windowsVirtualKeyCode: keyCodes[key], modifiers }
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', ...params })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', ...params, ...(key === 'Enter' ? { text: '\r' } : {}) })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
 }
 
@@ -169,7 +169,7 @@ async function focusActiveTab() {
   // Walk the actual focus order, including the separate close button and scroll controls.
   for (let attempt = 0; attempt < 12; attempt++) {
     if (await evaluate('document.activeElement === document.querySelector(".tab.active .tab-select")')) return
-    await press('Tab', 1)
+    await press('Tab', 8) // CDP Shift modifier; 1 means Alt.
   }
   throw new Error('The active terminal tab is not reachable with Shift+Tab')
 }
@@ -246,6 +246,47 @@ async function assertNoActiveShadow(theme) {
   assert.deepEqual(await evaluate(`['.tab.active', '.tab.active .tab-select'].map(selector => getComputedStyle(document.querySelector(selector)).boxShadow)`), ['none', 'none'], `${theme}: the active terminal tab must have no shadow`)
 }
 
+async function assertSessionViews() {
+  await click('.workspace-tabs button:nth-child(3)')
+  const toolsBefore = await evaluate(`({
+    tab: document.querySelector('.workspace-tabs button.active').textContent.trim(),
+    width: document.querySelector('.right-panel').getBoundingClientRect().width
+  })`)
+  await click('#session-view-files')
+  await waitFor('document.querySelector(".files-panel") && document.querySelector("#session-view-files").getAttribute("aria-selected") === "true"')
+  await evaluate('window.__filePanel = document.querySelector(".files-panel")')
+  assert.equal(await evaluate('document.querySelector(".right-panel").getBoundingClientRect().width'), 0)
+  assert.equal(await evaluate('Boolean(document.querySelector(".workspace-resizer"))'), false)
+
+  await evaluate('document.querySelector("#session-view-files").focus()')
+  for (const [key, view] of [['ArrowLeft', 'terminal'], ['End', 'files'], ['Home', 'terminal'], ['ArrowRight', 'files']]) {
+    await press(key)
+    await waitFor(`document.querySelector('#session-view-${view}').getAttribute('aria-selected') === 'true'
+      && document.activeElement === document.querySelector('#session-view-${view}')`)
+  }
+  await press('Enter')
+  assert.equal(await evaluate('document.querySelector(".files-panel") === window.__filePanel'), true, 'Reselecting files must preserve the file panel')
+
+  await click('#session-view-terminal')
+  await waitFor('document.querySelector(".terminal-stack").contains(document.activeElement)')
+  assert.deepEqual(await evaluate(`({
+    tab: document.querySelector('.workspace-tabs button.active').textContent.trim(),
+    width: document.querySelector('.right-panel').getBoundingClientRect().width
+  })`), toolsBefore, 'Returning to the terminal must restore the auxiliary tool and its width')
+  await assertStableTerminal()
+
+  await click('.workspace-close')
+  await click('#session-view-files')
+  await click('#session-view-terminal')
+  assert.equal(await evaluate('document.querySelector(".right-panel").getBoundingClientRect().width'), 0, 'A previously closed auxiliary panel must stay closed')
+  assert.equal(await evaluate('document.querySelector(".session-tools-toggle").getAttribute("aria-expanded")'), 'false')
+  await click('.session-tools-toggle')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width > 0')
+  assert.equal(await evaluate('document.querySelector(".workspace-tabs button.active").textContent.trim()'), toolsBefore.tab)
+  assert.equal(await evaluate('document.querySelector(".files-panel") === window.__filePanel'), true)
+  await click('.workspace-tabs button:nth-child(2)')
+}
+
 async function openHistory() {
   if (!await evaluate('Boolean(document.querySelector(".session-history-popover"))')) await click('[title="会话列表"]')
   await waitFor('Boolean(document.querySelector(".session-history-row"))')
@@ -270,12 +311,15 @@ try {
   })
   await send('Page.enable')
   await send('Runtime.enable')
+  await send('Page.bringToFront')
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false })
   await send('Page.navigate', { url: appUrl })
   await waitForTabCount(1)
   assert.equal(await evaluate('Boolean(window.__TAURI_IPC__)'), false, 'Run this smoke test against browser preview, not a native workspace.')
   await evaluate('window.__firstTerminalPane = document.querySelector(".terminal-stack").firstElementChild; window.__firstXterm = document.querySelector(".terminal-stack .xterm")')
   await assertLastTerminalGuard()
+  await assertSessionViews()
   assert.equal(await evaluate('Boolean(document.querySelector(".session-tab-scroll-prev, .session-tab-scroll-next"))'), false)
 
   await menuAction('新建本地终端')
@@ -342,7 +386,7 @@ try {
   await assertActiveVisible()
   await press('Tab', 2)
   await waitForActive(allTabs[0])
-  await press('Tab', 3)
+  await press('Tab', 10) // Control + Shift.
   await waitForActive(allTabs.at(-1))
   await focusActiveTab()
   await press('Home')
@@ -482,6 +526,7 @@ try {
       'stable terminal DOM', 'current terminal required in sync group', 'sync group switch and exit', 'filtered sync selection and stop',
       '20 tabs with duplicate title ordinals', 'wheel and arrow scrolling with disabled boundaries', 'automatic active tab reveal',
       'search empty state and keyboard selection', 'tab keyboard navigation and focus', 'active tab has no shadow in both themes',
+      'fixed terminal/files keyboard navigation', 'file panel survives view switches', 'auxiliary panel tab, width and visibility restoration',
       'background close preserves active instance', 'middle-click and Delete close', 'close other and right tabs', 'last terminal guard',
       'global draft session create/rename/delete', 'terminal switch preserves AI session', 'no uncaught exceptions'
     ],

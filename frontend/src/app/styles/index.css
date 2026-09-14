@@ -15,7 +15,6 @@
 @import '../../domains/terminal/presentation/styles/history.css';
 @import './theme-shell.css';
 @import '../../shared/styles/markdown.css';
-@import '../../domains/transfer/presentation/styles/sftp.css';
 @import '../../domains/ai/presentation/styles/ai.css';
 @import '../../domains/scripts/presentation/styles/scripts-polish.css';
 @import '../../domains/settings/presentation/styles/settings-polish.css';
@@ -31,3 +30,5 @@
 @import '../../domains/settings/presentation/styles/settings-layout.css';
 @import '../../domains/ai/presentation/styles/ai-cards.css';
 @import '../../shared/styles/typography.css';
+@import './session-view.css';
+@import '../../domains/transfer/presentation/styles/sftp.css';

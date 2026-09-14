@@ -8,7 +8,6 @@ import type { ScriptRecording } from '../../domains/scripts/types'
 import type { AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from '../../domains/ai/types'
 import { AiPanel } from '../../domains/ai/views'
 import { CommandHistoryPanel } from '../../domains/terminal/views'
-import { FileTransferPanel } from '../../domains/transfer/views'
 import { ScriptPanel } from '../../domains/scripts/views'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
@@ -50,7 +49,7 @@ const emit = defineEmits<{
   configureAi: []
   clearTerminalSelection: []
   close: []
-  workspaceTabChanged: [tab: 'history' | 'ai' | 'scripts' | 'sftp']
+  workspaceTabChanged: [tab: 'history' | 'ai' | 'scripts']
   selectWorkspaceSession: [sessionId: string]
   createWorkspaceSession: []
   renameWorkspaceSession: [sessionId: string, name: string]
@@ -73,18 +72,12 @@ const emit = defineEmits<{
   aiError: [detail: string]
 }>()
 
-const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>('ai')
+const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts'>('ai')
 const scriptPanelVisited = ref(false)
-const sftpPanelVisited = ref(false)
-const sftpTabActivationSequence = ref(0)
 
-function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
+function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
   activeWorkspaceTab.value = tab
   if (tab === 'scripts') scriptPanelVisited.value = true
-  if (tab === 'sftp') {
-    sftpPanelVisited.value = true
-    sftpTabActivationSequence.value += 1
-  }
   emit('workspaceTabChanged', tab)
 }
 </script>
@@ -122,16 +115,6 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
         >
           <UiIcon name="script" />
           <span>脚本</span>
-        </button>
-        <button
-          type="button"
-          title="SFTP"
-          aria-label="SFTP"
-          :class="{ active: activeWorkspaceTab === 'sftp' }"
-          @click="selectWorkspaceTab('sftp')"
-        >
-          <UiIcon name="folder" />
-          <span>SFTP</span>
         </button>
       </nav>
       <button class="icon-button workspace-close" type="button" title="关闭工作区" aria-label="关闭工作区" @click="emit('close')">
@@ -209,21 +192,6 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts' | 'sftp') {
       @stop-recording="emit('stopScriptRecording')"
       @clear-recording="emit('clearScriptRecording')"
       @write-terminal-input="emit('writeTerminalInput', $event)"
-    />
-    <FileTransferPanel
-      v-if="sftpPanelVisited"
-      v-show="activeWorkspaceTab === 'sftp'"
-      :terminal-id="terminalId"
-      :connection-id="connectionId"
-      :profile="connectionProfile"
-      :terminal-status="terminalStatus"
-      :terminal-connection-generation="terminalConnectionGeneration"
-      :active="!collapsed && activeWorkspaceTab === 'sftp'"
-      :activation-sequence="sftpTabActivationSequence"
-      :terminal-snapshot="terminalSnapshot"
-      :terminal-output-event="terminalOutputEvent"
-      @write-terminal-input="emit('writeTerminalInput', $event)"
-      @focus-terminal="emit('focusTerminal')"
     />
   </aside>
 </template>

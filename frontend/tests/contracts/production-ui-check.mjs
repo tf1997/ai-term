@@ -1400,7 +1400,7 @@ assert(
     terminalPane.includes('fitAddon.fit()') &&
     terminalPane.includes('terminalHostIsMeasurable') &&
     terminalPane.includes('scheduleTerminalSizeSync(true)') &&
-    appShell.includes(':active="tab.id === activeTerminalId"') &&
+    appShell.includes(':active="tab.id === activeTerminalId && activeView === \'terminal\'"') &&
     !terminalPane.includes('measureTerminalCell') &&
     terminalPane.includes('scrollTerminalToBottom') &&
     terminalPane.includes('terminal.buffer.active') &&
@@ -1670,7 +1670,7 @@ assert(
     fileTransfer.includes('initializeRemoteBrowserIfActive') &&
     fileTransfer.includes('() => props.activationSequence') &&
     fileTransfer.includes('options.useForSftp && !props.active') &&
-    workspacePanel.includes(':active="!collapsed && activeWorkspaceTab === \'sftp\'"') &&
+    appShell.includes(':active="activeView === \'files\'"') &&
     !fileTransfer.includes('hasRemoteShellSnapshot') &&
     fileTransfer.includes('useForSftp') &&
     fileTransfer.includes('writeTerminalInput') &&
@@ -1693,7 +1693,7 @@ assert(
     transferApi.includes("invoke<SftpTransferResponse>('sftp_download_path'") &&
     transferApi.includes("invoke<SftpProbeResponse>('sftp_probe'") &&
 
-    styles.includes('.sftp-workbench-active .right-panel') &&
+    styles.includes('.session-files-view') &&
     styles.includes('grid-column: 3 / 5;') &&
     styles.includes('grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);') &&
     styles.includes('.file-type-icon.folder') &&
@@ -1702,8 +1702,8 @@ assert(
     styles.includes('.theme-light .remote-drop-overlay') &&
     styles.includes('.file-context-menu') &&
     appShell.includes('sftpWorkbenchActive') &&
-    appShell.includes('isSftpProfile(profile)') &&
-    appShell.includes("workspacePanelTab.value = 'sftp'") &&
+    appShell.includes('useSessionView({ activeTerminalId, terminalTabs })') &&
+    appShell.includes("activeView.value === 'files'") &&
     workspacePanel.includes('workspaceTabChanged') &&
     workspacePanel.includes('@write-terminal-input=') &&
     terminalPane.includes('writeTerminalInput') &&
@@ -1733,9 +1733,8 @@ assert(
 )
 
 assert(
-  workspacePanel.includes('const sftpTabActivationSequence = ref(0)') &&
-    workspacePanel.includes('sftpTabActivationSequence.value += 1') &&
-    workspacePanel.includes(':activation-sequence="sftpTabActivationSequence"') &&
+  appShell.includes(':activation-sequence="1"') &&
+    !workspacePanel.includes('sftpTabActivationSequence') &&
     fileTransfer.includes('activationSequence: number') &&
     fileTransfer.includes('const isBastionConnection = computed') &&
     fileTransfer.includes('() => props.activationSequence') &&
@@ -1759,8 +1758,8 @@ assert(
     appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
     workspacePanel.includes('terminalStatus:') &&
     workspacePanel.includes('terminalConnectionGeneration: number') &&
-    workspacePanel.includes(':terminal-status="terminalStatus"') &&
-    workspacePanel.includes(':terminal-connection-generation="terminalConnectionGeneration"') &&
+    appShell.includes(':terminal-status="activeTerminal?.status ?? \'idle\'"') &&
+    appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
     fileTransfer.includes('terminalStatus: TerminalRuntimeStatus') &&
     fileTransfer.includes('terminalConnectionGeneration: number') &&
     fileTransfer.includes('requiresExplicitBastionProbe') &&
@@ -1797,13 +1796,11 @@ assert(
     appShell.includes('@focus-terminal="focusActiveTerminalFromWorkspace"') &&
     terminalPane.includes('function focusTerminal()') &&
     terminalPane.includes('focusTerminal,') &&
-    workspacePanel.includes('sftpPanelVisited') &&
-    workspacePanel.includes("if (tab === 'sftp') {") &&
-    workspacePanel.includes('v-if="sftpPanelVisited"') &&
-    workspacePanel.includes(`v-show="activeWorkspaceTab === 'sftp'"`) &&
-    workspacePanel.includes(':terminal-id="terminalId"') &&
-    workspacePanel.includes(':terminal-output-event="terminalOutputEvent"') &&
-    workspacePanel.includes('@focus-terminal="emit(\'focusTerminal\')"') &&
+    appShell.includes('v-if="filesVisited"') &&
+    appShell.includes(`v-show="activeView === 'files'"`) &&
+    appShell.includes(':terminal-id="activeTerminalId"') &&
+    appShell.includes(':terminal-output-event="activeTerminalOutputEvent"') &&
+    !workspacePanel.includes('<FileTransferPanel') &&
     fileTransfer.includes('terminalId: string') &&
     fileTransfer.includes('terminalOutputEvent?: TerminalOutputDeltaEvent') &&
     fileTransfer.includes('transferStateByTerminal') &&
@@ -1814,9 +1811,10 @@ assert(
     fileTransfer.includes('identityProbeText') &&
     fileTransfer.includes('snapshot.slice(-160_000)') &&
     appShell.includes('nextSnapshot.slice(-80_000)') &&
-    fileTransfer.includes('sftp-terminal-switch') &&
-    fileTransfer.includes('切换到终端') &&
-    styles.includes('.sftp-terminal-switch'),
+    appShell.includes('id="session-view-terminal"') &&
+    appShell.includes('id="session-view-files"') &&
+    appShell.includes("@click=\"selectSessionView('terminal')\"") &&
+    !fileTransfer.includes('sftp-terminal-switch'),
   'SFTP workspace must stay mounted across tab switches, parse terminal identity from output deltas, and expose a clear switch-back-to-terminal action.'
 )
 assert(
@@ -1889,11 +1887,11 @@ assert(
     styles.includes('.theme-light .file-meta span') &&
     styles.includes('.theme-light .transfer-pane-head') &&
     !styles.includes('\n.transfer-pane-head {\n  border-bottom-color: var(--light-border);\n  background: #fafcfb;\n}') &&
-    styles.includes('/* Dark theme SFTP polish. */') &&
-    styles.includes('.app-shell.theme-dark .sftp-transfer-workbench') &&
-    styles.includes('.app-shell.theme-dark .transfer-pane-head') &&
-    styles.includes('.app-shell.theme-dark .file-list') &&
-    styles.includes('.app-shell.theme-dark .transfer-progress span') &&
+    styles.includes('--sftp-surface:') &&
+    styles.includes('--sftp-muted:') &&
+    styles.includes('.app-shell .files-panel .file-list') &&
+    styles.includes(':root .remote-file-editor-modal') &&
+    styles.includes('.app-shell .files-panel .transfer-progress span') &&
     styles.includes('.app-shell.theme-dark .workspace-tabs button.active') &&
     styles.includes('.transfer-progress') &&
     styles.includes('.transfer-task-stats') &&
@@ -2328,7 +2326,9 @@ assert(
     !appShell.includes('toggle-left') &&
     !appShell.includes('toggle-right') &&
     !appShell.includes('top-actions') &&
-    appShell.includes('workspace-open-handle') &&
+    appShell.includes('session-tools-toggle') &&
+    appShell.includes(':aria-expanded="!rightCollapsed"') &&
+    appShell.includes('@click="rightCollapsed = !rightCollapsed"') &&
     appShell.includes('@close="rightCollapsed = true"') &&
     workspacePanel.includes("emit('close')") &&
     workspacePanel.includes('workspace-close'),
@@ -2336,11 +2336,12 @@ assert(
 )
 
 assert(
-  workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts' | 'sftp'>") &&
+  workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts'>") &&
     workspacePanel.includes("activeWorkspaceTab === 'history'") &&
     workspacePanel.includes("activeWorkspaceTab === 'ai'") &&
     workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
-    workspacePanel.includes("activeWorkspaceTab === 'sftp'") &&
+    !workspacePanel.includes("activeWorkspaceTab === 'sftp'") &&
+    appShell.includes('id="session-view-files"') &&
     workspacePanel.includes('selectWorkspaceSession') &&
     workspacePanel.includes('createWorkspaceSession') &&
     workspacePanel.includes('renameWorkspaceSession') &&
@@ -2366,7 +2367,7 @@ assert(
     workspaceSessionRules.includes('isAutoWorkspaceSessionName') &&
     workspacePanel.includes('CommandHistoryPanel') &&
     workspacePanel.includes('AiPanel'),
-  'Right workspace must expose history, AI, SFTP, and AI session history controls.'
+  'Right workspace must expose history, AI, scripts, and AI session history controls independently of the session file view.'
 )
 
 assert(
@@ -3085,7 +3086,8 @@ assert(
   workspacePanel.includes("activeWorkspaceTab === 'ai'") &&
     workspacePanel.includes("activeWorkspaceTab === 'history'") &&
     workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
-    workspacePanel.includes('SFTP') &&
+    appShell.includes('<span>文件</span>') &&
+    fileTransfer.includes('SFTP') &&
     aiConfig.includes('OpenAI 兼容接口') &&
     aiConfig.includes('已配置') &&
     aiConfig.includes('待配置') &&
@@ -3102,7 +3104,7 @@ assert(
     !aiConfig.includes('required') &&
     settingsSidebar.includes('AiConfigPanel') &&
     !aiPanel.includes('AiConfigPanel'),
-  'Workspace must use the prototype AI assistant tab labels and AI configuration must live in the left settings menu.'
+  'Session files and auxiliary tools must have distinct navigation labels, and AI configuration must live in the left settings menu.'
 )
 
 assert(
