@@ -22,6 +22,7 @@
 @import '../../domains/transfer/presentation/styles/sftp-workbench.css';
 @import './workspace-polish.css';
 @import './responsive.css';
+@import '../../domains/terminal/presentation/styles/terminal-tabs.css';
 @import '../../domains/settings/presentation/styles/settings-final.css';
 @import '../../domains/scripts/presentation/styles/workbench-final.css';
 @import '../../domains/ai/presentation/styles/composer.css';

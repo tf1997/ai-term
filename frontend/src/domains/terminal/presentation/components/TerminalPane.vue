@@ -1721,7 +1721,7 @@ onMounted(async () => {
   })
   terminal.open(terminalHost.value)
   syncTerminalSize()
-  terminal.focus()
+  if (props.active) terminal.focus()
 
   dataDisposable = terminal.onData((data) => {
     if (handleTerminalProtocolResponse(data)) return
@@ -1784,8 +1784,7 @@ watch(
     if (!active) return
     await nextTick()
     scheduleTerminalSizeSync(true)
-    terminal?.focus()
-    terminalHost.value?.focus()
+    focusTerminalUnlessNavigatingTabs()
   }
 )
 
@@ -1883,7 +1882,7 @@ async function connectRemote() {
     status.value = 'remote'
     syncTerminalSize(true)
     await nextTick()
-    terminal.focus()
+    focusTerminalUnlessNavigatingTabs()
   } catch (error) {
     if (!isCurrentConnectionAttempt(attempt)) {
       if (connectedSessionId) void disconnectTerminal(connectedSessionId)
@@ -1959,7 +1958,7 @@ async function connectLocal() {
     status.value = 'local'
     syncTerminalSize(true)
     await nextTick()
-    terminal.focus()
+    focusTerminalUnlessNavigatingTabs()
   } catch (error) {
     if (!isCurrentConnectionAttempt(attempt)) {
       if (connectedSessionId) void disconnectTerminal(connectedSessionId)
@@ -2304,6 +2303,11 @@ function disconnectFromButton() {
 function focusTerminal() {
   terminal?.focus()
   terminalHost.value?.focus()
+}
+
+function focusTerminalUnlessNavigatingTabs() {
+  if (!props.active || document.activeElement?.closest('.session-tabs')) return
+  focusTerminal()
 }
 
 onBeforeUnmount(() => {

@@ -100,13 +100,18 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: Termin
   async function fillHistoryCommandOnActiveTerminal(command: string) {
     const value = command.trim()
     if (!value) return
+    const terminalId = activeTerminalId.value
     let lastReadiness: ReturnType<TerminalPaneInstance['commandExecutionReadiness']> = 'unavailable'
 
     for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS) {
       if (!await waitForRetry(delay)) return
       await nextTick()
       if (disposed) return
-      const pane = terminalRefs.value[activeTerminalId.value]
+      if (!terminalTabs.value.some((tab) => tab.id === terminalId)) {
+        showToast('warning', '命令未填入', '原终端已关闭。')
+        return
+      }
+      const pane = terminalRefs.value[terminalId]
       lastReadiness = pane?.commandExecutionReadiness() ?? 'unavailable'
       if (lastReadiness === 'ready' && pane?.fillCommand(value)) {
         showToast('success', '已填入终端', commandPreview(value))
@@ -236,26 +241,8 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: Termin
       return
     }
 
-    if (event.data === '\t') {
-      if (
-        event.beforeState.available &&
-        event.beforeState.context === 'shell' &&
-        event.beforeState.reliable
-      ) {
-        const rejected: string[] = []
-        targetIds.forEach((terminalId) => {
-          const pane = terminalRefs.value[terminalId]
-          const targetState = pane?.terminalInputSyncState()
-          if (!pane || !targetState || !terminalInputSyncStatesMatch(event.beforeState, targetState)) return
-          resumeTerminalSyncTarget(terminalId)
-          if (!pane.writeSyncedTerminalInput(event.data, event.terminalId)) rejected.push(terminalId)
-        })
-        pauseTerminalSyncTargets(rejected, '部分 Shell 无法接收补全按键；已暂停向这些终端同步。')
-      }
-      return
-    }
-
-    if (!event.safeToSync) {
+    // 补全后的内容由各 Shell 决定，只核对按键前状态；暂停目标仍须双方回到空提示符。
+    if (!event.safeToSync && event.data !== '\t') {
       pauseTerminalSyncTargets(
         targetIds,
         '当前按键依赖各终端自己的历史、补全或交互状态，未广播到其他终端。回到空提示符后会自动恢复。'

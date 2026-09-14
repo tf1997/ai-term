@@ -98,9 +98,11 @@ assert(
 const terminalTabTypes = read('src/domains/terminal/domain/terminal.ts')
 const terminalTabState = read('src/domains/terminal/application/useTerminalTabs.ts')
 const terminalTabScroll = read('src/domains/terminal/application/useTerminalTabScroll.ts')
+const terminalTabsBar = read('src/domains/terminal/presentation/components/TerminalTabsBar.vue')
+const terminalTabsStyles = read('src/domains/terminal/presentation/styles/terminal-tabs.css')
 assert(
   appShell.includes('const terminalTabState = useTerminalTabs()') &&
-    appShell.includes('} = useTerminalTabScroll({ terminalTabs, activeTerminalId, leftCollapsed, rightCollapsed })') &&
+    terminalTabsBar.includes('} = useTerminalTabScroll({') &&
     appShell.includes('const tab = addTerminalTab(profile)') &&
     appShell.includes('if (!removeTerminalTab(tabId)) return') &&
     terminalInputRouter.includes('const added = pauseTerminalTargets(ids)') &&
@@ -109,9 +111,9 @@ assert(
     terminalTabState.includes('terminalTabs: tabs') &&
     terminalTabState.includes('activeTerminalId: readonly(activeTerminalId)') &&
     terminalTabScroll.includes('onBeforeUnmount') &&
-    terminalTabScroll.includes('stopDragging?.()') &&
-    terminalTabScroll.includes('sessionTabButtons.delete(tabId)') &&
-    terminalTabScroll.includes("removeEventListener('resize', updateSessionTabScrollMetrics)") &&
+    terminalTabScroll.includes('sessionTabResizeObserver?.disconnect()') &&
+    terminalTabScroll.includes('sessionTabElements.delete(tabId)') &&
+    terminalTabScroll.includes("removeEventListener('resize', handleSessionTabResize)") &&
     !appShell.includes('function selectTerminalTab') &&
     !appShell.includes('sessionTabResizeObserver'),
   'Terminal state and scroll lifecycles must have explicit owners while AppShell preserves terminal instances and business cleanup.'
@@ -715,7 +717,7 @@ assert(
     aiMarkdownMessage.includes('.chat-code-risk') &&
     aiPanelStyles.includes('.chat-collapse-footer') &&
     aiPanelStyles.includes('.theme-light .ai-chat-panel') &&
-    styles.includes('.tab:hover .terminal-target-toggle') &&
+    styles.includes('.session-tabs .tab-select') &&
     styles.includes('.terminal-target-summary.active') &&
     styles.includes('.workspace-tabs button.active::after') &&
     styles.includes('body.workspace-resizing'),
@@ -1535,9 +1537,9 @@ assert(
     terminalTabTypes.includes('status: TerminalRuntimeStatus') &&
     appShell.includes('updateTerminalStatus') &&
     appShell.includes('@status-changed="updateTerminalStatus"') &&
-    appShell.includes('terminalStatusClass(tab.status)') &&
-    appShell.includes(':class="terminalStatusClass(tab.status)"') &&
-    !appShell.includes('class="status-dot live"') &&
+    terminalTabsBar.includes('terminalStatusClass(tab.status)') &&
+    terminalTabsBar.includes(':class="terminalStatusClass(tab.status)"') &&
+    !terminalTabsBar.includes('class="status-dot live"') &&
     tauri.includes('terminalSessionActive') &&
     commands.includes('terminal_session_active') &&
     commands.includes('remove_terminal_session_after_exit') &&
@@ -2309,7 +2311,7 @@ assert(
     appShell.includes('activeTerminalId') &&
     appShell.includes('createTerminalTab') &&
     appShell.includes('closeTerminalTab') &&
-    appShell.includes('session-tabs'),
+    terminalTabsBar.includes('session-tabs'),
   'AppShell must manage multiple terminal tabs instead of a single fixed terminal.'
 )
 
@@ -2446,17 +2448,16 @@ assert(
     appShell.includes("readiness === 'line-busy'") &&
     terminalInputRouter.includes('等待提示符超时') &&
     terminalInputRouter.includes('脚本已部分发送') &&
-    appShell.includes('terminal-target-toggle') &&
-    appShell.includes('terminal-target-summary') &&
-    appShell.includes('仅同步当前终端') &&
-    appShell.includes('{{ terminalTargetLabel }}') &&
-    appShell.includes(':title="terminalTargetTitle"') &&
-    styles.includes('.terminal-target-toggle') &&
+    terminalTabsBar.includes('terminal-sync-option') &&
+    terminalTabsBar.includes('terminal-target-summary') &&
+    terminalTabsBar.includes('当前终端始终接收输入') &&
+    terminalTabsBar.includes(':title="terminalTargetTitle"') &&
+    styles.includes('.terminal-sync-option') &&
     styles.includes('.terminal-target-summary') &&
     styles.includes('.tab.target.active') &&
     styles.includes('.tab.target.sync-paused') &&
-    styles.includes('box-shadow: inset 0 -2px 0 var(--workbench-accent);') &&
-    styles.includes('max-width: min(260px, 28vw);') &&
+    !terminalTabsStyles.includes('box-shadow: inset 0 -2px 0 var(--workbench-accent);') &&
+    terminalTabsBar.includes('terminal-tab-search') &&
     aiPanel.includes('executionTargetLabel') &&
     aiPanel.includes('executionTargetTitle') &&
     scriptPanel.includes('executionTargetLabel') &&
@@ -2923,7 +2924,8 @@ assert(
     workspacePanel.includes("@pin=\"emit('pinQuickCommand', $event)\"") &&
     appShell.includes('fillHistoryCommandOnActiveTerminal') &&
     appShell.includes('pinQuickCommandOnActiveTerminal') &&
-    appHistoryFillBlock.includes('terminalRefs.value[activeTerminalId.value]') &&
+    appHistoryFillBlock.includes('const terminalId = activeTerminalId.value') &&
+    appHistoryFillBlock.includes('terminalRefs.value[terminalId]') &&
     appHistoryFillBlock.includes('pane?.fillCommand(value)') &&
     !appHistoryFillBlock.includes('executeCommandOnTerminalIds') &&
     appHistoryPinBlock.includes('terminalRefs.value[activeTerminalId.value]') &&
@@ -2933,7 +2935,7 @@ assert(
     appShell.includes('@pin-quick-command="pinQuickCommandOnActiveTerminal"') &&
     !workspacePanel.includes('rerunCommand') &&
     !appShell.includes('rerunCommandOnActiveTerminal'),
-  'History fill and pin actions must target the active terminal, keep fill out of multi-terminal synchronization, and never execute the command directly.'
+  'History fill and pin actions must target the terminal active at the time of the request, keep fill out of multi-terminal synchronization, and never execute the command directly.'
 )
 
 assert(

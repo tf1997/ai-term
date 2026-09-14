@@ -62,7 +62,9 @@ The animation above is captured from the current Vue browser preview and walks t
 - Open local shells or remote SSH sessions in tabs.
 - Connect to direct hosts, bastions, gateway domains, and interactive jump menus.
 - Use password or SSH key authentication with separate gateway and target layers.
-- Send input to one terminal or synchronize input across selected terminal tabs.
+- Find open terminals in the searchable tab list, scroll long tab rows with the wheel or arrow buttons, and switch with Ctrl+Tab / Ctrl+Shift+Tab. Repeated terminal names are numbered.
+- Choose synchronized input targets from the tab bar and stop synchronization with one click. Switching to an unselected terminal or opening a new one returns input to the current terminal only; paused keyboard targets stay marked until their prompts are ready.
+- Close other tabs or tabs to the right from the context menu, or middle-click a tab to close it. At least one terminal stays open.
 - Keep connection profiles, workspace sessions, and per-connection command history.
 
 ### AI Terminal Assistant

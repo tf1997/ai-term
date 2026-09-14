@@ -17,12 +17,14 @@ test('初始本地标签保持原始 ID、连接请求与只读状态', () => {
   const state = useTerminalTabs()
   assert.equal(isReadonly(state.terminalTabs.value), true)
   assert.equal(isReadonly(state.activeTerminalId), true)
+  assert.equal(isReadonly(state.pausedTerminalSyncIds), true)
   assert.deepEqual(state.terminalTabs.value, [{
     id: 'local-1', title: '本地终端', connectionId: 'local', profile: undefined,
     connectRequest: 0, status: 'idle', connectionGeneration: 0
   }])
   assert.deepEqual(state.targetTerminalIds.value, ['local-1'])
   assert.equal(state.multiTerminalInputEnabled.value, false)
+  assert.equal(state.pausedTerminalTargetCount.value, 0)
 })
 
 test('新增标签激活并重置同步目标，连接配置是独立快照', () => {
@@ -72,11 +74,12 @@ test('单选状态切换标签时只发送到新的当前终端', () => {
   assert.match(state.terminalTargetTitle.value, /仅发送到当前终端/)
 })
 
-test('多选状态切换标签保留原目标并纳入新的活动终端', () => {
+test('切换到已有同步目标保留范围和连接去重结果', () => {
   const state = useTerminalTabs()
   const remote = state.addTerminalTab(profile())
   const local = state.addTerminalTab()
   state.toggleTerminalTarget('local-1')
+  state.toggleTerminalTarget(remote.id)
   state.selectTerminalTab(remote.id)
   assert.deepEqual(state.targetTerminalIds.value, ['local-1', remote.id, local.id])
   assert.deepEqual(state.targetConnectionIds.value, ['local', 'server'])
@@ -84,14 +87,58 @@ test('多选状态切换标签保留原目标并纳入新的活动终端', () =>
   assert.match(state.terminalTargetTitle.value, /同步目标：本地终端、ops@example.internal、本地终端/)
 })
 
-test('取消活动标签的勾选重置为仅当前，不能移除当前输入目标', () => {
+test('切换未选中的标签退出同步，不因查看终端扩大广播范围', () => {
+  const state = useTerminalTabs()
+  const remote = state.addTerminalTab(profile())
+  const local = state.addTerminalTab()
+  state.toggleTerminalTarget('local-1')
+  state.pauseTerminalTargets(['local-1'])
+  state.selectTerminalTab(remote.id)
+  assert.deepEqual(state.targetTerminalIds.value, [remote.id])
+  assert.deepEqual(state.targetConnectionIds.value, ['server'])
+  assert.equal(state.multiTerminalInputEnabled.value, false)
+  assert.equal(state.isTerminalTargetSelected(local.id), false)
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
+})
+
+test('同步期间新建终端只向新终端输入并清除原范围的暂停状态', () => {
+  const state = useTerminalTabs()
+  state.addTerminalTab()
+  state.selectAllTerminalTargets()
+  state.pauseTerminalTargets(['local-1'])
+  const tab = state.addTerminalTab(profile())
+  assert.deepEqual(state.targetTerminalIds.value, [tab.id])
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
+})
+
+test('活动标签始终必选，点击勾选不改变范围，停止同步需明确重置', () => {
   const state = useTerminalTabs()
   const tab = state.addTerminalTab()
   state.selectAllTerminalTargets()
-  assert.equal(state.terminalTargetToggleTitle(tab.id), '仅同步当前终端')
+  state.pauseTerminalTargets(['local-1'])
+  assert.equal(state.terminalTargetToggleTitle(tab.id), '当前终端始终接收输入')
   state.toggleTerminalTarget(tab.id)
+  assert.deepEqual(state.targetTerminalIds.value, ['local-1', tab.id])
+  assert.equal(state.isTerminalSyncPaused('local-1'), true)
+  state.resetTerminalTargetsToActive()
   assert.deepEqual(state.targetTerminalIds.value, [tab.id])
-  assert.equal(state.terminalTargetToggleTitle(tab.id), '当前终端')
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
+  assert.equal(state.terminalTargetToggleTitle(tab.id), '当前终端始终接收输入')
+})
+
+test('显式设置同步目标过滤重复和无效项、保留活动终端与仍选中目标的暂停状态', () => {
+  const state = useTerminalTabs()
+  const second = state.addTerminalTab()
+  const active = state.addTerminalTab()
+  state.selectAllTerminalTargets()
+  state.pauseTerminalTargets(['local-1', second.id])
+  state.setTerminalTargets([second.id, 'missing', second.id])
+  assert.deepEqual(state.targetTerminalIds.value, [second.id, active.id])
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [second.id])
+  assert.equal(state.pausedTerminalTargetCount.value, 1)
+  state.setTerminalTargets([])
+  assert.deepEqual(state.targetTerminalIds.value, [active.id])
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
 })
 
 test('仅暂停有效的非活动同步目标，恢复和移除目标都清除暂停状态', () => {
@@ -111,20 +158,29 @@ test('仅暂停有效的非活动同步目标，恢复和移除目标都清除�
   assert.equal(state.terminalTargetToggleTitle('local-1'), '加入同步目标')
 })
 
-test('切换活动目标、全选和仅当前均清理对应暂停状态', () => {
+test('切换活动源只清理该源的暂停，全选保留其他目标的安全暂停', () => {
   const state = useTerminalTabs()
-  const tab = state.addTerminalTab()
+  const second = state.addTerminalTab()
+  const third = state.addTerminalTab()
   state.selectAllTerminalTargets()
-  state.pauseTerminalTargets(['local-1'])
+  state.pauseTerminalTargets(['local-1', second.id])
+  assert.equal(state.pausedTerminalTargetCount.value, 2)
+  assert.match(state.terminalTargetLabel.value, /同步 3 个 · 暂停 2 · 当前 本地终端/)
+  assert.match(state.terminalTargetTitle.value, /2 个终端键盘同步已暂停/)
   state.selectTerminalTab('local-1')
   assert.equal(state.isTerminalSyncPaused('local-1'), false)
-  state.pauseTerminalTargets([tab.id])
+  assert.equal(state.isTerminalSyncPaused(second.id), true)
+  assert.equal(state.pausedTerminalTargetCount.value, 1)
+  state.pauseTerminalTargets([third.id])
   state.selectAllTerminalTargets()
-  assert.equal(state.isTerminalSyncPaused(tab.id), false)
-  state.pauseTerminalTargets([tab.id])
+  state.selectAllTerminalTargets()
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [second.id, third.id])
+  assert.equal(state.pausedTerminalTargetCount.value, 2)
   state.resetTerminalTargetsToActive()
   assert.deepEqual(state.targetTerminalIds.value, ['local-1'])
-  assert.equal(state.isTerminalSyncPaused(tab.id), false)
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
+  assert.equal(state.pausedTerminalTargetCount.value, 0)
+  assert.doesNotMatch(state.terminalTargetLabel.value, /暂停/)
 })
 
 test('关闭活动标签选择前一个；关闭第一个选择新的第一个', () => {
@@ -148,6 +204,100 @@ test('关闭后台标签不切换活动标签并清除同步目标及暂停记�
   assert.equal(state.activeTerminalId.value, active.id)
   assert.deepEqual(state.targetTerminalIds.value, [active.id])
   assert.equal(state.isTerminalSyncPaused('local-1'), false)
+})
+
+test('关闭活动终端优先选择距离最近的存活同步目标，不把相邻未选终端加入范围', () => {
+  const state = useTerminalTabs()
+  const unrelated = state.addTerminalTab()
+  const closing = state.addTerminalTab()
+  const rightTarget = state.addTerminalTab(profile())
+  state.selectTerminalTab(closing.id)
+  state.setTerminalTargets(['local-1', closing.id, rightTarget.id])
+  state.pauseTerminalTargets(['local-1', rightTarget.id])
+  state.removeTerminalTab(closing.id)
+  assert.equal(state.activeTerminalId.value, rightTarget.id)
+  assert.deepEqual(state.targetTerminalIds.value, ['local-1', rightTarget.id])
+  assert.equal(state.isTerminalTargetSelected(unrelated.id), false)
+  assert.deepEqual(state.pausedTerminalSyncIds.value, ['local-1'])
+})
+
+test('关闭活动终端时等距同步目标优先前一项', () => {
+  const state = useTerminalTabs()
+  const middle = state.addTerminalTab()
+  const right = state.addTerminalTab()
+  state.selectAllTerminalTargets()
+  state.selectTerminalTab(middle.id)
+  state.removeTerminalTab(middle.id)
+  assert.equal(state.activeTerminalId.value, 'local-1')
+  assert.deepEqual(state.targetTerminalIds.value, ['local-1', right.id])
+})
+
+test('批量关闭其他终端保留指定后台终端并返回实际关闭项', () => {
+  const state = useTerminalTabs()
+  const keep = state.addTerminalTab(profile())
+  const active = state.addTerminalTab()
+  state.selectAllTerminalTargets()
+  state.pauseTerminalTargets(['local-1', keep.id])
+  assert.deepEqual(state.removeTerminalTabs(['local-1', active.id], keep.id), ['local-1', active.id])
+  assert.deepEqual(state.terminalTabs.value.map(tab => tab.id), [keep.id])
+  assert.equal(state.activeTerminalId.value, keep.id)
+  assert.deepEqual(state.targetTerminalIds.value, [keep.id])
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [])
+})
+
+test('批量关闭后台标签保留当前终端与仍存活的同步及暂停状态', () => {
+  const state = useTerminalTabs()
+  const second = state.addTerminalTab()
+  const third = state.addTerminalTab()
+  const active = state.addTerminalTab()
+  state.selectAllTerminalTargets()
+  state.pauseTerminalTargets(['local-1', second.id, third.id])
+  assert.deepEqual(state.removeTerminalTabs([third.id, 'missing', second.id, third.id], 'local-1'), [second.id, third.id])
+  assert.equal(state.activeTerminalId.value, active.id)
+  assert.deepEqual(state.targetTerminalIds.value, ['local-1', active.id])
+  assert.deepEqual(state.pausedTerminalSyncIds.value, ['local-1'])
+})
+
+test('批量关闭活动同步组后按原位置选前一存活终端，不受中途删除影响', () => {
+  const state = useTerminalTabs()
+  const second = state.addTerminalTab()
+  const third = state.addTerminalTab()
+  const active = state.addTerminalTab()
+  const last = state.addTerminalTab()
+  state.selectTerminalTab(active.id)
+  state.setTerminalTargets([second.id, active.id])
+  state.removeTerminalTabs([second.id, active.id])
+  assert.equal(state.activeTerminalId.value, third.id)
+  assert.deepEqual(state.targetTerminalIds.value, [third.id])
+  assert.deepEqual(state.terminalTabs.value.map(tab => tab.id), ['local-1', third.id, last.id])
+})
+
+test('关闭活动终端后显式切到未选的保留项时退出同步，不扩大原范围', () => {
+  const state = useTerminalTabs()
+  const keep = state.addTerminalTab()
+  const closing = state.addTerminalTab()
+  state.setTerminalTargets(['local-1', closing.id])
+  state.removeTerminalTabs([closing.id], keep.id)
+  assert.equal(state.activeTerminalId.value, keep.id)
+  assert.deepEqual(state.targetTerminalIds.value, [keep.id])
+})
+
+test('批量删除全部标签至少保留当前终端，指定保留项优先且失效 ID 不影响状态', () => {
+  const state = useTerminalTabs()
+  state.addTerminalTab()
+  const active = state.addTerminalTab()
+  const ids = state.terminalTabs.value.map(tab => tab.id)
+  assert.deepEqual(state.removeTerminalTabs(ids, 'missing'), ids.filter(id => id !== active.id))
+  assert.equal(state.activeTerminalId.value, active.id)
+  assert.deepEqual(state.removeTerminalTabs([active.id]), [])
+  assert.deepEqual(state.removeTerminalTabs(['missing']), [])
+  assert.deepEqual(state.removeTerminalTabs([]), [])
+
+  const other = useTerminalTabs()
+  const remote = other.addTerminalTab(profile())
+  assert.deepEqual(other.removeTerminalTabs(['local-1', remote.id], 'local-1'), [remote.id])
+  assert.equal(other.activeTerminalId.value, 'local-1')
+  assert.deepEqual(other.targetTerminalIds.value, ['local-1'])
 })
 
 test('最后一个终端不能关闭，晚到的失效标签事件不会改变状态', () => {

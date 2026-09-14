@@ -8,7 +8,7 @@ import { useConnectionProfiles } from '../../domains/connections/index'
 import { useAiConfigs } from '../../domains/ai/index'
 import { normalizeConnectionProfileForSave } from '../../domains/connections/index'
 import { formatError } from '../../shared/platform/errors'
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
 import type { ConnectionProfile } from '../../domains/connections/types'
 import type { AppUserSettings } from '../../domains/settings/types'
@@ -24,8 +24,6 @@ import { DEFAULT_AI_SESSION_ID } from '../../domains/ai/index'
 import { MAX_WORKSPACE_WIDTH, MIN_WORKSPACE_WIDTH } from '../../domains/settings/index'
 import type { TerminalTab } from '../../domains/terminal/types'
 import { useTerminalTabs } from '../../domains/terminal/index'
-import { useTerminalTabScroll } from '../../domains/terminal/index'
-import { terminalStatusClass } from '../../domains/terminal/index'
 import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
 
 import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntry } from '../../domains/ai/infrastructure/api'
@@ -36,7 +34,7 @@ import { createStableRefRegistry } from '../../domains/terminal/index'
 import { ConnectionSidebar } from '../../domains/connections/views'
 import ContextMenu from '../../shared/ui/ContextMenu.vue'
 import { SettingsSidebar } from '../../domains/settings/views'
-import { TerminalPane } from '../../domains/terminal/views'
+import { TerminalPane, TerminalTabsBar } from '../../domains/terminal/views'
 import WorkspacePanel from './WorkspacePanel.vue'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
@@ -52,9 +50,9 @@ const terminalTabState = useTerminalTabs()
 const {
   terminalTabs, activeTerminalId, activeTerminal, targetTerminalIds, targetConnectionIds,
   multiTerminalInputEnabled, terminalTargetLabel, terminalTargetTitle, selectTerminalTab,
-  addTerminalTab, removeTerminalTab, updateTerminalStatus, isTerminalTargetSelected,
-  isTerminalSyncPaused, terminalTargetToggleTitle, toggleTerminalTarget, selectAllTerminalTargets,
-  resetTerminalTargetsToActive, pauseTerminalTargets, resumeTerminalSyncTarget
+  addTerminalTab, removeTerminalTab, removeTerminalTabs, updateTerminalStatus, isTerminalTargetSelected,
+  pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
+  resetTerminalTargetsToActive
 } = terminalTabState
 // SFTP tabs open a workspace without establishing a live SSH session.
 const connectedProfileIds = computed(() => [...new Set(
@@ -95,11 +93,6 @@ const { appTheme, themeToggleButton, toggleAppTheme } = useAppTheme({
     showToast('info', '主题已切换', theme === 'light' ? '已切换为白色主题。' : '已切换为深色主题。')
   }
 })
-const {
-  sessionTabStrip, sessionTabOverflow, sessionTabThumbStyle, setSessionTabButton,
-  handleSessionTabScroll, handleSessionTabWheel, handleSessionTabScrollbarPointerDown,
-  handleSessionTabThumbPointerDown
-} = useTerminalTabScroll({ terminalTabs, activeTerminalId, leftCollapsed, rightCollapsed })
 let terminalOutputSequence = 0
 
 const activeTerminalSnapshot = computed(() => {
@@ -300,6 +293,7 @@ function openAiConfigContextMenu(event: MouseEvent, configId: string) {
 }
 
 function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
+  const tabIndex = terminalTabs.value.findIndex(item => item.id === tab.id)
   openContextMenu(event, tab.title, [
     {
       id: 'switch',
@@ -308,19 +302,20 @@ function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
     },
     {
       id: 'toggle-target',
-      label: tab.id === activeTerminalId.value ? '仅同步当前终端' : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
-      disabled: tab.id === activeTerminalId.value && targetTerminalIds.value.length === 1,
+      label: tab.id === activeTerminalId.value ? '当前终端始终接收输入' : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
+      disabled: tab.id === activeTerminalId.value,
       action: () => toggleTerminalTarget(tab.id)
     },
     {
       id: 'select-all-targets',
-      label: '选择全部终端',
-      disabled: terminalTabs.value.length <= 1,
+      label: '同步全部终端',
+      disabled: terminalTabs.value.length <= 1 || targetTerminalIds.value.length === terminalTabs.value.length,
       action: selectAllTerminalTargets
     },
     {
       id: 'reset-targets',
-      label: '仅当前终端',
+      label: '停止同步',
+      disabled: !multiTerminalInputEnabled.value,
       action: resetTerminalTargetsToActive
     },
     {
@@ -334,6 +329,20 @@ function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
       danger: true,
       disabled: terminalTabs.value.length === 1,
       action: () => closeTerminalTab(tab.id)
+    },
+    {
+      id: 'close-others',
+      label: '关闭其他终端',
+      danger: true,
+      disabled: terminalTabs.value.length <= 1,
+      action: () => closeOtherTerminalTabs(tab.id)
+    },
+    {
+      id: 'close-right',
+      label: '关闭右侧终端',
+      danger: true,
+      disabled: tabIndex < 0 || tabIndex === terminalTabs.value.length - 1,
+      action: () => closeTerminalTabsToRight(tab.id)
     }
   ])
 }
@@ -357,13 +366,14 @@ function openTerminalAreaContextMenu(event: MouseEvent) {
     },
     {
       id: 'select-all-targets',
-      label: '选择全部终端',
-      disabled: terminalTabs.value.length <= 1,
+      label: '同步全部终端',
+      disabled: terminalTabs.value.length <= 1 || targetTerminalIds.value.length === terminalTabs.value.length,
       action: selectAllTerminalTargets
     },
     {
       id: 'reset-targets',
-      label: '仅当前终端',
+      label: '停止同步',
+      disabled: !multiTerminalInputEnabled.value,
       action: resetTerminalTargetsToActive
     },
     {
@@ -377,6 +387,13 @@ function openTerminalAreaContextMenu(event: MouseEvent) {
       danger: true,
       disabled: terminalTabs.value.length === 1,
       action: () => closeTerminalTab(activeTerminalId.value)
+    },
+    {
+      id: 'close-others',
+      label: '关闭其他终端',
+      danger: true,
+      disabled: terminalTabs.value.length <= 1,
+      action: () => closeOtherTerminalTabs(activeTerminalId.value)
     }
   ])
 }
@@ -579,6 +596,10 @@ function createTerminalTab(profile?: ConnectionProfile) {
 
 function closeTerminalTab(tabId: string) {
   if (!removeTerminalTab(tabId)) return
+  cleanUpClosedTerminal(tabId)
+}
+
+function cleanUpClosedTerminal(tabId: string) {
   delete terminalSnapshots.value[tabId]
   delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
@@ -586,7 +607,25 @@ function closeTerminalTab(tabId: string) {
   removeScriptRecording(tabId)
 }
 
+function closeOtherTerminalTabs(tabId: string) {
+  if (!terminalTabs.value.some(tab => tab.id === tabId)) return
+  const closedIds = removeTerminalTabs(terminalTabs.value.filter(tab => tab.id !== tabId).map(tab => tab.id), tabId)
+  closedIds.forEach(cleanUpClosedTerminal)
+}
+
+function closeTerminalTabsToRight(tabId: string) {
+  const index = terminalTabs.value.findIndex(tab => tab.id === tabId)
+  if (index < 0) return
+  const closedIds = removeTerminalTabs(terminalTabs.value.slice(index + 1).map(tab => tab.id), tabId)
+  closedIds.forEach(cleanUpClosedTerminal)
+}
+
+function focusActiveTerminal() {
+  void nextTick(() => terminalRefs.value[activeTerminalId.value]?.focusTerminal())
+}
+
 function updateTerminalOutput(event: TerminalOutputEvent) {
+  if (!terminalTabs.value.some(tab => tab.id === event.terminalId)) return
   const previousSnapshot = terminalSnapshots.value[event.terminalId] ?? ''
   const delta = terminalOutputDelta(previousSnapshot, event.snapshot)
   terminalSnapshots.value[event.terminalId] = event.snapshot
@@ -603,6 +642,7 @@ function updateTerminalOutput(event: TerminalOutputEvent) {
 }
 
 function updateTerminalSelection(event: TerminalSelectionEvent) {
+  if (!terminalTabs.value.some(tab => tab.id === event.terminalId)) return
   terminalSelections.value = {
     ...terminalSelections.value,
     [event.terminalId]: event
@@ -615,7 +655,8 @@ function clearTerminalSelection() {
 
 function recordCommand(event: CommandRecordedEvent) {
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
-  const connectionId = tab?.connectionId ?? LOCAL_CONNECTION_ID
+  if (!tab) return
+  const connectionId = tab.connectionId
   const entry = recordCommandForConnection(connectionId, event)
   if (entry) appendRecordingCommand(event.terminalId, event.command)
 }
@@ -685,43 +726,24 @@ onBeforeUnmount(() => {
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
         <span>AI Term</span>
       </div>
-      <nav class="session-tabs" aria-label="终端会话">
-        <div class="session-tab-scrollarea">
-          <div ref="sessionTabStrip" class="session-tab-strip" @scroll="handleSessionTabScroll" @wheel="handleSessionTabWheel">
-            <button
-              v-for="tab in terminalTabs"
-              :key="tab.id"
-              :ref="(element) => setSessionTabButton(tab.id, element)"
-              class="tab"
-              :class="{ active: tab.id === activeTerminalId, target: isTerminalTargetSelected(tab.id), 'sync-paused': isTerminalSyncPaused(tab.id) }"
-              @click="selectTerminalTab(tab.id)"
-              @contextmenu.prevent.stop="openTerminalTabContextMenu($event, tab)"
-            >
-              <span
-                class="terminal-target-toggle"
-                :class="{ selected: isTerminalTargetSelected(tab.id) }"
-                :title="terminalTargetToggleTitle(tab.id)"
-                aria-hidden="true"
-                @click.stop="toggleTerminalTarget(tab.id)"
-              >
-                <span />
-              </span>
-              <span class="status-dot" :class="terminalStatusClass(tab.status)" />
-              <span class="tab-title">{{ tab.title }}</span>
-              <span v-if="terminalTabs.length > 1" class="tab-close" title="关闭终端" aria-label="关闭终端" @click.stop="closeTerminalTab(tab.id)"><UiIcon name="close" size="12" /></span>
-            </button>
-          </div>
-          <div v-if="sessionTabOverflow" class="session-tab-scrollbar" aria-hidden="true" @pointerdown="handleSessionTabScrollbarPointerDown">
-            <span class="session-tab-scrollbar-thumb" :style="sessionTabThumbStyle" @pointerdown.stop="handleSessionTabThumbPointerDown" />
-          </div>
-        </div>
-        <div class="session-tab-actions">
-          <span class="terminal-target-summary" :class="{ active: multiTerminalInputEnabled }" :title="terminalTargetTitle">
-            <UiIcon name="terminal" size="13" />
-            <span>{{ terminalTargetLabel }}</span>
-          </span>
-        </div>
-      </nav>
+      <TerminalTabsBar
+        :terminal-tabs="terminalTabs"
+        :active-terminal-id="activeTerminalId"
+        :target-terminal-ids="targetTerminalIds"
+        :paused-terminal-ids="pausedTerminalSyncIds"
+        :terminal-target-title="terminalTargetTitle"
+        @select="selectTerminalTab"
+        @close="closeTerminalTab"
+        @close-others="closeOtherTerminalTabs"
+        @create="openLocalTerminal"
+        @toggle-target="toggleTerminalTarget"
+        @set-targets="setTerminalTargets"
+        @select-all-targets="selectAllTerminalTargets"
+        @reset-targets="resetTerminalTargetsToActive"
+        @context-menu="openTerminalTabContextMenu"
+        @open-popover="closeContextMenu"
+        @focus-terminal="focusActiveTerminal"
+      />
     </header>
     <aside class="app-rail" aria-label="主导航">
       <button
@@ -815,6 +837,9 @@ onBeforeUnmount(() => {
         v-show="tab.id === activeTerminalId"
         :key="tab.id"
         :ref="terminalRefRegistry.refFor(tab.id)"
+        :id="`terminal-panel-${tab.id}`"
+        role="tabpanel"
+        :aria-labelledby="`terminal-tab-${tab.id}`"
         :terminal-id="tab.id"
         :active="tab.id === activeTerminalId"
         :profile="tab.profile"

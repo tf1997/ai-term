@@ -25,19 +25,27 @@ export function useTerminalTabs() {
   const targetTerminalIds = computed(() => targetTerminalTabs.value.map((tab) => tab.id))
   const targetConnectionIds = computed(() => [...new Set(targetTerminalTabs.value.map((tab) => tab.connectionId))])
   const multiTerminalInputEnabled = computed(() => targetTerminalIds.value.length > 1)
+  const pausedTerminalTargetCount = computed(() => targetTerminalTabs.value.filter((tab) =>
+    tab.id !== activeTerminalId.value && pausedTerminalSyncIdSet.value.has(tab.id)
+  ).length)
   const activeTerminalTitle = computed(() => activeTerminal.value?.title ?? '当前终端')
   const terminalTargetLabel = computed(() => {
     const count = targetTerminalIds.value.length
-    return count > 1 ? `同步 ${count} 个 · 当前 ${activeTerminalTitle.value}` : `当前 ${activeTerminalTitle.value}`
+    const paused = pausedTerminalTargetCount.value > 0 ? ` · 暂停 ${pausedTerminalTargetCount.value}` : ''
+    return count > 1 ? `同步 ${count} 个${paused} · 当前 ${activeTerminalTitle.value}` : `当前 ${activeTerminalTitle.value}`
   })
   const terminalTargetTitle = computed(() => {
     const targets = targetTerminalTabs.value.map((tab) => tab.title).join('、')
+    const paused = pausedTerminalTargetCount.value > 0
+      ? `；${pausedTerminalTargetCount.value} 个终端键盘同步已暂停，回到空提示符后自动恢复`
+      : ''
     return multiTerminalInputEnabled.value
-      ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}`
+      ? `当前 tab：${activeTerminalTitle.value}；同步目标：${targets}${paused}`
       : `当前 tab：${activeTerminalTitle.value}；仅发送到当前终端`
   })
 
-  function setTerminalTargets(ids: readonly string[], requiredId = activeTerminalId.value) {
+  function setTerminalTargets(ids: readonly string[]) {
+    const requiredId = activeTerminalId.value
     const next = normalizedTerminalTargetIds(terminalTabs.value, ids, requiredId)
     selectedTerminalIds.value = next
     pausedTerminalSyncIds.value = pausedTerminalSyncIds.value.filter((id) => next.includes(id) && id !== requiredId)
@@ -47,7 +55,7 @@ export function useTerminalTabs() {
     if (!terminalTabs.value.some((tab) => tab.id === tabId)) return
     activeTerminalId.value = tabId
     const current = selectedTerminalIds.value
-    setTerminalTargets(current.length <= 1 ? [tabId] : current, tabId)
+    setTerminalTargets(current.includes(tabId) ? current : [tabId])
   }
 
   function addTerminalTab(profile?: ConnectionProfile) {
@@ -63,20 +71,47 @@ export function useTerminalTabs() {
     }
     terminalTabs.value.push(tab)
     activeTerminalId.value = id
-    setTerminalTargets([id], id)
+    setTerminalTargets([id])
     return readonly(tab)
   }
 
-  function removeTerminalTab(tabId: string) {
-    if (terminalTabs.value.length === 1) return false
-    const index = terminalTabs.value.findIndex((tab) => tab.id === tabId)
-    if (index < 0) return false
-    terminalTabs.value = terminalTabs.value.filter((tab) => tab.id !== tabId)
-    if (activeTerminalId.value === tabId) {
-      activeTerminalId.value = (terminalTabs.value[Math.max(0, index - 1)] ?? terminalTabs.value[0]).id
+  function removeTerminalTabs(ids: readonly string[], preferredActiveId?: string): string[] {
+    const previousTabs = terminalTabs.value
+    if (previousTabs.length <= 1) return []
+    const requestedIds = new Set(ids)
+    let remainingTabs = previousTabs.filter((tab) => !requestedIds.has(tab.id))
+    if (remainingTabs.length === 0) {
+      const survivor = previousTabs.find((tab) => tab.id === preferredActiveId)
+        ?? previousTabs.find((tab) => tab.id === activeTerminalId.value)
+        ?? previousTabs[0]
+      remainingTabs = [survivor]
     }
-    setTerminalTargets(selectedTerminalIds.value)
-    return true
+    const remainingIds = new Set(remainingTabs.map((tab) => tab.id))
+    const removedIds = previousTabs.filter((tab) => !remainingIds.has(tab.id)).map((tab) => tab.id)
+    if (removedIds.length === 0) return []
+
+    let nextActiveId = activeTerminalId.value
+    if (!remainingIds.has(nextActiveId)) {
+      const activeIndex = previousTabs.findIndex((tab) => tab.id === activeTerminalId.value)
+      const nearestTargets = previousTabs
+        .map((tab, index) => ({ tab, index }))
+        .filter(({ tab }) => remainingIds.has(tab.id) && selectedTerminalIdSet.value.has(tab.id))
+        .sort((left, right) => Math.abs(left.index - activeIndex) - Math.abs(right.index - activeIndex) || left.index - right.index)
+      const previousSurvivor = previousTabs.slice(0, activeIndex).reverse().find((tab) => remainingIds.has(tab.id))
+      nextActiveId = preferredActiveId && remainingIds.has(preferredActiveId)
+        ? preferredActiveId
+        : (nearestTargets[0]?.tab ?? previousSurvivor ?? remainingTabs[0]).id
+    }
+
+    const survivingTargets = selectedTerminalIds.value.filter((id) => remainingIds.has(id))
+    terminalTabs.value = remainingTabs
+    activeTerminalId.value = nextActiveId
+    setTerminalTargets(survivingTargets.includes(nextActiveId) ? survivingTargets : [nextActiveId])
+    return removedIds
+  }
+
+  function removeTerminalTab(tabId: string) {
+    return removeTerminalTabs([tabId]).length > 0
   }
 
   function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
@@ -101,22 +136,18 @@ export function useTerminalTabs() {
 
   function terminalTargetToggleTitle(tabId: string) {
     if (isTerminalSyncPaused(tabId)) return '键盘同步已暂停；各终端回到空提示符后会自动恢复'
-    if (tabId === activeTerminalId.value) return multiTerminalInputEnabled.value ? '仅同步当前终端' : '当前终端'
+    if (tabId === activeTerminalId.value) return '当前终端始终接收输入'
     return isTerminalTargetSelected(tabId) ? '从同步目标移除' : '加入同步目标'
   }
 
   function toggleTerminalTarget(tabId: string) {
     if (!terminalTabs.value.some((tab) => tab.id === tabId)) return
-    if (tabId === activeTerminalId.value) {
-      setTerminalTargets([tabId], tabId)
-      return
-    }
+    if (tabId === activeTerminalId.value) return
     const current = selectedTerminalIds.value
     setTerminalTargets(current.includes(tabId) ? current.filter((id) => id !== tabId) : [...current, tabId])
   }
 
   function selectAllTerminalTargets() {
-    pausedTerminalSyncIds.value = []
     setTerminalTargets(terminalTabs.value.map((tab) => tab.id))
   }
 
@@ -140,10 +171,12 @@ export function useTerminalTabs() {
   return {
     terminalTabs: tabs,
     activeTerminalId: readonly(activeTerminalId),
+    pausedTerminalSyncIds: readonly(pausedTerminalSyncIds),
     activeTerminal, targetTerminalIds, targetConnectionIds, multiTerminalInputEnabled,
-    terminalTargetLabel, terminalTargetTitle, selectTerminalTab, addTerminalTab, removeTerminalTab,
+    pausedTerminalTargetCount, terminalTargetLabel, terminalTargetTitle,
+    selectTerminalTab, addTerminalTab, removeTerminalTab, removeTerminalTabs,
     updateTerminalStatus, isTerminalTargetSelected, isTerminalSyncPaused, terminalTargetToggleTitle,
-    toggleTerminalTarget, selectAllTerminalTargets, resetTerminalTargetsToActive,
+    setTerminalTargets, toggleTerminalTarget, selectAllTerminalTargets, resetTerminalTargetsToActive,
     pauseTerminalTargets, resumeTerminalSyncTarget
   }
 }

@@ -265,17 +265,12 @@
 .theme-light .server-meta {
   color: var(--light-muted);
 }
-.theme-light .chip, .theme-light .settings-option-status, .theme-light .terminal-target-summary, .theme-light .command-risk-status, .theme-light .script-editor-risk {
+.theme-light .chip, .theme-light .settings-option-status, .theme-light .command-risk-status, .theme-light .script-editor-risk {
   border-color: #dbe4e9;
   background: #f5f8f7;
   color: #536271;
 }
-.theme-light .chip.ready, .theme-light .settings-option-status.ready, .theme-light .terminal-target-summary.active, .theme-light .command-risk-status.risk-safe, .theme-light .script-editor-risk.risk-safe {
-  border-color: #c9ecd8;
-  background: var(--light-accent-soft);
-  color: var(--light-accent-strong);
-}
-.theme-light .tab.target {
+.theme-light .chip.ready, .theme-light .settings-option-status.ready, .theme-light .command-risk-status.risk-safe, .theme-light .script-editor-risk.risk-safe {
   border-color: #c9ecd8;
   background: var(--light-accent-soft);
   color: var(--light-accent-strong);
