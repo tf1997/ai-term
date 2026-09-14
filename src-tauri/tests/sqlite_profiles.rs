@@ -372,3 +372,185 @@ fn sqlite_store_migrates_legacy_plaintext_ssh_passwords_on_read() {
         Some("target-secret")
     );
 }
+
+#[test]
+fn database_credentials_persist_ssh_passwords_across_restarts() {
+    let database_path = temp_db_path("profiles-database-restart");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let mut saved = profile("database-prod", "database-prod");
+    saved.gateway.auth_mode = AuthMode::Password;
+    saved.gateway.password = Some(" gateway-secret\n".into());
+    saved.target.auth_mode = AuthMode::Password;
+    saved.target.password = Some("目标-secret\t ".into());
+    store.save_connection_profile(&saved).unwrap();
+    drop(store);
+
+    saved.gateway.credential_ref = Some("ssh-profile:database-prod:gateway:password".into());
+    saved.target.credential_ref = Some("ssh-profile:database-prod:target:password".into());
+    let reopened = SqliteConfigStore::with_database_credentials(&database_path);
+    assert_eq!(
+        reopened.get_connection_profile(&saved.id).unwrap(),
+        Some(saved.clone())
+    );
+    assert_eq!(reopened.list_connection_profiles().unwrap(), vec![saved]);
+}
+
+#[test]
+fn database_credentials_update_passwords_and_preserve_them_when_input_is_blank() {
+    let database_path = temp_db_path("profiles-database-update");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let mut saved = profile("database-update", "before-update");
+    saved.gateway.password = Some("gateway-original".into());
+    saved.target.password = Some("target-original".into());
+    store.save_connection_profile(&saved).unwrap();
+
+    let mut updated = store.get_connection_profile(&saved.id).unwrap().unwrap();
+    updated.name = "after-update".into();
+    updated.gateway.password = Some("gateway-updated".into());
+    updated.target.password = Some("target-updated".into());
+    store.save_connection_profile(&updated).unwrap();
+
+    let mut blank_input = updated.clone();
+    blank_input.gateway.password = None;
+    blank_input.target.password = Some(" \t\r\n".into());
+    store.save_connection_profile(&blank_input).unwrap();
+    drop(store);
+
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert_eq!(
+        reopened.get_connection_profile(&updated.id).unwrap(),
+        Some(updated)
+    );
+}
+
+#[test]
+fn database_credentials_keep_copied_profile_passwords_independent() {
+    let database_path = temp_db_path("profiles-database-copy");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let mut source = profile("database-source", "database-source");
+    source.gateway.password = Some("gateway-source".into());
+    source.target.password = Some("target-source".into());
+    store.save_connection_profile(&source).unwrap();
+    let source = store.get_connection_profile(&source.id).unwrap().unwrap();
+
+    let mut copied = source.clone();
+    copied.id = "database-copy".into();
+    copied.name = "database-copy".into();
+    copied.gateway.password = Some("gateway-copy".into());
+    copied.target.password = Some("target-copy".into());
+    store.save_connection_profile(&copied).unwrap();
+    drop(store);
+
+    copied.gateway.credential_ref = Some("ssh-profile:database-copy:gateway:password".into());
+    copied.target.credential_ref = Some("ssh-profile:database-copy:target:password".into());
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert_eq!(
+        reopened.get_connection_profile(&copied.id).unwrap(),
+        Some(copied.clone())
+    );
+    assert_eq!(
+        reopened.get_connection_profile(&source.id).unwrap(),
+        Some(source.clone())
+    );
+    assert!(reopened.delete_connection_profile(&copied.id).unwrap());
+    assert_eq!(
+        reopened.get_connection_profile(&source.id).unwrap(),
+        Some(source)
+    );
+}
+
+#[test]
+fn database_credentials_delete_both_ssh_passwords() {
+    let database_path = temp_db_path("profiles-database-delete");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let mut saved = profile("database-delete", "database-delete");
+    saved.gateway.password = Some("gateway-delete".into());
+    saved.target.password = Some("target-delete".into());
+    store.save_connection_profile(&saved).unwrap();
+    drop(store);
+
+    let reopened = SqliteConfigStore::with_database_credentials(&database_path);
+    assert!(reopened.delete_connection_profile(&saved.id).unwrap());
+    assert!(!reopened.delete_connection_profile(&saved.id).unwrap());
+    drop(reopened);
+
+    let connection = Connection::open(&database_path).unwrap();
+    let password_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM credentials WHERE value IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(password_count, 0);
+    drop(connection);
+
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert!(reopened.list_connection_profiles().unwrap().is_empty());
+}
+
+#[test]
+fn database_credentials_migrate_legacy_ssh_passwords_and_preserve_them_after_restart() {
+    let database_path = temp_db_path("profiles-database-legacy");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let mut expected = profile("database-legacy", "database-legacy");
+    expected.gateway.auth_mode = AuthMode::Password;
+    expected.target.auth_mode = AuthMode::Password;
+    store.save_connection_profile(&expected).unwrap();
+
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute(
+            "UPDATE connection_profiles SET gateway_password = ?1, target_password = ?2 WHERE id = ?3",
+            ["gateway-legacy", "target-legacy", &expected.id],
+        )
+        .unwrap();
+    drop(connection);
+
+    expected.gateway.password = Some("gateway-legacy".into());
+    expected.gateway.credential_ref = Some("ssh-profile:database-legacy:gateway:password".into());
+    expected.target.password = Some("target-legacy".into());
+    expected.target.credential_ref = Some("ssh-profile:database-legacy:target:password".into());
+    assert_eq!(
+        store.list_connection_profiles().unwrap(),
+        vec![expected.clone()]
+    );
+    drop(store);
+
+    let connection = Connection::open(&database_path).unwrap();
+    let legacy_passwords: (Option<String>, Option<String>) = connection
+        .query_row(
+            "SELECT gateway_password, target_password FROM connection_profiles WHERE id = ?1",
+            [&expected.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(legacy_passwords, (None, None));
+    drop(connection);
+
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert_eq!(
+        reopened.get_connection_profile(&expected.id).unwrap(),
+        Some(expected)
+    );
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn platform_credentials_store_ssh_passwords_in_database_on_unix() {
+    let database_path = temp_db_path("profiles-platform-credentials");
+    let store = SqliteConfigStore::with_platform_credentials(&database_path);
+    let mut saved = profile("platform-password", "platform-password");
+    saved.gateway.password = Some("platform-gateway-secret".into());
+    saved.target.password = Some("platform-target-secret".into());
+    store.save_connection_profile(&saved).unwrap();
+    drop(store);
+
+    saved.gateway.credential_ref = Some("ssh-profile:platform-password:gateway:password".into());
+    saved.target.credential_ref = Some("ssh-profile:platform-password:target:password".into());
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert_eq!(
+        reopened.get_connection_profile(&saved.id).unwrap(),
+        Some(saved)
+    );
+}

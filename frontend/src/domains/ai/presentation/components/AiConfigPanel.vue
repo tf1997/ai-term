@@ -71,7 +71,7 @@ function save() {
       </label>
       <label>
         <span>API Key</span>
-        <input v-model="draft.apiKey" type="password" placeholder="保存到系统凭据管理器" />
+        <input v-model="draft.apiKey" type="password" placeholder="保存在本机" />
       </label>
       <label class="wide">
         <span>Base URL（API 根路径，不是网页登录页）</span>
@@ -101,7 +101,7 @@ function save() {
     </div>
     <p v-if="validationError" class="ai-config-validation-error" role="alert">{{ validationError }}</p>
     <div class="config-footer">
-      <span>{{ saved ? '已保存到系统凭据管理器' : 'API Key 将保存到系统凭据管理器' }}</span>
+      <span>{{ saved ? '已保存在本机' : 'API Key 将保存在本机' }}</span>
       <button class="primary" @click="save">保存配置</button>
     </div>
   </section>

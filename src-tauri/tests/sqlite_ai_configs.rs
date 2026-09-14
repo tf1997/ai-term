@@ -236,3 +236,39 @@ fn sqlite_store_migrates_legacy_plaintext_ai_api_key_on_read() {
         Some("sk-legacy")
     );
 }
+
+#[test]
+fn database_credentials_persist_ai_api_key_across_restart_and_delete_it_with_config() {
+    let database_path = temp_db_path("ai-config-database-credentials");
+    let store = SqliteConfigStore::with_database_credentials(&database_path);
+    let saved = config("database-provider", "test-model");
+    store.save_ai_provider_config(&saved).unwrap();
+    drop(store);
+
+    let reopened = SqliteConfigStore::with_database_credentials(&database_path);
+    assert_eq!(
+        reopened.get_ai_provider_config(&saved.id).unwrap(),
+        Some(saved.clone())
+    );
+    assert_eq!(
+        reopened.list_ai_provider_configs().unwrap(),
+        vec![saved.clone()]
+    );
+    assert!(reopened.delete_ai_provider_config(&saved.id).unwrap());
+    assert!(!reopened.delete_ai_provider_config(&saved.id).unwrap());
+    drop(reopened);
+
+    let connection = Connection::open(&database_path).unwrap();
+    let key_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM credentials WHERE key = ?1 AND value IS NOT NULL",
+            [&saved.api_key_ref],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(key_count, 0);
+    drop(connection);
+
+    let reopened = SqliteConfigStore::with_database_credentials(database_path);
+    assert!(reopened.list_ai_provider_configs().unwrap().is_empty());
+}

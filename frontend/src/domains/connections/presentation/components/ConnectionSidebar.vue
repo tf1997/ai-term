@@ -97,7 +97,7 @@ function targetPortLabel(_profile: ConnectionProfile) {
 }
 
 function targetPasswordPlaceholder() {
-  return '可选，保存到系统凭据管理器用于自动登录'
+  return '可选，保存后用于自动登录'
 }
 
 function profileReady(profile: ConnectionProfile) {
@@ -172,7 +172,7 @@ function profileReadyToConnect(profile: ConnectionProfile) {
           <div class="modal-head">
             <div>
               <strong>{{ editorMode === 'create' ? '新建连接' : '编辑连接' }}</strong>
-              <span>连接信息写入 SQLite，密码保存到系统凭据管理器。</span>
+              <span>连接信息和密码保存在本机。</span>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="emit('closeEditor')"><UiIcon name="close" /></button>
           </div>

@@ -63,7 +63,7 @@ impl CredentialStore for SystemCredentialStore {
 
 const SERVICE_NAME: &str = "ai-term";
 
-fn validate_key(key: &str) -> Result<&str> {
+pub(crate) fn validate_key(key: &str) -> Result<&str> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
         bail!("credential key is empty");
@@ -242,6 +242,7 @@ mod platform {
             ],
             None,
             false,
+            None,
         )?;
         Ok(())
     }
@@ -253,6 +254,7 @@ mod platform {
             &["find-generic-password", "-s", SERVICE_NAME, "-a", key, "-w"],
             None,
             true,
+            None,
         )?;
         Ok(output.map(|value| value.trim_end_matches(['\r', '\n']).to_string()))
     }
@@ -264,6 +266,7 @@ mod platform {
             &["delete-generic-password", "-s", SERVICE_NAME, "-a", key],
             None,
             true,
+            None,
         )?;
         Ok(())
     }
@@ -273,6 +276,9 @@ mod platform {
 mod platform {
     use super::{run_command, validate_key, SERVICE_NAME};
     use anyhow::Result;
+    use std::time::Duration;
+
+    const LEGACY_CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(2);
 
     pub fn platform_set_secret(key: &str, value: &str) -> Result<()> {
         let key = validate_key(key)?;
@@ -289,6 +295,7 @@ mod platform {
             ],
             Some(value),
             false,
+            None,
         )?;
         Ok(())
     }
@@ -300,6 +307,7 @@ mod platform {
             &["lookup", "service", SERVICE_NAME, "key", key],
             None,
             true,
+            Some(LEGACY_CREDENTIAL_TIMEOUT),
         )?;
         Ok(output.map(|value| value.trim_end_matches(['\r', '\n']).to_string()))
     }
@@ -311,6 +319,7 @@ mod platform {
             &["clear", "service", SERVICE_NAME, "key", key],
             None,
             true,
+            Some(LEGACY_CREDENTIAL_TIMEOUT),
         )?;
         Ok(())
     }
@@ -339,6 +348,7 @@ fn run_command(
     args: &[&str],
     stdin: Option<&str>,
     missing_is_ok: bool,
+    timeout: Option<std::time::Duration>,
 ) -> Result<Option<String>> {
     use anyhow::{anyhow, bail, Context};
     use std::io::Write;
@@ -361,6 +371,22 @@ fn run_command(
             .take()
             .ok_or_else(|| anyhow!("failed to open {program} stdin"))?;
         child_stdin.write_all(input.as_bytes())?;
+    }
+    if let Some(timeout) = timeout {
+        // Legacy Linux keyrings may wait indefinitely for a desktop session or
+        // unlock prompt. Keep profile reads/deletions usable in that case.
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("{program} timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
     let output = child.wait_with_output()?;
     if output.status.success() {
@@ -385,3 +411,39 @@ use platform::{platform_delete_secret, platform_get_secret, platform_set_secret}
 use platform::{platform_delete_secret, platform_get_secret, platform_set_secret};
 #[cfg(not(any(windows, unix)))]
 use platform::{platform_delete_secret, platform_get_secret, platform_set_secret};
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::run_command;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn credential_helper_timeout_stops_an_unresponsive_process() {
+        let started = Instant::now();
+        let error = run_command(
+            "/bin/sh",
+            &["-c", "exec sleep 10"],
+            None,
+            true,
+            Some(Duration::from_millis(100)),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn credential_helper_with_timeout_returns_successful_output() {
+        let output = run_command(
+            "/bin/sh",
+            &["-c", "printf 'saved-password'"],
+            None,
+            false,
+            Some(Duration::from_secs(2)),
+        )
+        .unwrap();
+
+        assert_eq!(output.as_deref(), Some("saved-password"));
+    }
+}

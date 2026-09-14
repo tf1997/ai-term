@@ -160,7 +160,7 @@ Each AI configuration has an editable request timeout in seconds, defaulting to 
 
 Connection profiles, command history, conversations, and scripts are stored locally. Only context explicitly selected and attached to an AI request is sent to the configured provider. Review that provider's retention and privacy policy before sending sensitive terminal output.
 
-For convenience, the current version may still store SSH passwords and AI API keys in plaintext. Protect the workstation with disk encryption and operating system account controls; OS keychain integration is still being improved.
+SSH passwords and AI API keys are saved on this device. On Linux, they are stored in plaintext in the local `ai-term.sqlite3` database, without requiring `secret-tool` or a desktop keyring. macOS uses Keychain and Windows uses Credential Manager. Existing Linux system credentials are migrated to the database when they can be read; if the old credential service is unavailable, re-enter and save the password or API key.
 
 ## Verification
 
@@ -179,7 +179,7 @@ cargo test
 
 The current release is `v0.1.0`. It is available for evaluation and active development, with packaged builds for Windows, Ubuntu, macOS, and musl-based Linux.
 
-Planned work includes stronger SSH key management, OS keychain integration, more transfer fallbacks for restricted bastions, and richer AI context controls.
+Planned work includes stronger SSH key management, more transfer fallbacks for restricted bastions, and richer AI context controls.
 
 ## Contributing
 

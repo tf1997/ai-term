@@ -162,6 +162,7 @@ const sshBackend = read('../src-tauri/src/domain/terminal/ssh.rs')
 const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
+const databaseCredentials = read('../src-tauri/src/domain/storage/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
 const windowsRootStyles = styles.match(/:root\[data-platform="windows"\]\s*\{([^}]*)\}/)?.[1] ?? ''
 
@@ -2107,7 +2108,7 @@ assert(
     sidebar.includes('v-model="selectedProfile.target.authMode"') &&
     connectionProfileState.includes("password: ''") &&
     !sidebar.includes('v-model="selectedProfile.gateway.password"'),
-  'ConnectionSidebar must let users enter direct SSH passwords while backend storage moves them into the system credential store.'
+  'ConnectionSidebar must let users enter direct SSH passwords while backend storage persists them on this device.'
 )
 
 assert(
@@ -2123,12 +2124,14 @@ assert(
 )
 
 assert(
-  sidebar.includes('系统凭据管理器') &&
+  sidebar.includes('保存在本机') &&
+    settingsSidebar.includes('Linux 使用本地数据库（明文）') &&
+    settingsSidebar.includes('macOS / Windows') &&
     settingsSidebar.includes('系统凭据管理器') &&
-    aiConfig.includes('系统凭据管理器') &&
-    !sidebar.includes('明文保存') &&
-    !aiConfig.includes('明文保存'),
-  'Credential UI copy must describe system credential storage instead of plaintext SQLite storage.'
+    aiConfig.includes('保存在本机') &&
+    !sidebar.includes('保存到系统凭据管理器') &&
+    !aiConfig.includes('保存到系统凭据管理器'),
+  'Credential UI copy must describe local storage and disclose Linux plaintext database storage alongside macOS and Windows system credentials.'
 )
 
 assert(
@@ -2136,12 +2139,15 @@ assert(
     credentials.includes('CredWriteW') &&
     credentials.includes('secret-tool') &&
     credentials.includes('security') &&
+    databaseCredentials.includes('pub struct SqliteCredentialStore') &&
+    sqlite.includes('with_platform_credentials') &&
+    sqlite.includes('with_database_credentials') &&
     sqlite.includes('with_system_credentials') &&
     sqlite.includes('with_credential_store') &&
     sqlite.includes('credential_store') &&
     sqlite.includes('Option::<String>::None') &&
-    tauriLib.includes('SqliteConfigStore::with_system_credentials'),
-  'Sensitive SSH passwords and AI API keys must be saved through the system credential store, with SQLite retaining only credential references.'
+    tauriLib.includes('SqliteConfigStore::with_platform_credentials'),
+  'SSH passwords and AI API keys must use platform credential storage, with Linux database support and system credentials on macOS and Windows.'
 )
 
 assert(

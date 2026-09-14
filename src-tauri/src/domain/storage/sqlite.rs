@@ -15,6 +15,7 @@ use crate::domain::connection::models::{
     AiProviderConfig, AiProviderType, AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole,
     ContextPolicy, FileTransferMode, JumpMode,
 };
+use crate::domain::storage::credentials::SqliteCredentialStore;
 use crate::domain::workspace::{
     AgentCommandAllowlistEntry, AiConversationMessage, AiMessageRole, CommandHistoryRecord,
     UpdateScript, WorkspaceSession,
@@ -152,6 +153,26 @@ impl SqliteConfigStore {
 
     pub fn with_system_credentials(database_path: impl Into<String>) -> Self {
         Self::with_credential_store(database_path, Arc::new(SystemCredentialStore::new()))
+    }
+
+    pub fn with_database_credentials(database_path: impl Into<String>) -> Self {
+        let database_path = database_path.into();
+        let credentials = Arc::new(SqliteCredentialStore::new(database_path.clone()));
+        Self::with_credential_store(database_path, credentials)
+    }
+
+    pub fn with_platform_credentials(database_path: impl Into<String>) -> Self {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            Self::with_system_credentials(database_path)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let database_path = database_path.into();
+            let credentials = SqliteCredentialStore::new(database_path.clone())
+                .with_legacy_store(Arc::new(SystemCredentialStore::new()));
+            Self::with_credential_store(database_path, Arc::new(credentials))
+        }
     }
 
     pub fn with_credential_store(
@@ -890,7 +911,7 @@ impl SqliteConfigStore {
             self.credential_store
                 .set_secret(&key, &secret)
                 .with_context(|| {
-                    format!("failed to save {role} SSH password to system credentials")
+                    format!("failed to save {role} SSH password to credential storage")
                 })?;
             endpoint.credential_ref = Some(key);
         } else {
@@ -938,7 +959,7 @@ impl SqliteConfigStore {
             self.credential_store
                 .set_secret(&key, &secret)
                 .with_context(|| {
-                    format!("failed to migrate {role} SSH password to system credentials")
+                    format!("failed to migrate {role} SSH password to credential storage")
                 })?;
             connection.execute(
                 &format!(
@@ -954,7 +975,7 @@ impl SqliteConfigStore {
         endpoint.credential_ref = normalized_optional(endpoint.credential_ref.take());
         if let Some(key) = endpoint.credential_ref.as_deref() {
             endpoint.password = self.credential_store.get_secret(key).with_context(|| {
-                format!("failed to read {role} SSH password from system credentials")
+                format!("failed to read {role} SSH password from credential storage")
             })?;
         } else {
             endpoint.password = None;
@@ -987,7 +1008,7 @@ impl SqliteConfigStore {
                 .unwrap_or_else(|| ai_provider_secret_ref(&stored.id));
             self.credential_store
                 .set_secret(&key, &secret)
-                .context("failed to save AI API key to system credentials")?;
+                .context("failed to save AI API key to credential storage")?;
             stored.api_key_ref = key;
         } else if let Some(key) = normalized_string(&stored.api_key_ref) {
             stored.api_key_ref = key;
@@ -1008,7 +1029,7 @@ impl SqliteConfigStore {
                 .unwrap_or_else(|| ai_provider_secret_ref(&config.id));
             self.credential_store
                 .set_secret(&key, &secret)
-                .context("failed to migrate AI API key to system credentials")?;
+                .context("failed to migrate AI API key to credential storage")?;
             connection.execute(
                 "UPDATE ai_provider_configs SET api_key_ref = ?1, api_key = NULL WHERE id = ?2",
                 params![&key, config.id],
@@ -1023,7 +1044,7 @@ impl SqliteConfigStore {
             config.api_key = self
                 .credential_store
                 .get_secret(&key)
-                .context("failed to read AI API key from system credentials")?;
+                .context("failed to read AI API key from credential storage")?;
         } else {
             config.api_key_ref.clear();
             config.api_key = None;

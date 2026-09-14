@@ -367,14 +367,14 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
           <div class="modal-head">
             <div>
               <strong>{{ editorMode === 'create' ? '新建 AI 配置' : '编辑 AI 配置' }}</strong>
-              <span>配置写入 SQLite，API Key 保存到系统凭据管理器。</span>
+              <span>密钥保存在本机：Linux 使用本地数据库（明文），macOS / Windows 使用系统凭据管理器。</span>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiConfig">
               <UiIcon name="close" />
             </button>
           </div>
           <p v-if="saveState === 'saving'" class="save-feedback">保存中...</p>
-          <p v-else-if="saveState === 'saved'" class="save-feedback ok">已保存，密钥已写入系统凭据管理器</p>
+          <p v-else-if="saveState === 'saved'" class="save-feedback ok">配置和密钥已保存在本机</p>
           <p v-else-if="saveState === 'error'" class="save-feedback error">{{ saveError }}</p>
           <AiConfigPanel
             :config="aiConfig"
