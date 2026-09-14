@@ -56,6 +56,13 @@ const {
   isTerminalSyncPaused, terminalTargetToggleTitle, toggleTerminalTarget, selectAllTerminalTargets,
   resetTerminalTargetsToActive, pauseTerminalTargets, resumeTerminalSyncTarget
 } = terminalTabState
+// SFTP tabs open a workspace without establishing a live SSH session.
+const connectedProfileIds = computed(() => [...new Set(
+  terminalTabs.value.filter((tab) => tab.profile && tab.status === 'remote').map((tab) => tab.connectionId)
+)])
+const pendingConnectionProfileIds = computed(() => [...new Set(
+  terminalTabs.value.filter((tab) => tab.profile && tab.status === 'connecting').map((tab) => tab.connectionId)
+)])
 // shallowRef: component instances are only accessed imperatively; deep
 // reactivity would proxy every TerminalPane instance for no benefit.
 const terminalRefRegistry = createStableRefRegistry<TerminalPaneInstance>()
@@ -762,6 +769,8 @@ onBeforeUnmount(() => {
       :selected-profile-id="selectedProfileId"
       :selected-profile="sidebarProfile"
       :connecting-profile-id="connectingProfileId"
+      :connected-profile-ids="connectedProfileIds"
+      :pending-connection-profile-ids="pendingConnectionProfileIds"
       :connection-error="connectionError"
       :editor-open="connectionEditorOpen"
       :editor-mode="connectionEditorMode"

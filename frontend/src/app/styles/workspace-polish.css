@@ -332,6 +332,27 @@
   color: #ffffff;
 }
 
+.connection-sidebar .connection-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  gap: 4px;
+  padding-inline: 8px;
+  border-color: transparent;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.connection-sidebar .connection-create-button:hover:not(:disabled) {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+}
+
 .search-input,
 .theme-light .search-input {
   width: calc(100% - 20px);
@@ -350,124 +371,199 @@
   color: var(--workbench-quiet);
 }
 
+.connection-search {
+  position: relative;
+  min-width: 0;
+  margin: 7px 10px;
+}
+
+.connection-search > .ui-icon {
+  position: absolute;
+  top: 8px;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  color: var(--workbench-quiet);
+}
+
+.connection-sidebar .connection-search .search-input {
+  width: 100%;
+  margin: 0;
+  padding-left: 29px;
+}
+
 .server-list {
   gap: 2px;
-  padding: 5px 6px 12px;
+  padding: 4px 6px 12px;
 }
 
 .server-card,
 .theme-light .server-card {
-  min-height: 58px;
+  --connection-row-surface: var(--workbench-panel);
+  position: relative;
+  min-height: 52px;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 56px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
   overflow: hidden;
   border-color: transparent;
   border-radius: 6px;
   background: transparent;
-  padding: 8px;
+  padding: 7px 8px;
   box-shadow: none;
 }
 
-/* 与 AI 配置卡片同一套语言:hover 只提亮,选中态用整卡淡绿底 + 描边。
-   inset 左边条会和 6px 圆角错位,浅色主题下那道深绿也显脏。 */
 .server-card:hover,
 .theme-light .server-card:hover {
+  --connection-row-surface: color-mix(in srgb, var(--workbench-text) 4%, var(--workbench-panel));
   border-color: transparent;
-  background: var(--workbench-hover);
+  background: var(--connection-row-surface);
   box-shadow: none;
 }
 
 .server-card.active,
 .theme-light .server-card.active {
-  border-color: color-mix(in srgb, var(--workbench-accent) 42%, transparent);
-  background: color-mix(in srgb, var(--workbench-accent) 10%, transparent);
+  --connection-row-surface: color-mix(in srgb, var(--workbench-accent) 8%, var(--workbench-panel));
+  border-color: transparent;
+  background: var(--connection-row-surface);
   box-shadow: none;
 }
 
-.server-content {
-  overflow: hidden;
-  gap: 3px;
+.connection-sidebar button:focus-visible,
+.server-card:focus-visible {
+  outline: 2px solid var(--workbench-accent);
+  outline-offset: -2px;
 }
 
 .server-main {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
+}
+
+.server-name {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .server-main strong,
 .theme-light .server-main strong {
   display: block;
+  flex: 1;
   color: var(--workbench-text-strong);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
 }
 
 .server-meta,
 .theme-light .server-meta {
-  gap: 0;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 6px;
   color: var(--workbench-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.connection-sidebar .server-meta .server-address {
+  flex: 0 1 auto;
+  color: var(--workbench-muted);
+}
+
+.connection-sidebar .server-meta .server-role {
+  flex: 0 0 auto;
+  font-family: var(--font-sans);
   font-size: 11px;
+  color: var(--workbench-quiet);
+  white-space: nowrap;
 }
 
-.server-meta span:last-child {
-  display: none;
+.server-role::before {
+  content: '·';
+  margin-right: 6px;
 }
 
-.server-main .badge {
-  height: 18px;
-  border-color: var(--workbench-line);
-  background: transparent;
-  color: var(--workbench-muted);
-  padding-inline: 6px;
-  font-size: 10px;
+.server-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 16px;
+  color: var(--workbench-accent);
 }
 
-/* 「直连」是每行都有的静态属性,不是状态,用绿色等于整列都在报警;
-   降成中性描边,把绿色留给真正的状态(连接中 / 选中)。 */
-.server-main .badge.ok {
-  border-color: var(--workbench-line);
-  background: transparent;
-  color: var(--workbench-muted);
+.server-status .ui-icon {
+  width: 12px;
+  height: 12px;
 }
 
-.server-main .badge.warn {
-  border-color: color-mix(in srgb, var(--workbench-accent) 34%, transparent);
-  background: var(--workbench-accent-soft);
-  color: var(--workbench-accent-strong);
+.server-status.connecting .ui-icon {
+  animation: connection-status-spin 1s linear infinite;
 }
 
-/* 浅色主题的 .app-shell.theme-light .badge.ok 特异性更高,要同深度压过去。 */
-.app-shell.theme-light .server-main .badge.ok {
-  border-color: var(--workbench-line);
-  background: transparent;
-  color: var(--workbench-muted);
+@keyframes connection-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.app-shell.theme-light .server-main .badge.warn {
-  border-color: #bfe9d3;
-  background: #f0fbf5;
-  color: var(--light-accent-strong);
+@media (prefers-reduced-motion: reduce) {
+  .server-status.connecting .ui-icon {
+    animation: none;
+  }
 }
 
+/* Overlay the end of the name on interaction; neither text row reflows. */
 .server-card .card-actions {
-  width: 56px;
-  min-width: 56px;
-  grid-template-columns: repeat(2, 26px);
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  width: 52px;
+  min-width: 52px;
+  height: 24px;
+  grid-template-columns: repeat(2, 24px);
+  border-radius: 4px;
+  background: var(--connection-row-surface);
   opacity: 0;
-  transition: opacity .15s ease;
+  pointer-events: none;
+  transition: opacity .12s ease;
+}
+
+.server-card .card-actions::before {
+  content: '';
+  position: absolute;
+  inset: 0 100% 0 auto;
+  width: 12px;
+  background: linear-gradient(to right, transparent, var(--connection-row-surface));
+  pointer-events: none;
 }
 
 .server-card:hover .card-actions,
 .server-card:focus-within .card-actions,
 .server-card.active .card-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .server-card .card-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .server-card .card-actions .icon-button,
 .theme-light .server-card .card-actions .icon-button {
+  width: 24px;
+  height: 24px;
   border-color: transparent;
   background: transparent;
   color: var(--workbench-muted);
@@ -480,11 +576,9 @@
   color: var(--workbench-text-strong);
 }
 
-/* 运行按钮:实心绿色三角 + 悬停绿色底,和右侧灰色的"更多"区分开,
-   也避免和左侧绿色描边的角色徽标(堡垒机/直连)混成一体 */
 .server-card .card-actions .icon-button.connect,
 .theme-light .server-card .card-actions .icon-button.connect {
-  color: var(--workbench-accent);
+  color: var(--workbench-muted);
 }
 
 .server-card .card-actions .icon-button.connect .ui-icon path {

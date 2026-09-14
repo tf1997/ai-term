@@ -7,6 +7,7 @@ defineProps<{
     | 'arrow-left'
     | 'arrow-right'
     | 'arrow-up'
+    | 'check'
     | 'close'
     | 'copy'
     | 'database'
@@ -86,6 +87,9 @@ defineProps<{
     <template v-else-if="name === 'arrow-up'">
       <path d="M12 19V5" />
       <path d="m5 12 7-7 7 7" />
+    </template>
+    <template v-else-if="name === 'check'">
+      <path d="m5 12 4 4 10-10" />
     </template>
     <template v-else-if="name === 'close'">
       <path d="M18 6 6 18" />

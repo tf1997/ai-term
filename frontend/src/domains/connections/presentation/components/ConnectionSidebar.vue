@@ -8,6 +8,8 @@ const props = defineProps<{
   selectedProfileId: string
   selectedProfile?: ConnectionProfile
   connectingProfileId: string
+  connectedProfileIds?: string[]
+  pendingConnectionProfileIds?: string[]
   connectionError: string
   editorOpen: boolean
   editorMode: 'create' | 'edit'
@@ -110,59 +112,91 @@ const selectedProfileReadyToSave = computed(() => {
 })
 
 function profileReadyToConnect(profile: ConnectionProfile) {
-  return profileReady(profile)
+  return profileReady(profile) && !isProfileConnecting(profile)
+}
+
+function isProfileConnecting(profile: ConnectionProfile) {
+  return profile.id === props.connectingProfileId || props.pendingConnectionProfileIds?.includes(profile.id) === true
+}
+
+function isProfileConnected(profile: ConnectionProfile) {
+  return props.connectedProfileIds?.includes(profile.id) === true
+}
+
+function connectionStatusLabel(profile: ConnectionProfile) {
+  if (isProfileConnecting(profile)) {
+    return isProfileConnected(profile) ? 'SSH 终端运行中，正在新建连接' : '连接中'
+  }
+  return isProfileConnected(profile) ? 'SSH 终端运行中' : ''
+}
+
+function connectButtonLabel(profile: ConnectionProfile) {
+  if (isProfileConnecting(profile)) return '连接中'
+  return isProfileConnected(profile) ? '新建终端连接' : '连接服务器'
+}
+
+function connectProfile(profile: ConnectionProfile, event?: MouseEvent) {
+  if (event && event.detail > 1) return
+  if (profileReadyToConnect(profile)) emit('connect', profile.id)
 }
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar connection-sidebar">
     <div class="section-head">
       <span class="section-title">连接</span>
-      <button class="primary" type="button" title="新建连接" aria-label="新建连接" @click="emit('create')">
+      <button class="connection-create-button" type="button" title="新建连接" aria-label="新建连接" @click="emit('create')">
         <UiIcon name="plus" />
         <span>新建</span>
       </button>
     </div>
-    <input v-model="query" class="search-input" placeholder="搜索主机、用户或标签" aria-label="搜索连接" />
+    <div class="connection-search">
+      <UiIcon name="search" />
+      <input v-model="query" class="search-input" placeholder="搜索连接" aria-label="搜索名称、主机或用户" title="搜索名称、主机或用户" />
+    </div>
     <div class="server-list">
-      <p v-if="filteredProfiles.length === 0" class="empty-state">暂无连接</p>
+      <p v-if="filteredProfiles.length === 0" class="empty-state">{{ query.trim() ? '未找到匹配的连接' : '暂无连接' }}</p>
       <article
         v-for="profile in filteredProfiles"
         :key="profile.id"
         class="server-card"
         :class="{ active: profile.id === selectedProfileId }"
         role="button"
+        :aria-pressed="profile.id === selectedProfileId"
         tabindex="0"
         @click="emit('select', profile.id)"
-        @dblclick="emit('connect', profile.id)"
+        @dblclick="connectProfile(profile)"
         @contextmenu.prevent="emit('openMenu', $event, profile.id)"
-        @keydown.enter="emit('select', profile.id)"
-        @keydown.ctrl.enter="emit('connect', profile.id)"
+        @keydown.enter.self.exact.prevent="emit('select', profile.id)"
+        @keydown.space.self.exact.prevent="emit('select', profile.id)"
+        @keydown.ctrl.enter.self.exact.prevent="connectProfile(profile)"
       >
-        <div class="server-content">
-          <div class="server-main">
-            <strong>{{ profile.name }}</strong>
+        <div class="server-main">
+          <div class="server-name">
             <span
-              class="badge"
-              :class="{ ok: profile.id !== connectingProfileId, warn: profile.id === connectingProfileId }"
+              v-if="connectionStatusLabel(profile)"
+              class="server-status"
+              :class="{ connecting: isProfileConnecting(profile) }"
+              role="img"
+              :title="connectionStatusLabel(profile)"
+              :aria-label="connectionStatusLabel(profile)"
             >
-              {{ profile.id === connectingProfileId ? '连接中' : connectionRoleLabel(profile) }}
+              <UiIcon :name="isProfileConnecting(profile) ? 'refresh' : 'check'" />
             </span>
+            <strong :title="profile.name">{{ profile.name }}</strong>
           </div>
-          <div class="server-meta">
-            <span>{{ profile.target.username || '用户' }}@{{ profile.target.host || '服务器' }}</span>
-            <span>
-              SSH / SFTP
-            </span>
+          <div class="card-actions" @dblclick.stop>
+            <button class="icon-button connect" type="button" :title="connectButtonLabel(profile)" :aria-label="connectButtonLabel(profile)" :disabled="!profileReadyToConnect(profile)" @click.stop="connectProfile(profile, $event)">
+              <UiIcon name="play" />
+            </button>
+            <button class="icon-button more" type="button" title="更多操作" aria-label="更多操作" @click.stop="emit('openMenu', $event, profile.id)">
+              <UiIcon name="more" />
+            </button>
           </div>
         </div>
-        <div class="card-actions">
-          <button class="icon-button connect" type="button" title="连接服务器" aria-label="连接服务器" :disabled="!profileReadyToConnect(profile) || profile.id === connectingProfileId" @click.stop="emit('connect', profile.id)">
-            <UiIcon name="play" />
-          </button>
-          <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click.stop="emit('openMenu', $event, profile.id)">
-            <UiIcon name="more" />
-          </button>
+        <div class="server-meta">
+          <span class="server-address" :title="(profile.target.username || '用户') + '@' + (profile.target.host || '服务器')">{{ profile.target.username || '用户' }}@{{ profile.target.host || '服务器' }}</span>
+          <span class="server-role">{{ connectionRoleLabel(profile) }}</span>
         </div>
       </article>
     </div>

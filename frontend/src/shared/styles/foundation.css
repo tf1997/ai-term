@@ -20,6 +20,7 @@
   --font-xl: 16px;
   --control-h: 32px;
   --icon-size: 32px;
+  --code-block-inset: 12px;
   color: #f4f7fb;
   background: #070a10;
 }

@@ -698,7 +698,8 @@ assert(
     appShell.includes('role="separator"') &&
     appShell.includes('tabindex="0"') &&
     sidebar.includes('<span class="section-title">连接</span>') &&
-    sidebar.includes('placeholder="搜索主机、用户或标签"') &&
+    sidebar.includes('placeholder="搜索连接"') &&
+    sidebar.includes('aria-label="搜索名称、主机或用户"') &&
     settingsSidebar.includes('<span class="section-title">设置</span>') &&
     settingsSidebar.includes('<span>AI 配置</span>') &&
     aiConversationRules.includes('normalizeGeneratedSessionTitle') &&
@@ -2165,7 +2166,7 @@ assert(
   sidebar.includes('function profileReady') &&
     sidebar.includes('function shouldShowTargetPassword') &&
     sidebar.includes('targetUsernamePlaceholder') &&
-    sidebar.includes('SSH / SFTP') &&
+    sidebar.includes('connectionRoleLabel(profile)') &&
     sidebar.includes('连接服务器') &&
     !sidebar.includes('function needsGateway') &&
     !sidebar.includes('function needsMenuProfile') &&
@@ -2209,10 +2210,10 @@ assertLastCssDeclarations(
   '.server-card',
   {
     'min-width': '0',
-    'grid-template-columns': 'minmax(0, 1fr) 56px',
+    'grid-template-columns': 'minmax(0, 1fr)',
     'overflow': 'hidden',
   },
-  'Connection cards must reserve a stable action column without allowing long names to push badges or buttons outside the sidebar.'
+  'Connection cards must give both rows the full card width without allowing long names or addresses to overflow the sidebar.'
 )
 
 assertLastCssDeclarations(
@@ -2220,9 +2221,9 @@ assertLastCssDeclarations(
   {
     'min-width': '0',
     'display': 'grid',
-    'grid-template-columns': 'minmax(0, 1fr) max-content',
+    'grid-template-columns': 'minmax(0, 1fr)',
   },
-  'Connection names must shrink while role badges remain visible.'
+  'Connection names must use the full first row while action overlays leave text geometry stable.'
 )
 
 assertLastCssDeclarations(
@@ -2994,7 +2995,7 @@ assert(
     sidebar.includes('SSH 主机') &&
     sidebar.includes('连接模式') &&
     sidebar.includes('登录用户名') &&
-    sidebar.includes('SSH / SFTP') &&
+    sidebar.includes('connectionRoleLabel(profile)') &&
     !sidebar.includes('selectedProfile.jumpMode') &&
     !sidebar.includes('selectedProfile.fileTransferMode') &&
     !sidebar.includes('isSftpProfile'),
@@ -3427,7 +3428,7 @@ assert(
   /\.tool-code-content,\s*\.tool-preview-content\s*\{[^}]*overflow:\s*auto;[^}]*white-space:\s*pre;/.test(aiCodeBlock) &&
     !/\.tool-code-output[^}]*\{[^}]*white-space:\s*pre-wrap;/.test(aiCodeBlock) &&
     aiCodeBlock.includes('<pre v-if="content" class="tool-code-content"') &&
-    aiCodeBlock.includes('<code>{{ content }}</code>') &&
+    aiCodeBlock.includes('<AiCodeText :content="content" :line-numbers="kind !== \'output\'"') &&
     /\.tool-code\s*\{[^}]*min-width:\s*0;[^}]*width:\s*100%;/.test(aiCodeBlock) &&
     agentStepCard.includes('label="输出" kind="output"') &&
     agentStepCard.includes('class="tool-step-meta"') &&

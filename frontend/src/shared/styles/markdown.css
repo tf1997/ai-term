@@ -11,6 +11,32 @@
   padding: 0;
   white-space: pre;
 }
+/* Unfinished streamed fences use this renderer until AiCodeBlock takes over. */
+.markdown-content .markdown-code-block .code-head {
+  min-height: 36px;
+  padding: 4px var(--code-block-inset, 12px);
+}
+.markdown-content .markdown-code-block .code-head > span {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.markdown-content .markdown-code-block pre {
+  margin: 0;
+  padding: var(--code-block-inset, 12px);
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  tab-size: 4;
+  font: 12px/1.7 var(--font-mono);
+  letter-spacing: 0;
+}
+.markdown-content .markdown-code-block code {
+  font: inherit;
+}
 .script-risk-ai-output .markdown-content {
   white-space: normal;
 }
