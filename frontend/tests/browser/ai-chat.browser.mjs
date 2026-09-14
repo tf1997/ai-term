@@ -113,7 +113,16 @@ try {
           const turns = [...list.querySelectorAll('.chat-turn-assistant')].map(element => ({ ...rect(element), body: rect(element.querySelector('.chat-turn-body')), tools: [...element.querySelectorAll('.tool-step, .chat-error')].map(rect) }));
           const composer = panel.querySelector('.chat-composer');
           const input = composer.querySelector('textarea');
-          return { panel: { ...rect(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth }, list: { ...rect(list), clientWidth: list.clientWidth, scrollWidth: list.scrollWidth }, turns, composer: rect(composer), input: rect(input), clippedButtons: [...composer.querySelectorAll('button')].filter(b => { const r = b.getBoundingClientRect(), c = composer.getBoundingClientRect(); return r.width && (r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1); }).map(b => b.title || b.textContent.trim()) };
+          const steps = [...list.querySelectorAll('.tool-step')].map(element => {
+            const title = element.querySelector('.tool-step-title');
+            const meta = element.querySelector('.tool-step-meta');
+            const status = element.querySelector('.tool-step-status');
+            return { header: rect(element.querySelector('.tool-step-header')), title: rect(title), titleOverflow: title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1, meta: meta ? rect(meta) : null, status: rect(status), collapsed: element.classList.contains('is-collapsed'), targetVisible: [...element.querySelectorAll('.tool-step-target')].some(target => target.getBoundingClientRect().height > 0) };
+          });
+          const command = panel.querySelector('[data-message-id="long-output"] .tool-code-command .tool-code-content');
+          const output = panel.querySelector('[data-message-id="long-output"] .tool-code-output .tool-code-content');
+          const longTitle = panel.querySelector('[data-message-id="long-output"] .tool-step-title');
+          return { panel: { ...rect(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth }, list: { ...rect(list), clientWidth: list.clientWidth, scrollWidth: list.scrollWidth }, turns, steps, command: { overflowY: getComputedStyle(command).overflowY, clientHeight: command.clientHeight, scrollHeight: command.scrollHeight }, output: { whiteSpace: getComputedStyle(output).whiteSpace, clientHeight: output.clientHeight, scrollHeight: output.scrollHeight, lines: output.textContent.split('\\n').length }, longTitle: { height: longTitle.offsetHeight, lineHeight: parseFloat(getComputedStyle(longTitle).lineHeight) }, composer: rect(composer), input: rect(input), clippedButtons: [...composer.querySelectorAll('button')].filter(b => { const r = b.getBoundingClientRect(), c = composer.getBoundingClientRect(); return r.width && (r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1); }).map(b => b.title || b.textContent.trim()) };
         })()`)
         const label = `${theme}, ${width}px, ${zoom * 100}%`
         assert.ok(metrics.panel.scrollWidth <= metrics.panel.clientWidth + 1, `Panel horizontal overflow (${label})`)
@@ -131,11 +140,23 @@ try {
         assert.deepEqual(metrics.clippedButtons, [], `Composer controls clipped (${label})`)
         assert.ok(metrics.list.bottom <= metrics.composer.top + 1.1, `Conversation overlaps composer (${label})`)
         assert.ok(metrics.input.width >= 180 * zoom, `Input too narrow (${label})`)
+        for (const step of metrics.steps) {
+          assert.ok(!step.titleOverflow, `Agent step title clips (${label})`)
+          if (step.meta) assert.ok(step.meta.top >= step.title.bottom - 1 && step.meta.bottom <= step.header.bottom + 1, `Agent step header/meta overlap (${label})`)
+          assert.ok(step.status.top >= step.title.bottom - 1 && step.status.right <= step.header.right + 1, `Step status overlaps the title or clips (${label})`)
+          assert.equal(step.targetVisible, !step.collapsed, `Collapsed step repeats target metadata (${label})`)
+        }
+        assert.ok(metrics.longTitle.height > metrics.longTitle.lineHeight * 1.5, `Long title must wrap (${label})`)
+        assert.ok(metrics.command.scrollHeight > metrics.command.clientHeight + 1, `Long command fixture must exceed preview height (${label})`)
+        assert.equal(metrics.command.overflowY, 'auto', `Command preview uses the shared scroll container (${label})`)
+        assert.equal(metrics.output.whiteSpace, 'pre', `Output preserves terminal columns (${label})`)
+        assert.ok(metrics.output.scrollHeight > metrics.output.clientHeight + 1 && metrics.output.lines >= 48, `Output fixture keeps a bounded scroll region (${label})`)
         geometry.push({ theme, zoom, width, turnWidth: metrics.turns[0].width, bodyWidth: metrics.turns[0].body.width })
       }
     }
   }
   checks.push('20 panel width/theme/125% CSS zoom combinations keep message and body edges aligned', 'No panel horizontal overflow or composer overlap')
+  checks.push('Long Chinese step titles wrap without metadata overlap', 'Collapsed steps omit repeated targets', 'Command previews avoid nested scrolling while multiline output preserves columns')
 
   await evaluate('aiFixture.configure({ theme: "light", zoom: 1, width: 554 })')
   const firstScreenshot = await screenshot('ai-chat-light-554.png')
@@ -171,6 +192,11 @@ try {
   await waitFor(`Boolean(document.querySelector('${longTurn} button[aria-label="复制命令"]'))`)
   await click(`${longTurn} button[aria-label="复制命令"]`)
   assert.equal(await evaluate('aiFixture.copied.at(-1)'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].command'), 'Copy command preserves complete text')
+  await click(`${longTurn} .tool-code-command .tool-code-more`)
+  await waitFor('Boolean(document.querySelector(".tool-preview-dialog[role=dialog]"))')
+  assert.equal(await evaluate('document.querySelector(".tool-preview-content code").textContent'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].command'), 'Command preview opens the complete original command')
+  await click('.tool-preview-dialog button[aria-label="关闭"]')
+  await waitFor('!document.querySelector(".tool-preview-dialog")')
   await click(`${longTurn} button[aria-label="复制输出"]`)
   assert.equal(await evaluate('aiFixture.copied.at(-1)'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].output'), 'Copy output preserves content beyond preview')
   await click(`${longTurn} button[aria-label="展开输出"]`)
@@ -191,6 +217,18 @@ try {
   await click('button[aria-label="回到最新"]')
   await waitFor('(() => { const list = document.querySelector(".chat-message-list"); return list.scrollHeight - list.scrollTop - list.clientHeight < 4; })()')
   checks.push('Streaming updates retain scroll position while reading earlier turns')
+
+  await evaluate('aiFixture.configure({ approvalPreview: true, theme: "light", zoom: 1.25, width: 360 })')
+  const approval = await evaluate(`(() => {
+    const step = document.querySelector('[data-status="pending"]');
+    const content = step.querySelector('.tool-code-full .tool-code-content');
+    return { content: content.textContent, clipped: content.scrollHeight > content.clientHeight + 1, maxHeight: getComputedStyle(content).maxHeight, expandButton: Boolean(step.querySelector('.tool-code-more')), approvalAction: [...step.querySelectorAll('button')].some(button => button.textContent.includes('执行命令')) };
+  })()`)
+  assert.ok(approval.content.includes('最后输出行') && !approval.clipped, 'Approval renders the entire long command before execution')
+  assert.equal(approval.maxHeight, 'none', 'Approval command has no preview height limit')
+  assert.equal(approval.expandButton, false, 'Complete approval commands do not show a redundant expand button')
+  assert.ok(approval.approvalAction, 'Approval command retains its execution action')
+  checks.push('Pending approval renders the full command at 360px and 125% zoom')
 
   assert.deepEqual(exceptions, [], 'Uncaught browser exceptions')
   console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot], nativeBackendTested: false }, null, 2))

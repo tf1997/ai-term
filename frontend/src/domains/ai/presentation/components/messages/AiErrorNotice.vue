@@ -78,6 +78,11 @@ watch(() => props.detail, () => { detailOpen.value = false })
 .chat-error-action:disabled { opacity: .45; cursor: not-allowed; }
 .chat-error-action:focus-visible, .chat-error-detail:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
 .chat-error-feedback { color: var(--chat-muted, var(--workbench-muted)); font-size: 11px; }
-.chat-error-detail { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--chat-line, var(--workbench-line)); max-height: 200px; overflow: auto; color: var(--chat-muted, var(--workbench-muted)); font: 11px/1.7 var(--font-mono, 'JetBrains Mono', Consolas, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-error-detail { margin: 12px 0 0; padding: 10px 12px 12px 0; border-top: 1px solid var(--chat-line, var(--workbench-line)); max-height: 200px; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; color: var(--chat-muted, var(--workbench-muted)); font: 12px/1.7 var(--font-mono, 'JetBrains Mono', Consolas, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
+.chat-error-detail::-webkit-scrollbar-track { background: transparent; }
+.chat-error-detail::-webkit-scrollbar-thumb { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
+.chat-error-detail::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
+.chat-error-detail::-webkit-scrollbar-corner { background: transparent; }
 .chat-error-detail code { font: inherit; }
 </style>

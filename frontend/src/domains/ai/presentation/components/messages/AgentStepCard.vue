@@ -103,28 +103,27 @@ function toggleDetails() {
 </script>
 
 <template>
-  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': step.status === 'running' && !observationStopped, 'is-collapsed': collapsed }" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': step.status === 'running' && !observationStopped, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
         <span class="tool-step-title">{{ step.reason || '终端命令' }}</span>
-        <span class="tool-step-status">{{ statusLabel }}</span>
         <UiIcon :name="collapsed ? 'arrow-down' : 'arrow-up'" size="13" class="tool-step-chevron" />
       </button>
       <div v-else class="tool-step-heading">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
         <span class="tool-step-title">{{ step.reason || '终端命令' }}</span>
-        <span class="tool-step-status">{{ statusLabel }}</span>
       </div>
-      <div v-if="targetLabel || durationLabel || countdownLabel || step.exitCode !== undefined" class="tool-step-meta">
-        <span v-if="targetLabel" class="tool-step-target" :title="targetLabel">{{ targetLabel }}</span>
-        <span v-if="step.exitCode !== undefined" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
-        <span v-if="durationLabel">{{ durationLabel }}</span>
+      <div class="tool-step-meta">
+        <span class="tool-step-status">{{ statusLabel }}</span>
+        <span v-if="step.exitCode !== undefined" class="tool-step-exit" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
+        <span v-if="durationLabel" class="tool-step-duration">{{ durationLabel }}</span>
         <span v-if="countdownLabel">{{ countdownLabel }}</span>
       </div>
     </header>
 
     <div v-if="!collapsed" class="tool-step-body">
+      <div v-if="targetLabel" class="tool-step-target" :title="targetLabel"><UiIcon name="terminal" size="13" /><span>{{ targetLabel }}</span></div>
       <div v-if="step.autoApproved || riskLabels.length || step.sensitive" class="tool-step-risk-row">
         <span v-if="step.autoApproved" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
         <span v-for="label in riskLabels" :key="label" class="tool-step-risk" :class="{ 'is-high': hasHighRisk }"><UiIcon name="shield" size="12" />{{ label }}</span>
@@ -168,18 +167,26 @@ function toggleDetails() {
 
 <style scoped>
 .tool-step { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 8px; overflow: hidden; color: var(--chat-text, var(--workbench-text)); background: var(--chat-surface, var(--workbench-panel-strong)); letter-spacing: 0; overflow-anchor: none; }
-.tool-step-header { min-width: 0; padding: 11px 12px; }
-.tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: start; gap: 8px; width: 100%; min-width: 0; color: inherit; text-align: left; }
+.tool-step-header { min-width: 0; padding: 12px; }
+.tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: start; gap: 8px; width: 100%; min-width: 0; height: auto; color: inherit; text-align: left; white-space: normal; }
 .tool-step-toggle { border: 0; padding: 0; background: transparent; cursor: pointer; }
+.tool-step-toggle:hover .tool-step-chevron { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step-toggle:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 5px; border-radius: 2px; }
-.tool-step-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 550; line-height: 1.6; overflow-wrap: anywhere; }
-.tool-step-state-icon, .tool-step-chevron { color: var(--chat-muted, var(--workbench-muted)); margin-top: 3px; }
-.tool-step-status { min-width: 0; color: var(--chat-muted, var(--workbench-muted)); font-size: 11px; font-weight: 400; line-height: 1.6; text-align: right; white-space: nowrap; }
+.tool-step-title { min-width: 0; font-size: 13px; font-weight: 550; line-height: 1.65; white-space: normal; overflow-wrap: anywhere; }
+.tool-step-state-icon, .tool-step-chevron { color: var(--chat-muted, var(--workbench-muted)); margin-top: 4px; }
+.tool-step-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; font-weight: 400; white-space: nowrap; }
+.tool-step-status::before { content: ''; width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; }
+.tool-step.is-success .tool-step-status { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step.is-error .tool-step-state-icon, .tool-step.is-error .tool-step-status, .tool-step-exit-error { color: var(--chat-danger, #c24150); }
 .tool-step.is-running .tool-step-status, .tool-step.is-running .tool-step-state-icon { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step.is-running .tool-step-state-icon { animation: tool-step-spin 1.6s linear infinite; }
-.tool-step-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 3px 0 0 23px; color: var(--chat-muted, var(--workbench-muted)); font-size: 11px; line-height: 1.6; }
-.tool-step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.tool-step-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 18px; margin-top: 6px; padding-left: 24px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.5; }
+.tool-step-exit { padding-left: 10px; border-left: 1px solid var(--chat-line, var(--workbench-line)); }
+.tool-step-exit, .tool-step-duration { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tool-step-duration { margin-left: auto; }
+.tool-step-target { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--chat-line, var(--workbench-line)); color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.5; }
+.tool-step-target .ui-icon { flex: none; }
+.tool-step-target span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-step-body { border-top: 1px solid var(--chat-line, var(--workbench-line)); transform-origin: top center; animation: tool-step-reveal 150ms ease-out; }
 .tool-step-risk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 12px 0; background: var(--chat-subtle, var(--workbench-panel)); font-size: 11px; line-height: 1.6; }
 .tool-step-auto { color: var(--chat-muted, var(--workbench-muted)); }
@@ -201,16 +208,16 @@ function toggleDetails() {
 .tool-step-action:focus-visible, .tool-step-allow:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
 .tool-step-action.is-icon { width: 29px; padding: 0; flex: 0 0 29px; }
 .tool-step-copy-feedback { color: var(--chat-muted, var(--workbench-muted)); font-size: 11px; }
-.tool-step-error-detail { margin: 10px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono, 'JetBrains Mono', Consolas, monospace); color: var(--chat-muted, var(--workbench-muted)); }
+.tool-step-error-detail { margin: 10px 0 0; max-height: 180px; padding: 0 12px 12px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--font-mono, 'JetBrains Mono', Consolas, monospace); color: var(--chat-muted, var(--workbench-muted)); }
+.tool-step-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
+.tool-step-error-detail::-webkit-scrollbar-track { background: transparent; }
+.tool-step-error-detail::-webkit-scrollbar-thumb { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
+.tool-step-error-detail::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
+.tool-step-error-detail::-webkit-scrollbar-corner { background: transparent; }
 .tool-step-allow { display: flex; align-items: flex-start; gap: 5px; max-width: 100%; margin: 10px 0 0; padding: 0; color: var(--chat-muted, var(--workbench-muted)); background: transparent; border: 0; font-size: 11px; line-height: 1.7; text-align: left; cursor: pointer; }
 .tool-step-allow .ui-icon { margin-top: 3px; flex: 0 0 auto; }
 .tool-step-allow span { flex: 0 0 auto; }
 .tool-step-allow code { min-width: 0; overflow-wrap: anywhere; font: inherit; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); }
-@media (max-width: 360px) {
-  .tool-step-toggle, .tool-step-heading { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .tool-step-chevron { grid-column: 3; grid-row: 1; }
-  .tool-step-status { grid-column: 2 / 4; grid-row: 2; justify-self: end; }
-}
 @keyframes tool-step-spin { to { transform: rotate(360deg); } }
 @keyframes tool-step-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .tool-step.is-running .tool-step-state-icon, .tool-step-body { animation: none; } }

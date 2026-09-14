@@ -1,10 +1,23 @@
 import { createApp, h, nextTick, reactive } from 'vue'
 import AiPanel from '../../src/domains/ai/presentation/components/AiPanel.vue'
+import AgentStepCard from '../../src/domains/ai/presentation/components/messages/AgentStepCard.vue'
 import '../../src/app/styles/index.css'
 
 const now = '2026-09-12T12:00:00.000Z'
 const command = 'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, VolumeName, FileSystem, Size, FreeSpace'
-const longCommand = "powershell -Command \"Get-WinEvent -FilterHashtable @{ LogName='System'; Id=41,42,107,109,153,4101,6008,1; StartTime=(Get-Date).AddDays(-7) } | Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-Table -AutoSize\""
+const longCommand = [
+  "echo '=== 1. pid 12290 是什么进程 ==='",
+  'ps -p 12290 -o pid,user,etime,args --width 200 | cut -c1-200',
+  "echo '=== 2. 本机 ZK 四字命令 ruok ==='",
+  "(echo ruok; sleep 1) | timeout 5 nc 127.0.0.1 2181 || echo 'ruok 无响应或失败'",
+  "echo '=== 3. srvr 状态 Leader/Follower ==='",
+  "(echo srvr; sleep 1) | timeout 5 nc 127.0.0.1 2181 | head -15",
+  "echo '=== 4. ZooKeeper 与 ClickHouse 监听端口 ==='",
+  "ss -lntp | awk 'NR == 1 || /:2181|:8123|:9000/'",
+  "echo '=== 5. 最后输出行，必须可查看和完整复制 ==='"
+].join('\n')
+const targetLabel = 'ag.hirain.com · tengfei.chu@ag.hirain.com'
+const longReason = '确认 2181 端口进程身份，并用 ruok/srvr 检查本机 ZooKeeper 是否正常服务，核对 Leader/Follower 状态以及 ClickHouse 连接情况'
 const longOutput = Array.from({ length: 48 }, (_, i) => `2026-09-${String(i % 12 + 1).padStart(2, '0')} 16:32:15  ${String(1000 + i).padEnd(6)} System  ${'Long diagnostic output preserving terminal columns. '.repeat(4)}`).join('\n')
 const base = { connectionId: 'local', workspaceSessionId: 'fixture-session', terminalId: 'fixture-terminal', terminalConnectionGeneration: 1, createdAt: now }
 const assistant = (id, text, values = {}) => ({ ...base, id, role: 'assistant', text, ...values })
@@ -21,7 +34,7 @@ const messages = [
   user('question-dispatch', 'Inspect another disk'),
   assistant('dispatch-failed', '命令派发失败:Shell 尚未返回可执行提示符', { error: true, errorKind: 'tool', mode: 'agent', agentStatus: 'error', agentSteps: [step('dispatch-step', { status: 'failed', executionPhase: 'not-started', failureReason: 'Shell 尚未返回可执行提示符', output: undefined, exitCode: undefined, durationMs: undefined })] }),
   user('question-long', 'Collect diagnostic output'),
-  assistant('long-output', 'Collected diagnostic output.', { mode: 'agent', agentStatus: 'done', agentSteps: [step('long-step', { command: longCommand, output: longOutput })] }),
+  assistant('long-output', 'Collected diagnostic output.', { mode: 'agent', agentStatus: 'done', agentSteps: [step('long-step', { reason: longReason, command: longCommand, output: longOutput })] }),
   user('question-nonzero', 'Check missing path'),
   assistant('nonzero', 'The command reported an error.', { mode: 'agent', agentStatus: 'done', agentSteps: [step('nonzero-step', { exitCode: 1, output: 'Cannot find path D:\\missing because it does not exist.' })] }),
   user('question-stopped', 'Stop collecting output'),
@@ -36,12 +49,13 @@ const state = reactive({
   width: 554,
   zoom: 1,
   theme: 'light',
+  approvalPreview: false,
   props: {
     ...base,
     workspaceSessions: [{ id: base.workspaceSessionId, connectionId: 'local', name: 'Terminal assistant', summary: '', aiMode: 'chat', createdAt: now, updatedAt: now }],
-    connectionLabels: { local: '本地终端' },
-    executionTargetLabel: '本地终端',
-    executionTargetTitle: '本地终端',
+    connectionLabels: { local: targetLabel },
+    executionTargetLabel: targetLabel,
+    executionTargetTitle: targetLabel,
     executionTargetConnectionIds: ['local'],
     selectedConfigId: 'fixture-config',
     config: { id: 'fixture-config', provider: 'open-ai-compatible', baseUrl: 'https://fixture.invalid/v1', model: 'gpt-5.5', apiKey: 'fixture-only', apiKeyRef: '', contextPolicy: 'active-command-output', systemPrompt: '', riskPolicy: 'confirm-dangerous', timeoutSeconds: 30 },
@@ -63,6 +77,17 @@ document.head.append(style)
 
 createApp({
   render() {
+    if (state.approvalPreview) {
+      return h('main', { class: 'app-shell theme-' + state.theme + ' ai-browser-fixture', style: { width: state.width + 'px', zoom: state.zoom } }, [
+        h('section', { class: 'assistant-panel ai-chat-panel', style: { padding: '16px', boxSizing: 'border-box', overflow: 'auto' } }, [
+          h(AgentStepCard, {
+            step: step('approval-preview', { reason: longReason, command: longCommand, status: 'pending', executionPhase: 'not-started', output: undefined, exitCode: undefined, durationMs: undefined }),
+            awaitingApproval: true,
+            targetLabel
+          })
+        ])
+      ])
+    }
     return h('main', { class: `app-shell theme-${state.theme} ai-browser-fixture`, style: { width: `${state.width}px`, zoom: state.zoom } }, [h(AiPanel, {
       ...state.props,
       onSetSessionMode: (id, mode) => { state.props.workspaceSessions[0].aiMode = mode; events.push({ type: 'mode', mode }) },

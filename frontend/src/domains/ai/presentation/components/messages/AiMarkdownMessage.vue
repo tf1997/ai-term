@@ -62,7 +62,7 @@ function inferCommandShellLabel(command: string) {
       <AiCodeBlock v-else-if="part.type === 'code'" :content="part.content" :label="part.label" :kind="part.command ? 'command' : part.plainResult ? 'output' : 'code'">
         <template #meta>
           <span v-if="part.risk" class="chat-code-risk" :class="`is-${part.risk.level}`" :title="part.risk.message">
-            <UiIcon name="shield" size="11" />{{ part.risk.label }}
+            <UiIcon name="shield" size="12" />{{ part.risk.label }}
           </span>
         </template>
         <template #actions>
@@ -81,12 +81,17 @@ function inferCommandShellLabel(command: string) {
 .chat-markdown > .markdown-content { min-width: 0; margin: 0; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
 .chat-markdown :deep(.markdown-content > :first-child) { margin-top: 0; }
 .chat-markdown :deep(.markdown-content > :last-child) { margin-bottom: 0; }
-.chat-markdown :deep(.markdown-content table) { display: block; width: 100%; max-width: 100%; overflow-x: auto; }
+.chat-markdown :deep(.markdown-content table) { display: block; width: 100%; max-width: 100%; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; }
+.chat-markdown :deep(.markdown-content table::-webkit-scrollbar) { width: 10px; height: 10px; }
+.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-track) { background: transparent; }
+.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-thumb) { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
+.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-thumb:hover) { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
+.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-corner) { background: transparent; }
 .chat-markdown :deep(.markdown-content h1) { font-size: 20px; line-height: 1.5; }
 .chat-markdown :deep(.markdown-content h2) { font-size: 17px; line-height: 1.5; }
 .chat-markdown :deep(.markdown-content h3) { font-size: 15px; line-height: 1.6; }
-.chat-code-risk { display: inline-flex; align-items: center; align-self: center; gap: 3px; height: 18px; color: var(--chat-muted, var(--workbench-muted)); font-size: 10px; line-height: 1; white-space: nowrap; transform: translateY(1px); }
-.chat-code-risk .ui-icon { display: block; width: 11px; height: 11px; flex: 0 0 11px; }
+.chat-code-risk { display: inline-flex; align-items: center; gap: 3px; height: 18px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.chat-code-risk .ui-icon { display: block; width: 12px; height: 12px; flex: 0 0 12px; }
 .chat-code-risk.is-medium { color: var(--chat-warning, #996015); }
 .chat-code-risk.is-high { color: var(--chat-danger, #c24150); }
 .chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 3px 7px; background: var(--chat-button, var(--workbench-accent)); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1.5; }
