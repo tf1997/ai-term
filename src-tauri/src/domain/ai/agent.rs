@@ -11,10 +11,10 @@ use serde_json::{json, Value};
 use crate::domain::ai::chat::{
     build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
     conversation_context_chars, conversation_context_was_compressed,
-    conversation_messages_for_payload, extract_chat_answer, extract_stream_delta, is_cancelled,
-    parse_model_error, reject_html_response, stream_usage_options, truncate_for_prompt,
-    AiCancelToken, AiConversationRole, AiConversationTurn, ContextBundle,
-    MAX_CONVERSATION_SUMMARY_CHARS,
+    conversation_messages_for_payload, conversation_summary_message, extract_chat_answer,
+    extract_stream_delta, is_cancelled, parse_model_error, reject_html_response,
+    stream_usage_options, truncate_for_prompt, AiCancelToken, AiConversationRole,
+    AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
 };
 use crate::domain::ai::stream::{
     is_stream_done, open_stream, sse_data_payloads, wait_for_stream, SseEventBuffer, StreamStart,
@@ -26,6 +26,8 @@ use crate::domain::text::Utf8StreamDecoder;
 /// 任务轮次的字符总量上限；超限直接报错，轮次压缩由前端负责（文档第 8 节）。
 /// 前端在 24k 软预算处开始压缩旧证据;此处保留独立的协议硬上限。
 const MAX_AGENT_TURN_CHARS: usize = 80_000;
+/// Short outputs cost less than a reference and should remain verbatim.
+const MIN_DUPLICATE_OUTPUT_CHARS: usize = 256;
 /// 缺失工具结果时自动补发的 tool 消息内容（文档 5.3）。
 const SKIPPED_TOOL_RESULT_CONTENT: &str = r#"{"status":"skipped"}"#;
 /// 网关疑似不支持 function calling 时前置的提示（文档 5.7）。
@@ -171,18 +173,13 @@ fn build_agent_payload(
     conversation: &[AiConversationTurn],
     stream: bool,
 ) -> Result<Value> {
-    let mut system_content = build_agent_system_prompt(&request.config.system_prompt);
-    if let Some(summary) = normalized_conversation_summary(request) {
-        system_content.push_str(
-            "\n\n【历史对话摘要】以下是本会话更早对话的压缩摘要，仅作背景参考；当前终端内容与最新消息优先：\n",
-        );
-        system_content.push_str(&summary);
-    }
-
     let mut messages = vec![json!({
         "role": "system",
-        "content": system_content
+        "content": build_agent_system_prompt(&request.config.system_prompt)
     })];
+    if let Some(summary) = normalized_conversation_summary(request) {
+        messages.push(conversation_summary_message(&summary));
+    }
     messages.extend(conversation.iter().map(|message| {
         json!({
             "role": match &message.role {
@@ -268,6 +265,7 @@ fn conversation_summary_chars(request: &AiAgentTurnRequest) -> usize {
 /// skipped，防止个别网关直接 400；无前置 tool_call 的结果视为非法轮次。
 fn append_turn_messages(messages: &mut Vec<Value>, turns: &[AiAgentTurn]) -> Result<()> {
     let mut pending_tool_call_ids: Vec<String> = Vec::new();
+    let mut output_sources = BTreeMap::new();
 
     for turn in turns {
         match turn {
@@ -315,7 +313,7 @@ fn append_turn_messages(messages: &mut Vec<Value>, turns: &[AiAgentTurn]) -> Res
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": content,
+                    "content": deduplicate_tool_output(content, tool_call_id, &mut output_sources),
                 }));
             }
         }
@@ -323,6 +321,40 @@ fn append_turn_messages(messages: &mut Vec<Value>, turns: &[AiAgentTurn]) -> Res
 
     flush_pending_tool_results(messages, &mut pending_tool_call_ids);
     Ok(())
+}
+
+/// References are rebuilt from the actual messages in this request, so an
+/// earlier compaction can never leave a reference to a missing full output.
+/// The transcript and tool status/exit code remain untouched.
+fn deduplicate_tool_output(
+    content: &str,
+    tool_call_id: &str,
+    sources: &mut BTreeMap<String, String>,
+) -> String {
+    let Ok(mut payload) = serde_json::from_str::<Value>(content) else {
+        return content.to_string();
+    };
+    let Some(output) = payload.get("output").and_then(Value::as_str) else {
+        return content.to_string();
+    };
+    if output.chars().count() < MIN_DUPLICATE_OUTPUT_CHARS {
+        return content.to_string();
+    }
+    let Some(source_id) = sources.get(output) else {
+        sources.insert(output.to_string(), tool_call_id.to_string());
+        return content.to_string();
+    };
+    let reference = format!("[输出与前面的工具结果 {source_id} 完全相同，请引用该结果中的 output]");
+    if reference.chars().count() >= output.chars().count() {
+        return content.to_string();
+    }
+    payload["output"] = Value::String(reference);
+    let compact = payload.to_string();
+    if compact.chars().count() < content.chars().count() {
+        compact
+    } else {
+        content.to_string()
+    }
 }
 
 fn flush_pending_tool_results(messages: &mut Vec<Value>, pending_tool_call_ids: &mut Vec<String>) {
@@ -801,6 +833,108 @@ mod tests {
         );
     }
 
+    fn output_turns(results: &[(&str, Value)]) -> Vec<AiAgentTurn> {
+        results
+            .iter()
+            .flat_map(|(id, result)| {
+                [
+                    AiAgentTurn::Assistant {
+                        text: String::new(),
+                        tool_calls: vec![tool_call(id, r#"{"command":"tail -n 100 app.log"}"#)],
+                    },
+                    AiAgentTurn::ToolResult {
+                        tool_call_id: (*id).into(),
+                        content: result.to_string(),
+                    },
+                ]
+            })
+            .collect()
+    }
+
+    fn tool_results(payload: &Value) -> Vec<Value> {
+        payload["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| serde_json::from_str(message["content"].as_str().unwrap()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn duplicate_outputs_reference_existing_content_and_preserve_metadata() {
+        let output = "complete log line\n".repeat(250);
+        let mut request = agent_request(output_turns(&[
+            ("first", json!({"exitCode": 0, "output": output})),
+            (
+                "second",
+                json!({"exitCode": 1, "durationMs": 75, "truncated": true, "output": output}),
+            ),
+        ]));
+        let original_turns = request.turns.clone();
+        let payload = build_test_payload(&request).unwrap();
+        let results = tool_results(&payload);
+        assert_eq!(results[0]["output"], output);
+        assert!(results[1]["output"].as_str().unwrap().contains("first"));
+        assert!(results[1]["output"].as_str().unwrap().chars().count() < 100);
+        assert_eq!(results[1]["exitCode"], 1);
+        assert_eq!(results[1]["durationMs"], 75);
+        assert_eq!(results[1]["truncated"], true);
+        assert_eq!(
+            request.turns, original_turns,
+            "stored transcript is not rewritten"
+        );
+
+        request.turns.extend(output_turns(&[(
+            "third",
+            json!({"exitCode": 0, "output": output}),
+        )]));
+        let next = build_test_payload(&request).unwrap();
+        let previous_messages = payload["messages"].as_array().unwrap();
+        assert_eq!(
+            &next["messages"].as_array().unwrap()[..previous_messages.len()],
+            previous_messages
+        );
+        assert!(tool_results(&next)[2]["output"]
+            .as_str()
+            .unwrap()
+            .contains("first"));
+    }
+
+    #[test]
+    fn output_references_are_rebuilt_after_earlier_turns_are_compacted() {
+        let output = "full output\n".repeat(300);
+        let request = agent_request(output_turns(&[
+            (
+                "compacted",
+                json!({"exitCode": 0, "output": "only the tail", "note": "仅保留输出尾部"}),
+            ),
+            ("full", json!({"exitCode": 0, "output": output})),
+            ("repeat", json!({"exitCode": 0, "output": output})),
+        ]));
+        let results = tool_results(&build_test_payload(&request).unwrap());
+        assert_eq!(results[1]["output"], output);
+        assert!(results[2]["output"].as_str().unwrap().contains("full"));
+        assert!(!results[2]["output"].as_str().unwrap().contains("compacted"));
+    }
+
+    #[test]
+    fn different_or_short_outputs_are_not_replaced_with_references() {
+        let output = "log data\n".repeat(100);
+        let changed = format!("{output}ERROR: disk full");
+        let request = agent_request(output_turns(&[
+            ("one", json!({"output": output})),
+            ("two", json!({"output": changed})),
+            ("three", json!({"output": "ok"})),
+            ("four", json!({"output": "ok"})),
+        ]));
+        let results = tool_results(&build_test_payload(&request).unwrap());
+        assert_eq!(results[0]["output"], output);
+        assert_eq!(results[1]["output"], changed);
+        assert_eq!(results[2]["output"], "ok");
+        assert_eq!(results[3]["output"], "ok");
+    }
+
     #[test]
     fn payload_fills_missing_tool_results_as_skipped() {
         let request = agent_request(vec![
@@ -904,8 +1038,17 @@ mod tests {
             .unwrap();
         assert!(system.starts_with("自定义提示词"));
         assert!(system.contains("终端操作 Agent"));
-        assert!(system.contains("【历史对话摘要】"));
-        assert!(system.contains("nginx 502"));
+        assert!(!system.contains("【历史对话摘要】"));
+        let summary = payload
+            .pointer("/messages/1/content")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(summary.contains("nginx 502"));
+        assert_eq!(payload["messages"][1]["role"], "user");
+        request.conversation_summary = Some("更新后的摘要".into());
+        let newer = build_test_payload(&request).unwrap();
+        assert_eq!(payload["messages"][0], newer["messages"][0]);
+        assert_eq!(payload["tools"], newer["tools"]);
     }
 
     #[test]

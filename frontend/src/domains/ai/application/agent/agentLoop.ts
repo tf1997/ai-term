@@ -44,6 +44,8 @@ const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2_000
 const TIMEOUT_PARTIAL_OUTPUT_CHARS = 500
 /** 软预算:提早压缩重复回传的旧证据,后端 80k 仍是协议硬上限。 */
 const DEFAULT_MAX_TURN_CHARS = 24_000
+/** 一次压缩留出 25% 余量,减少连续改写历史导致的前缀缓存失效。 */
+const COMPACTED_TURN_BUDGET_RATIO = 0.75
 /** 压缩时最近保留的完整轮次数(文档 8);探索任务依赖较长证据链。 */
 const PROTECTED_RECENT_TURNS = 6
 /** 压缩时 Assistant 文本保留的字符数。 */
@@ -133,9 +135,10 @@ export function compressAgentTurns(turns: AiAgentTurn[], maxTurnChars: number): 
   let total = turns.reduce((sum, turn) => sum + turnChars(turn), 0)
   if (total <= maxTurnChars) return turns
 
+  const targetChars = Math.floor(maxTurnChars * COMPACTED_TURN_BUDGET_RATIO)
   const compressed = turns.slice()
   const protectedFrom = Math.max(0, compressed.length - PROTECTED_RECENT_TURNS)
-  for (let index = 0; index < protectedFrom && total > maxTurnChars; index += 1) {
+  for (let index = 0; index < protectedFrom && total > targetChars; index += 1) {
     const turn = compressed[index]
     let next: AiAgentTurn | undefined
     if (turn.kind === 'toolResult') {

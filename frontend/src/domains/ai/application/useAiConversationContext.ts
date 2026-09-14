@@ -1,7 +1,8 @@
-import { ref, onBeforeUnmount } from 'vue'
+import { nextTick, onBeforeUnmount } from 'vue'
 import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
 import type { AiProviderConfig } from '../domain/provider'
-import { MAX_AI_COMMAND_HISTORY, MAX_AI_CONVERSATION_MESSAGES, AI_CONTEXT_COMPACT_THRESHOLD, formatSessionDisplayTitle, isAutoSessionName, normalizeGeneratedSessionTitle } from '../domain/aiConversation'
+import { MAX_AI_COMMAND_HISTORY, formatSessionDisplayTitle, isAutoSessionName, normalizeGeneratedSessionTitle } from '../domain/aiConversation'
+import { planConversationCompaction } from '../domain/conversationCompaction'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
 import * as tauri from '../infrastructure/api'
 
@@ -29,18 +30,21 @@ export function useAiConversationContext(props: Readonly<AiPanelProps>, emit: Ai
    * instead of feeding the model its own question twice.
    */
   function conversationContextParts(sessionId: string, beforeMessageId = '') {
-    let eligible = props.messages.filter(
-      (message) => !message.streaming && !message.error && message.text.trim()
-    )
-    if (beforeMessageId) {
-      const cutoff = eligible.findIndex((message) => message.id === beforeMessageId)
-      if (cutoff >= 0) eligible = eligible.slice(0, cutoff)
-    }
+    const sessionMessages = props.messages.filter((message) => message.workspaceSessionId === sessionId)
     const session = props.workspaceSessions.find((item) => item.id === sessionId)
-    const summary = session?.contextSummary?.trim() || ''
+    let summary = session?.contextSummary?.trim() || ''
     const lastId = session?.contextSummaryLastMessageId || ''
-    const boundary =
-      summary && lastId ? eligible.findIndex((message) => message.id === lastId) + 1 : 0
+    const cutoff = beforeMessageId ? sessionMessages.findIndex((message) => message.id === beforeMessageId) : -1
+    if (cutoff >= 0 && summary && lastId
+      && sessionMessages.findIndex((message) => message.id === lastId) >= cutoff) {
+      // Inspect the full transcript: the anchor may itself be streaming on retry.
+      // A retry inside the summary must not see conclusions from later turns.
+      summary = ''
+    }
+    const eligible = sessionMessages.filter(
+      (message, index) => (cutoff < 0 || index < cutoff) && !message.streaming && !message.error && message.text.trim()
+    )
+    const boundary = summary && lastId ? eligible.findIndex((message) => message.id === lastId) + 1 : 0
     return { summary, eligibleCount: eligible.length, unsummarized: eligible.slice(boundary) }
   }
 
@@ -78,45 +82,45 @@ export function useAiConversationContext(props: Readonly<AiPanelProps>, emit: Ai
       })
   }
 
-  const compactingSessionIds = ref<Record<string, boolean>>({})
+  const compactingSessionIds = new Set<string>()
 
   /**
-   * Folds older conversation turns into an AI-generated summary once enough of
-   * them pile up beyond the recent window, then persists the summary on the
-   * workspace session. Runs in the background after an exchange completes.
+   * Folds older turns into a persisted summary when the count or character
+   * budget is reached. Runs after Vue has applied the completed exchange.
    */
-  function maybeCompactConversation(sessionId: string) {
-    if (sessionId !== props.workspaceSessionId) return
-    if (compactingSessionIds.value[sessionId]) return
-    const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
-    if (!props.config.baseUrl.trim() || !props.config.model.trim() || !apiKey) return
-    const { summary, unsummarized } = conversationContextParts(sessionId)
-    const overflowCount = unsummarized.length - MAX_AI_CONVERSATION_MESSAGES
-    if (overflowCount < AI_CONTEXT_COMPACT_THRESHOLD) return
-    const toCompact = unsummarized.slice(0, overflowCount)
-    const lastMessageId = toCompact[toCompact.length - 1]?.id
-    if (!lastMessageId) return
-
-    compactingSessionIds.value = { ...compactingSessionIds.value, [sessionId]: true }
-    void compressAiConversation({
-      config: props.config,
-      apiKey,
-      previousSummary: summary || undefined,
-      messages: toCompact.map((message) => ({ role: message.role, content: message.text }))
-    })
-      .then((response) => {
-        const nextSummary = response.summary.trim()
-        if (!nextSummary) return
-        emit('updateSessionContextSummary', sessionId, nextSummary, lastMessageId)
+  async function maybeCompactConversation(sessionId: string) {
+    if (disposed || sessionId !== props.workspaceSessionId || compactingSessionIds.has(sessionId)) return
+    compactingSessionIds.add(sessionId)
+    try {
+      await nextTick()
+      if (disposed || sessionId !== props.workspaceSessionId) return
+      const config = { ...props.config }
+      const apiKey = config.apiKey?.trim() || props.apiKey.trim()
+      if (!config.baseUrl.trim() || !config.model.trim() || !apiKey) return
+      const session = props.workspaceSessions.find((item) => item.id === sessionId)
+      if (!session) return
+      const watermark = session.contextSummaryLastMessageId || ''
+      const { summary, unsummarized } = conversationContextParts(sessionId)
+      const plan = planConversationCompaction(unsummarized)
+      if (!plan) return
+      const response = await compressAiConversation({
+        config,
+        apiKey,
+        previousSummary: summary || undefined,
+        messages: plan.messages
       })
-      .catch((error) => {
-        console.error('failed to compress AI conversation context', error)
-      })
-      .finally(() => {
-        const next = { ...compactingSessionIds.value }
-        delete next[sessionId]
-        compactingSessionIds.value = next
-      })
+      if (response.sourceCount !== plan.messages.length) return
+      const latest = props.workspaceSessions.find((item) => item.id === sessionId)
+      // An older background response must not overwrite a newer checkpoint.
+      if (!latest || (latest.contextSummary?.trim() || '') !== summary
+        || (latest.contextSummaryLastMessageId || '') !== watermark) return
+      const nextSummary = response.summary.trim()
+      if (nextSummary) emit('updateSessionContextSummary', sessionId, nextSummary, plan.lastMessageId)
+    } catch (error) {
+      console.error('failed to compress AI conversation context', error)
+    } finally {
+      compactingSessionIds.delete(sessionId)
+    }
   }
 
   return { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation }

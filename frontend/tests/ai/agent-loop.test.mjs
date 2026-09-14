@@ -674,6 +674,23 @@ test('轮次压缩:短输出不会因压缩而膨胀', () => {
   assert.equal(compressed[0].content, original, '压缩占位更长时保持原样')
 })
 
+test('轮次压缩留出余量,后续小增量保持历史前缀不变', () => {
+  const recent = Array.from({ length: 6 }, () => ({ kind: 'assistant', text: 'p'.repeat(100), toolCalls: [] }))
+  const turns = [
+    ...Array.from({ length: 5 }, (_, index) => ({
+      kind: 'toolResult', toolCallId: `tool-${index}`,
+      content: JSON.stringify({ exitCode: 0, output: 'evidence'.repeat(100), durationMs: 50 })
+    })),
+    ...recent
+  ]
+  const compressed = compressAgentTurns(turns, 4000)
+  const size = compressed.reduce((sum, turn) => sum + (turn.content ?? turn.text).length, 0)
+  assert.ok(size <= 3000, `压缩后留出下一轮余量,实际 ${size} 字符`)
+  assert.deepEqual(compressed.slice(-6), recent, '最近的证据保持完整')
+  const next = [...compressed, { kind: 'assistant', text: '新进展'.repeat(100), toolCalls: [] }]
+  assert.equal(compressAgentTurns(next, 4000), next, '未再次超过触发阈值就不改写历史')
+})
+
 test('轮次压缩:幂等,完整保留的输出与跳过状态不会被标成"已省略"', () => {
   const protectedTail = Array.from({ length: 6 }, () => ({ kind: 'assistant', text: 'p'.repeat(200), toolCalls: [] }))
   const turns = [

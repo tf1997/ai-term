@@ -34,7 +34,7 @@ type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | '
 export function useAgentSession(options: AgentSessionOptions, source: AgentSessionSource = tauri) {
   const { props, emit, askText, pendingAgentRiskReview, canSendMessage, composerBusy, selectedTerminalContext, scrollMessagesToLatest, closeAiCommandRiskConfirm } = options
   const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer } = options.answerState
-  const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle } = options.conversationContext
+  const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = options.conversationContext
   const { onAiChatStream, cancelTask, aiAgentTurnStream, touchAgentCommandAllowlistEntry } = source
   // Agent 模式运行态
   const agentRun = ref<AgentRunState | null>(null)
@@ -424,6 +424,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           requestConfig,
           apiKey
         )
+        void maybeCompactConversation(requestWorkspaceSessionId)
       }
     } finally {
       agentStopHandle = null

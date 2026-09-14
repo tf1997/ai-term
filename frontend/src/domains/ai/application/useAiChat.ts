@@ -146,7 +146,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
         requestConfig,
         requestApiKey
       )
-      maybeCompactConversation(requestWorkspaceSessionId)
+      void maybeCompactConversation(requestWorkspaceSessionId)
     } catch (error) {
       if (disposed || stopRequested.value || currentRequestId.value !== requestId) return
       cancelStreamFlush()
