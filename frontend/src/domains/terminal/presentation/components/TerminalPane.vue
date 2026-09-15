@@ -11,7 +11,8 @@ import '@xterm/xterm/css/xterm.css'
 import { connectProfile, connectLocalTerminal, forgetAiTermKnownHost, disconnectTerminal, terminalResize, terminalSessionActive, terminalWrite } from '../../infrastructure/api'
 import { saveConnectionProfile } from '../../../connections/infrastructure/api'
 import type { AuthEndpoint, ConnectionProfile } from '../../../connections/types'
-import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
+import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
+import { createInternalTerminalOutputFilter } from '../../domain/internalTerminalOutput'
 import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
 import { attachShellIntegration } from '../../domain/shellIntegration'
 import type { AttachedShellIntegration } from '../../domain/shellIntegration'
@@ -45,6 +46,7 @@ interface TerminalVisualSettings {
   terminalFontFamily: string
   terminalFontSize: number
   terminalTheme: TerminalTheme
+  debugMode?: boolean
 }
 
 interface TerminalInputBatch {
@@ -106,6 +108,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   terminalOutput: [event: TerminalOutputEvent]
+  terminalProtocolOutput: [event: TerminalOutputDeltaEvent]
   terminalSelection: [event: TerminalSelectionEvent]
   terminalInput: [event: TerminalInputEvent]
   terminalInputWriteFailed: [event: TerminalInputWriteFailureEvent]
@@ -138,6 +141,9 @@ let dataDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
+const internalOutputFilter = createInternalTerminalOutputFilter()
+let internalOutputTimer: number | undefined
+let terminalProtocolSequence = 0
 let terminalOutputEmitTimer: number | undefined
 const TERMINAL_OUTPUT_EMIT_INTERVAL = 200
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1_500_000
@@ -735,7 +741,7 @@ function emitTerminalSnapshot() {
 // out to the parent and every context-consuming panel. A trailing timer
 // collapses a burst into one emit per interval; the local input-context and
 // completion updates below still run per chunk since they only read state.
-// 面板消费方(AI 上下文、SFTP 握手、录制)都不需要高频快照,200ms 足够;
+// AI 上下文、录制使用过滤后的低频快照；SFTP 使用独立的原始增量事件。
 // 更高频率会在 vim 等全屏程序持续重绘时把右侧面板的重渲染打满主线程。
 function scheduleTerminalSnapshotEmit() {
   if (terminalOutputEmitTimer !== undefined) return
@@ -765,8 +771,55 @@ function appendTerminalOutput(data: string) {
 // 不会比屏幕旧。历史上提示符识别读的是字节流尾巴,这个顺序反了会让命令(或 Ctrl+C)
 // 之后的新提示符认不出来,快捷命令/历史填入随即误报"Shell 尚未返回可输入提示符"。
 function ingestTerminalOutput(data: string, forceScroll = false) {
+  emit('terminalProtocolOutput', {
+    terminalId: props.terminalId,
+    snapshot: '',
+    delta: data,
+    sequence: ++terminalProtocolSequence
+  })
+  data = internalOutputFilter.push(data)
+  if (!data) return
   appendTerminalOutput(data)
   writeTerminalView(data, forceScroll)
+}
+
+function flushInternalOutput() {
+  if (internalOutputTimer !== undefined) window.clearTimeout(internalOutputTimer)
+  internalOutputTimer = undefined
+  const data = internalOutputFilter.push('')
+  if (data) { appendTerminalOutput(data); writeTerminalView(data) }
+}
+
+function scheduleInternalOutputFlush(delay: number) {
+  if (internalOutputTimer !== undefined) window.clearTimeout(internalOutputTimer)
+  internalOutputTimer = window.setTimeout(flushInternalOutput, delay)
+}
+
+function resetInternalOutput() {
+  if (internalOutputTimer !== undefined) window.clearTimeout(internalOutputTimer)
+  internalOutputTimer = undefined
+  internalOutputFilter.reset()
+}
+
+function finishFileInput(command: string) {
+  internalOutputFilter.finish(command)
+  scheduleInternalOutputFlush(2_010)
+}
+
+function resumeUserOutput() {
+  internalOutputFilter.resume()
+  flushInternalOutput()
+  scheduleInternalOutputFlush(2_010)
+}
+
+function internalPromptRestorePrefix() {
+  const buffer = terminal?.buffer.active
+  if (!buffer) return '\r\x1b[2K'
+  let row = buffer.baseY + buffer.cursorY
+  const cursorRow = row
+  while (row > buffer.baseY && buffer.getLine(row)?.isWrapped) row--
+  const move = cursorRow > row ? `\x1b[${cursorRow - row}A` : ''
+  return `\r${move}\x1b[J`
 }
 
 function activeBufferLine(y: number) {
@@ -996,6 +1049,7 @@ function commitTrackedCommands(commands: string[]) {
 }
 
 function advanceTerminalInputGeneration() {
+  resetInternalOutput()
   abortActiveCapture('终端会话已关闭或重新连接')
   const staleInput = terminalInputQueue.splice(0)
   staleInput.forEach((batch) => {
@@ -1382,6 +1436,7 @@ function refreshTerminalInputContext() {
 
 function commandExecutionReadiness(): TerminalCommandReadiness {
   if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
+  if (internalOutputFilter.active()) return 'shell-busy'
   if (shellIntegrationInputActive()) {
     return shellIntegrationCommandLine().trim() ? 'line-busy' : 'ready'
   }
@@ -2181,6 +2236,7 @@ function executeCommand(command: string, options?: { historyCommand?: string; on
 
 function forwardInteractiveTerminalInput(data: string, synchronize = true) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  resumeUserOutput()
   const beforeState = terminalInputSyncState()
   const inputResult = trackUserInput(data)
   updateCompletionAfterInput(inputResult)
@@ -2213,6 +2269,7 @@ function sendInteractiveTerminalInput(data: string, synchronize = true) {
 
 function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  resumeUserOutput()
   const inputResult = trackUserInput(data)
   updateCompletionAfterInput(inputResult)
   const submittedCommands = takePendingTrackedCommands()
@@ -2229,6 +2286,7 @@ function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
 
 function writeTerminalInput(data: string) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  resumeUserOutput()
   if (data.includes('\r') || data.includes('\n')) shellCommandAwaitingPrompt = true
   resetTrackedTerminalInput('unknown')
   pendingInputControlSequence = ''
@@ -2238,12 +2296,23 @@ function writeTerminalInput(data: string) {
 
 function writeFileInput(data: string): Promise<boolean> {
   if (!data || !terminalBackendInputReady() || commandExecutionReadiness() !== 'ready') return Promise.resolve(false)
+  const timeoutMs = data.includes('AI_TERM_IDENT_BEGIN_') ? 12_000 : 60_000
+  const token = internalOutputFilter.begin(data, {
+    debug: props.terminalSettings?.debugMode === true,
+    timeoutMs,
+    restorePrefix: internalPromptRestorePrefix()
+  })
+  if (token) scheduleInternalOutputFlush(timeoutMs + 10)
   if (data.includes('\r') || data.includes('\n')) shellCommandAwaitingPrompt = true
   resetTrackedTerminalInput('unknown')
   pendingInputControlSequence = ''
   closeCompletion()
   return new Promise((resolve, reject) => {
-    if (!enqueueTerminalInput(data, 'direct', [() => resolve(true)], [reject])) resolve(false)
+    const fail = (error: unknown) => { finishFileInput(data); reject(error) }
+    if (!enqueueTerminalInput(data, 'direct', [() => resolve(true)], [fail])) {
+      finishFileInput(data)
+      resolve(false)
+    }
   })
 }
 
@@ -2364,6 +2433,7 @@ defineExpose({
   terminalInputSyncState,
   writeTerminalInput,
   writeFileInput,
+  finishFileInput,
   interruptFileInput,
   writeSyncedTerminalInput
 })

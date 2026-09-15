@@ -74,6 +74,7 @@ export function useTerminalFileTransfer(options: {
     signal.addEventListener('abort', abort, { once: true })
     if (signal.aborted) controller.abort()
     let dispatched = false, interrupted = false
+    let command = ''
     function stopCommand() {
       if (!dispatched || interrupted || pending.get(id)?.complete || !state.interruptAllowed ||
         disposed || options.generation() !== target.generation) return
@@ -113,7 +114,7 @@ export function useTerminalFileTransfer(options: {
             if (controller.signal.aborted || disposed || options.generation() !== target.generation) {
               throw new Error('终端连接已变化或任务已取消。')
             }
-            const command = build(begin, end)
+            command = build(begin, end)
             dispatched = true
             try {
               if (!(await bridge.write(command))) {
@@ -136,6 +137,7 @@ export function useTerminalFileTransfer(options: {
       stopCommand()
       throw reason
     } finally {
+      if (command) bridge.finish?.(command)
       controller.abort()
       pending.delete(id)
       operations.delete(controller)

@@ -9,7 +9,7 @@ import { createDefaultUserSettings, MAX_AGENT_COMMAND_TIMEOUT_SEC, MAX_AGENT_STE
 import { AiConfigPanel } from '../../../ai/views'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
-type SettingsSection = 'ai' | 'terminal' | 'agent'
+type SettingsSection = 'ai' | 'terminal' | 'agent' | 'application'
 const windowsPlatform = isWindowsPlatform()
 const defaultUserSettings = createDefaultUserSettings(windowsPlatform)
 
@@ -45,7 +45,7 @@ const draft = reactive<AppUserSettings>({ ...props.settings })
 
 const settingsGroups: Array<{
   key: SettingsSection
-  icon: 'ai' | 'terminal' | 'shield'
+  icon: 'ai' | 'terminal' | 'shield' | 'settings'
   shortTitle: string
   title: string
   description: string
@@ -54,7 +54,8 @@ const settingsGroups: Array<{
 }> = [
   { key: 'ai', icon: 'ai', shortTitle: 'AI', title: 'AI 配置', description: '模型、API 地址和密钥', status: '已接入', ready: true },
   { key: 'terminal', icon: 'terminal', shortTitle: '终端', title: '终端外观', description: '字体、字号、默认 Shell 偏好', status: '已接入', ready: true },
-  { key: 'agent', icon: 'shield', shortTitle: 'Agent', title: 'Agent 模式', description: '自动执行策略与命令允许列表', status: '已接入', ready: true }
+  { key: 'agent', icon: 'shield', shortTitle: 'Agent', title: 'Agent 模式', description: '自动执行策略与命令允许列表', status: '已接入', ready: true },
+  { key: 'application', icon: 'settings', shortTitle: '应用', title: '应用设置', description: '调试模式与诊断输出', status: '已接入', ready: true }
 ]
 
 const sortedAiConfigs = computed(() => {
@@ -184,7 +185,31 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
         </button>
       </section>
 
-      <section v-if="activeSection === 'terminal'" class="settings-section settings-controls terminal-settings-panel" aria-label="终端外观设置">
+      <section v-if="activeSection === 'application'" class="settings-section settings-controls application-settings-panel" aria-label="应用设置">
+        <div class="settings-section-head">
+          <strong>应用设置</strong>
+          <span>即时生效</span>
+        </div>
+        <label class="settings-field settings-debug-field">
+          <span class="settings-debug-row">
+            <span id="debug-mode-label">调试模式</span>
+            <span class="settings-debug-toggle">
+              <span aria-hidden="true">{{ draft.debugMode ? '已开启' : '已关闭' }}</span>
+              <input
+                v-model="draft.debugMode"
+                type="checkbox"
+                role="switch"
+                :aria-checked="draft.debugMode"
+                aria-labelledby="debug-mode-label"
+                aria-describedby="debug-mode-description"
+                @change="saveSettings"
+              />
+            </span>
+          </span>
+          <small id="debug-mode-description">显示终端及 SFTP 的内部诊断输出，用于排查问题。默认关闭。</small>
+        </label>
+      </section>
+      <section v-else-if="activeSection === 'terminal'" class="settings-section settings-controls terminal-settings-panel" aria-label="终端外观设置">
         <div class="settings-section-head">
           <strong>终端外观</strong>
           <span>即时应用到所有终端</span>

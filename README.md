@@ -89,6 +89,7 @@ The animation above is captured from the current Vue browser preview and walks t
 - Upload or download files and directories with size, speed, progress, ETA, and destination details.
 - Use direct SFTP or gateway-aware connection profiles.
 - Cancel active tasks and retain terminal-based transfer fallbacks for restricted bastion environments.
+- [Debug mode](docs/terminal-debug-mode.md) hides internal terminal probes by default; enable it in application settings to inspect diagnostic output.
 
 ### Dark / Light Theme
 

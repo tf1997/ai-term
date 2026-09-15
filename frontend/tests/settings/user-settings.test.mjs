@@ -34,6 +34,7 @@ test('平台默认值保持字体、字号和 Agent 预算兼容，默认对象�
   assert.equal(windows.terminalFontFamily, WINDOWS_TERMINAL_FONT_FAMILY)
   assert.equal(system.terminalFontFamily, SYSTEM_TERMINAL_FONT_FAMILY)
   assert.deepEqual(system, {
+    debugMode: false,
     terminalFontFamily: SYSTEM_TERMINAL_FONT_FAMILY,
     terminalFontSize: 13,
     terminalTheme: 'midnight',
@@ -48,6 +49,7 @@ test('平台默认值保持字体、字号和 Agent 预算兼容，默认对象�
 
 test('设置校验保留合法偏好和显式关闭，不修改传入草稿', () => {
   const draft = {
+    debugMode: true,
     terminalFontFamily: '  Fira Code, monospace  ',
     terminalFontSize: 13.5,
     terminalTheme: 'light',
@@ -59,6 +61,7 @@ test('设置校验保留合法偏好和显式关闭，不修改传入草稿', ()
   }
   const original = structuredClone(draft)
   assert.deepEqual(normalizeUserSettings(draft, true), {
+    debugMode: true,
     terminalFontFamily: 'Fira Code, monospace',
     terminalFontSize: 13.5,
     terminalTheme: 'midnight',
@@ -68,6 +71,17 @@ test('设置校验保留合法偏好和显式关闭，不修改传入草稿', ()
     agentCommandTimeoutSec: 240
   })
   assert.deepEqual(draft, original)
+})
+
+test('调试模式默认关闭，旧版设置和非布尔值不会意外开启诊断输出', () => {
+  for (const windowsPlatform of [true, false]) {
+    assert.equal(createDefaultUserSettings(windowsPlatform).debugMode, false)
+    assert.equal(normalizeUserSettings({}, windowsPlatform).debugMode, false)
+    for (const value of [undefined, null, false, 0, 1, '', 'true', 'false', [], {}, new Boolean(true)]) {
+      assert.equal(normalizeUserSettings({ debugMode: value }, windowsPlatform).debugMode, false)
+    }
+    assert.equal(normalizeUserSettings({ debugMode: true }, windowsPlatform).debugMode, true)
+  }
 })
 
 test('空值、错误根类型和错误字段类型回落默认值', () => {

@@ -1,8 +1,8 @@
-/* Settings has three categories; keep the hub on one stable row. */
+/* Keep the settings categories on one stable row. */
 .settings-center > .settings-hub {
   min-height: 34px;
   flex: 0 0 34px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: stretch;
 }
 
@@ -91,7 +91,7 @@
   min-width: 0;
   min-height: 34px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 3px;
 }
 
@@ -284,4 +284,77 @@
 
 .settings-sidebar .agent-settings-panel .agent-manual-add {
   gap: 8px;
+}
+
+.settings-sidebar .application-settings-panel {
+  align-content: start;
+  gap: 14px;
+  padding: 12px 0;
+}
+
+.settings-sidebar .settings-debug-field {
+  gap: 6px;
+  color: var(--workbench-text-strong);
+  cursor: pointer;
+}
+
+.settings-debug-row,
+.settings-debug-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-debug-row {
+  min-height: 34px;
+  justify-content: space-between;
+}
+
+.settings-debug-toggle {
+  flex: 0 0 auto;
+  color: var(--workbench-muted);
+  font-size: var(--font-xs);
+}
+
+.settings-sidebar .settings-debug-field small {
+  color: var(--workbench-muted);
+  line-height: 1.55;
+}
+
+.settings-sidebar .settings-debug-toggle input {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  display: grid;
+  align-items: center;
+  flex: 0 0 34px;
+  margin: 0;
+  border: 1px solid var(--workbench-line);
+  border-radius: 999px;
+  background: var(--workbench-panel-strong);
+  padding: 2px;
+  cursor: pointer;
+}
+
+.settings-sidebar .settings-debug-toggle input::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--workbench-muted);
+}
+
+.settings-sidebar .settings-debug-toggle input:checked {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent);
+}
+
+.settings-sidebar .settings-debug-toggle input:checked::before {
+  transform: translateX(14px);
+  background: var(--workbench-panel-strong);
+}
+
+.settings-sidebar .settings-debug-toggle input:focus-visible {
+  outline: 2px solid var(--workbench-accent-strong);
+  outline-offset: 3px;
 }

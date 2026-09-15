@@ -16,7 +16,9 @@
     "test:configuration": "tsx --test tests/integration/configuration.test.mjs",
     "test:routing": "tsx --test tests/integration/workspace-routing.test.mjs tests/integration/session-view.test.mjs",
     "test:transfer": "tsx --test tests/transfer/*.test.mjs",
-    "test:sftp-browser": "node tests/browser/sftp-workspace.browser.mjs"
+    "test:sftp-browser": "node tests/browser/sftp-workspace.browser.mjs",
+    "test:terminal-debug": "tsx --test tests/terminal/internal-terminal-output.test.mjs tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs",
+    "test:terminal-debug-browser": "node tests/browser/terminal-debug.browser.mjs"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans-sc": "5.3.0",

@@ -29,6 +29,7 @@ export interface TerminalPaneHandle {
   terminalInputSyncState: () => TerminalInputSyncState
   writeTerminalInput: (data: string) => boolean
   writeFileInput: (data: string) => Promise<boolean>
+  finishFileInput: (command: string) => void
   interruptFileInput: () => Promise<boolean>
   writeSyncedTerminalInput: (data: string, sourceTerminalId: string) => boolean
   clearTerminal: () => void

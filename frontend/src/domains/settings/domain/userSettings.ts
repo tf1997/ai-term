@@ -15,6 +15,7 @@ export const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
 
 export function createDefaultUserSettings(windowsPlatform: boolean): AppUserSettings {
   return {
+    debugMode: false,
     terminalFontFamily: windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY,
     terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
     terminalTheme: 'midnight',
@@ -52,6 +53,7 @@ export function normalizeUserSettings(value: unknown, windowsPlatform: boolean):
   const defaultShell = typeof settings.defaultShell === 'string' ? settings.defaultShell.trim() : ''
 
   return {
+    debugMode: settings.debugMode === true,
     terminalFontFamily: terminalFontFamily || defaults.terminalFontFamily,
     terminalFontSize: Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, terminalFontSize)),
     terminalTheme: 'midnight',

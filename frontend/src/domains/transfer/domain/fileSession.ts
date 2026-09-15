@@ -23,6 +23,7 @@ export function sftpProfileRoute(profile: ConnectionProfile) {
 export interface TerminalFileBridge {
   readiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable'
   write: (data: string) => boolean | Promise<boolean>
+  finish?: (command: string) => void
   interrupt?: () => boolean | Promise<boolean>
 }
 

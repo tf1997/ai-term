@@ -222,6 +222,7 @@ export function useSftpConnection(options: {
       )
     } finally {
       if (pending === own) pending = null
+      bridge.finish?.(command)
       identityOperations.delete(operation)
       signal.removeEventListener('abort', abort)
     }

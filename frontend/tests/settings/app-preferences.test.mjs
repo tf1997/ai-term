@@ -112,6 +112,31 @@ test('设置唯一更新入口再次校验预算，并持久化实际生效的�
   assert.equal(appSettings.value.terminalFontSize, 22)
 })
 
+test('调试模式切换立即生效、持久化并在重启后恢复，保存其他设置不改变开关', () => {
+  const storage = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontSize: 16 }) })
+  const { appSettings, updateUserSettings } = useUserSettings(false, storage)
+  assert.equal(appSettings.value.debugMode, false)
+  assert.equal(updateUserSettings({ ...appSettings.value, debugMode: true }), true)
+  assert.equal(appSettings.value.debugMode, true)
+  assert.equal(JSON.parse(storage.getItem(USER_SETTINGS_STORAGE_KEY)).debugMode, true)
+  const restored = useUserSettings(false, storage)
+  assert.equal(restored.appSettings.value.debugMode, true)
+  assert.equal(restored.updateUserSettings({ ...restored.appSettings.value, terminalFontSize: 18 }), true)
+  assert.equal(restored.appSettings.value.debugMode, true)
+  assert.equal(restored.updateUserSettings({ ...restored.appSettings.value, debugMode: false }), true)
+  assert.equal(restored.appSettings.value.debugMode, false)
+  assert.equal(useUserSettings(false, storage).appSettings.value.debugMode, false)
+})
+
+test('持久化的错误调试开关和更新时传入的真值字符串都会回落为关闭', () => {
+  const storage = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ debugMode: 'true' }) })
+  const { appSettings, updateUserSettings } = useUserSettings(false, storage)
+  assert.equal(appSettings.value.debugMode, false)
+  assert.equal(updateUserSettings({ ...appSettings.value, debugMode: 'true' }), true)
+  assert.equal(appSettings.value.debugMode, false)
+  assert.equal(JSON.parse(storage.getItem(USER_SETTINGS_STORAGE_KEY)).debugMode, false)
+})
+
 test('存储写入失败返回 false，但设置仍立即应用到当前会话', () => {
   const storage = { getItem: () => null, setItem() { throw new Error('quota exceeded') } }
   const { appSettings, updateUserSettings } = useUserSettings(false, storage)

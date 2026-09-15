@@ -665,6 +665,7 @@ function terminalFileBridge(terminalId: string): TerminalFileBridge {
     bridge = {
       readiness: () => terminalRefs.value[terminalId]?.commandExecutionReadiness() ?? 'unavailable',
       write: data => terminalRefs.value[terminalId]?.writeFileInput(data) ?? false,
+      finish: command => terminalRefs.value[terminalId]?.finishFileInput(command),
       interrupt: () => terminalRefs.value[terminalId]?.interruptFileInput() ?? false
     }
     terminalFileBridges.set(terminalId, bridge)
@@ -727,8 +728,11 @@ function updateTerminalOutput(event: TerminalOutputEvent) {
       sequence: ++terminalOutputSequence
     }
   }
-  filePanelRegistry.values[event.terminalId]?.acceptTerminalOutput(terminalOutputEvents.value[event.terminalId])
   appendRecordingOutput(event.terminalId, delta)
+}
+
+function handleTerminalProtocolOutput(event: TerminalOutputDeltaEvent) {
+  filePanelRegistry.values[event.terminalId]?.acceptTerminalOutput(event)
 }
 
 function updateTerminalSelection(event: TerminalSelectionEvent) {
@@ -982,6 +986,7 @@ onBeforeUnmount(() => {
         :terminal-settings="appSettings"
         :app-theme="appTheme"
         @terminal-output="updateTerminalOutput"
+        @terminal-protocol-output="handleTerminalProtocolOutput"
         @terminal-selection="updateTerminalSelection"
         @terminal-input="syncTerminalInputToTargets"
         @terminal-input-write-failed="handleTerminalInputWriteFailure"
