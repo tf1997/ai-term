@@ -2236,6 +2236,24 @@ function writeTerminalInput(data: string) {
   return writePreparedTerminalInput(data, { source: 'direct' })
 }
 
+function writeFileInput(data: string): Promise<boolean> {
+  if (!data || !terminalBackendInputReady() || commandExecutionReadiness() !== 'ready') return Promise.resolve(false)
+  if (data.includes('\r') || data.includes('\n')) shellCommandAwaitingPrompt = true
+  resetTrackedTerminalInput('unknown')
+  pendingInputControlSequence = ''
+  closeCompletion()
+  return new Promise((resolve, reject) => {
+    if (!enqueueTerminalInput(data, 'direct', [() => resolve(true)], [reject])) resolve(false)
+  })
+}
+
+function interruptFileInput(): Promise<boolean> {
+  if (!terminalBackendInputReady()) return Promise.resolve(false)
+  return new Promise((resolve, reject) => {
+    if (!enqueueTerminalInput('\x03', 'direct', [() => resolve(true)], [reject])) resolve(false)
+  })
+}
+
 async function pasteClipboardToTerminal() {
   try {
     const text = await readClipboard()
@@ -2345,6 +2363,8 @@ defineExpose({
   runCommandAndCapture,
   terminalInputSyncState,
   writeTerminalInput,
+  writeFileInput,
+  interruptFileInput,
   writeSyncedTerminalInput
 })
 </script>

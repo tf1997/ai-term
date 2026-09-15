@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/tauri'
 
 export interface TaskOptions {
   taskId?: string
+  timeoutMs?: number
 }
 
 export function cancelTask(taskId: string) {

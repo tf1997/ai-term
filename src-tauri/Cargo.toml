@@ -27,6 +27,7 @@ portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 ssh2 = "0.9.6"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }
 
 [target.'cfg(not(windows))'.dependencies]
 ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }

@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
+use super::ssh_cancel::SshIoCancellation;
 use crate::domain::connection::models::{AuthEndpoint, AuthMode, ConnectionProfile, JumpMode};
 use crate::domain::pty::{
     append_limited_lossy, spawn_pty_process, write_to_pty, PtyCommand, PtySession,
@@ -56,6 +57,7 @@ pub struct NativeSshTerminalSession {
 
 pub(crate) struct RoutedSshSession {
     session: Session,
+    interrupt_sockets: Vec<TcpStream>,
     _gateway_session: Option<Session>,
     _forward_guard: Option<LocalForwardGuard>,
 }
@@ -63,6 +65,29 @@ pub(crate) struct RoutedSshSession {
 impl RoutedSshSession {
     pub(crate) fn session(&self) -> &Session {
         &self.session
+    }
+
+    pub(crate) fn cancel_io_on(
+        &self,
+        token: Option<&Arc<AtomicBool>>,
+    ) -> Result<SshIoCancellation> {
+        let guard = SshIoCancellation::new(token);
+        for socket in &self.interrupt_sockets {
+            guard.track(socket)?;
+        }
+        Ok(guard)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        for socket in &self.interrupt_sockets {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+impl Drop for RoutedSshSession {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -393,17 +418,31 @@ pub(crate) fn connect_endpoint(endpoint: &AuthEndpoint) -> Result<Session> {
 pub(crate) fn connect_routed_endpoint(
     target: &AuthEndpoint,
     proxy: Option<&AuthEndpoint>,
+    cancel_token: Option<&Arc<AtomicBool>>,
 ) -> Result<RoutedSshSession> {
+    let cancellation = SshIoCancellation::new(cancel_token);
+    cancellation.check()?;
     let Some(proxy) = proxy else {
         return Ok(RoutedSshSession {
-            session: connect_endpoint(target)?,
+            session: connect_endpoint_via_cancellable(
+                target,
+                target.host.clone(),
+                target.port.unwrap_or(22),
+                Some(&cancellation),
+            )?,
+            interrupt_sockets: cancellation.sockets()?,
             _gateway_session: None,
             _forward_guard: None,
         });
     };
 
-    let gateway = connect_endpoint(proxy)
-        .with_context(|| format!("failed to connect bastion {}", endpoint_label(proxy)))?;
+    let gateway = connect_endpoint_via_cancellable(
+        proxy,
+        proxy.host.clone(),
+        proxy.port.unwrap_or(22),
+        Some(&cancellation),
+    )
+    .with_context(|| format!("failed to connect bastion {}", endpoint_label(proxy)))?;
     gateway.set_blocking(false);
     let target_port = target.port.unwrap_or(22);
     let forward_guard = start_local_forward(gateway.clone(), target.host.clone(), target_port)
@@ -415,10 +454,11 @@ pub(crate) fn connect_routed_endpoint(
                 target_port
             )
         })?;
-    let session = connect_endpoint_via(
+    let session = connect_endpoint_via_cancellable(
         target,
         forward_guard.wake_addr.ip().to_string(),
         forward_guard.wake_addr.port(),
+        Some(&cancellation),
     )
     .with_context(|| {
         format!(
@@ -429,44 +469,144 @@ pub(crate) fn connect_routed_endpoint(
 
     Ok(RoutedSshSession {
         session,
+        interrupt_sockets: cancellation.sockets()?,
         _gateway_session: Some(gateway),
         _forward_guard: Some(forward_guard),
     })
 }
 
 fn connect_endpoint_via(endpoint: &AuthEndpoint, host: String, port: u16) -> Result<Session> {
-    let stream = connect_tcp(&host, port)?;
-    let mut session = Session::new().context("failed to create SSH session")?;
-    session.set_timeout(SSH_AUTH_TIMEOUT_MS);
-    session.set_tcp_stream(stream);
-    session.handshake().context("SSH handshake failed")?;
-    verify_known_host(&session, endpoint)?;
-    authenticate_endpoint(&session, endpoint)?;
-    if !session.authenticated() {
-        bail!("SSH authentication failed for {}", endpoint_label(endpoint));
-    }
-    Ok(session)
+    connect_endpoint_via_cancellable(endpoint, host, port, None)
 }
 
-fn connect_tcp(host: &str, port: u16) -> Result<TcpStream> {
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .with_context(|| format!("failed to resolve {host}:{port}"))?
-        .collect::<Vec<_>>();
+fn connect_endpoint_via_cancellable(
+    endpoint: &AuthEndpoint,
+    host: String,
+    port: u16,
+    cancellation: Option<&SshIoCancellation>,
+) -> Result<Session> {
+    let result = (|| {
+        let stream = connect_tcp(&host, port, cancellation)?;
+        if let Some(guard) = cancellation {
+            guard.track(&stream)?;
+        }
+        let mut session = Session::new().context("failed to create SSH session")?;
+        session.set_timeout(SSH_AUTH_TIMEOUT_MS);
+        session.set_tcp_stream(stream);
+        session.handshake().context("SSH handshake failed")?;
+        if let Some(guard) = cancellation {
+            guard.check()?;
+        }
+        verify_known_host(&session, endpoint)?;
+        if let Some(guard) = cancellation {
+            guard.check()?;
+        }
+        authenticate_endpoint(&session, endpoint)?;
+        if let Some(guard) = cancellation {
+            guard.check()?;
+        }
+        if !session.authenticated() {
+            bail!("SSH authentication failed for {}", endpoint_label(endpoint));
+        }
+        Ok(session)
+    })();
+    // Socket shutdown commonly returns an SSH transport error. Preserve the
+    // cancellation cause so the caller cannot treat it as a route failure.
+    if let Some(guard) = cancellation {
+        guard.check()?;
+    }
+    result
+}
+
+fn connect_tcp(
+    host: &str,
+    port: u16,
+    cancellation: Option<&SshIoCancellation>,
+) -> Result<TcpStream> {
+    if let Some(guard) = cancellation {
+        guard.check()?;
+    }
+    let addrs = resolve_tcp_addresses(host, port, cancellation)?;
     let mut last_error = None;
     for addr in addrs {
-        match TcpStream::connect_timeout(&addr, SSH_CONNECT_TIMEOUT) {
-            Ok(stream) => {
-                let _ = stream.set_nodelay(true);
-                return Ok(stream);
+        let started = Instant::now();
+        loop {
+            if let Some(guard) = cancellation {
+                guard.check()?;
             }
-            Err(error) => last_error = Some(error),
+            let remaining = SSH_CONNECT_TIMEOUT.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            let timeout = if cancellation.is_some_and(SshIoCancellation::is_cancellable) {
+                remaining.min(Duration::from_millis(500))
+            } else {
+                remaining
+            };
+            match TcpStream::connect_timeout(&addr, timeout) {
+                Ok(stream) => {
+                    let _ = stream.set_nodelay(true);
+                    return Ok(stream);
+                }
+                Err(error) => {
+                    let retry = error.kind() == io::ErrorKind::TimedOut;
+                    last_error = Some(error);
+                    if !retry {
+                        break;
+                    }
+                }
+            }
         }
     }
     Err(last_error
         .map(anyhow::Error::from)
         .unwrap_or_else(|| anyhow!("no address resolved for {host}:{port}")))
     .with_context(|| format!("failed to connect {host}:{port}"))
+}
+
+fn resolve_tcp_addresses(
+    host: &str,
+    port: u16,
+    cancellation: Option<&SshIoCancellation>,
+) -> Result<Vec<SocketAddr>> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    let name = host.to_string();
+    let resolve = move || {
+        (name.as_str(), port)
+            .to_socket_addrs()
+            .map(|addresses| addresses.collect())
+    };
+    match cancellation.filter(|guard| guard.is_cancellable()) {
+        Some(guard) => resolve_cancellable(guard, resolve),
+        None => resolve().map_err(Into::into),
+    }
+    .with_context(|| format!("failed to resolve {host}:{port}"))
+}
+
+fn resolve_cancellable(
+    cancellation: &SshIoCancellation,
+    resolve: impl FnOnce() -> io::Result<Vec<SocketAddr>> + Send + 'static,
+) -> Result<Vec<SocketAddr>> {
+    cancellation.check()?;
+    let (send, receive) = std::sync::mpsc::channel();
+    // The OS resolver can finish independently, but the SFTP worker stops
+    // waiting immediately on cancellation. This thread never opens SSH sockets.
+    thread::spawn(move || {
+        let _ = send.send(resolve());
+    });
+    loop {
+        cancellation.check()?;
+        match receive.recv_timeout(Duration::from_millis(20)) {
+            Ok(result) => {
+                cancellation.check()?;
+                return result.map_err(Into::into);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 fn verify_known_host(session: &Session, endpoint: &AuthEndpoint) -> Result<()> {
@@ -892,7 +1032,28 @@ fn ssh_directory() -> Option<PathBuf> {
 }
 
 fn app_known_hosts_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_KNOWN_HOSTS.with(|value| value.borrow().clone()) {
+        return Some(path);
+    }
     ssh_directory().map(|directory| directory.join("ai-term_known_hosts"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_KNOWN_HOSTS: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_known_hosts<T>(path: PathBuf, action: impl FnOnce() -> T) -> T {
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_KNOWN_HOSTS.with(|value| *value.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_KNOWN_HOSTS.with(|value| value.borrow_mut().replace(path)));
+    action()
 }
 
 fn home_directory() -> Option<PathBuf> {
@@ -1193,6 +1354,100 @@ impl TerminalSession for PendingSshSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_interrupts_a_stalled_ssh_handshake_and_closes_transport() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut buffer = [0; 256];
+            assert!(stream.read(&mut buffer).unwrap() > 0);
+            ready_tx.send(()).unwrap();
+            // Do not send an SSH banner. Cancellation must interrupt libssh2's
+            // blocking handshake, rather than waiting for its 30 s timeout.
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::ConnectionReset => break,
+                    other => panic!("cancelled SSH client stayed connected: {other:?}"),
+                }
+            }
+        });
+        let token = Arc::new(AtomicBool::new(false));
+        let cancel_token = token.clone();
+        let cancel = thread::spawn(move || {
+            ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let started = Instant::now();
+            cancel_token.store(true, Ordering::SeqCst);
+            started
+        });
+        let endpoint = AuthEndpoint {
+            host: address.ip().to_string(),
+            port: Some(address.port()),
+            username: "fixture".into(),
+            auth_mode: AuthMode::Password,
+            credential_ref: None,
+            password: Some("unused".into()),
+        };
+        let error = connect_routed_endpoint(&endpoint, None, Some(&token))
+            .err()
+            .expect("handshake must be cancelled");
+        assert!(format!("{error:#}").contains("SFTP task cancelled"));
+        assert!(cancel.join().unwrap().elapsed() < Duration::from_secs(1));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn already_cancelled_ssh_operation_never_opens_a_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let endpoint = AuthEndpoint {
+            host: address.ip().to_string(),
+            port: Some(address.port()),
+            username: "fixture".into(),
+            auth_mode: AuthMode::Password,
+            credential_ref: None,
+            password: None,
+        };
+        let token = Arc::new(AtomicBool::new(true));
+        let error = connect_routed_endpoint(&endpoint, None, Some(&token))
+            .err()
+            .unwrap();
+        assert!(format!("{error:#}").contains("cancelled"));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn cancellation_stops_waiting_for_dns_without_opening_a_late_connection() {
+        let token = Arc::new(AtomicBool::new(false));
+        let guard = SshIoCancellation::new(Some(&token));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let cancel = thread::spawn(move || {
+            started_rx.recv().unwrap();
+            token.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let result = resolve_cancellable(&guard, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(vec!["127.0.0.1:22".parse().unwrap()])
+        });
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        release_tx.send(()).unwrap();
+        cancel.join().unwrap();
+    }
 
     #[derive(Default)]
     struct PartialNonblockingWriter {

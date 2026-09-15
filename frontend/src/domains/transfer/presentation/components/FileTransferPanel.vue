@@ -1,1822 +1,1267 @@
-﻿<script setup lang="ts">
-import { useRemoteFileEditor } from '../../application/useRemoteFileEditor'
-import { useTransferTasks } from '../../application/useTransferTasks'
-import { transferActionLabel, transferKindLabel, hasDeterminateProgress, transferProgressWidth, transferStatusLabel, transferAmountLabel, transferSpeedLabel, transferRemainingLabel, transferElapsedLabel, transferCompletionLabel, formatSize, formatLocalModified, formatRemoteModified, formatError } from '../../domain/transferPresentation'
-import { parseTerminalIdentitySnapshot } from '../../domain/terminalIdentity'
-import { buildRemoteBreadcrumbs, buildLocalBreadcrumbs, normalizeRemoteDirectoryPath, localParentPath, joinRemotePath, joinLocalPath, localFileName, remoteParentPath, normalizeRemoteComparePath, normalizeLocalComparePath, isHiddenEntry, rootLabel, shellQuote } from '../../domain/transferPaths'
-import type { TerminalTargetIdentity, SftpTarget, PendingIdentityProbe, SftpProbeState, TransferPanelState, RemoteDirectoryCacheEntry, LoadDirectoryOptions, FileContextMenuItem, FileContextMenuState } from '../../domain/transfer'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-
-import { localHomeDirectory, localListRoots, localListDirectory, localOpenPath, onTauriFileDrop, onTauriFileDropCancelled, onTauriFileDropHover, sftpCreateDirectory, sftpDeletePath, sftpDownloadPath, sftpListDirectory, sftpProbe, sftpUploadFile, sftpUploadPath } from '../../infrastructure/api'
-import type { LocalFileEntry } from '../../infrastructure/api'
-import type { SftpFileEntry, SftpProbeResponse } from '../../domain/transfer'
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { ConnectionProfile } from '../../../connections/types'
 import type { TerminalOutputDeltaEvent } from '../../../terminal/types'
+import type { FileTargetBinding, TerminalFileBridge } from '../../domain/fileSession'
+import {
+  captureFileTarget,
+  CONNECTION_FAILURE_LABELS,
+  sameFileTarget,
+  serverIdentityKey,
+} from '../../domain/fileSession'
+import { boundedOperation, useSftpConnection } from '../../application/useSftpConnection'
+import { useDirectoryBrowser } from '../../application/useDirectoryBrowser'
+import type { BrowserEntry, BrowserSnapshot } from '../../application/useDirectoryBrowser'
+import { useFileLocations } from '../../application/fileLocations'
+import { transferTasks } from '../../application/transferTaskManager'
+import type { TransferJob } from '../../application/transferTaskManager'
+import { useRemoteFileEditor } from '../../application/useRemoteFileEditor'
+import { INLINE_TRANSFER_LIMIT, useTerminalFileTransfer } from '../../application/useTerminalFileTransfer'
+import {
+  joinLocalPath,
+  joinRemotePath,
+  localFileName,
+  localParentPath,
+  remoteParentPath,
+} from '../../domain/transferPaths'
+import { formatSize, formatError } from '../../domain/transferPresentation'
+import {
+  cancelTask,
+  localHomeDirectory,
+  localListDirectory,
+  localListRoots,
+  localOpenPath,
+  onTauriFileDrop,
+  onTauriFileDropHover,
+  onTauriFileDropCancelled,
+  sftpCreateDirectory,
+  sftpDeletePath,
+  sftpDownloadPath,
+  sftpListDirectory,
+  sftpUploadPath,
+} from '../../infrastructure/api'
+import FileBrowserPane from './FileBrowserPane.vue'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
-
-type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
+import { trapTabFocus } from '../../../../shared/ui/overlays'
 
 const props = defineProps<{
   terminalId: string
   connectionId: string
   profile?: ConnectionProfile
-  terminalStatus: TerminalRuntimeStatus
+  terminalStatus: string
   terminalConnectionGeneration: number
+  terminalContextVersion?: number
+  terminalBridge?: TerminalFileBridge
+  profileRoute?: string
   active: boolean
-  activationSequence: number
-  terminalSnapshot: string
+  terminalSnapshot?: string
   terminalOutputEvent?: TerminalOutputDeltaEvent
+  profiles?: ConnectionProfile[]
+  sessions?: { id: string; title: string }[]
 }>()
-
 const emit = defineEmits<{
-  writeTerminalInput: [data: string]
   focusTerminal: []
+  selectSession: [id: string]
+  connectProfile: [id: string]
+  createConnection: []
 }>()
-
-const INLINE_TRANSFER_LIMIT = 700 * 1024
-const REMOTE_DIRECTORY_CACHE_TTL_MS = 30_000
-
-const fileInput = ref<HTMLInputElement | null>(null)
-const remoteDropZone = ref<HTMLElement | null>(null)
-const currentPath = ref('.')
-const pathDraft = ref('.')
-const localPath = ref('')
-const localPathDraft = ref('')
-const localHome = ref('')
-const localRoots = ref<string[]>([])
-const remotePathHistory = ref<string[]>([])
-const remotePathHistoryIndex = ref(-1)
-const localPathHistory = ref<string[]>([])
-const localPathHistoryIndex = ref(-1)
-const transferMode = ref<'sftp' | 'terminal'>('sftp')
-const terminalRemotePath = ref('')
-const entries = ref<SftpFileEntry[]>([])
-const localEntries = ref<LocalFileEntry[]>([])
-const selectedRemoteEntry = ref<SftpFileEntry | null>(null)
-const selectedLocalEntry = ref<LocalFileEntry | null>(null)
-const remoteDropActive = ref(false)
-const loading = ref(false)
-const directoryLoading = ref(false)
-const directoryLoadingPath = ref('')
-const localLoading = ref(false)
-const identifying = ref(false)
-const fileContextMenu = ref<FileContextMenuState | null>(null)
-const status = ref('')
-const error = ref('')
-const { remoteEditor, remoteEditorTextarea, remoteEditorDirty, remoteEditorLineCount, remoteEditorByteSize, openRemoteFileEditor, closeRemoteFileEditor, saveRemoteFileEditor, remoteEditorErrorMessage, handleRemoteEditorKeydown } = useRemoteFileEditor({
-  props, currentPath, status, error,
-  remoteReady: () => remoteReady.value, remoteBusy: () => remoteBusy.value,
-  remoteRequestEpoch: () => remoteRequestEpoch, transferStateKey,
-  targetOverride: () => targetOverride.value, isCurrentRemoteRequest,
-  invalidateRemoteDirectoryCache, loadDirectory
+const panel = ref<HTMLElement | null>(null),
+  localPane = ref<InstanceType<typeof FileBrowserPane> | null>(null),
+  remotePane = ref<InstanceType<typeof FileBrowserPane> | null>(null)
+const browsersElement = ref<HTMLElement | null>(null),
+  fileInput = ref<HTMLInputElement | null>(null)
+const locations = useFileLocations(),
+  preferences = locations.preferences
+const localHome = ref(''),
+  localRoots = ref<string[]>([]),
+  serverKey = ref(props.connectionId === 'local' ? 'local' : '')
+const mode = ref<'sftp' | 'terminal'>('sftp'),
+  terminalPath = ref(''),
+  notice = ref(''),
+  operationError = ref('')
+const manualOpen = ref(false),
+  manualHost = ref(''),
+  manualUsername = ref(''),
+  chosenProfile = ref(''),
+  chosenSession = ref('')
+const pairsOpen = ref(false),
+  pairName = ref(''),
+  actionBusy = ref(false)
+let actionController: AbortController | null = null,
+  disposed = false,
+  restoreSequence = 0
+const directoryOperations = new Map<string, AbortController>()
+const dropHover = ref(false)
+let lastDroppedPaths = { signature: '', at: 0 }
+let lastFocus: { side: 'local' | 'remote'; kind: 'path' | 'list' } = { side: 'local', kind: 'list' }
+const snapshots = new Map<
+  string,
+  { local: BrowserSnapshot; remote: BrowserSnapshot; mode: 'sftp' | 'terminal'; terminalPath: string }
+>()
+const connection = useSftpConnection({
+  context: () => ({
+    terminalId: props.terminalId,
+    connectionId: props.connectionId,
+    generation: props.terminalConnectionGeneration,
+    contextVersion: props.terminalContextVersion ?? 0,
+    status: props.terminalStatus,
+    profile: props.profile,
+  }),
+  bridge: () => props.terminalBridge,
+  profileRoute: () => props.profileRoute,
+  preferredHost: (key) => locations.get(key).preferredHost,
+  rememberHost: locations.rememberHost,
 })
-const { activeTask, lastTransfer, taskInProgress, activeTransferTask, runTransfer, startRemoteTask, updateTransferProgress, completeTransferTask, recordTransferFailure, finishRemoteTask, cancelActiveTask, handleTaskError, formatTaskError, isTaskCancelledMessage, cancelActiveRemoteTaskForStateChange } = useTransferTasks({
-  loading, status, error, remoteReady: () => remoteReady.value,
-  remoteRequestEpoch: () => remoteRequestEpoch,
-  connectionGeneration: () => props.terminalConnectionGeneration,
-  transferStateKey, isCurrentRemoteRequest
+const c = reactive(connection)
+const ready = computed(() => c.phase === 'ready' && Boolean(c.binding))
+const saved = computed(() => locations.get(serverKey.value))
+const localBrowser = useDirectoryBrowser({
+  contextKey: () => serverKey.value || props.terminalId,
+  read: async (path) => localListDirectory(resolveLocal(path)),
+  onVisited: (path) => locations.remember(serverKey.value, 'local', path),
 })
-const selectedTarget = ref<SftpTarget | null>(null)
-const sftpProbeByHost = ref<Record<string, SftpProbeState>>({})
-const currentTerminalTarget = ref<TerminalTargetIdentity | null>(null)
-const targetConnectionGeneration = ref<number | null>(null)
-const requiresExplicitBastionProbe = ref(false)
-const bastionAutoProbeAttempted = ref(false)
-const pendingDownload = ref<{
-  begin: string
-  end: string
+const remoteBrowser = useDirectoryBrowser({
+  contextKey: () => serverKey.value,
+  enabled: () => ready.value,
+  read: async (path) => {
+    const target = c.binding ? captureFileTarget(c.binding) : null
+    if (!target) throw new Error('请先连接远端服务器。')
+    const id = taskId('list'),
+      operation = new AbortController()
+    const destination = resolveRemote(path)
+    directoryOperations.set(id, operation)
+    try {
+      const result = await boundedOperation(
+        () =>
+          sftpListDirectory(target.connectionId, destination, target.override, {
+            taskId: id,
+            timeoutMs: 45_000,
+          }),
+        45_000,
+        operation.signal,
+        () => {
+          void cancelTask(id).catch(() => {})
+        },
+      )
+      if (!sameFileTarget(target, c.binding)) throw new Error('目录所属目标已变化，已忽略旧结果。')
+      return result
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason)
+      if (message.includes('SFTP_TARGET_CHANGED') && sameFileTarget(target, c.binding))
+        connection.invalidate(message)
+      throw reason
+    } finally {
+      directoryOperations.delete(id)
+    }
+  },
+  onVisited: (path) => locations.remember(serverKey.value, 'remote', path),
+})
+const terminalTransfer = useTerminalFileTransfer({
+  bridge: () => props.terminalBridge,
+  generation: () => props.terminalConnectionGeneration,
+})
+const editorState = useRemoteFileEditor({
+  props,
+  currentPath: remoteBrowser.path,
+  status: notice,
+  error: operationError,
+  remoteReady: () => ready.value,
+  remoteBusy: () => actionBusy.value,
+  remoteRequestEpoch: () => c.binding?.revision ?? -1,
+  transferStateKey: () => serverKey.value,
+  targetOverride: () => c.binding?.override,
+  isCurrentRemoteRequest: (epoch, key, generation) =>
+    epoch === c.binding?.revision &&
+    key === serverKey.value &&
+    generation === props.terminalConnectionGeneration,
+  invalidateRemoteDirectoryCache: remoteBrowser.invalidate,
+  loadDirectory: async (path, options) => {
+    await remoteBrowser.load(path, { ...options, preserve: true })
+  },
+  targetLabel: () => c.binding?.label ?? '',
+  verifyBeforeWrite: () => connection.verifyBeforeWrite(),
+  onTargetChanged: (reason) => connection.invalidate(reason),
+})
+const editor = reactive(editorState)
+const activeJob = computed(() =>
+  transferTasks.jobs.value.find(
+    (job) =>
+      job.binding.terminalId === props.terminalId &&
+      job.binding.serverKey === serverKey.value &&
+      (job.status === 'running' || job.status === 'queued'),
+  ),
+)
+const canUseTerminal = computed(() => props.terminalStatus === 'remote')
+const headerLabel = computed(() => c.binding?.label || props.profile?.name || '选择远程连接')
+const routeChanged = computed(
+  () =>
+    c.error.includes('SFTP_TARGET_CHANGED') ||
+    c.failures.some((failure) => failure.message.includes('SFTP_TARGET_CHANGED')),
+)
+const stageLabel = computed(() =>
+  c.phase === 'identifying'
+    ? '正在识别当前服务器'
+    : c.phase === 'connecting'
+      ? `正在连接 ${c.attempt?.index ?? 1}/${c.attempt?.total ?? 1}：${c.attempt?.host ?? props.profile?.target.host ?? ''}`
+      : routeChanged.value
+        ? '连接配置已变化，已停止使用旧路线。请按新配置打开会话。'
+        : c.error,
+)
+const currentContextMenu = ref<{
+  x: number
+  y: number
   name: string
+  items: { label: string; danger?: boolean; disabled?: boolean; action: () => void }[]
 } | null>(null)
-const pendingIdentify = ref<PendingIdentityProbe | null>(null)
-const transferStateByTerminal = ref<Record<string, TransferPanelState>>({})
-const remoteDirectoryCache = ref<Record<string, RemoteDirectoryCacheEntry>>({})
-const remoteDirectoryRequests = new Map<string, Promise<void>>()
-const fileDropUnlisteners: Array<() => void> = []
-let remoteDropArmed = false
-let remoteDropClearTimer: number | null = null
-let lastDroppedPathSignature = ''
-let lastDroppedAt = 0
-let remoteRequestEpoch = 0
-
-const remoteConnectionAvailable = computed(() => Boolean(props.connectionId && props.connectionId !== 'local'))
-const isBastionConnection = computed(() => props.profile?.connectionRole === 'bastion')
-const terminalSessionConnected = computed(() => props.terminalStatus === 'remote')
-const selectedBastionTargetIsCurrent = computed(() => {
-  return Boolean(
-    selectedTarget.value &&
-    targetConnectionGeneration.value === props.terminalConnectionGeneration &&
-    !requiresExplicitBastionProbe.value
-  )
-})
-const remoteReady = computed(() => {
-  if (!remoteConnectionAvailable.value) return false
-  if (!isBastionConnection.value) return true
-  return terminalSessionConnected.value && selectedBastionTargetIsCurrent.value
-})
-const terminalDetectionReady = computed(() => {
-  return remoteConnectionAvailable.value && terminalSessionConnected.value
-})
-const remoteBusy = computed(() => loading.value || directoryLoading.value || identifying.value)
-const transferActionReady = computed(() => {
-  return transferMode.value === 'terminal' ? terminalDetectionReady.value : remoteReady.value
-})
-const targetOverride = computed(() => {
-  if (!selectedTarget.value || !selectedBastionTargetIsCurrent.value) return undefined
-  return {
-    targetHost: selectedTarget.value.host,
-    targetUsername: selectedTarget.value.username
-  }
-})
-const sortedEntries = computed(() => {
-  return [...entries.value].sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
-})
-const sortedLocalEntries = computed(() => {
-  return [...localEntries.value].sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
-})
-const sftpHeaderSummary = computed(() => {
-  if (transferMode.value === 'terminal') return `终端传输 · 单文件 ${formatSize(INLINE_TRANSFER_LIMIT)} 内`
-  if (!remoteConnectionAvailable.value) return '未连接远程终端'
-  if (isBastionConnection.value && !terminalSessionConnected.value) return '终端连接已断开'
-  if (isBastionConnection.value && requiresExplicitBastionProbe.value) return '需要检测当前终端 SFTP'
-  const target = selectedTarget.value
-    ? `${selectedTarget.value.username || 'user'}@${selectedTarget.value.host}`
-    : isBastionConnection.value
-      ? identifying.value ? '正在检测当前终端 SFTP' : '等待检测当前终端 SFTP'
-      : props.profile?.name || props.connectionId
-  return target
-})
-const localPaneSummary = computed(() => {
-  if (localLoading.value) return '加载中'
-  const selected = selectedLocalEntry.value ? ' · 已选 1' : ''
-  return `${sortedLocalEntries.value.length} 项${selected}`
-})
-const remotePaneSummary = computed(() => {
-  if (!remoteConnectionAvailable.value) return '未连接'
-  if (!remoteReady.value) return '等待检测'
-  if (directoryLoading.value) return sortedEntries.value.length > 0 ? `${sortedEntries.value.length} 项 · 正在打开` : '正在读取'
-  const selected = selectedRemoteEntry.value ? ' · 已选 1' : ''
-  return `${sortedEntries.value.length} 项${selected}`
-})
-const remoteDirectoryLoadingLabel = computed(() => {
-  const path = directoryLoadingPath.value || currentPath.value || '.'
-  return sortedEntries.value.length > 0 ? `正在打开 ${path}` : `正在读取 ${path}`
+const localInit = Promise.all([
+  localHomeDirectory().catch(() => ''),
+  localListRoots().catch(() => [] as string[]),
+]).then(([home, roots]) => {
+  localHome.value = home
+  localRoots.value = roots
 })
 
-const localBreadcrumbs = computed(() => buildLocalBreadcrumbs(localPath.value || localHome.value))
-const remoteBreadcrumbs = computed(() => buildRemoteBreadcrumbs(currentPath.value))
-const localCrumbNav = ref<HTMLElement | null>(null)
-const remoteCrumbNav = ref<HTMLElement | null>(null)
-
-watch(localBreadcrumbs, () => scrollCrumbsToEnd(localCrumbNav))
-watch(remoteBreadcrumbs, () => scrollCrumbsToEnd(remoteCrumbNav))
-
-function scrollCrumbsToEnd(nav: { value: HTMLElement | null }) {
-  void nextTick(() => {
-    if (nav.value) nav.value.scrollLeft = nav.value.scrollWidth
+function taskId(kind: string) {
+  return `sftp_${kind}_${Date.now()}_${Math.random().toString(36).slice(2)}`
+}
+function resolveLocal(path: string) {
+  const value = path.trim()
+  if (!value || value === '~') return localHome.value
+  if (/^[a-z]:[\\/]|^[\\/]/i.test(value)) return value
+  if (/^~[\\/]/.test(value)) return joinLocalPath(localHome.value, value.slice(2))
+  return joinLocalPath(localBrowser.path.value || localHome.value, value)
+}
+function resolveRemote(path: string) {
+  const value = path.trim()
+  if (!value || value === '.' || value === '~') return value === '~' ? c.home : value || '.'
+  if (value.startsWith('/')) return value
+  if (value.startsWith('~/')) return joinRemotePath(c.home, value.slice(2))
+  return joinRemotePath(remoteBrowser.path.value || '.', value)
+}
+function storeView() {
+  if (!serverKey.value) return
+  snapshots.set(serverKey.value, {
+    local: localBrowser.snapshot(),
+    remote: remoteBrowser.snapshot(),
+    mode: mode.value,
+    terminalPath: terminalPath.value,
   })
 }
-
-function transferStateKey(
-  terminalId = props.terminalId,
-  connectionId = props.connectionId,
-  connectionRole = props.profile?.connectionRole ?? 'direct'
-) {
-  return `${terminalId || 'terminal'}:${connectionId || 'local'}:${connectionRole}`
+async function restoreServer(target: FileTargetBinding, pathOverride?: string) {
+  const sequence = ++restoreSequence
+  storeView()
+  serverKey.value = target.serverKey
+  const runtime = snapshots.get(target.serverKey),
+    saved = locations.get(target.serverKey)
+  localBrowser.restore(runtime?.local)
+  remoteBrowser.restore(runtime?.remote)
+  if (runtime) {
+    mode.value = runtime.mode
+    terminalPath.value = runtime.terminalPath
+  } else terminalPath.value = target.identity?.pwd ?? ''
+  await localInit
+  if (sequence !== restoreSequence || disposed) return
+  const localPath = runtime?.local.path || saved.local || localHome.value
+  const remotePath =
+    pathOverride || runtime?.remote.path || saved.remote || target.identity?.pwd || c.home || '.'
+  await Promise.all([
+    localBrowser.load(localPath, { preserve: true, recordHistory: !runtime }),
+    remoteBrowser.load(remotePath, {
+      force: true,
+      preserve: !pathOverride,
+      recordHistory: !runtime || Boolean(pathOverride),
+    }),
+  ])
 }
-
-function resolveRemoteDirectoryPath(path: string) {
-  const requested = path.trim()
-  if (!requested || requested === '.' || requested === '~') return requested || currentPath.value || '.'
-  if (requested.startsWith('~/')) return `./${requested.slice(2)}`
-  if (requested.startsWith('/') || requested.startsWith('./')) return requested
-  const base = currentPath.value && currentPath.value !== '.' ? currentPath.value.replace(/\/+$/, '') : '.'
-  return `${base}/${requested}`
-}
-
-function resolveLocalDirectoryPath(path: string) {
-  const requested = path.trim()
-  if (!requested) return localPath.value || localHome.value
-  if (requested === '~') return localHome.value
-  if (requested.startsWith('~/') || requested.startsWith('~\\')) {
-    const suffix = requested.slice(2)
-    const separator = localHome.value.includes('\\') ? '\\' : '/'
-    return `${localHome.value.replace(/[\\/]+$/, '')}${separator}${suffix}`
-  }
-  if (/^[A-Za-z]:[\\/]/.test(requested) || requested.startsWith('\\') || requested.startsWith('/')) return requested
-  const base = (localPath.value || localHome.value).replace(/[\\/]+$/, '')
-  const separator = base.includes('\\') ? '\\' : '/'
-  return `${base}${separator}${requested}`
-}
-
-function remoteTargetCacheKey() {
-  const target = targetOverride.value
-  if (target?.targetHost) return `target:${target.targetUsername || 'user'}@${target.targetHost}`.toLowerCase()
-  return `profile:${props.connectionId || 'local'}`
-}
-
-function remoteDirectoryCacheKey(path: string, targetKey = remoteTargetCacheKey()) {
-  return `${transferStateKey()}:${targetKey}:${normalizeRemoteDirectoryPath(path)}`
-}
-
-function cachedRemoteDirectory(path: string, targetKey = remoteTargetCacheKey()) {
-  return remoteDirectoryCache.value[remoteDirectoryCacheKey(path, targetKey)]
-}
-
-function applyRemoteDirectoryCache(cached: RemoteDirectoryCacheEntry, recordHistory = true) {
-  currentPath.value = cached.path
-  pathDraft.value = cached.path
-  entries.value = [...cached.entries]
-  selectedRemoteEntry.value = null
-  if (recordHistory) rememberRemotePath(cached.path)
-  status.value = ''
-}
-
-function rememberRemotePath(path: string) {
-  if (remotePathHistory.value[remotePathHistoryIndex.value] === path) return
-  remotePathHistory.value = [...remotePathHistory.value.slice(0, remotePathHistoryIndex.value + 1), path].slice(-50)
-  remotePathHistoryIndex.value = remotePathHistory.value.length - 1
-}
-
-function rememberLocalPath(path: string) {
-  if (localPathHistory.value[localPathHistoryIndex.value] === path) return
-  localPathHistory.value = [...localPathHistory.value.slice(0, localPathHistoryIndex.value + 1), path].slice(-50)
-  localPathHistoryIndex.value = localPathHistory.value.length - 1
-}
-
-function rememberRemoteDirectory(
-  requestedPath: string,
-  responsePath: string,
-  responseEntries: SftpFileEntry[],
-  targetKey = remoteTargetCacheKey()
-) {
-  const cached = {
-    path: responsePath,
-    entries: [...responseEntries],
-    cachedAt: Date.now()
-  }
-  remoteDirectoryCache.value = {
-    ...remoteDirectoryCache.value,
-    [remoteDirectoryCacheKey(requestedPath, targetKey)]: cached,
-    [remoteDirectoryCacheKey(responsePath, targetKey)]: cached
+async function establish(manual?: { host: string; username: string; profileRoute?: string }, path?: string) {
+  currentContextMenu.value = null
+  operationError.value = ''
+  storeView()
+  const target = await connection.connect(manual)
+  if (target && !disposed) {
+    manualOpen.value = false
+    await restoreServer(target, path)
   }
 }
-
-function invalidateRemoteDirectoryCache(path = currentPath.value) {
-  const next = { ...remoteDirectoryCache.value }
-  delete next[remoteDirectoryCacheKey(path)]
-  delete next[remoteDirectoryCacheKey(currentPath.value)]
-  remoteDirectoryCache.value = next
+function acceptTerminalOutput(event: TerminalOutputDeltaEvent) {
+  connection.feedOutput(event)
+  terminalTransfer.feedOutput(event)
 }
-
-function saveTransferState(key = transferStateKey()) {
-  transferStateByTerminal.value = {
-    ...transferStateByTerminal.value,
-    [key]: {
-      currentPath: currentPath.value,
-      pathDraft: pathDraft.value,
-      terminalRemotePath: terminalRemotePath.value,
-      transferMode: transferMode.value,
-      entries: [...entries.value],
-      selectedTarget: selectedTarget.value ? { ...selectedTarget.value } : null,
-      sftpProbeByHost: { ...sftpProbeByHost.value },
-      currentTerminalTarget: currentTerminalTarget.value ? { ...currentTerminalTarget.value } : null,
-      targetConnectionGeneration: targetConnectionGeneration.value,
-      requiresExplicitBastionProbe: requiresExplicitBastionProbe.value,
-      bastionAutoProbeAttempted: bastionAutoProbeAttempted.value,
-      status: status.value
-    }
-  }
-}
-
-function restoreTransferState(key = transferStateKey()) {
-  const cached = transferStateByTerminal.value[key]
-  if (!cached) return false
-  currentPath.value = cached.currentPath
-  pathDraft.value = cached.pathDraft
-  terminalRemotePath.value = cached.terminalRemotePath
-  transferMode.value = cached.transferMode
-  entries.value = [...cached.entries]
-  selectedRemoteEntry.value = null
-  selectedTarget.value = cached.selectedTarget ? { ...cached.selectedTarget } : null
-  sftpProbeByHost.value = { ...cached.sftpProbeByHost }
-  currentTerminalTarget.value = cached.currentTerminalTarget ? { ...cached.currentTerminalTarget } : null
-  targetConnectionGeneration.value = cached.targetConnectionGeneration
-  requiresExplicitBastionProbe.value = cached.requiresExplicitBastionProbe
-  bastionAutoProbeAttempted.value = cached.bastionAutoProbeAttempted
-  pendingIdentify.value = null
-  pendingDownload.value = null
-  identifying.value = false
-  loading.value = false
-  directoryLoading.value = false
-  directoryLoadingPath.value = ''
-  status.value = cached.status
-  remotePathHistory.value = [cached.currentPath]
-  remotePathHistoryIndex.value = 0
-  error.value = ''
-  return true
-}
-
-function resetRemoteBrowserState() {
-  remoteRequestEpoch += 1
-  cancelActiveRemoteTaskForStateChange()
-  remoteDirectoryRequests.clear()
-  currentPath.value = '.'
-  pathDraft.value = '.'
-  terminalRemotePath.value = ''
-  entries.value = []
-  selectedRemoteEntry.value = null
-  selectedTarget.value = null
-  sftpProbeByHost.value = {}
-  currentTerminalTarget.value = null
-  targetConnectionGeneration.value = null
-  requiresExplicitBastionProbe.value = false
-  bastionAutoProbeAttempted.value = false
-  pendingIdentify.value = null
-  pendingDownload.value = null
-  identifying.value = false
-  loading.value = false
-  directoryLoading.value = false
-  directoryLoadingPath.value = ''
-  status.value = ''
-  remotePathHistory.value = []
-  remotePathHistoryIndex.value = -1
-  error.value = ''
-}
-
-function clearRemoteDirectoryCacheForState(key = transferStateKey()) {
-  const prefix = key + ':'
-  remoteDirectoryCache.value = Object.fromEntries(
-    Object.entries(remoteDirectoryCache.value).filter(([cacheKey]) => !cacheKey.startsWith(prefix))
-  )
-}
-
-function hasBastionTargetContext() {
-  return Boolean(
-    selectedTarget.value ||
-    currentTerminalTarget.value ||
-    targetConnectionGeneration.value !== null ||
-    bastionAutoProbeAttempted.value
-  )
-}
-
-function invalidateBastionTarget(message: string, requireExplicit = true) {
-  if (!isBastionConnection.value) return
-  const hadContext = hasBastionTargetContext()
-  remoteRequestEpoch += 1
-  cancelActiveRemoteTaskForStateChange()
-  remoteDirectoryRequests.clear()
-  clearRemoteDirectoryCacheForState()
-  currentPath.value = '.'
-  pathDraft.value = '.'
-  entries.value = []
-  selectedRemoteEntry.value = null
-  fileContextMenu.value = null
-  selectedTarget.value = null
-  sftpProbeByHost.value = {}
-  currentTerminalTarget.value = null
-  targetConnectionGeneration.value = null
-  pendingIdentify.value = null
-  identifying.value = false
-  directoryLoading.value = false
-  directoryLoadingPath.value = ''
-  requiresExplicitBastionProbe.value = requireExplicit && hadContext
-  bastionAutoProbeAttempted.value = requireExplicit && hadContext
-  remotePathHistory.value = []
-  remotePathHistoryIndex.value = -1
-  error.value = ''
-  status.value = hadContext ? message : ''
-  saveTransferState()
-}
-
-function validateBastionTargetState() {
-  if (!isBastionConnection.value) {
-    if (selectedTarget.value || targetConnectionGeneration.value !== null || requiresExplicitBastionProbe.value) {
-      resetRemoteBrowserState()
-    }
-    return
-  }
-  if (!terminalSessionConnected.value) {
-    if (hasBastionTargetContext()) {
-      invalidateBastionTarget('终端连接已断开；上次 SFTP 目标已失效，重新连接后请检测当前终端 SFTP。')
-    }
-    return
-  }
-  if (
-    selectedTarget.value &&
-    targetConnectionGeneration.value !== props.terminalConnectionGeneration
-  ) {
-    invalidateBastionTarget('终端连接已重新建立；上次 SFTP 目标已失效，请检测当前终端 SFTP。')
-  }
-}
-
-function normalizeInterruptedBastionProbeForStateSave() {
-  if (
-    selectedTarget.value ||
-    !bastionAutoProbeAttempted.value ||
-    !(
-      pendingIdentify.value?.useForSftp ||
-      Object.values(sftpProbeByHost.value).some((probe) => probe.probing)
-    )
-  ) return
-  currentTerminalTarget.value = null
-  sftpProbeByHost.value = {}
-  requiresExplicitBastionProbe.value = false
-  bastionAutoProbeAttempted.value = false
-  status.value = ''
-}
-
-watch(
-  () => transferStateKey(),
-  (key, previousKey) => {
-    if (previousKey) {
-      normalizeInterruptedBastionProbeForStateSave()
-      saveTransferState(previousKey)
-    }
-    resetRemoteBrowserState()
-    restoreTransferState(key)
-    validateBastionTargetState()
-    void nextTick(() => activateSftpTab())
-  }
-)
-
-watch(
-  () => [props.terminalStatus, props.terminalConnectionGeneration] as const,
-  ([terminalStatus, generation], previous) => {
-    if (!isBastionConnection.value) return
-    const connected = terminalStatus === 'remote'
-    if (!connected) {
-      if (hasBastionTargetContext()) {
-        invalidateBastionTarget('终端连接已断开；上次 SFTP 目标已失效，重新连接后请检测当前终端 SFTP。')
-      }
-      return
-    }
-    const previousGeneration = previous?.[1]
-    if (
-      selectedTarget.value &&
-      targetConnectionGeneration.value !== generation &&
-      previousGeneration !== generation
-    ) {
-      invalidateBastionTarget('终端连接已重新建立；上次 SFTP 目标已失效，请检测当前终端 SFTP。')
-      return
-    }
-    if (props.active) void nextTick(() => activateSftpTab())
-  }
-)
-
-onMounted(() => {
-  void loadLocalHome()
-  void loadLocalRoots()
-  void attachNativeFileDropEvents()
-})
-
-onBeforeUnmount(() => {
-  clearRemoteDropState()
-  detachNativeFileDropEvents()
-})
-
-watch(
-  () => props.terminalSnapshot,
-  (snapshot) => {
-    if (pendingDownload.value) finishTerminalDownloadIfReady(snapshot)
-    if (pendingIdentify.value) finishTerminalIdentifyIfReady(identityProbeText(snapshot))
-  }
-)
-
 watch(
   () => props.terminalOutputEvent,
   (event) => {
-    if (!event) return
-    if (pendingDownload.value) finishTerminalDownloadIfReady(event.snapshot)
-    if (pendingIdentify.value) {
-      pendingIdentify.value.output = `${pendingIdentify.value.output}${event.delta}`.slice(-160_000)
-      finishTerminalIdentifyIfReady(identityProbeText(event.snapshot))
-    }
-  }
+    if (event) acceptTerminalOutput(event)
+  },
 )
-
+async function activate() {
+  if (!props.active || disposed) return
+  await localInit
+  if (!props.active || disposed) return
+  if (!localBrowser.path.value) await localBrowser.load(saved.value.local || localHome.value)
+  if (props.profile && ['idle', 'stale'].includes(c.phase)) await establish()
+  else if (ready.value) {
+    const terminalBusy = transferTasks.jobs.value.some(
+      (job) =>
+        job.binding.terminalId === props.terminalId &&
+        job.mode === 'terminal' &&
+        ['running', 'queued'].includes(job.status),
+    )
+    if (
+      c.binding?.source === 'terminal' &&
+      !actionBusy.value &&
+      !editor.remoteEditor?.saving &&
+      !terminalBusy
+    ) {
+      const target = c.binding
+      try {
+        await connection.verifyBeforeWrite()
+      } catch (reason) {
+        if (c.phase === 'stale') await establish()
+        else if (sameFileTarget(target, c.binding))
+          operationError.value = `未能核对当前终端：${reason instanceof Error ? reason.message : String(reason)}`
+        return
+      }
+    }
+    await Promise.all([localBrowser.refreshIfStale(), remoteBrowser.refreshIfStale()])
+  }
+}
+function selectTransferMode(value: 'sftp' | 'terminal') {
+  if (mode.value === value) return
+  mode.value = value
+  if (value === 'sftp') void activate()
+}
+function toggleDensity() {
+  preferences.value.density = preferences.value.density === 'compact' ? 'comfortable' : 'compact'
+  locations.persist()
+}
+function toggleHidden() {
+  preferences.value.showHidden = !preferences.value.showHidden
+  locations.persist()
+}
+function dismissNotice() {
+  notice.value = ''
+  operationError.value = ''
+}
+function abortDirectoryOperations() {
+  directoryOperations.forEach((operation) => operation.abort())
+}
+watch(() => c.binding?.revision, abortDirectoryOperations, { flush: 'sync' })
 watch(
   () => props.active,
   (active) => {
-    if (active) void nextTick(() => activateSftpTab())
+    if (active) void nextTick(activate)
+    else {
+      storeView()
+      currentContextMenu.value = null
+      const focused = document.activeElement
+      if (focused && panel.value?.contains(focused)) {
+        const side = focused.closest('.remote-pane') ? 'remote' : 'local'
+        lastFocus = { side, kind: focused.closest('.file-location-control') ? 'path' : 'list' }
+      }
+    }
   },
-  { flush: 'post' }
+  { immediate: true },
 )
-
 watch(
-  () => props.activationSequence,
-  (sequence) => {
-    if (sequence <= 0) return
-    transferMode.value = 'sftp'
-    activateSftpTab()
+  () => [props.terminalStatus, props.terminalConnectionGeneration, props.terminalContextVersion],
+  (current, previous) => {
+    if (props.terminalStatus !== 'remote' || current[1] !== previous[1] || current[2] !== previous[2]) {
+      terminalTransfer.disconnect()
+      transferTasks.cancelTerminal(props.terminalId)
+    }
+    if (props.active && props.profile && ['idle', 'stale'].includes(c.phase)) void nextTick(activate)
   },
-  { immediate: true, flush: 'post' }
+)
+watch(
+  () => preferences.value.showHidden,
+  (value) => {
+    localBrowser.showHidden.value = value
+    remoteBrowser.showHidden.value = value
+  },
+  { immediate: true },
 )
 
-function isCurrentRemoteRequest(epoch: number, stateKey: string, generation: number) {
+function focusView() {
+  void nextTick(() => {
+    if (!props.active) return
+    if (editor.remoteEditor) {
+      editorState.remoteEditorTextarea.value?.focus()
+      return
+    }
+    ;(lastFocus.side === 'local' ? localPane.value : remotePane.value)?.focus(lastFocus.kind)
+  })
+}
+function focusWithin(event: FocusEvent) {
+  const target = event.target as HTMLElement
+  if (target.closest('.local-pane,.remote-pane'))
+    lastFocus = {
+      side: target.closest('.remote-pane') ? 'remote' : 'local',
+      kind: target.closest('.file-location-control') ? 'path' : 'list',
+    }
+}
+async function openLocation(job: TransferJob) {
+  if (job.direction === 'download') {
+    await localOpenPath(localParentPath(job.targetPath))
+    return
+  }
+  mode.value = 'sftp'
+  await establish(
+    {
+      host: job.binding.host,
+      username: job.binding.username,
+      profileRoute: job.binding.override.profileRoute,
+    },
+    remoteParentPath(job.targetPath),
+  )
+  const entry = remoteBrowser.entries.value.find((item) => item.path === job.targetPath)
+  if (entry) remoteBrowser.select(entry)
+  focusView()
+}
+function confirmClose() {
+  if (editor.remoteEditor?.saving || editor.remoteEditor?.loading) return false
   return (
-    epoch === remoteRequestEpoch &&
-    stateKey === transferStateKey() &&
-    (!isBastionConnection.value || generation === props.terminalConnectionGeneration)
+    !editor.remoteEditorDirty ||
+    window.confirm(`关闭此会话并放弃 ${editor.remoteEditor?.name} 的未保存修改？`)
   )
 }
+defineExpose({ focusView, acceptTerminalOutput, openLocation, confirmClose })
+watch(
+  () => Boolean(editor.remoteEditor),
+  (open, wasOpen) => {
+    if (!open && wasOpen) focusView()
+  },
+)
 
-async function loadDirectory(path = currentPath.value, options: LoadDirectoryOptions = {}) {
-  if (!remoteReady.value || loading.value || directoryLoading.value) return
-  const requestEpoch = remoteRequestEpoch
-  const requestStateKey = transferStateKey()
-  const requestGeneration = props.terminalConnectionGeneration
-  const requestedPath = normalizeRemoteDirectoryPath(resolveRemoteDirectoryPath(path))
-  const targetKey = remoteTargetCacheKey()
-  const cacheKey = remoteDirectoryCacheKey(requestedPath, targetKey)
-  const cached = cachedRemoteDirectory(requestedPath, targetKey)
-  const cacheFresh = cached && Date.now() - cached.cachedAt < REMOTE_DIRECTORY_CACHE_TTL_MS
-
-  if (cached && !options.force) {
-    applyRemoteDirectoryCache(cached, options.recordHistory !== false)
-    if (cacheFresh) return
-  }
-
-  const existingRequest = remoteDirectoryRequests.get(cacheKey)
-  if (existingRequest) {
-    try {
-      await existingRequest
-    } catch (err) {
-      if (!cached && isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)) {
-        handleTaskError(err)
-      }
-    }
-    return
-  }
-
-  directoryLoading.value = true
-  directoryLoadingPath.value = requestedPath
-  error.value = ''
-  const request = (async () => {
-    const response = await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value)
-    if (!isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)) return
-    currentPath.value = response.path
-    pathDraft.value = response.path
-    entries.value = response.entries
-    selectedRemoteEntry.value = null
-    if (options.recordHistory !== false) rememberRemotePath(response.path)
-    status.value = ''
-    rememberRemoteDirectory(requestedPath, response.path, response.entries, targetKey)
-  })()
-  remoteDirectoryRequests.set(cacheKey, request)
+async function guardedAction(action: (signal: AbortSignal) => Promise<void>) {
+  if (actionBusy.value || editor.remoteEditor?.saving) return
+  actionBusy.value = true
+  operationError.value = ''
+  actionController = new AbortController()
+  const actionTarget = c.binding ? captureFileTarget(c.binding) : null
   try {
-    await request
-  } catch (err) {
-    if (isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)) handleTaskError(err)
+    await action(actionController.signal)
+  } catch (reason) {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    if (message.includes('SFTP_TARGET_CHANGED') && sameFileTarget(actionTarget, c.binding))
+      connection.invalidate(message)
+    operationError.value = formatError(reason)
   } finally {
-    if (remoteDirectoryRequests.get(cacheKey) === request) remoteDirectoryRequests.delete(cacheKey)
-    if (isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)) {
-      directoryLoading.value = false
-      directoryLoadingPath.value = ''
-    }
+    actionBusy.value = false
+    actionController = null
   }
 }
-
-async function loadLocalHome() {
+function cancelAction() {
+  actionController?.abort()
+}
+async function verify(expected: FileTargetBinding, signal?: AbortSignal) {
+  await connection.verifyBeforeWrite(signal)
+  if (!sameFileTarget(expected, c.binding)) throw new Error('操作目标已变化，请重新确认。')
+  return expected
+}
+function currentTarget() {
+  if (!c.binding || !ready.value) throw new Error('请先连接并确认远端目标。')
+  return captureFileTarget(c.binding)
+}
+function refreshAfter(job: TransferJob) {
+  if (disposed || job.status !== 'done' || job.binding.serverKey !== serverKey.value) return
+  const browser = job.direction === 'upload' ? remoteBrowser : localBrowser
+  const parent =
+    job.direction === 'upload' ? remoteParentPath(job.targetPath) : localParentPath(job.targetPath)
+  browser.invalidate(parent)
+  if (props.active && browser.path.value === parent)
+    void browser.load(parent, { force: true, preserve: true, recordHistory: false })
+}
+async function uploadPaths(paths: string[]) {
+  const chosen = [...new Set(paths.filter(Boolean))],
+    directory = remoteBrowser.path.value
+  if (!chosen.length) {
+    operationError.value = '没有读取到本地文件路径，请使用桌面文件管理器或左侧列表。'
+    return
+  }
+  let target: FileTargetBinding
   try {
-    localHome.value = await localHomeDirectory()
-    await loadLocalDirectory(localHome.value)
-  } catch (err) {
-    error.value = formatError(err)
-  }
-}
-
-function initializeRemoteBrowserIfActive() {
-  if (!props.active || transferMode.value !== 'sftp' || !remoteConnectionAvailable.value || remoteBusy.value || pendingIdentify.value) return
-  if (isBastionConnection.value) {
-    if (!terminalSessionConnected.value) {
-      status.value = '终端尚未连接，无法检测当前 SFTP 目标。'
-      return
-    }
-    if (selectedBastionTargetIsCurrent.value) {
-      if (entries.value.length === 0) void loadDirectory(currentPath.value || '.')
-      return
-    }
-    if (requiresExplicitBastionProbe.value) {
-      status.value = '请点击“检测当前终端 SFTP”确认新的服务器目标。'
-      return
-    }
-    if (!bastionAutoProbeAttempted.value) {
-      bastionAutoProbeAttempted.value = true
-      openCurrentTerminalSftp({ automatic: true })
-    }
+    target = currentTarget()
+  } catch (reason) {
+    operationError.value = String(reason)
     return
   }
-  if (entries.value.length === 0) initializeRemoteBrowser()
-}
-
-function activateSftpTab() {
-  if (
-    !props.active ||
-    transferMode.value !== 'sftp' ||
-    !remoteConnectionAvailable.value ||
-    taskInProgress.value
-  ) {
-    return
-  }
-  if (remoteBusy.value || identifying.value || pendingIdentify.value) return
-  initializeRemoteBrowserIfActive()
-}
-
-function selectTransferMode(mode: 'sftp' | 'terminal') {
-  transferMode.value = mode
-  if (mode === 'sftp') activateSftpTab()
-}
-
-function initializeRemoteBrowser() {
-  if (!props.active || !remoteConnectionAvailable.value) return
-  useConfiguredTargetForSftp()
-}
-
-function openCurrentTerminalSftp(options: { automatic?: boolean } = {}) {
-  if (!isBastionConnection.value || !terminalDetectionReady.value || remoteBusy.value || taskInProgress.value) return
-  if (!options.automatic) {
-    invalidateBastionTarget('正在重新检测当前终端 SFTP...')
-  }
-  bastionAutoProbeAttempted.value = true
-  resetTerminalIdentityProbeForRetry()
-  currentTerminalTarget.value = null
-  selectedRemoteEntry.value = null
-  identifyCurrentTerminalTarget({ useForSftp: true })
-}
-
-function resetTerminalIdentityProbeForRetry() {
-  pendingIdentify.value = null
-  identifying.value = false
-  loading.value = false
-  directoryLoading.value = false
-  directoryLoadingPath.value = ''
-  error.value = ''
-  status.value = ''
-}
-
-function useConfiguredTargetForSftp(message?: string) {
-  if (!props.active) return
-  selectedTarget.value = null
-  targetConnectionGeneration.value = null
-  requiresExplicitBastionProbe.value = false
-  bastionAutoProbeAttempted.value = false
-  transferMode.value = 'sftp'
-  if (message) status.value = message
-  void loadDirectory(currentPath.value || '.')
-}
-
-async function loadLocalDirectory(path = localPath.value || localHome.value, recordHistory = true) {
-  localLoading.value = true
-  error.value = ''
-  try {
-    const response = await localListDirectory(resolveLocalDirectoryPath(path))
-    localHome.value = response.home
-    localPath.value = response.path
-    localPathDraft.value = response.path
-    localEntries.value = response.entries
-    selectedLocalEntry.value = null
-    if (recordHistory) rememberLocalPath(response.path)
-  } catch (err) {
-    error.value = formatError(err)
-  } finally {
-    localLoading.value = false
-  }
-}
-
-async function useTerminalTargetForSftp() {
-  if (!isBastionConnection.value || !currentTerminalTarget.value || !terminalDetectionReady.value || remoteBusy.value) return
-  const terminalTarget = currentTerminalTarget.value
-  if (isBastionConnection.value && (!terminalTarget.ip.trim() || !terminalTarget.username.trim())) {
-    const missing = [!terminalTarget.ip.trim() ? '服务器 IP' : '', !terminalTarget.username.trim() ? '服务器用户名' : '']
-      .filter(Boolean)
-      .join('和')
-    error.value = `未能从当前终端解析${missing}，已停止 SFTP 探测。`
-    status.value = ''
-    return
-  }
-  const target = {
-    host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host,
-    username: terminalTarget.username || undefined,
-    label: terminalTarget.label,
-    sourceLine: terminalTarget.label
-  }
-  const detectionEpoch = remoteRequestEpoch
-  const restoresCurrentTarget = selectedTarget.value
-    ? candidateKey(selectedTarget.value) === candidateKey(target)
-    : false
-  const probe = await probeSelectedTarget(target)
-  if (!probe) return
-  if (detectionEpoch !== remoteRequestEpoch) return
-  if (!probe.available) {
-    selectedTarget.value = null
-    targetConnectionGeneration.value = null
-    requiresExplicitBastionProbe.value = true
-    bastionAutoProbeAttempted.value = true
-    error.value = probe.message
-    status.value = ''
-    saveTransferState()
-    return
-  }
-  selectedTarget.value = target
-  targetConnectionGeneration.value = props.terminalConnectionGeneration
-  requiresExplicitBastionProbe.value = false
-  bastionAutoProbeAttempted.value = true
-  transferMode.value = 'sftp'
-  if (!restoresCurrentTarget) entries.value = []
-  currentPath.value = restoresCurrentTarget
-    ? currentPath.value || probe.path || terminalTarget.pwd || '.'
-    : probe.path || terminalTarget.pwd || '.'
-  pathDraft.value = currentPath.value
-  saveTransferState()
-  if (props.active) await loadDirectory(currentPath.value)
-}
-
-async function probeSelectedTarget(candidate: SftpTarget) {
-  if (!terminalDetectionReady.value) return null
-  const requestEpoch = remoteRequestEpoch
-  const requestGeneration = props.terminalConnectionGeneration
-  const requestKey = transferStateKey()
-  const taskId = startRemoteTask(`探测 ${candidate.host}`)
-  if (!taskId) return null
-  const key = candidateKey(candidate)
-  sftpProbeByHost.value = {
-    ...sftpProbeByHost.value,
-    [key]: {
-      available: false,
-      message: '正在探测 SFTP...',
-      probing: true
-    }
-  }
-  status.value = `正在探测 ${candidate.username || 'user'}@${candidate.host} 的 SFTP...`
-  error.value = ''
-  try {
-    const response = await sftpProbe(props.connectionId, {
-      targetHost: candidate.host,
-      targetUsername: candidate.username
-    }, { taskId })
-    if (
-      requestEpoch !== remoteRequestEpoch ||
-      requestKey !== transferStateKey() ||
-      requestGeneration !== props.terminalConnectionGeneration ||
-      !terminalDetectionReady.value
-    ) return null
-    sftpProbeByHost.value = {
-      ...sftpProbeByHost.value,
-      [key]: response
-    }
-    status.value = response.message
-    return response
-  } catch (err) {
-    if (
-      requestEpoch !== remoteRequestEpoch ||
-      requestKey !== transferStateKey() ||
-      requestGeneration !== props.terminalConnectionGeneration
-    ) return null
-    const response: SftpProbeResponse = {
-      available: false,
-      message: formatTaskError(err)
-    }
-    sftpProbeByHost.value = {
-      ...sftpProbeByHost.value,
-      [key]: response
-    }
-    error.value = response.message
-    status.value = ''
-    return response
-  } finally {
-    finishRemoteTask(taskId)
-  }
-}
-
-function clearSelectedTarget() {
-  if (remoteBusy.value) return
-  if (isBastionConnection.value) {
-    invalidateBastionTarget('已清除当前 SFTP 目标，请检测当前终端 SFTP。')
-    return
-  }
-  useConfiguredTargetForSftp()
-}
-
-function switchToTerminalMode() {
-  transferMode.value = 'terminal'
-  if (!currentTerminalTarget.value && terminalDetectionReady.value) void identifyCurrentTerminalTarget()
-}
-
-function candidateKey(candidate: Pick<SftpTarget, 'host' | 'username'>) {
-  return `${candidate.username || 'user'}@${candidate.host}`.toLowerCase()
-}
-
-function probeStateFor(candidate: SftpTarget) {
-  return sftpProbeByHost.value[candidateKey(candidate)]
-}
-
-function identifyCurrentTerminalTarget(options: { useForSftp?: boolean } = {}) {
-  if (!terminalDetectionReady.value || identifying.value || (options.useForSftp && !props.active)) return
-  if (options.useForSftp && !isBastionConnection.value) return
-  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const begin = `AI_TERM_IDENT_BEGIN_${id}`
-  const end = `AI_TERM_IDENT_END_${id}`
-  pendingIdentify.value = { begin, end, useForSftp: Boolean(options.useForSftp), output: '' }
-  identifying.value = true
-  error.value = ''
-  status.value = '正在识别当前终端服务器...'
-  emit(
-    'writeTerminalInput',
-    [
-      `printf '\\n${begin}\\n'`,
-      `printf 'user='; (whoami 2>/dev/null || id -un 2>/dev/null || printf unknown)`,
-      `printf '\\nhostname='; (hostname 2>/dev/null || printf unknown)`,
-      `printf '\\nips='; ((hostname -I 2>/dev/null || ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1) | tr '\\n' ' ')`,
-      `printf '\\npwd='; (pwd 2>/dev/null || printf .)`,
-      `printf '\\n${end}\\n'`
-    ].join('; ') + '\n'
-  )
-}
-
-function openEntry(entry: SftpFileEntry) {
-  if (remoteBusy.value) return
-  if (entry.isDir) {
-    void loadDirectory(entry.path)
-    return
-  }
-  void openRemoteFileEditor(entry)
-}
-
-function selectRemoteEntry(entry: SftpFileEntry) {
-  selectedRemoteEntry.value = entry
-}
-
-function openRemoteContextMenu(event: MouseEvent, entry: SftpFileEntry) {
-  selectRemoteEntry(entry)
-  openFileContextMenu(event, entry.name, [
-    {
-      id: 'open',
-      label: entry.isDir ? '打开目录' : '编辑文件',
-      disabled: remoteBusy.value,
-      action: () => openEntry(entry)
-    },
-    {
-      id: 'download',
-      label: '下载到本地目录',
-      disabled: remoteBusy.value,
-      action: () => void downloadRemoteEntry(entry)
-    },
-    {
-      id: 'copy-path',
-      label: '复制远端路径',
-      action: () => void copyText(entry.path)
-    },
-    {
-      id: 'delete',
-      label: '删除',
-      danger: true,
-      disabled: remoteBusy.value,
-      action: () => void deleteEntry(entry)
-    }
-  ])
-}
-
-function openLocalEntry(entry: LocalFileEntry) {
-  if (!entry.isDir) {
-    selectedLocalEntry.value = entry
-    return
-  }
-  void loadLocalDirectory(entry.path)
-}
-
-function selectLocalEntry(entry: LocalFileEntry) {
-  selectedLocalEntry.value = entry
-}
-
-function openLocalContextMenu(event: MouseEvent, entry: LocalFileEntry) {
-  selectLocalEntry(entry)
-  openFileContextMenu(event, entry.name, [
-    {
-      id: 'open',
-      label: entry.isDir ? '打开文件夹' : '打开文件位置',
-      action: () => void openLocalFileLocation(entry)
-    },
-    {
-      id: 'upload',
-      label: '上传到远端目录',
-      disabled: !remoteReady.value || remoteBusy.value,
-      action: () => {
-        selectedLocalEntry.value = entry
-        void uploadSelectedLocalEntry()
-      }
-    },
-    {
-      id: 'copy-path',
-      label: '复制本地路径',
-      action: () => void copyText(entry.path)
-    }
-  ])
-}
-
-function openFileContextMenu(event: MouseEvent, title: string, items: FileContextMenuItem[]) {
-  const menuWidth = 220
-  const menuHeight = Math.min(280, 32 + items.length * 36)
-  fileContextMenu.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
-    title,
-    items
-  }
-}
-
-function closeFileContextMenu() {
-  fileContextMenu.value = null
-}
-
-function runFileContextMenuItem(item: FileContextMenuItem) {
-  if (item.disabled) return
-  item.action()
-  closeFileContextMenu()
-}
-
-async function openLocalFileLocation(entry: LocalFileEntry) {
-  try {
-    await localOpenPath(entry.path)
-  } catch (err) {
-    error.value = formatError(err)
-  }
-}
-
-function goParent() {
-  if (remoteBusy.value || currentPath.value === '/' || currentPath.value === '.') return
-  const parts = currentPath.value.split('/').filter(Boolean)
-  parts.pop()
-  void loadDirectory(parts.length ? `/${parts.join('/')}` : '/')
-}
-
-function goLocalParent() {
-  if (!localPath.value || localPath.value === '/') return
-  void loadLocalDirectory(localParentPath(localPath.value) || '/')
-}
-
-async function loadLocalRoots() {
-  try {
-    localRoots.value = await localListRoots()
-  } catch {
-    localRoots.value = []
-  }
-}
-
-function selectLocalRoot(event: Event) {
-  const path = (event.target as HTMLSelectElement).value
-  if (path) void loadLocalDirectory(path)
-}
-
-const currentLocalRoot = computed(() => {
-  const drive = localPath.value.match(/^[A-Za-z]:[\\/]/)?.[0]?.slice(0, 2)
-  if (drive) return `${drive}\\`
-  return localRoots.value.includes('/') ? '/' : ''
-})
-
-function goRemoteBack() {
-  if (remoteBusy.value || remotePathHistoryIndex.value <= 0) return
-  remotePathHistoryIndex.value -= 1
-  void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
-}
-
-function goRemoteForward() {
-  if (remoteBusy.value || remotePathHistoryIndex.value >= remotePathHistory.value.length - 1) return
-  remotePathHistoryIndex.value += 1
-  void loadDirectory(remotePathHistory.value[remotePathHistoryIndex.value], { recordHistory: false })
-}
-
-function goLocalBack() {
-  if (localPathHistoryIndex.value <= 0) return
-  localPathHistoryIndex.value -= 1
-  void loadLocalDirectory(localPathHistory.value[localPathHistoryIndex.value], false)
-}
-
-function goLocalForward() {
-  if (localPathHistoryIndex.value >= localPathHistory.value.length - 1) return
-  localPathHistoryIndex.value += 1
-  void loadLocalDirectory(localPathHistory.value[localPathHistoryIndex.value], false)
-}
-
-function canAcceptRemoteDrop() {
-  return transferMode.value === 'sftp' && remoteReady.value && !remoteBusy.value && isRemoteDropZoneVisible()
-}
-
-function isRemoteDropZoneVisible() {
-  const element = remoteDropZone.value
-  if (!element) return false
-  const rect = element.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0 && window.getComputedStyle(element).display !== 'none'
-}
-
-async function attachNativeFileDropEvents() {
-  try {
-    fileDropUnlisteners.push(
-      await onTauriFileDrop((paths) => {
-        if (!remoteDropArmed && !canAcceptRemoteDrop()) return
-        clearRemoteDropState()
-        void uploadDroppedLocalPaths(paths)
-      })
-    )
-    fileDropUnlisteners.push(
-      await onTauriFileDropHover((paths) => {
-        if (!paths.length || !canAcceptRemoteDrop()) {
-          clearRemoteDropState()
-          return
-        }
-        showRemoteDropTarget()
-      })
-    )
-    fileDropUnlisteners.push(await onTauriFileDropCancelled(clearRemoteDropState))
-  } catch {
-    // Browser preview mode does not expose Tauri file-drop events.
-  }
-}
-
-function detachNativeFileDropEvents() {
-  fileDropUnlisteners.splice(0).forEach((unlisten) => unlisten())
-}
-
-function handleRemoteDragEnter(event: DragEvent) {
-  if (!dragHasFiles(event) || !canAcceptRemoteDrop()) return
-  event.preventDefault()
-  event.stopPropagation()
-  showRemoteDropTarget(event)
-}
-
-function handleRemoteDragOver(event: DragEvent) {
-  if (!dragHasFiles(event) || !canAcceptRemoteDrop()) return
-  event.preventDefault()
-  event.stopPropagation()
-  showRemoteDropTarget(event)
-}
-
-function handleRemoteDragLeave(event: DragEvent) {
-  const target = event.currentTarget as HTMLElement | null
-  if (target && event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) return
-  scheduleRemoteDropClear()
-}
-
-function handleRemoteDrop(event: DragEvent) {
-  if (!canAcceptRemoteDrop()) return
-  event.preventDefault()
-  event.stopPropagation()
-  const paths = dataTransferLocalPaths(event.dataTransfer)
-  clearRemoteDropState()
-  void uploadDroppedLocalPaths(paths)
-}
-
-function showRemoteDropTarget(event?: DragEvent) {
-  if (event?.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-  remoteDropActive.value = true
-  remoteDropArmed = true
-  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
-}
-
-function scheduleRemoteDropClear(delay = 140) {
-  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
-  remoteDropClearTimer = window.setTimeout(() => clearRemoteDropState(), delay)
-}
-
-function clearRemoteDropState() {
-  if (remoteDropClearTimer) window.clearTimeout(remoteDropClearTimer)
-  remoteDropClearTimer = null
-  remoteDropActive.value = false
-  remoteDropArmed = false
-}
-
-function dragHasFiles(event: DragEvent) {
-  return Array.from(event.dataTransfer?.types ?? []).includes('Files')
-}
-
-function dataTransferLocalPaths(dataTransfer: DataTransfer | null) {
-  const paths: string[] = []
-  for (const file of Array.from(dataTransfer?.files ?? [])) {
-    const path = fileLocalPath(file)
-    if (path) paths.push(path)
-  }
-  for (const item of Array.from(dataTransfer?.items ?? [])) {
-    if (item.kind !== 'file') continue
-    const file = item.getAsFile()
-    const path = file ? fileLocalPath(file) : ''
-    if (path) paths.push(path)
-  }
-  return uniqueLocalPaths(paths)
-}
-
-function fileLocalPath(file: File) {
-  return (file as File & { path?: string }).path?.trim() ?? ''
-}
-
-function uniqueLocalPaths(paths: string[]) {
-  return [...new Set(paths.map((path) => path.trim()).filter(Boolean))]
-}
-
-function isDuplicateDroppedPaths(paths: string[]) {
-  const signature = paths.join('\n')
-  const now = Date.now()
-  if (signature && signature === lastDroppedPathSignature && now - lastDroppedAt < 1500) return true
-  lastDroppedPathSignature = signature
-  lastDroppedAt = now
-  return false
-}
-
-async function uploadDroppedLocalPaths(rawPaths: string[]) {
-  const paths = uniqueLocalPaths(rawPaths)
-  if (!paths.length) {
-    error.value = '没有获取到本地文件路径，请从系统文件管理器拖入文件或文件夹。'
-    return
-  }
-  if (!canAcceptRemoteDrop()) {
-    status.value = activeTask.value ? `已有任务进行中：${activeTask.value.label}` : '请先打开远端 SFTP 目录。'
-    return
-  }
-  if (isDuplicateDroppedPaths(paths)) return
-
-  let lastUploadedPath = ''
-  for (const localPath of paths) {
-    const name = localFileName(localPath) || localPath
-    const targetPath = joinRemotePath(currentPath.value, name)
-    const response = await runTransfer(
-      `正在上传 ${name}...`,
-      (taskId) => sftpUploadPath(props.connectionId, localPath, currentPath.value, targetOverride.value, { taskId }),
-      {
+  await guardedAction(async (signal) => {
+    await verify(target, signal)
+    for (const source of chosen) {
+      const name = localFileName(source),
+        destination = joinRemotePath(directory, name)
+      const ticket = transferTasks.enqueue({
+        binding: target,
         direction: 'upload',
         itemKind: 'item',
         itemName: name,
-        sourcePath: localPath,
-        targetPath
-      }
-    )
-    if (!response) return
-    lastUploadedPath = response.targetPath || response.remotePath || targetPath
-  }
-  invalidateRemoteDirectoryCache(currentPath.value)
-  await loadDirectory(currentPath.value, { force: true })
-  if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
+        sourcePath: source,
+        targetPath: destination,
+        execute: (id) =>
+          sftpUploadPath(target.connectionId, source, directory, target.override, { taskId: id }),
+      })
+      void ticket.completed.then(refreshAfter)
+    }
+    notice.value = `已加入 ${chosen.length} 项上传，切换终端后仍会继续。`
+  })
 }
-function triggerUpload() {
-  if (remoteBusy.value) return
-  if (transferMode.value === 'terminal') {
-    if (!terminalDetectionReady.value) return
-    fileInput.value?.click()
+function uploadDroppedPaths(paths: string[]) {
+  dropHover.value = false
+  const signature = JSON.stringify([serverKey.value, remoteBrowser.path.value, [...new Set(paths)].sort()])
+  if (signature === lastDroppedPaths.signature && Date.now() - lastDroppedPaths.at < 800) return
+  if (paths.length) lastDroppedPaths = { signature, at: Date.now() }
+  void uploadPaths(paths)
+}
+async function downloadEntries(entries: BrowserEntry[], expected?: FileTargetBinding) {
+  const chosen = entries.map((entry) => ({ ...entry })),
+    directory = localBrowser.path.value
+  let target: FileTargetBinding
+  try {
+    target = expected ?? currentTarget()
+  } catch (reason) {
+    operationError.value = String(reason)
     return
   }
-  if (!remoteReady.value) return
-  void uploadSelectedLocalEntry()
+  await guardedAction(async (signal) => {
+    await verify(target, signal)
+    for (const entry of chosen) {
+      const destination = joinLocalPath(directory, entry.name)
+      const ticket = transferTasks.enqueue({
+        binding: target,
+        direction: 'download',
+        itemKind: entry.isDir ? 'folder' : 'file',
+        itemName: entry.name,
+        sourcePath: entry.path,
+        targetPath: destination,
+        execute: (id) =>
+          sftpDownloadPath(target.connectionId, entry.path, directory, entry.isDir, target.override, {
+            taskId: id,
+          }),
+      })
+      void ticket.completed.then(refreshAfter)
+    }
+    notice.value = `已加入 ${chosen.length} 项下载。`
+  })
+}
+async function mutation(
+  action: (target: FileTargetBinding, id: string, signal: AbortSignal) => Promise<unknown>,
+  expected: FileTargetBinding,
+) {
+  await guardedAction(async (signal) => {
+    await verify(expected, signal)
+    const id = taskId('operation')
+    await boundedOperation(
+      () => action(expected, id, signal),
+      45_000,
+      signal,
+      () => {
+        void cancelTask(id).catch(() => {})
+      },
+    )
+    if (sameFileTarget(expected, c.binding)) {
+      remoteBrowser.invalidate()
+      await remoteBrowser.load(remoteBrowser.path.value, { force: true, preserve: true })
+    }
+  })
+}
+function createDirectory() {
+  let target: FileTargetBinding
+  try {
+    target = currentTarget()
+  } catch {
+    return
+  }
+  const base = remoteBrowser.path.value,
+    name = window.prompt(`在 ${target.label} 的 ${base} 下创建目录`, 'new-folder')
+  if (name?.trim())
+    void mutation(
+      (target, id) =>
+        sftpCreateDirectory(target.connectionId, joinRemotePath(base, name.trim()), target.override, {
+          taskId: id,
+        }),
+      target,
+    )
+}
+function deleteEntries(entries: BrowserEntry[], expected?: FileTargetBinding) {
+  let target: FileTargetBinding
+  try {
+    target = expected ?? currentTarget()
+  } catch {
+    return
+  }
+  const chosen = entries.map((entry) => ({ ...entry }))
+  if (
+    !chosen.length ||
+    !window.confirm(
+      `从 ${target.label} 删除 ${chosen.length} 项？\n${chosen.map((entry) => entry.path).join('\n')}\n此操作无法撤销。`,
+    )
+  )
+    return
+  void mutation(async (target, id, signal) => {
+    for (const entry of chosen) {
+      if (signal.aborted) throw new Error('操作已取消')
+      await sftpDeletePath(target.connectionId, entry.path, entry.isDir, target.override, { taskId: id })
+    }
+  }, target)
+}
+function runMenuAction(action: () => void) {
+  currentContextMenu.value = null
+  action()
+  focusView()
+}
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    notice.value = '已复制'
+  } catch {
+    operationError.value = '复制失败，请选择文本后手动复制。'
+  }
+}
+function showMenu(event: MouseEvent | KeyboardEvent, entry: BrowserEntry, side: 'local' | 'remote') {
+  const rect = (event.target as HTMLElement).getBoundingClientRect(),
+    x = event instanceof MouseEvent ? event.clientX : rect.left,
+    y = event instanceof MouseEvent ? event.clientY : rect.bottom
+  const target = c.binding ? captureFileTarget(c.binding) : undefined
+  const items =
+    side === 'local'
+      ? [
+          {
+            label: entry.isDir ? '打开目录' : '打开文件位置',
+            action: () => {
+              if (entry.isDir) void localBrowser.load(entry.path)
+              else void localOpenPath(localParentPath(entry.path))
+            },
+          },
+          {
+            label: '上传到当前远端目录',
+            disabled: !ready.value,
+            action: () => void uploadPaths([entry.path]),
+          },
+          { label: '复制路径', action: () => void copyText(entry.path) },
+        ]
+      : [
+          {
+            label: entry.isDir ? '打开目录' : '编辑文件',
+            disabled: !ready.value,
+            action: () => {
+              if (!sameFileTarget(target ?? null, c.binding)) return
+              if (entry.isDir) void remoteBrowser.load(entry.path)
+              else void editor.openRemoteFileEditor({ ...entry, permissions: entry.permissions ?? '' })
+            },
+          },
+          {
+            label: '下载到本地目录',
+            disabled: !ready.value,
+            action: () => void downloadEntries([entry], target),
+          },
+          { label: '复制路径', action: () => void copyText(entry.path) },
+          {
+            label: '删除',
+            danger: true,
+            disabled: !ready.value,
+            action: () => deleteEntries([entry], target),
+          },
+        ]
+  currentContextMenu.value = {
+    x: Math.max(8, Math.min(x, window.innerWidth - 230)),
+    y: Math.max(8, Math.min(y, window.innerHeight - 220)),
+    name: entry.name,
+    items,
+  }
+  void nextTick(() =>
+    document.querySelector<HTMLButtonElement>('.file-context-menu button:not(:disabled)')?.focus(),
+  )
+}
+function menuKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    currentContextMenu.value = null
+    focusView()
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const buttons = [
+    ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+  ]
+  const current = buttons.indexOf(document.activeElement as HTMLButtonElement),
+    index =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? buttons.length - 1
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+  buttons[index]?.focus()
 }
 
-async function uploadSelectedFiles(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
+async function locateTerminalDirectory() {
+  await guardedAction(async (signal) => {
+    const actual = await connection.readIdentity(signal)
+    if (!c.binding || serverIdentityKey(props.connectionId, actual) !== c.binding.serverKey) {
+      await establish()
+      return
+    }
+    await remoteBrowser.load(actual.pwd, { preserve: false })
+  })
+}
+async function terminalBinding(signal: AbortSignal): Promise<FileTargetBinding> {
+  const identity = await connection.readIdentity(signal)
+  const host = identity.ips[0] || identity.hostname
+  terminalPath.value = terminalPath.value || identity.pwd
+  return {
+    terminalId: props.terminalId,
+    connectionId: props.connectionId,
+    generation: props.terminalConnectionGeneration,
+    revision: props.terminalContextVersion ?? 0,
+    serverKey: serverIdentityKey(props.connectionId, identity),
+    host,
+    username: identity.username,
+    label: `${identity.username}@${host}`,
+    source: 'terminal',
+    identity,
+    override: { targetHost: host, targetUsername: identity.username },
+  }
+}
+async function uploadSmallFiles(event: Event) {
+  const input = event.target as HTMLInputElement,
+    files = Array.from(input.files ?? [])
   input.value = ''
   if (!files.length) return
-
-  if (transferMode.value === 'terminal') {
-    await uploadFilesThroughTerminal(files)
-    return
-  }
-
-  let lastUploadedPath = ''
-  for (const file of files) {
-    const localPath =
-      (file as File & { path?: string }).path ?? window.prompt('输入本地文件完整路径', file.name) ?? ''
-    if (!localPath) {
-      error.value = '当前环境没有提供本地文件路径，请在 Tauri 客户端中上传文件。'
-      return
-    }
-    const targetPath = joinRemotePath(currentPath.value, localFileName(localPath) || file.name)
-    const response = await runTransfer(
-      `正在上传 ${file.name}...`,
-      (taskId) => sftpUploadFile(props.connectionId, localPath, currentPath.value, targetOverride.value, { taskId }),
-      {
+  await guardedAction(async (signal) => {
+    const target = await terminalBinding(signal),
+      base = terminalPath.value || target.identity!.pwd
+    for (const file of files) {
+      if (file.size > INLINE_TRANSFER_LIMIT) throw new Error(`${file.name} 超过 700 KB，请使用 SFTP。`)
+      const destination = joinRemotePath(base, file.name)
+      const ticket = transferTasks.enqueue({
+        binding: target,
+        mode: 'terminal',
         direction: 'upload',
-        itemKind: 'file',
         itemName: file.name,
-        sourcePath: localPath,
-        targetPath
-      }
-    )
-    if (!response) return
-    lastUploadedPath = response.targetPath || response.remotePath || targetPath
-  }
-  invalidateRemoteDirectoryCache(currentPath.value)
-  await loadDirectory(currentPath.value, { force: true })
-  if (lastUploadedPath) selectRemoteEntryByPath(lastUploadedPath)
-}
-
-async function uploadFilesThroughTerminal(files: File[]) {
-  if (!terminalDetectionReady.value) {
-    error.value = '当前终端未连接，无法通过终端通道上传。'
-    return
-  }
-  for (const file of files) {
-    if (file.size > INLINE_TRANSFER_LIMIT) {
-      error.value = `${file.name} 超过终端通道限制 ${formatSize(INLINE_TRANSFER_LIMIT)}，请使用 SFTP。`
-      return
+        sourcePath: file.name,
+        targetPath: destination,
+        execute: (_, signal) => terminalTransfer.upload(file, destination, target, signal),
+      })
+      void ticket.completed.then(refreshAfter)
     }
-    const defaultBase = currentTerminalTarget.value?.pwd || currentPath.value || '.'
-    const defaultPath = joinRemotePath(defaultBase === '.' ? '.' : defaultBase, file.name)
-    const remotePath = window.prompt('上传到远程路径', defaultPath)
-    if (!remotePath) return
-    status.value = `正在通过终端上传 ${file.name}...`
-    error.value = ''
-    const base64 = wrapBase64(arrayBufferToBase64(await file.arrayBuffer()))
-    const marker = `AI_TERM_UPLOAD_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const command = [
-      `base64 -d > ${shellQuote(remotePath)} <<'${marker}'`,
-      base64,
-      marker,
-      `printf '\\nAI Term uploaded: %s\\n' ${shellQuote(remotePath)}`
-    ].join('\n')
-    emit('writeTerminalInput', `${command}\n`)
-    status.value = `已发送上传命令：${remotePath}`
-  }
+  })
 }
-
-async function downloadEntry(entry: SftpFileEntry) {
-  await downloadRemoteEntry(entry)
-}
-
-async function uploadSelectedLocalEntry() {
-  if (!remoteReady.value || !selectedLocalEntry.value) {
-    error.value = '请先在本地用户目录中选择要上传的文件或文件夹。'
-    return
-  }
-  const item = selectedLocalEntry.value
-  const targetPath = joinRemotePath(currentPath.value, item.name)
-  const response = await runTransfer(
-    `正在上传 ${item.name}...`,
-    (taskId) => sftpUploadPath(props.connectionId, item.path, currentPath.value, targetOverride.value, { taskId }),
-    {
-      direction: 'upload',
-      itemKind: item.isDir ? 'folder' : 'file',
-      itemName: item.name,
-      sourcePath: item.path,
-      targetPath
-    }
-  )
-  if (!response) return
-  invalidateRemoteDirectoryCache(currentPath.value)
-  await loadDirectory(currentPath.value, { force: true })
-  selectRemoteEntryByPath(response.targetPath || response.remotePath || targetPath)
-}
-
-async function downloadSelectedRemoteEntry() {
-  if (!selectedRemoteEntry.value) {
-    error.value = '请先在远端目录中选择要下载的文件或文件夹。'
-    return
-  }
-  await downloadRemoteEntry(selectedRemoteEntry.value)
-}
-
-async function downloadRemoteEntry(entry: SftpFileEntry) {
-  if (!localPath.value) await loadLocalHome()
-  if (!localPath.value) return
-  const targetPath = joinLocalPath(localPath.value, entry.name)
-  const response = await runTransfer(
-    `正在下载 ${entry.name}...`,
-    (taskId) => sftpDownloadPath(props.connectionId, entry.path, localPath.value, entry.isDir, targetOverride.value, { taskId }),
-    {
-      direction: 'download',
-      itemKind: entry.isDir ? 'folder' : 'file',
-      itemName: entry.name,
-      sourcePath: entry.path,
-      targetPath
-    }
-  )
-  if (!response) return
-  await loadLocalDirectory(localPath.value)
-  selectLocalEntryByPath(response.localPath || response.targetPath || targetPath)
-}
-
-function downloadThroughTerminal(path = terminalRemotePath.value) {
-  if (!terminalDetectionReady.value) {
-    error.value = '当前终端未连接，无法通过终端通道下载。'
-    return
-  }
-  const remotePath = path.trim() || window.prompt('远程文件路径') || ''
-  if (!remotePath) return
-  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const begin = `__AI_TERM_DOWNLOAD_BEGIN_${id}__`
-  const end = `__AI_TERM_DOWNLOAD_END_${id}__`
-  pendingDownload.value = {
-    begin,
-    end,
-    name: remotePath.split('/').filter(Boolean).pop() || 'download.bin'
-  }
-  terminalRemotePath.value = remotePath
-  status.value = `正在通过终端下载 ${remotePath}...`
-  error.value = ''
-  emit(
-    'writeTerminalInput',
-    `printf '\\n${begin}\\n'; base64 ${shellQuote(remotePath)}; printf '\\n${end}\\n'\n`
-  )
-}
-
-async function createDirectory() {
-  if (!remoteReady.value) return
-  const name = window.prompt('新建目录名')
-  if (!name?.trim()) return
-  const response = await runTransfer(`正在创建 ${name.trim()}...`, (taskId) =>
-    sftpCreateDirectory(props.connectionId, joinRemotePath(currentPath.value, name.trim()), targetOverride.value, { taskId })
-  )
-  if (!response) return
-  invalidateRemoteDirectoryCache(currentPath.value)
-  await loadDirectory(currentPath.value, { force: true })
-}
-
-async function deleteEntry(entry: SftpFileEntry) {
-  if (!remoteReady.value) return
-  if (!window.confirm(`删除 ${entry.name}？`)) return
-  const response = await runTransfer(`正在删除 ${entry.name}...`, (taskId) =>
-    sftpDeletePath(props.connectionId, entry.path, entry.isDir, targetOverride.value, { taskId })
-  )
-  if (!response) return
-  invalidateRemoteDirectoryCache(currentPath.value)
-  await loadDirectory(currentPath.value, { force: true })
-}
-
-function selectRemoteEntryByPath(path: string) {
-  const normalized = normalizeRemoteComparePath(path)
-  selectedRemoteEntry.value = entries.value.find((entry) => normalizeRemoteComparePath(entry.path) === normalized) ?? null
-}
-
-function selectLocalEntryByPath(path: string) {
-  const normalized = normalizeLocalComparePath(path)
-  selectedLocalEntry.value = localEntries.value.find((entry) => normalizeLocalComparePath(entry.path) === normalized) ?? null
-}
-
-async function openLastTransferLocation() {
-  const task = lastTransfer.value
-  if (!task?.targetPath) return
-  try {
-    if (task.direction === 'download') {
-      await localOpenPath(task.targetPath)
-      return
-    }
-    const remotePath = task.itemKind === 'folder' ? task.targetPath : remoteParentPath(task.targetPath)
-    await loadDirectory(remotePath)
-    selectRemoteEntryByPath(task.targetPath)
-  } catch (err) {
-    error.value = formatError(err)
-  }
-}
-
-async function copyLastTransferPath() {
-  const path = lastTransfer.value?.targetPath
+async function downloadSmallFile() {
+  const path = terminalPath.value.trim()
   if (!path) return
-  await copyText(path)
+  await guardedAction(async (signal) => {
+    const target = await terminalBinding(signal),
+      name = localFileName(path),
+      destination = joinLocalPath(localBrowser.path.value || localHome.value, name)
+    const exists = localBrowser.entries.value.some((entry) => entry.path === destination)
+    if (exists && !window.confirm(`覆盖本地文件 ${destination}？`)) return
+    const ticket = transferTasks.enqueue({
+      binding: target,
+      mode: 'terminal',
+      direction: 'download',
+      itemName: name,
+      sourcePath: path,
+      targetPath: destination,
+      execute: (_, signal) => terminalTransfer.download(path, destination, target, signal, exists),
+    })
+    void ticket.completed.then(refreshAfter)
+  })
 }
-
-async function copyText(value: string) {
-  if (!value) return
-  if (!navigator.clipboard?.writeText) {
-    error.value = '当前环境不支持剪贴板写入。'
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(value)
-    status.value = '已复制路径'
-  } catch (err) {
-    error.value = formatError(err)
+function savePair() {
+  locations.savePair(serverKey.value, pairName.value, localBrowser.path.value, remoteBrowser.path.value)
+  pairName.value = ''
+}
+async function usePair(local: string, remote: string) {
+  pairsOpen.value = false
+  await Promise.all([
+    localBrowser.load(local, { preserve: false }),
+    remoteBrowser.load(remote, { preserve: false }),
+  ])
+}
+function setSplit(value: number) {
+  preferences.value.split = Math.max(35, Math.min(65, value))
+}
+function resizeMove(event: PointerEvent) {
+  const rect = browsersElement.value?.getBoundingClientRect()
+  if (rect) setSplit(((event.clientX - rect.left) / rect.width) * 100)
+}
+function resizeEnd() {
+  window.removeEventListener('pointermove', resizeMove)
+  window.removeEventListener('pointerup', resizeEnd)
+  window.removeEventListener('pointercancel', resizeEnd)
+  locations.persist()
+}
+function resizeStart(event: PointerEvent) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  window.addEventListener('pointermove', resizeMove)
+  window.addEventListener('pointerup', resizeEnd)
+  window.addEventListener('pointercancel', resizeEnd)
+}
+function resizeKey(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  setSplit(
+    event.key === 'Home'
+      ? 35
+      : event.key === 'End'
+        ? 65
+        : preferences.value.split + (event.key === 'ArrowRight' ? 2 : -2),
+  )
+  locations.persist()
+}
+function editorKeydown(event: KeyboardEvent) {
+  event.stopPropagation()
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    editor.closeRemoteFileEditor()
+  } else if (event.key === 'Tab') {
+    trapTabFocus(event, event.currentTarget as HTMLElement)
   }
 }
-
-function identityProbeText(snapshot: string) {
-  const pending = pendingIdentify.value
-  if (!pending) return snapshot.slice(-160_000)
-  return `${snapshot.slice(-160_000)}
-${pending.output}`.slice(-160_000)
+function windowFocus() {
+  if (props.active && ready.value && !actionBusy.value && !editor.remoteEditor?.saving) void activate()
 }
-
-function finishTerminalDownloadIfReady(snapshot: string) {
-  const pending = pendingDownload.value
-  if (!pending) return
-  const beginIndex = snapshot.lastIndexOf(pending.begin)
-  const endIndex = snapshot.lastIndexOf(pending.end)
-  if (beginIndex === -1 || endIndex === -1 || endIndex <= beginIndex) return
-  const raw = snapshot.slice(beginIndex + pending.begin.length, endIndex)
-  const base64 = raw.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^A-Za-z0-9+/=]/g, '')
-  if (!base64) {
-    error.value = '没有从终端输出中解析到文件内容。'
-    pendingDownload.value = null
-    return
-  }
-  if (base64.length > Math.ceil((INLINE_TRANSFER_LIMIT * 4) / 3) + 1024) {
-    error.value = `终端通道下载超过 ${formatSize(INLINE_TRANSFER_LIMIT)}，请使用 SFTP。`
-    pendingDownload.value = null
-    return
-  }
-  try {
-    saveBase64File(base64, pending.name)
-    status.value = `已生成下载文件：${pending.name}`
-  } catch (err) {
-    error.value = formatError(err)
-  } finally {
-    pendingDownload.value = null
-  }
+const dropUnlisteners: (() => void)[] = []
+function canAcceptDrop() {
+  return props.active && mode.value === 'sftp' && ready.value && !actionBusy.value && !editor.remoteEditor
 }
-
-function finishTerminalIdentifyIfReady(snapshot: string) {
-  const pending = pendingIdentify.value
-  if (!pending) return
-  const parsed = parseTerminalIdentitySnapshot(snapshot.slice(-160_000), pending)
-  if (!parsed.complete) return
-  const shouldUseForSftp = pending.useForSftp
-  if (!parsed.host) {
-    currentTerminalTarget.value = null
-    identifying.value = false
-    pendingIdentify.value = null
-    if (shouldUseForSftp) {
-      if (isBastionConnection.value) {
-        requiresExplicitBastionProbe.value = true
-        bastionAutoProbeAttempted.value = true
-        error.value = '未能从当前终端解析服务器 IP 和服务器用户名，已停止 SFTP 探测。'
-        status.value = ''
-        saveTransferState()
-        return
-      }
-      if (props.active) {
-        error.value = ''
-        useConfiguredTargetForSftp('未识别到当前终端目标，已使用连接配置目标打开 SFTP。')
-      }
-      return
-    }
-    error.value = '没有识别到当前服务器 IP 或主机名。直连服务器可直接使用配置目标 SFTP。'
-    return
-  }
-
-  currentTerminalTarget.value = {
-    host: parsed.host,
-    ip: parsed.ip,
-    username: parsed.values.user,
-    hostname: parsed.values.hostname || parsed.host,
-    pwd: parsed.values.pwd || '.',
-    label: `${parsed.values.user || '未知用户'}@${parsed.host} · ${parsed.values.hostname || parsed.host} · ${parsed.values.pwd || '.'}`
-  }
-  terminalRemotePath.value = parsed.values.pwd || terminalRemotePath.value
-  status.value = `已识别当前终端：${currentTerminalTarget.value.label}`
-  identifying.value = false
-  pendingIdentify.value = null
-  if (shouldUseForSftp) void useTerminalTargetForSftp()
+function registerDropListener(subscription: Promise<() => void>) {
+  void subscription
+    .then((stop) => {
+      if (disposed) stop()
+      else dropUnlisteners.push(stop)
+    })
+    .catch(() => {})
 }
-
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
-  }
-  return btoa(binary)
-}
-
-function wrapBase64(value: string) {
-  return value.match(/.{1,76}/g)?.join('\n') ?? value
-}
-
-function saveBase64File(base64: string, name: string) {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  const url = URL.createObjectURL(new Blob([bytes]))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
-}
+onMounted(() => {
+  window.addEventListener('focus', windowFocus)
+  registerDropListener(
+    onTauriFileDrop((paths) => {
+      if (canAcceptDrop()) uploadDroppedPaths(paths)
+    }),
+  )
+  registerDropListener(
+    onTauriFileDropHover((paths) => {
+      dropHover.value = Boolean(paths.length && canAcceptDrop())
+    }),
+  )
+  registerDropListener(
+    onTauriFileDropCancelled(() => {
+      dropHover.value = false
+    }),
+  )
+})
+onBeforeUnmount(() => {
+  disposed = true
+  storeView()
+  cancelAction()
+  abortDirectoryOperations()
+  resizeEnd()
+  dropUnlisteners.forEach((stop) => stop())
+  window.removeEventListener('focus', windowFocus)
+  transferTasks.cancelTerminal(props.terminalId)
+})
 </script>
 
 <template>
-  <section class="files-panel">
-    <div class="panel-head sftp-panel-head">
+  <section
+    ref="panel"
+    class="files-panel file-workspace"
+    :class="`density-${preferences.density}`"
+    :style="{ '--file-split': `${preferences.split}%` }"
+    @focusin="focusWithin"
+  >
+    <header class="sftp-panel-head file-workspace-head">
       <div class="sftp-title-copy">
-        <strong>文件传输</strong>
-        <span>{{ sftpHeaderSummary }}</span>
+        <strong>文件</strong><span :title="headerLabel">{{ headerLabel }}</span>
       </div>
-      <div class="transfer-mode-tabs" role="tablist" aria-label="传输模式">
-        <button type="button" :class="{ active: transferMode === 'sftp' }" role="tab" :aria-selected="transferMode === 'sftp'" @click="selectTransferMode('sftp')">SFTP</button>
-        <button type="button" :class="{ active: transferMode === 'terminal' }" role="tab" :aria-selected="transferMode === 'terminal'" @click="selectTransferMode('terminal')">终端传输</button>
+      <div class="transfer-mode-tabs" role="group" aria-label="传输方式">
+        <button
+          type="button"
+          :class="{ active: mode === 'sftp' }"
+          :aria-pressed="mode === 'sftp'"
+          @click="selectTransferMode('sftp')"
+        >
+          SFTP</button
+        ><button
+          type="button"
+          :class="{ active: mode === 'terminal' }"
+          :aria-pressed="mode === 'terminal'"
+          @click="selectTransferMode('terminal')"
+        >
+          终端传输
+        </button>
       </div>
       <div class="panel-actions">
-        <button v-if="isBastionConnection" class="text-button" type="button" title="检测当前终端 SFTP" aria-label="检测当前终端 SFTP" :disabled="!terminalDetectionReady || remoteBusy || taskInProgress" @click="openCurrentTerminalSftp()"><UiIcon name="terminal" size="14" /><span>检测目标</span></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="刷新" aria-label="刷新" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(currentPath, { force: true })"><UiIcon name="refresh" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="新建目录" aria-label="新建目录" :disabled="!remoteReady || remoteBusy" @click="createDirectory"><UiIcon name="folder" /></button>
-        <button v-if="transferMode === 'sftp'" class="icon-button" type="button" title="下载选中远端项到本地目录" aria-label="下载选中远端项到本地目录" :disabled="!remoteReady || remoteBusy || !selectedRemoteEntry" @click="downloadSelectedRemoteEntry"><UiIcon name="download" /></button>
-        <button class="icon-button" type="button" :title="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :aria-label="transferMode === 'sftp' ? '上传选中本地项到远端目录' : '上传小文件'" :disabled="!transferActionReady || remoteBusy || (transferMode === 'sftp' && !selectedLocalEntry)" @click="triggerUpload"><UiIcon name="upload" /></button>
-        <button v-if="activeTask" class="icon-button danger" type="button" title="取消当前任务" aria-label="取消当前任务" :disabled="activeTask.cancelling" @click="cancelActiveTask">
-          <span v-if="activeTask.cancelling" class="spinner-dot" aria-hidden="true" /><UiIcon v-else name="close" />
-        </button>
-        <input ref="fileInput" type="file" multiple class="visually-hidden" @change="uploadSelectedFiles" />
-      </div>
-    </div>
-
-    <div
-      v-if="status || error || activeTask || lastTransfer"
-      class="sftp-feedback"
-      :class="{
-        error: Boolean(error),
-        complete: !error && !activeTransferTask && Boolean(lastTransfer)
-      }"
-    >
-      <p v-if="error">{{ error }}</p>
-      <template v-else-if="activeTransferTask">
-        <div class="transfer-task-head">
-          <strong>{{ transferActionLabel(activeTransferTask) }}{{ transferKindLabel(activeTransferTask) }} · {{ activeTransferTask.itemName }}</strong>
-          <span>{{ transferStatusLabel(activeTransferTask) }}</span>
-        </div>
-        <div class="transfer-progress" :class="{ indeterminate: !hasDeterminateProgress(activeTransferTask) }">
-          <span :style="hasDeterminateProgress(activeTransferTask) ? { width: transferProgressWidth(activeTransferTask) } : undefined" />
-        </div>
-        <div class="transfer-task-stats">
-          <span><strong>已传</strong>{{ transferAmountLabel(activeTransferTask) }}</span>
-          <span><strong>速度</strong>{{ transferSpeedLabel(activeTransferTask) }}</span>
-          <span><strong>剩余</strong>{{ transferRemainingLabel(activeTransferTask) }}</span>
-          <span><strong>完成</strong>{{ transferCompletionLabel(activeTransferTask) }}</span>
-        </div>
-        <div class="transfer-task-paths">
-          <span :title="activeTransferTask.sourcePath">{{ activeTransferTask.sourcePath }}</span>
-          <span :title="activeTransferTask.targetPath">{{ activeTransferTask.targetPath }}</span>
-        </div>
-      </template>
-      <template v-else-if="lastTransfer">
-        <div class="transfer-task-head">
-          <strong>{{ transferActionLabel(lastTransfer) }}{{ transferKindLabel(lastTransfer) }} · {{ lastTransfer.itemName }}</strong>
-          <span>{{ transferStatusLabel(lastTransfer) }}</span>
-        </div>
-        <div class="transfer-progress complete">
-          <span />
-        </div>
-        <div class="transfer-task-stats">
-          <span><strong>已传</strong>{{ transferAmountLabel(lastTransfer) }}</span>
-          <span><strong>平均</strong>{{ transferSpeedLabel(lastTransfer) }}</span>
-          <span><strong>耗时</strong>{{ transferElapsedLabel(lastTransfer) }}</span>
-          <span><strong>完成</strong>{{ transferCompletionLabel(lastTransfer) }}</span>
-        </div>
-        <div class="transfer-task-paths">
-          <span :title="lastTransfer.sourcePath">{{ lastTransfer.sourcePath }}</span>
-          <span :title="lastTransfer.targetPath || lastTransfer.progressText">{{ lastTransfer.targetPath || lastTransfer.progressText }}</span>
-        </div>
-        <div v-if="lastTransfer.status === 'done'" class="transfer-task-actions">
-          <button type="button" @click="openLastTransferLocation">{{ lastTransfer.direction === 'download' ? '打开位置' : '打开远端目录' }}</button>
-          <button type="button" @click="copyLastTransferPath">复制路径</button>
-        </div>
-      </template>
-      <p v-else>{{ status || activeTask?.label }}</p>
-    </div>
-
-    <div v-if="currentTerminalTarget" class="terminal-target-card">
-      <div>
-        <span>当前终端</span>
-        <strong>{{ currentTerminalTarget.username }}@{{ currentTerminalTarget.host }}</strong>
-        <small>{{ currentTerminalTarget.hostname }} · {{ currentTerminalTarget.pwd }}</small>
-      </div>
-      <button v-if="isBastionConnection" type="button" :disabled="remoteBusy" @click="useTerminalTargetForSftp">打开 SFTP</button>
-    </div>
-
-    <div v-if="transferMode === 'sftp' && selectedTarget" class="bastion-targets">
-      <div class="selected-target">
-        <span>当前 SFTP 目标</span>
-        <strong>{{ selectedTarget.username || 'user' }}@{{ selectedTarget.host }}</strong>
-        <button type="button" :disabled="remoteBusy" @click="clearSelectedTarget">清除目标</button>
-      </div>
-      <button v-if="probeStateFor(selectedTarget) && !probeStateFor(selectedTarget)?.available" class="terminal-fallback-button" type="button" @click="switchToTerminalMode">
-        使用终端传输
-      </button>
-    </div>
-
-    <div v-if="transferMode === 'terminal'" class="terminal-transfer-panel">
-      <p class="terminal-transfer-note">
-        通过当前已登录终端传输小文件，适合无法直接 SFTP 的环境。单文件限制 {{ formatSize(INLINE_TRANSFER_LIMIT) }}。
-      </p>
-      <button type="button" :disabled="!terminalDetectionReady || identifying" @click="() => identifyCurrentTerminalTarget()">
-        {{ identifying ? '识别中...' : '识别当前服务器' }}
-      </button>
-      <label>
-        <span>远程文件路径</span>
-        <input v-model="terminalRemotePath" placeholder="/tmp/app.log" :disabled="!terminalDetectionReady || Boolean(pendingDownload)" />
-      </label>
-      <div class="terminal-transfer-actions">
-        <button type="button" :disabled="!terminalDetectionReady || Boolean(pendingDownload)" @click="triggerUpload">上传小文件</button>
-        <button type="button" :disabled="!terminalDetectionReady || Boolean(pendingDownload)" @click="downloadThroughTerminal()">下载远程文件</button>
-      </div>
-    </div>
-
-    <div v-else class="sftp-transfer-workbench">
-      <div class="transfer-target-strip">
-        <span class="transfer-route-item" :title="localPath || localHome || '本地目录未加载'">
-          <UiIcon name="download" size="14" />
-          <strong>下载到</strong>
-          <em>{{ localPath || localHome || '本地目录未加载' }}</em>
-        </span>
-        <span class="transfer-route-item" :title="currentPath">
-          <UiIcon name="upload" size="14" />
-          <strong>上传到</strong>
-          <em>{{ currentPath }}</em>
-        </span>
-      </div>
-      <div class="transfer-browser">
-        <section class="transfer-pane local-pane">
-          <div class="transfer-pane-head">
-            <div class="transfer-pane-title">
-              <strong>本地</strong>
-              <span>{{ localPaneSummary }}</span>
-            </div>
-            <nav ref="localCrumbNav" class="transfer-pane-path" :title="localPath || localHome" aria-label="本地路径导航">
-              <button v-for="crumb in localBreadcrumbs" :key="crumb.path" type="button" :title="crumb.path" @click="loadLocalDirectory(crumb.path)">{{ crumb.label }}</button>
-            </nav>
-          </div>
-          <div class="local-pathbar">
-            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="localLoading || localPathHistoryIndex <= 0" @click="goLocalBack"><UiIcon name="arrow-left" /></button>
-            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="localLoading || localPathHistoryIndex >= localPathHistory.length - 1" @click="goLocalForward"><UiIcon name="arrow-right" /></button>
-            <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="localLoading" @click="goLocalParent"><UiIcon name="arrow-up" /></button>
-            <select class="root-directory-select" :value="currentLocalRoot" :disabled="localLoading || localRoots.length === 0" aria-label="切换根目录" title="切换根目录" @change="selectLocalRoot">
-              <option value="" disabled>根目录</option>
-              <option v-for="root in localRoots" :key="root" :value="root">{{ rootLabel(root) }}</option>
-            </select>
-            <input v-model="localPathDraft" :disabled="localLoading" aria-label="本地目录路径" placeholder="用户目录" @keydown.enter="loadLocalDirectory(localPathDraft)" />
-            <button type="button" :disabled="localLoading" @click="loadLocalDirectory(localPathDraft)">打开</button>
-            <button type="button" :disabled="localLoading || !localHome" @click="loadLocalDirectory(localHome)">用户目录</button>
-          </div>
-          <div class="file-list">
-            <p v-if="localLoading && localEntries.length === 0" class="empty-state">正在加载本地目录...</p>
-            <p v-else-if="sortedLocalEntries.length === 0" class="empty-state">本地目录为空</p>
-            <article
-              v-for="entry in sortedLocalEntries"
-              :key="entry.path"
-              class="file-row"
-              :class="{ directory: entry.isDir, active: selectedLocalEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
-              tabindex="0"
-              :aria-label="`${entry.isDir ? '本地目录' : '本地文件'} ${entry.name}`"
-              @click="selectLocalEntry(entry)"
-              @dblclick="openLocalEntry(entry)"
-              @keydown.enter.self.prevent="openLocalEntry(entry)"
-              @keydown.space.self.prevent="selectLocalEntry(entry)"
-              @contextmenu.prevent.stop="openLocalContextMenu($event, entry)"
-            >
-              <div class="file-main">
-                <span class="file-type-icon" :class="{ folder: entry.isDir, file: !entry.isDir }" aria-hidden="true"><UiIcon :name="entry.isDir ? 'folder' : 'file'" size="17" /></span>
-                <div class="file-copy">
-                  <strong :title="entry.name">{{ entry.name }}</strong>
-                  <span class="file-meta">
-                    <span v-if="!entry.isDir">{{ formatSize(entry.size) }}</span>
-                    <span>{{ formatLocalModified(entry.modified) }}</span>
-                  </span>
-                </div>
-              </div>
-              <div class="file-actions">
-                <button class="icon-button" type="button" title="打开文件位置" aria-label="打开文件位置" @click.stop="openLocalFileLocation(entry)"><UiIcon name="external-link" /></button>
-                <button class="icon-button" type="button" title="上传到远端目录" aria-label="上传到远端目录" :disabled="!remoteReady || remoteBusy" @click.stop="selectedLocalEntry = entry; uploadSelectedLocalEntry()"><UiIcon name="upload" /></button>
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section
-          ref="remoteDropZone"
-          class="transfer-pane remote-pane"
-          :class="{ 'drop-active': remoteDropActive, 'directory-loading': directoryLoading }"
-          :aria-busy="directoryLoading"
-          @dragenter="handleRemoteDragEnter"
-          @dragover="handleRemoteDragOver"
-          @dragleave="handleRemoteDragLeave"
-          @drop="handleRemoteDrop"
+        <button v-if="props.profile" type="button" :disabled="c.busy || actionBusy" @click="establish()">
+          <UiIcon name="network" size="14" />{{ ready ? '重新检测' : '连接' }}</button
+        ><button v-if="c.busy" type="button" @click="connection.cancel">取消连接</button
+        ><button v-if="actionBusy" type="button" @click="cancelAction">取消操作</button
+        ><button
+          class="icon-button"
+          type="button"
+          aria-label="文件显示设置"
+          :title="preferences.density === 'compact' ? '切换舒适行高' : '切换紧凑行高'"
+          @click="toggleDensity"
         >
-          <div class="transfer-pane-head">
-            <div class="transfer-pane-title">
-              <strong>远端</strong>
-              <span class="transfer-pane-summary" role="status" aria-live="polite" :title="directoryLoading ? remoteDirectoryLoadingLabel : remotePaneSummary">
-                <i v-if="directoryLoading" class="spinner-dot" aria-hidden="true" />
-                {{ remotePaneSummary }}
-              </span>
-            </div>
-            <nav ref="remoteCrumbNav" class="transfer-pane-path" :title="currentPath" aria-label="远端路径导航">
-              <button v-for="crumb in remoteBreadcrumbs" :key="crumb.path" type="button" :title="crumb.path" @click="loadDirectory(crumb.path)">{{ crumb.label }}</button>
-            </nav>
-          </div>
-          <div class="sftp-pathbar">
-            <button class="icon-button" type="button" title="后退" aria-label="后退" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex <= 0" @click="goRemoteBack"><UiIcon name="arrow-left" /></button>
-            <button class="icon-button" type="button" title="前进" aria-label="前进" :disabled="!remoteReady || remoteBusy || remotePathHistoryIndex >= remotePathHistory.length - 1" @click="goRemoteForward"><UiIcon name="arrow-right" /></button>
-            <button class="icon-button" type="button" title="上级目录" aria-label="上级目录" :disabled="!remoteReady || remoteBusy" @click="goParent"><UiIcon name="arrow-up" /></button>
-            <input v-model="pathDraft" :disabled="!remoteReady || remoteBusy" aria-label="远程目录路径" placeholder="/home/app" @keydown.enter="loadDirectory(pathDraft)" />
-            <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory(pathDraft)">打开</button>
-            <button type="button" :disabled="!remoteReady || remoteBusy" @click="loadDirectory('.')">主目录</button>
-          </div>
-          <div class="file-list">
-            <div v-if="remoteDropActive" class="remote-drop-overlay" aria-live="polite">
-              <UiIcon name="upload" size="22" />
-              <strong>释放后上传到远端目录</strong>
-              <span>{{ currentPath }}</span>
-            </div>
-            <div v-if="!remoteConnectionAvailable" class="sftp-empty-state" role="status">
-              <UiIcon name="folder" size="28" />
-              <strong>选择一个远程会话</strong>
-              <p>在左侧打开 SSH 连接，或切换到已连接的终端，即可浏览远程文件。</p>
-            </div>
-            <p v-else-if="isBastionConnection && !terminalSessionConnected" class="empty-state">终端连接已断开，当前 SFTP 目标已失效。</p>
-            <p v-else-if="!remoteReady" class="empty-state">请点击顶部的“检测当前终端 SFTP”。</p>
-            <p v-else-if="directoryLoading && entries.length === 0" class="empty-state" role="status" aria-live="polite">正在加载 SFTP 目录...</p>
-            <p v-else-if="sortedEntries.length === 0" class="empty-state">当前目录为空</p>
-            <article
-              v-for="entry in sortedEntries"
-              :key="entry.path"
-              class="file-row"
-              :class="{ directory: entry.isDir, active: selectedRemoteEntry?.path === entry.path, 'hidden-entry': isHiddenEntry(entry.name) }"
-              tabindex="0"
-              :aria-label="`${entry.isDir ? '远程目录' : '远程文件'} ${entry.name}`"
-              @click="selectRemoteEntry(entry)"
-              @dblclick="openEntry(entry)"
-              @keydown.enter.self.prevent="openEntry(entry)"
-              @keydown.space.self.prevent="selectRemoteEntry(entry)"
-              @contextmenu.prevent.stop="openRemoteContextMenu($event, entry)"
-            >
-              <div class="file-main">
-                <span class="file-type-icon" :class="{ folder: entry.isDir, file: !entry.isDir }" aria-hidden="true"><UiIcon :name="entry.isDir ? 'folder' : 'file'" size="17" /></span>
-                <div class="file-copy">
-                  <strong :title="entry.name">{{ entry.name }}</strong>
-                  <span class="file-meta">
-                    <span>{{ entry.permissions || '权限未知' }}</span>
-                    <span v-if="!entry.isDir">{{ formatSize(entry.size) }}</span>
-                    <span>{{ formatRemoteModified(entry.modified) }}</span>
-                  </span>
-                </div>
-              </div>
-              <div class="file-actions">
-                <button v-if="entry.isDir" class="icon-button" type="button" title="打开目录" aria-label="打开目录" :disabled="remoteBusy" @click.stop="openEntry(entry)"><UiIcon name="folder-open" /></button>
-                <button v-else class="icon-button" type="button" title="编辑远端文件" aria-label="编辑远端文件" :disabled="remoteBusy" @click.stop="openEntry(entry)"><UiIcon name="edit" /></button>
-                <button class="icon-button" type="button" title="下载到本地目录" aria-label="下载到本地目录" :disabled="remoteBusy" @click.stop="downloadEntry(entry)"><UiIcon name="download" /></button>
-                <button class="icon-button danger" type="button" title="删除" aria-label="删除" :disabled="remoteBusy" @click.stop="deleteEntry(entry)"><UiIcon name="trash" /></button>
-              </div>
-            </article>
-          </div>
-        </section>
+          <UiIcon name="list" size="15" /></button
+        ><button
+          class="icon-button"
+          type="button"
+          :aria-label="preferences.showHidden ? '隐藏隐藏文件' : '显示隐藏文件'"
+          :aria-pressed="preferences.showHidden"
+          @click="toggleHidden"
+        >
+          <UiIcon :name="preferences.showHidden ? 'eye' : 'eye-off'" size="15" />
+        </button>
       </div>
+    </header>
+
+    <div v-if="c.busy || c.error" class="file-connection-status" :class="{ error: !c.busy }" role="status">
+      <div>
+        <strong>{{ stageLabel }}</strong
+        ><span v-if="c.busy">可以切换终端，当前连接流程会保留。</span>
+      </div>
+      <button v-if="routeChanged" type="button" @click="emit('connectProfile', connectionId)">
+        按新配置打开
+      </button>
+      <button v-if="!c.busy && profile" type="button" @click="establish()">重试</button
+      ><button v-if="profile" type="button" :disabled="c.busy" @click="manualOpen = !manualOpen">
+        手动指定
+      </button>
+    </div>
+    <details v-if="c.failures.length" class="file-connection-failures">
+      <summary>{{ c.failures.length }} 个地址的连接记录</summary>
+      <ul>
+        <li v-for="failure in c.failures" :key="failure.host">
+          <strong>{{ failure.host }} · {{ CONNECTION_FAILURE_LABELS[failure.kind] }}</strong>
+          <p>{{ formatError(failure.message) }}</p>
+        </li>
+      </ul>
+    </details>
+    <form
+      v-if="manualOpen"
+      class="file-manual-target"
+      @submit.prevent="establish({ host: manualHost, username: manualUsername })"
+    >
+      <label>服务器 IP / 主机名<input v-model="manualHost" required placeholder="10.20.0.17" /></label
+      ><label>账号<input v-model="manualUsername" required placeholder="deploy" /></label
+      ><button type="submit" :disabled="c.busy">连接此目标</button
+      ><button type="button" @click="manualOpen = false">收起</button>
+    </form>
+    <div
+      v-if="notice || operationError"
+      class="file-operation-notice"
+      :class="{ error: Boolean(operationError) }"
+      role="status"
+    >
+      <span>{{ operationError || notice }}</span
+      ><button class="icon-button" type="button" aria-label="关闭提示" @click="dismissNotice">
+        <UiIcon name="close" size="13" />
+      </button>
     </div>
 
-    <teleport to="body">
-      <div v-if="fileContextMenu" class="context-menu-scrim" role="presentation" @click="closeFileContextMenu" @contextmenu.prevent="closeFileContextMenu" />
-      <section v-if="fileContextMenu" class="context-menu file-context-menu" role="menu" :style="{ left: `${fileContextMenu.x}px`, top: `${fileContextMenu.y}px` }">
-        <strong>{{ fileContextMenu.title }}</strong>
-        <button
-          v-for="item in fileContextMenu.items"
-          :key="item.id"
+    <div v-if="mode === 'sftp'" class="file-workspace-tools">
+      <div>
+        <button type="button" :disabled="!ready" :aria-expanded="pairsOpen" @click="pairsOpen = !pairsOpen">
+          <UiIcon name="pin" size="14" />路径组合</button
+        ><button
+          type="button"
+          :disabled="!ready || !canUseTerminal || actionBusy"
+          title="定位到终端当前目录"
+          @click="locateTerminalDirectory"
+        >
+          <UiIcon name="terminal" size="14" />终端目录
+        </button>
+      </div>
+      <div>
+        <button type="button" :disabled="!ready || actionBusy" @click="createDirectory">新建目录</button
+        ><button
+          type="button"
+          :disabled="!ready || actionBusy || !remoteBrowser.selectedEntries.value.length"
+          @click="deleteEntries(remoteBrowser.selectedEntries.value)"
+        >
+          删除选中
+        </button>
+      </div>
+    </div>
+    <section v-if="pairsOpen && mode === 'sftp'" class="file-path-pairs">
+      <form @submit.prevent="savePair">
+        <label
+          >保存当前路径组合<input
+            v-model="pairName"
+            maxlength="80"
+            placeholder="例如：发布目录"
+            required /></label
+        ><button type="submit">保存</button><button type="button" @click="pairsOpen = false">收起</button>
+      </form>
+      <ul>
+        <li v-for="pair in saved.pairs" :key="pair.id">
+          <button type="button" @click="usePair(pair.local, pair.remote)">
+            <strong>{{ pair.name }}</strong
+            ><span>{{ pair.local }} → {{ pair.remote }}</span></button
+          ><button
+            class="icon-button"
+            type="button"
+            :aria-label="`删除路径组合 ${pair.name}`"
+            @click="locations.deletePair(serverKey, pair.id)"
+          >
+            <UiIcon name="trash" size="14" />
+          </button>
+        </li>
+      </ul>
+      <p v-if="!saved.pairs.length">当前本地和远端目录可以一起保存，之后一次打开。</p>
+    </section>
+
+    <div v-if="activeJob" class="file-active-transfer" role="status">
+      <div>
+        <strong>{{ activeJob.itemName }}</strong
+        ><span
+          >{{ activeJob.binding.label }} ·
+          {{
+            activeJob.status === 'queued' ? '排队中' : `${Math.round(activeJob.progressPercent ?? 0)}%`
+          }}</span
+        ><button type="button" :disabled="activeJob.cancelling" @click="transferTasks.cancel(activeJob.id)">
+          取消
+        </button>
+      </div>
+      <progress max="100" :value="activeJob.progressPercent ?? undefined" aria-label="文件传输进度" />
+    </div>
+
+    <div v-show="mode === 'sftp'" ref="browsersElement" class="transfer-browser file-browsers">
+      <FileBrowserPane
+        ref="localPane"
+        :active="props.active && mode === 'sftp'"
+        :transfer-enabled="ready && !actionBusy"
+        side="local"
+        :browser="localBrowser"
+        :enabled="true"
+        :recent="saved.localRecent"
+        :bookmarks="saved.localBookmarks"
+        :roots="localRoots"
+        :home="localHome"
+        @open="localOpenPath($event.path)"
+        @menu="(event, entry) => showMenu(event, entry, 'local')"
+        @bookmark="locations.toggleBookmark(serverKey, 'local', $event)"
+        @transfer="uploadPaths(localBrowser.selectedEntries.value.map((entry) => entry.path))"
+      />
+      <div
+        class="file-pane-resizer"
+        role="separator"
+        aria-label="调整本地和远端宽度"
+        aria-orientation="vertical"
+        :aria-valuenow="Math.round(preferences.split)"
+        aria-valuemin="35"
+        aria-valuemax="65"
+        tabindex="0"
+        @pointerdown="resizeStart"
+        @keydown="resizeKey"
+      />
+      <FileBrowserPane
+        ref="remotePane"
+        :active="props.active && mode === 'sftp'"
+        :transfer-enabled="!actionBusy"
+        :drop-hover="dropHover"
+        side="remote"
+        :browser="remoteBrowser"
+        :enabled="ready"
+        :identity="c.binding?.label"
+        :recent="saved.remoteRecent"
+        :bookmarks="saved.remoteBookmarks"
+        :home="c.home"
+        @open="editor.openRemoteFileEditor({ ...$event, permissions: $event.permissions ?? '' })"
+        @menu="(event, entry) => showMenu(event, entry, 'remote')"
+        @bookmark="locations.toggleBookmark(serverKey, 'remote', $event)"
+        @transfer="downloadEntries(remoteBrowser.selectedEntries.value)"
+        @drop="uploadDroppedPaths"
+        ><template #empty
+          ><UiIcon :name="c.busy ? 'network' : 'folder'" size="28" /><strong>{{
+            c.busy ? '正在准备远端文件' : profile ? '连接远端服务器' : '选择一个远程会话'
+          }}</strong>
+          <p>
+            {{
+              c.busy
+                ? '连接成功后将恢复这台服务器的工作目录。'
+                : profile
+                  ? '检测当前服务器，或手动指定 IP 和账号。'
+                  : '连接后即可在此浏览、上传和下载文件。'
+            }}
+          </p>
+          <template v-if="!c.busy"
+            ><div v-if="sessions?.length" class="file-connection-choice">
+              <select v-model="chosenSession" aria-label="选择已打开的远程会话">
+                <option value="" disabled>已打开的远程会话</option>
+                <option v-for="session in sessions" :key="session.id" :value="session.id">
+                  {{ session.title }}
+                </option></select
+              ><button type="button" :disabled="!chosenSession" @click="emit('selectSession', chosenSession)">
+                切换到此会话
+              </button>
+            </div>
+            <div v-if="!profile && profiles?.length" class="file-connection-choice">
+              <select v-model="chosenProfile" aria-label="选择远程连接">
+                <option value="" disabled>选择远程连接</option>
+                <option v-for="item in profiles" :key="item.id" :value="item.id">
+                  {{ item.name }}
+                </option></select
+              ><button
+                type="button"
+                :disabled="!chosenProfile"
+                @click="emit('connectProfile', chosenProfile)"
+              >
+                连接并浏览
+              </button>
+            </div>
+            <div class="file-empty-actions">
+              <button v-if="profile" type="button" @click="establish()">
+                {{ c.phase === 'error' || c.phase === 'cancelled' ? '重新连接' : '检测并连接' }}</button
+              ><button v-if="profile" type="button" @click="manualOpen = true">手动指定目标</button
+              ><button v-else type="button" @click="emit('createConnection')">新建连接</button
+              ><button type="button" @click="emit('focusTerminal')">前往终端</button>
+            </div></template
+          ></template
+        ></FileBrowserPane
+      >
+    </div>
+
+    <section v-if="mode === 'terminal'" class="terminal-transfer-panel file-terminal-transfer">
+      <div>
+        <strong>通过当前终端传输</strong>
+        <p>
+          适合不支持 SFTP 的服务器。每个文件不超过
+          {{ formatSize(INLINE_TRANSFER_LIMIT) }}，执行前会核对服务器和账号。
+        </p>
+      </div>
+      <label
+        >远端路径<input
+          v-model="terminalPath"
+          aria-label="终端传输远端路径"
+          placeholder="上传填写目录，下载填写完整文件路径" /></label
+      ><label
+        >本地下载目录<input
+          v-model="localBrowser.draft.value"
+          aria-label="终端传输本地目录"
+          @keydown.enter="localBrowser.load(localBrowser.draft.value)" /></label
+      ><button type="button" @click="localBrowser.load(localBrowser.draft.value)">使用本地目录</button>
+      <div>
+        <button type="button" :disabled="!canUseTerminal || actionBusy" @click="fileInput?.click()">
+          选择文件上传</button
+        ><button
+          type="button"
+          :disabled="!canUseTerminal || !terminalPath || actionBusy"
+          @click="downloadSmallFile"
+        >
+          下载远端文件</button
+        ><button type="button" @click="emit('focusTerminal')">前往终端</button>
+      </div>
+      <p v-if="!canUseTerminal">请先连接一个可执行命令的 SSH 终端。</p>
+      <input ref="fileInput" type="file" class="visually-hidden" multiple @change="uploadSmallFiles" />
+    </section>
+
+    <Teleport to="body"
+      ><div
+        v-if="currentContextMenu"
+        class="file-popover-scrim"
+        @click="currentContextMenu = null"
+        @contextmenu.prevent="currentContextMenu = null"
+      />
+      <section
+        v-if="currentContextMenu"
+        class="file-context-menu context-menu"
+        role="menu"
+        :aria-label="currentContextMenu.name"
+        :style="{ left: `${currentContextMenu.x}px`, top: `${currentContextMenu.y}px` }"
+        @keydown="menuKeydown"
+      >
+        <strong>{{ currentContextMenu.name }}</strong
+        ><button
+          v-for="item in currentContextMenu.items"
+          :key="item.label"
           type="button"
           role="menuitem"
           :class="{ danger: item.danger }"
           :disabled="item.disabled"
-          @click="runFileContextMenuItem(item)"
+          @click="runMenuAction(item.action)"
         >
           {{ item.label }}
         </button>
-      </section>
-    </teleport>
-    <teleport to="body">
-      <div v-if="remoteEditor" class="modal-backdrop remote-file-editor-backdrop" role="presentation">
-        <section class="modal remote-file-editor-modal" role="dialog" aria-modal="true" :aria-label="`编辑远端文件 ${remoteEditor.name}`">
+      </section></Teleport
+    >
+    <Teleport to="body"
+      ><div v-if="editor.remoteEditor && props.active" class="modal-backdrop remote-file-editor-backdrop">
+        <section
+          class="modal remote-file-editor-modal"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`编辑 ${editor.remoteEditor.name}`"
+          @keydown="editorKeydown"
+        >
           <header class="modal-head">
             <div>
-              <strong>{{ remoteEditor.name }}</strong>
-              <span :title="remoteEditor.path">{{ remoteEditor.path }}</span>
+              <strong>{{ editor.remoteEditor.name }}</strong
+              ><span :title="editor.remoteEditor.path"
+                >{{ editor.remoteEditor.target?.label }} · {{ editor.remoteEditor.path }}</span
+              >
             </div>
-            <button class="icon-button" type="button" title="关闭编辑器" aria-label="关闭编辑器" :disabled="remoteEditor.loading || remoteEditor.saving" @click="closeRemoteFileEditor"><UiIcon name="close" /></button>
+            <button
+              class="icon-button"
+              type="button"
+              aria-label="关闭编辑器"
+              :disabled="editor.remoteEditor.loading || editor.remoteEditor.saving"
+              @click="editor.closeRemoteFileEditor"
+            >
+              <UiIcon name="close" />
+            </button>
           </header>
-          <div v-if="remoteEditor.loading" class="remote-file-editor-loading" role="status">正在读取远端文件...</div>
-          <template v-else>
-            <textarea
-              ref="remoteEditorTextarea"
-              v-model="remoteEditor.content"
-              class="remote-file-editor-textarea"
-              spellcheck="false"
-              :disabled="remoteEditor.saving"
-              :aria-label="`编辑 ${remoteEditor.name}`"
-              @keydown="handleRemoteEditorKeydown"
-            />
-            <div class="remote-file-editor-status" :class="{ error: remoteEditor.error }" role="status">
-              <span v-if="remoteEditor.error">{{ remoteEditor.error }}</span>
-              <span v-else>{{ remoteEditorDirty ? '未保存' : '已保存' }}</span>
-              <span>{{ remoteEditorLineCount }} 行</span>
-              <span>{{ formatSize(remoteEditorByteSize) }}</span>
-              <span>UTF-8</span>
-            </div>
-          </template>
+          <p v-if="editor.remoteEditorTargetChanged" class="file-editor-target-warning" role="alert">
+            原服务器或连接已变化，已禁止保存。草稿仍保留，可以复制后重新打开原目标文件。
+          </p>
+          <div v-if="editor.remoteEditor.loading" class="remote-file-editor-loading">正在读取文件…</div>
+          <textarea
+            v-else
+            :ref="(element) => (editorState.remoteEditorTextarea.value = element as HTMLTextAreaElement)"
+            v-model="editor.remoteEditor.content"
+            class="remote-file-editor-textarea"
+            :aria-label="`编辑 ${editor.remoteEditor.name}`"
+            :disabled="editor.remoteEditor.saving"
+            spellcheck="false"
+            @keydown="editor.handleRemoteEditorKeydown"
+          />
+          <div
+            class="remote-file-editor-status"
+            :class="{ error: Boolean(editor.remoteEditor.error) }"
+            role="status"
+          >
+            <span>{{ editor.remoteEditor.error || (editor.remoteEditorDirty ? '未保存' : '已保存') }}</span
+            ><span
+              >{{ editor.remoteEditorLineCount }} 行 · {{ formatSize(editor.remoteEditorByteSize) }} ·
+              UTF-8</span
+            >
+          </div>
           <footer class="modal-actions">
-            <button type="button" :disabled="remoteEditor.loading || remoteEditor.saving" @click="closeRemoteFileEditor">关闭</button>
-            <button type="button" :disabled="remoteEditor.loading || remoteEditor.saving || !remoteEditorDirty" @click="saveRemoteFileEditor()">
-              {{ remoteEditor.saving ? '保存中...' : '保存到服务器' }}
+            <button type="button" @click="copyText(editor.remoteEditor.content)">复制草稿</button
+            ><button
+              type="button"
+              :disabled="editor.remoteEditor.loading || editor.remoteEditor.saving"
+              @click="editor.closeRemoteFileEditor"
+            >
+              关闭</button
+            ><button
+              type="button"
+              :disabled="
+                editor.remoteEditorTargetChanged ||
+                !editor.remoteEditorDirty ||
+                editor.remoteEditor.loading ||
+                editor.remoteEditor.saving
+              "
+              @click="editor.saveRemoteFileEditor()"
+            >
+              {{ editor.remoteEditor.saving ? '正在保存' : '保存到原服务器' }}
             </button>
           </footer>
         </section>
-      </div>
-    </teleport>
+      </div></Teleport
+    >
   </section>
 </template>

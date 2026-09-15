@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Manager, State};
@@ -9,6 +8,7 @@ use crate::app::events::{
     terminal_data_event_name, AiChatStreamEvent, AiChatStreamEventKind, SftpTransferEvent,
     TerminalClosedEvent, TerminalDataEvent,
 };
+use crate::app::sftp_task::{requested_timeout, run_sftp_task};
 use crate::app::state::AppState;
 use crate::domain::ai::agent::{
     agent_turn_with_provider_stream, AiAgentTurnRequest, AiAgentTurnResponse,
@@ -27,9 +27,10 @@ use crate::domain::connection::profiles::validate_profile;
 use crate::domain::connection::sftp::{
     create_directory_with_cancel, delete_path_with_cancel, download_file_with_progress,
     download_path_with_progress, list_directory_with_cancel, probe_sftp_with_cancel,
-    read_remote_text_file, save_remote_text_file, upload_file_with_progress,
-    upload_path_with_progress, RemoteTextFileResponse, SftpCancelToken, SftpListResponse,
-    SftpProbeResponse, SftpProgressUpdate, SftpTargetOverride, SftpTransferResponse,
+    read_remote_text_file_with_cancel, save_remote_text_file_with_cancel,
+    upload_file_with_progress, upload_path_with_progress, validate_sftp_profile_route,
+    RemoteTextFileResponse, SftpListResponse, SftpProbeResponse, SftpProgressUpdate,
+    SftpTargetOverride, SftpTransferResponse,
 };
 use crate::domain::filesystem::local::{
     home_directory, list_directory as list_local_directory_impl, open_path as open_local_path_impl,
@@ -45,6 +46,8 @@ use crate::domain::workspace::{
 };
 
 const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
+const SFTP_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const SFTP_TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
 const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
@@ -828,31 +831,24 @@ pub async fn sftp_list_directory(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<SftpListResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
-    let timeout_token = cancel_token.clone();
-    let operation = tokio::task::spawn_blocking(move || {
-        list_directory_with_cancel(&profile, &path, &target_override, cancel_token.as_ref())
-    });
-    let result = match tokio::time::timeout(SFTP_COMMAND_TIMEOUT, operation).await {
-        Ok(joined) => joined
-            .map_err(|err| err.to_string())?
-            .map_err(|err| err.to_string()),
-        Err(_) => {
-            if let Some(token) = timeout_token {
-                token.store(true, Ordering::SeqCst);
-            }
-            Err("SFTP directory listing timed out; Windows sftp.exe or the PTY session did not return. Please check saved passwords, host-key prompts, ProxyJump access, and whether the remote server allows SFTP.".into())
-        }
-    };
-    finish_optional_task(task_id, &state).await;
-    result
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_COMMAND_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            list_directory_with_cancel(&profile, &path, &target_override, Some(&token))
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -861,21 +857,28 @@ pub async fn sftp_probe(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<SftpProbeResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
-    let result = tokio::task::spawn_blocking(move || {
-        probe_sftp_with_cancel(&profile, &target_override, cancel_token.as_ref())
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_PROBE_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            Ok(probe_sftp_with_cancel(
+                &profile,
+                &target_override,
+                Some(&token),
+            ))
+        },
+    )
     .await
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -885,22 +888,24 @@ pub async fn sftp_create_directory(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
-    let result = tokio::task::spawn_blocking(move || {
-        create_directory_with_cancel(&profile, &path, &target_override, cancel_token.as_ref())
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_COMMAND_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            create_directory_with_cancel(&profile, &path, &target_override, Some(&token))
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -911,28 +916,24 @@ pub async fn sftp_delete_path(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
-    let result = tokio::task::spawn_blocking(move || {
-        delete_path_with_cancel(
-            &profile,
-            &path,
-            is_dir,
-            &target_override,
-            cancel_token.as_ref(),
-        )
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_COMMAND_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            delete_path_with_cancel(&profile, &path, is_dir, &target_override, Some(&token))
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -943,33 +944,35 @@ pub async fn sftp_upload_file(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
     let progress_task_id = task_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        with_sftp_progress(app, progress_task_id, |progress| {
-            upload_file_with_progress(
-                &profile,
-                &local_path,
-                &remote_dir,
-                &target_override,
-                cancel_token.as_ref(),
-                progress,
-            )
-        })
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            with_sftp_progress(app, progress_task_id, |progress| {
+                upload_file_with_progress(
+                    &profile,
+                    &local_path,
+                    &remote_dir,
+                    &target_override,
+                    Some(&token),
+                    progress,
+                )
+            })
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -980,33 +983,35 @@ pub async fn sftp_upload_path(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
     let progress_task_id = task_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        with_sftp_progress(app, progress_task_id, |progress| {
-            upload_path_with_progress(
-                &profile,
-                &local_path,
-                &remote_dir,
-                &target_override,
-                cancel_token.as_ref(),
-                progress,
-            )
-        })
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            with_sftp_progress(app, progress_task_id, |progress| {
+                upload_path_with_progress(
+                    &profile,
+                    &local_path,
+                    &remote_dir,
+                    &target_override,
+                    Some(&token),
+                    progress,
+                )
+            })
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -1017,33 +1022,35 @@ pub async fn sftp_download_file(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
     let progress_task_id = task_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        with_sftp_progress(app, progress_task_id, |progress| {
-            download_file_with_progress(
-                &profile,
-                &remote_path,
-                &local_path,
-                &target_override,
-                cancel_token.as_ref(),
-                progress,
-            )
-        })
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            with_sftp_progress(app, progress_task_id, |progress| {
+                download_file_with_progress(
+                    &profile,
+                    &remote_path,
+                    &local_path,
+                    &target_override,
+                    Some(&token),
+                    progress,
+                )
+            })
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -1055,34 +1062,36 @@ pub async fn sftp_download_path(
     target_host: Option<String>,
     target_username: Option<String>,
     task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<SftpTransferResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    let (task_id, cancel_token) = register_optional_task(task_id, &state).await;
     let progress_task_id = task_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        with_sftp_progress(app, progress_task_id, |progress| {
-            download_path_with_progress(
-                &profile,
-                &remote_path,
-                &local_dir,
-                is_dir,
-                &target_override,
-                cancel_token.as_ref(),
-                progress,
-            )
-        })
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            with_sftp_progress(app, progress_task_id, |progress| {
+                download_path_with_progress(
+                    &profile,
+                    &remote_path,
+                    &local_dir,
+                    is_dir,
+                    &target_override,
+                    Some(&token),
+                    progress,
+                )
+            })
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string());
-    finish_optional_task(task_id, &state).await;
-    result
 }
 
 #[tauri::command]
@@ -1091,19 +1100,30 @@ pub async fn sftp_read_text_file(
     remote_path: String,
     target_host: Option<String>,
     target_username: Option<String>,
+    task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<RemoteTextFileResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    tokio::task::spawn_blocking(move || {
-        read_remote_text_file(&profile, &remote_path, &target_override)
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_COMMAND_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            read_remote_text_file_with_cancel(
+                &profile,
+                &remote_path,
+                &target_override,
+                Some(&token),
+            )
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -1115,26 +1135,33 @@ pub async fn sftp_save_text_file(
     force: bool,
     target_host: Option<String>,
     target_username: Option<String>,
+    task_id: Option<String>,
+    profile_route: Option<String>,
+    timeout_ms: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<RemoteTextFileResponse, String> {
-    let profile = sftp_profile(&connection_id, &state).await?;
     let target_override = SftpTargetOverride {
         host: target_host,
         username: target_username,
     };
-    tokio::task::spawn_blocking(move || {
-        save_remote_text_file(
-            &profile,
-            &remote_path,
-            &content,
-            &expected_revision,
-            force,
-            &target_override,
-        )
-    })
+    run_sftp_task(
+        &state,
+        task_id,
+        requested_timeout(timeout_ms, SFTP_COMMAND_TIMEOUT),
+        sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
+        move |profile, token| {
+            save_remote_text_file_with_cancel(
+                &profile,
+                &remote_path,
+                &content,
+                &expected_revision,
+                force,
+                &target_override,
+                Some(&token),
+            )
+        },
+    )
     .await
-    .map_err(|err| err.to_string())?
-    .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -1192,28 +1219,17 @@ where
         action(None)
     }
 }
-async fn register_optional_task(
-    task_id: Option<String>,
-    state: &State<'_, AppState>,
-) -> (Option<String>, Option<SftpCancelToken>) {
-    if let Some(task_id) = task_id {
-        let token = state.register_task(task_id.clone()).await;
-        (Some(task_id), Some(token))
-    } else {
-        (None, None)
-    }
-}
-
-async fn finish_optional_task(task_id: Option<String>, state: &State<'_, AppState>) {
-    if let Some(task_id) = task_id {
-        state.finish_task(&task_id).await;
-    }
-}
-
-async fn sftp_profile(
+async fn sftp_profile_for_route(
     connection_id: &str,
-    state: &State<'_, AppState>,
+    state: &AppState,
+    expected_route: Option<&str>,
 ) -> Result<ConnectionProfile, String> {
+    let profile = sftp_profile(connection_id, state).await?;
+    validate_sftp_profile_route(&profile, expected_route).map_err(|error| error.to_string())?;
+    Ok(profile)
+}
+
+async fn sftp_profile(connection_id: &str, state: &AppState) -> Result<ConnectionProfile, String> {
     if connection_id == "local" {
         return Err("SFTP requires a remote connection profile".into());
     }
@@ -1225,4 +1241,58 @@ async fn sftp_profile(
         .ok_or_else(|| format!("connection profile {connection_id} was not found"))?;
     validate_profile(&profile).map_err(|err| err.to_string())?;
     Ok(profile)
+}
+
+#[cfg(test)]
+mod sftp_route_binding_tests {
+    use super::*;
+    use crate::domain::connection::models::{
+        AuthEndpoint, AuthMode, ConnectionRole, FileTransferMode, JumpMode,
+    };
+    use crate::domain::connection::sftp::sftp_profile_route;
+    use crate::domain::storage::sqlite::SqliteConfigStore;
+
+    #[tokio::test]
+    async fn editing_the_saved_route_rejects_a_queued_write_before_its_worker_starts() {
+        let state = AppState::with_profile_store(SqliteConfigStore::new(":memory:"));
+        let endpoint = AuthEndpoint {
+            host: "127.0.0.1".into(),
+            port: Some(22),
+            username: "fixture".into(),
+            auth_mode: AuthMode::Auto,
+            credential_ref: None,
+            password: None,
+        };
+        let mut profile = ConnectionProfile {
+            id: "queued-route".into(),
+            name: "fixture".into(),
+            connection_role: ConnectionRole::Direct,
+            gateway: endpoint.clone(),
+            target: endpoint,
+            jump_mode: JumpMode::Direct,
+            menu_profile_id: String::new(),
+            file_transfer_mode: FileTransferMode::SftpDirect,
+        };
+        state
+            .save_connection_profile(profile.clone())
+            .await
+            .unwrap();
+        let captured_route = sftp_profile_route(&profile);
+        profile.target.port = Some(2022);
+        profile.gateway.host = "changed-gateway.invalid".into();
+        state.save_connection_profile(profile).await.unwrap();
+
+        let result = run_sftp_task(
+            &state,
+            Some("queued-write".into()),
+            Duration::from_secs(1),
+            sftp_profile_for_route("queued-route", &state, Some(&captured_route)),
+            |_, _| -> anyhow::Result<()> {
+                panic!("a changed route must never reach the SFTP worker")
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().starts_with("SFTP_TARGET_CHANGED:"));
+        assert_eq!(state.active_task_count(), 0);
+    }
 }

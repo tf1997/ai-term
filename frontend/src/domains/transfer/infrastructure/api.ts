@@ -80,9 +80,14 @@ export function localOpenPath(path: string) {
   return invoke<void>('local_open_path', { path })
 }
 
+export function localWriteTransferFile(path: string, data: number[], overwrite = false) {
+  return invoke<void>('local_write_transfer_file', { path, data, overwrite })
+}
+
 export interface SftpTargetOverride {
   targetHost?: string
   targetUsername?: string
+  profileRoute?: string
 }
 
 export function sftpListDirectory(connectionId: string, path: string, target?: SftpTargetOverride, options?: TaskOptions) {

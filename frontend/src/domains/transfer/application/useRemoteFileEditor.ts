@@ -14,10 +14,13 @@ interface RemoteEditorOptions {
   remoteBusy: () => boolean
   remoteRequestEpoch: () => number
   transferStateKey: () => string
-  targetOverride: () => { targetHost: string; targetUsername?: string } | undefined
+  targetOverride: () => { targetHost?: string; targetUsername?: string; profileRoute?: string } | undefined
   isCurrentRemoteRequest: (epoch: number, stateKey: string, generation: number) => boolean
   invalidateRemoteDirectoryCache: (path: string) => void
   loadDirectory: (path: string, options?: LoadDirectoryOptions) => Promise<void>
+  targetLabel?: () => string
+  verifyBeforeWrite?: () => Promise<unknown>
+  onTargetChanged?: (reason: string) => void
 }
 type RemoteEditorSource = Pick<typeof tauri, 'sftpReadTextFile' | 'sftpSaveTextFile'>
 
@@ -34,12 +37,31 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
 
   const remoteEditorDirty = computed(() => Boolean(remoteEditor.value && remoteEditor.value.content !== remoteEditor.value.savedContent))
 
+  function targetIsCurrent(editor: RemoteEditorState) {
+    const target = editor.target
+    return Boolean(target && remoteReady() && target.connectionId === props.connectionId &&
+      target.stateKey === transferStateKey() && target.generation === props.terminalConnectionGeneration &&
+      target.epoch === remoteRequestEpoch() && JSON.stringify(target.override ?? {}) === JSON.stringify(targetOverride() ?? {}))
+  }
+
+  function reportTargetChange(reason: unknown, editor: RemoteEditorState) {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    if (message.includes('SFTP_TARGET_CHANGED') && targetIsCurrent(editor))
+      options.onTargetChanged?.(message)
+  }
+
+  const remoteEditorTargetChanged = computed(() => Boolean(remoteEditor.value && !targetIsCurrent(remoteEditor.value)))
+
   const remoteEditorLineCount = computed(() => remoteEditor.value ? remoteEditor.value.content.split('\n').length : 0)
 
   const remoteEditorByteSize = computed(() => remoteEditor.value ? new TextEncoder().encode(remoteEditor.value.content).length : 0)
 
   async function openRemoteFileEditor(entry: SftpFileEntry) {
     if (entry.isDir || !remoteReady() || remoteBusy()) return
+    if (remoteEditor.value) {
+      closeRemoteFileEditor()
+      if (remoteEditor.value) return
+    }
     if (entry.size > REMOTE_TEXT_EDITOR_LIMIT) {
       error.value = `文件超过内置编辑器限制 ${formatSize(REMOTE_TEXT_EDITOR_LIMIT)}，请先下载后使用本机编辑器。`
       return
@@ -48,6 +70,11 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
     const operationEpoch = remoteRequestEpoch()
     const operationStateKey = transferStateKey()
     const operationGeneration = props.terminalConnectionGeneration
+    const target = {
+      connectionId: props.connectionId, stateKey: operationStateKey, generation: operationGeneration,
+      epoch: operationEpoch, label: options.targetLabel?.() || props.connectionId,
+      override: targetOverride() ? { ...targetOverride() } : undefined
+    }
     remoteEditor.value = {
       name: entry.name,
       path: entry.path,
@@ -56,13 +83,14 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
       revision: '',
       loading: true,
       saving: false,
-      error: ''
+      error: '',
+      target
     }
     error.value = ''
     status.value = `正在打开 ${entry.path}...`
     try {
-      const response = await sftpReadTextFile(props.connectionId, entry.path, targetOverride())
-      if (disposed || request !== editorRequest || !isCurrentRemoteRequest(operationEpoch, operationStateKey, operationGeneration)) return
+      const response = await sftpReadTextFile(target.connectionId, entry.path, target.override)
+      if (disposed || request !== editorRequest) return
       remoteEditor.value = {
         name: entry.name,
         path: response.path,
@@ -71,12 +99,14 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
         revision: response.revision,
         loading: false,
         saving: false,
-        error: ''
+        error: '',
+        target
       }
       status.value = `已打开远端文件：${response.path}`
       void nextTick(() => remoteEditorTextarea.value?.focus())
     } catch (err) {
-      if (disposed || request !== editorRequest || !isCurrentRemoteRequest(operationEpoch, operationStateKey, operationGeneration) || !remoteEditor.value || remoteEditor.value.path !== entry.path) return
+      if (disposed || request !== editorRequest || !remoteEditor.value || remoteEditor.value.path !== entry.path) return
+      reportTargetChange(err, remoteEditor.value)
       remoteEditor.value.loading = false
       remoteEditor.value.error = remoteEditorErrorMessage(err)
       status.value = ''
@@ -93,27 +123,39 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
   async function saveRemoteFileEditor(force = false) {
     const editor = remoteEditor.value
     if (!editor || editor.loading || editor.saving || !remoteEditorDirty.value) return
+    if (!targetIsCurrent(editor)) {
+      editor.error = '原服务器、账号或连接已变化，已停止保存。草稿仍保留，请复制草稿后重新打开目标文件。'
+      return
+    }
     editor.saving = true
     editor.error = ''
     try {
+      await options.verifyBeforeWrite?.()
+      if (disposed || remoteEditor.value !== editor) return
+      if (!targetIsCurrent(editor)) throw new Error('保存前目标已变化，已阻止写入，草稿仍保留。')
+      const target = editor.target!
+      const submittedContent = editor.content
       const response = await sftpSaveTextFile(
-        props.connectionId,
+        target.connectionId,
         editor.path,
-        editor.content,
+        submittedContent,
         editor.revision,
         force,
-        targetOverride()
+        target.override
       )
       if (disposed || remoteEditor.value !== editor) return
-      editor.content = response.content
+      if (editor.content === submittedContent) editor.content = response.content
       editor.savedContent = response.content
       editor.revision = response.revision
       editor.path = response.path
       status.value = `已保存远端文件：${response.path}`
-      invalidateRemoteDirectoryCache(currentPath.value)
-      await loadDirectory(currentPath.value, { force: true, recordHistory: false })
+      if (targetIsCurrent(editor)) {
+        invalidateRemoteDirectoryCache(currentPath.value)
+        await loadDirectory(currentPath.value, { force: true, recordHistory: false })
+      }
     } catch (err) {
       if (disposed || remoteEditor.value !== editor) return
+      reportTargetChange(err, editor)
       const message = formatError(err)
       if (message.includes('REMOTE_FILE_CHANGED:')) {
         const overwrite = window.confirm(`${editor.name} 在远端已被修改。是否覆盖远端版本？`)
@@ -147,5 +189,5 @@ export function useRemoteFileEditor(options: RemoteEditorOptions, source: Remote
     remoteEditor.value = null
   })
 
-  return { remoteEditor, remoteEditorTextarea, remoteEditorDirty, remoteEditorLineCount, remoteEditorByteSize, openRemoteFileEditor, closeRemoteFileEditor, saveRemoteFileEditor, remoteEditorErrorMessage, handleRemoteEditorKeydown }
+  return { remoteEditor, remoteEditorTextarea, remoteEditorDirty, remoteEditorTargetChanged, remoteEditorLineCount, remoteEditorByteSize, openRemoteFileEditor, closeRemoteFileEditor, saveRemoteFileEditor, remoteEditorErrorMessage, handleRemoteEditorKeydown }
 }

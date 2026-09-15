@@ -1,0 +1,5 @@
+export { transferTasks } from './application/transferTaskManager'
+export type { TransferJob } from './application/transferTaskManager'
+export type { TerminalFileBridge, FileTargetBinding } from './domain/fileSession'
+export { localOpenPath } from './infrastructure/api'
+export { localParentPath } from './domain/transferPaths'

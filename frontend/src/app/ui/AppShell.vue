@@ -37,7 +37,9 @@ import { ConnectionSidebar } from '../../domains/connections/views'
 import ContextMenu from '../../shared/ui/ContextMenu.vue'
 import { SettingsSidebar } from '../../domains/settings/views'
 import { TerminalPane, TerminalTabsBar } from '../../domains/terminal/views'
-import { FileTransferPanel } from '../../domains/transfer/views'
+import { FileTransferPanel, TransferTaskCenter } from '../../domains/transfer/views'
+import type { TerminalFileBridge, TransferJob } from '../../domains/transfer/index'
+import { localOpenPath, localParentPath } from '../../domains/transfer/index'
 import WorkspacePanel from './WorkspacePanel.vue'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
@@ -57,7 +59,23 @@ const {
   pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
   resetTerminalTargetsToActive
 } = terminalTabState
-const { activeView, filesVisited, selectView } = useSessionView({ activeTerminalId, terminalTabs })
+const { activeView, selectView } = useSessionView({ activeTerminalId, terminalTabs })
+const visitedFileTerminals = ref<string[]>([])
+const filePanelTabs = computed(() => terminalTabs.value.filter(tab => visitedFileTerminals.value.includes(tab.id)))
+type FilePanelHandle = {
+  focusView: () => void
+  acceptTerminalOutput: (event: TerminalOutputDeltaEvent) => void
+  openLocation: (job: TransferJob) => Promise<void>
+  confirmClose: () => boolean
+}
+const filePanelRegistry = createStableRefRegistry<FilePanelHandle>()
+const terminalFileBridges = new Map<string, TerminalFileBridge>()
+const terminalContextVersions = ref<Record<string, number>>({})
+const filePanelRoutes = ref<Record<string, string>>({})
+watch([activeTerminalId, activeView], ([id, view]) => {
+  if (view === 'files' && !visitedFileTerminals.value.includes(id)) visitedFileTerminals.value.push(id)
+}, { immediate: true })
+const remoteFileSessions = computed(() => terminalTabs.value.filter(tab => tab.profile).map(tab => ({ id: tab.id, title: tab.title })))
 // SFTP tabs open a workspace without establishing a live SSH session.
 const connectedProfileIds = computed(() => [...new Set(
   terminalTabs.value.filter((tab) => tab.profile && tab.status === 'remote').map((tab) => tab.connectionId)
@@ -591,11 +609,17 @@ function createTerminalTab(profile?: ConnectionProfile) {
 }
 
 function closeTerminalTab(tabId: string) {
+  if (filePanelRegistry.values[tabId]?.confirmClose() === false) return
   if (!removeTerminalTab(tabId)) return
   cleanUpClosedTerminal(tabId)
 }
 
 function cleanUpClosedTerminal(tabId: string) {
+  visitedFileTerminals.value = visitedFileTerminals.value.filter(id => id !== tabId)
+  filePanelRegistry.remove(tabId)
+  terminalFileBridges.delete(tabId)
+  delete terminalContextVersions.value[tabId]
+  delete filePanelRoutes.value[tabId]
   delete terminalSnapshots.value[tabId]
   delete terminalOutputEvents.value[tabId]
   delete terminalSelections.value[tabId]
@@ -605,14 +629,18 @@ function cleanUpClosedTerminal(tabId: string) {
 
 function closeOtherTerminalTabs(tabId: string) {
   if (!terminalTabs.value.some(tab => tab.id === tabId)) return
-  const closedIds = removeTerminalTabs(terminalTabs.value.filter(tab => tab.id !== tabId).map(tab => tab.id), tabId)
+  const ids = terminalTabs.value.filter(tab => tab.id !== tabId).map(tab => tab.id)
+  if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
+  const closedIds = removeTerminalTabs(ids, tabId)
   closedIds.forEach(cleanUpClosedTerminal)
 }
 
 function closeTerminalTabsToRight(tabId: string) {
   const index = terminalTabs.value.findIndex(tab => tab.id === tabId)
   if (index < 0) return
-  const closedIds = removeTerminalTabs(terminalTabs.value.slice(index + 1).map(tab => tab.id), tabId)
+  const ids = terminalTabs.value.slice(index + 1).map(tab => tab.id)
+  if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
+  const closedIds = removeTerminalTabs(ids, tabId)
   closedIds.forEach(cleanUpClosedTerminal)
 }
 
@@ -628,6 +656,48 @@ function focusActiveTerminal() {
 function selectSessionView(view: SessionView) {
   selectView(view)
   if (view === 'terminal') focusActiveTerminal()
+  else void nextTick(() => filePanelRegistry.values[activeTerminalId.value]?.focusView())
+}
+
+function terminalFileBridge(terminalId: string): TerminalFileBridge {
+  let bridge = terminalFileBridges.get(terminalId)
+  if (!bridge) {
+    bridge = {
+      readiness: () => terminalRefs.value[terminalId]?.commandExecutionReadiness() ?? 'unavailable',
+      write: data => terminalRefs.value[terminalId]?.writeFileInput(data) ?? false,
+      interrupt: () => terminalRefs.value[terminalId]?.interruptFileInput() ?? false
+    }
+    terminalFileBridges.set(terminalId, bridge)
+  }
+  return bridge
+}
+
+function selectFileSession(terminalId: string) {
+  selectTerminalTab(terminalId)
+  selectSessionView('files')
+}
+
+async function connectFileProfile(profileId: string) {
+  await connectProfileFromSidebar(profileId)
+  if (activeTerminal.value?.connectionId === profileId) selectSessionView('files')
+}
+
+async function openTransferLocation(job: TransferJob) {
+  if (job.direction === 'download') {
+    try { await localOpenPath(localParentPath(job.targetPath)) }
+    catch (error) { showToast('error', '无法打开下载位置', formatError(error)) }
+    return
+  }
+  let tab = terminalTabs.value.find(item => item.id === job.binding.terminalId)
+  if (!tab) {
+    const profile = profiles.value.find(item => item.id === job.binding.connectionId)
+    if (!profile) { showToast('error', '无法打开原目标', '原连接配置已删除。'); return }
+    tab = addTerminalTab({ ...profile, fileTransferMode: profile.connectionRole === 'bastion' ? 'sftp-gateway' : 'sftp-direct' })
+    if (job.binding.override.profileRoute) filePanelRoutes.value[tab.id] = job.binding.override.profileRoute
+  }
+  selectFileSession(tab.id)
+  await nextTick()
+  await filePanelRegistry.values[tab.id]?.openLocation(job)
 }
 
 function handleSessionViewKeydown(event: KeyboardEvent) {
@@ -657,6 +727,7 @@ function updateTerminalOutput(event: TerminalOutputEvent) {
       sequence: ++terminalOutputSequence
     }
   }
+  filePanelRegistry.values[event.terminalId]?.acceptTerminalOutput(terminalOutputEvents.value[event.terminalId])
   appendRecordingOutput(event.terminalId, delta)
 }
 
@@ -675,6 +746,9 @@ function clearTerminalSelection() {
 function recordCommand(event: CommandRecordedEvent) {
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   if (!tab) return
+  if (/(?:^|[;&|\s])(?:ssh|mosh|su|login|exit|logout)(?:\s|$)|(?:^|[;&|\s])sudo\s+(?:-[^\s]*[is]\b|su\b)/.test(event.command)) {
+    terminalContextVersions.value[event.terminalId] = (terminalContextVersions.value[event.terminalId] ?? 0) + 1
+  }
   const connectionId = tab.connectionId
   const entry = recordCommandForConnection(connectionId, event)
   if (entry) appendRecordingCommand(event.terminalId, event.command)
@@ -876,6 +950,7 @@ onBeforeUnmount(() => {
           <span>文件</span>
         </button>
       </nav>
+      <TransferTaskCenter @open-location="openTransferLocation" />
       <button
         v-if="activeView === 'terminal'"
         class="session-tools-toggle"
@@ -917,17 +992,24 @@ onBeforeUnmount(() => {
     </section>
     <section id="session-files-view" v-show="activeView === 'files'" class="session-files-view" role="tabpanel" aria-labelledby="session-view-files">
       <FileTransferPanel
-        v-if="filesVisited"
-        :terminal-id="activeTerminalId"
-        :connection-id="activeConnectionId"
-        :profile="activeTerminal?.profile"
-        :terminal-status="activeTerminal?.status ?? 'idle'"
-        :terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"
-        :active="activeView === 'files'"
-        :activation-sequence="1"
-        :terminal-snapshot="activeTerminalSnapshot"
-        :terminal-output-event="activeTerminalOutputEvent"
-        @write-terminal-input="writeInputToTargetTerminals"
+        v-for="tab in filePanelTabs"
+        v-show="tab.id === activeTerminalId"
+        :key="tab.id"
+        :ref="filePanelRegistry.refFor(tab.id)"
+        :terminal-id="tab.id"
+        :connection-id="tab.connectionId"
+        :profile="tab.profile"
+        :terminal-status="tab.status"
+        :terminal-connection-generation="tab.connectionGeneration"
+        :terminal-context-version="terminalContextVersions[tab.id] ?? 0"
+        :terminal-bridge="terminalFileBridge(tab.id)"
+        :profile-route="filePanelRoutes[tab.id]"
+        :active="tab.id === activeTerminalId && activeView === 'files'"
+        :profiles="profiles"
+        :sessions="remoteFileSessions"
+        @select-session="selectFileSession"
+        @connect-profile="connectFileProfile"
+        @create-connection="createProfile"
         @focus-terminal="focusActiveTerminalFromWorkspace"
       />
     </section>

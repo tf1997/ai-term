@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::Mutex;
 
+use super::tasks::{TaskRegistration, TaskRegistry};
 use crate::domain::connection::models::{AiProviderConfig, ConnectionProfile};
 use crate::domain::storage::sqlite::SqliteConfigStore;
 use crate::domain::terminal::ssh::TerminalSession;
@@ -22,7 +20,7 @@ pub struct SessionRecord {
 #[derive(Default)]
 pub struct AppState {
     sessions: Mutex<HashMap<String, SessionRecord>>,
-    tasks: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    tasks: Arc<TaskRegistry>,
     // The store synchronizes internally around one persistent SQLite
     // connection, so no async lock is needed here; sharing the Arc lets each
     // call run on the blocking pool without serializing unrelated commands.
@@ -45,7 +43,7 @@ impl AppState {
     pub fn with_profile_store(profile_store: SqliteConfigStore) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            tasks: Mutex::new(HashMap::new()),
+            tasks: Arc::new(TaskRegistry::default()),
             profile_store: Some(Arc::new(profile_store)),
         }
     }
@@ -57,23 +55,24 @@ impl AppState {
     }
 
     pub async fn register_task(&self, task_id: String) -> Arc<AtomicBool> {
-        let token = Arc::new(AtomicBool::new(false));
-        self.tasks.lock().await.insert(task_id, token.clone());
-        token
+        self.tasks.register(task_id)
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> bool {
-        let tasks = self.tasks.lock().await;
-        if let Some(token) = tasks.get(task_id) {
-            token.store(true, Ordering::SeqCst);
-            true
-        } else {
-            false
-        }
+        self.tasks.cancel(task_id)
     }
 
     pub async fn finish_task(&self, task_id: &str) {
-        self.tasks.lock().await.remove(task_id);
+        self.tasks.finish(task_id);
+    }
+
+    pub(crate) fn scoped_task(&self, task_id: Option<String>) -> Result<TaskRegistration, String> {
+        self.tasks.scoped(task_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_task_count(&self) -> usize {
+        self.tasks.active_count()
     }
 
     pub async fn register_session(&self, session_id: String, profile_id: String) {

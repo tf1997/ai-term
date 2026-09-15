@@ -100,6 +100,9 @@ export function formatRemoteModified(value: string) {
 
 export function formatError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err)
+  if (message.includes('SFTP_TARGET_CHANGED')) {
+    return '原连接配置的地址、端口或跳转方式已变化，已停止操作。请按新配置打开会话后重试。'
+  }
   if (isTauriPreviewUnavailable(message)) {
     return '浏览器预览中无法使用本地文件和 SFTP 能力，请在 AI Term 桌面端中操作。'
   }

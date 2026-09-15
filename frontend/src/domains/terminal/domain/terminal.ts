@@ -28,6 +28,8 @@ export interface TerminalPaneHandle {
   pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'
   terminalInputSyncState: () => TerminalInputSyncState
   writeTerminalInput: (data: string) => boolean
+  writeFileInput: (data: string) => Promise<boolean>
+  interruptFileInput: () => Promise<boolean>
   writeSyncedTerminalInput: (data: string, sourceTerminalId: string) => boolean
   clearTerminal: () => void
   disconnectFromButton: () => void

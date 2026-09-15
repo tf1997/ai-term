@@ -56,7 +56,13 @@ const transferTypes = read('src/domains/transfer/domain/transfer.ts')
 const transferPaths = read('src/domains/transfer/domain/transferPaths.ts')
 const terminalIdentity = read('src/domains/transfer/domain/terminalIdentity.ts')
 const transferPresentation = read('src/domains/transfer/domain/transferPresentation.ts')
-const transferTasks = read('src/domains/transfer/application/useTransferTasks.ts')
+const transferTasks = read('src/domains/transfer/application/transferTaskManager.ts')
+const sftpConnection = read('src/domains/transfer/application/useSftpConnection.ts')
+const directoryBrowser = read('src/domains/transfer/application/useDirectoryBrowser.ts')
+const fileBrowserPane = read('src/domains/transfer/presentation/components/FileBrowserPane.vue')
+const fileLocationControl = read('src/domains/transfer/presentation/components/FileLocationControl.vue')
+const transferTaskCenter = read('src/domains/transfer/presentation/components/TransferTaskCenter.vue')
+const terminalFileTransfer = read('src/domains/transfer/application/useTerminalFileTransfer.ts')
 const remoteFileEditor = read('src/domains/transfer/application/useRemoteFileEditor.ts')
 const aiApi = read('src/domains/ai/infrastructure/api.ts')
 const connectionApi = read('src/domains/connections/infrastructure/api.ts')
@@ -163,6 +169,7 @@ const sftpBackend = read('../src-tauri/src/domain/connection/sftp.rs')
 const sshBackend = read('../src-tauri/src/domain/terminal/ssh.rs')
 const localFilesystem = read('../src-tauri/src/domain/filesystem/local.rs')
 const commands = read('../src-tauri/src/app/commands.rs')
+const sftpTaskLifecycle = read('../src-tauri/src/app/sftp_task.rs')
 const credentials = read('../src-tauri/src/domain/auth/credentials.rs')
 const databaseCredentials = read('../src-tauri/src/domain/storage/credentials.rs')
 const tauriLib = read('../src-tauri/src/lib.rs')
@@ -1207,9 +1214,10 @@ assert(
 )
 assert(
   commands.includes('SFTP_COMMAND_TIMEOUT') &&
-    commands.includes('tokio::time::timeout') &&
-    commands.includes('SFTP directory listing timed out') &&
-    commands.includes('token.store(true'),
+    commands.includes('run_sftp_task') &&
+    sftpTaskLifecycle.includes('sleep_until(deadline)') &&
+    sftpTaskLifecycle.includes('token.store(true') &&
+    sftpTaskLifecycle.includes('operation.abort()'),
   'SFTP directory listing command must have a Tauri-level hard timeout so the frontend never stays stuck on loading when Windows sftp.exe or PTY hangs.'
 )
 assert(
@@ -1612,301 +1620,94 @@ assert(
   'AI configuration must be editable and emit a save event instead of rendering readonly sample data.'
 )
 
+// Asynchronous ownership, cancellation and navigation are verified by the
+// transfer behavior tests and SFTP browser suite. These contracts keep the
+// production UI wired to the domain services and real desktop capabilities.
 assert(
-  fileTransfer.includes('type="file"') &&
-    fileTransfer.includes('triggerUpload') &&
-    fileTransfer.includes('remoteDropActive') &&
-    fileTransfer.includes('handleRemoteDragEnter') &&
-    fileTransfer.includes('handleRemoteDrop') &&
-    fileTransfer.includes('uploadDroppedLocalPaths') &&
+  fileTransfer.includes('useSftpConnection') &&
+    fileTransfer.includes('useDirectoryBrowser') &&
+    fileTransfer.includes('useRemoteFileEditor') &&
+    fileTransfer.includes('useTerminalFileTransfer') &&
+    fileTransfer.includes('transferTasks.enqueue') &&
     fileTransfer.includes('onTauriFileDrop') &&
     fileTransfer.includes('onTauriFileDropHover') &&
     fileTransfer.includes('onTauriFileDropCancelled') &&
-    fileTransfer.includes('remoteDropZone') &&
-    fileTransfer.includes('isRemoteDropZoneVisible') &&
-    fileTransfer.includes('dataTransferLocalPaths') &&
-    fileTransfer.includes('isDuplicateDroppedPaths') &&
-    fileTransfer.includes('remote-drop-overlay') &&
-    fileTransfer.includes("@drop=\"handleRemoteDrop\"") &&
-    fileTransfer.includes("itemKind: 'item'") &&
-    fileTransfer.includes('sftpListDirectory') &&
-    fileTransfer.includes('sftpUploadFile') &&
     fileTransfer.includes('sftpUploadPath') &&
-    transferApi.includes('export function sftpDownloadFile(') && fileTransfer.includes('sftpDownloadPath') &&
     fileTransfer.includes('sftpDownloadPath') &&
     fileTransfer.includes('sftpDeletePath') &&
-    fileTransfer.includes('localHomeDirectory') &&
-    fileTransfer.includes('localListDirectory') &&
     fileTransfer.includes('localOpenPath') &&
-    !fileTransfer.includes('@tauri-apps/api/shell') &&
-    !fileTransfer.includes('openShellPath') &&
-    fileTransfer.includes('await localOpenPath(entry.path)') &&
-    fileTransfer.includes('await localOpenPath(task.targetPath)') &&
-    fileTransfer.includes('localEntries') &&
-    fileTransfer.includes('selectedLocalEntry') &&
-    fileTransfer.includes('selectedRemoteEntry') &&
-    fileTransfer.includes('openLocalFileLocation') &&
-    fileTransfer.includes('openLocalContextMenu') &&
-    fileTransfer.includes('openRemoteContextMenu') &&
-    fileTransfer.includes('fileContextMenu') &&
-    fileTransfer.includes('file-type-icon') &&
-    transferTasks.includes('cancelTask') &&
-    fileTransfer.includes('activeTask') &&
-    fileTransfer.includes('cancelActiveTask') &&
-    fileTransfer.includes('sftpProbe') &&
-    fileTransfer.includes('sftpProbeByHost') &&
-    fileTransfer.includes('probeSelectedTarget') &&
-
-    fileTransfer.includes('selectedTarget') &&
-    fileTransfer.includes("transferMode = ref<'sftp' | 'terminal'>") &&
-    fileTransfer.includes('uploadFilesThroughTerminal') &&
-    fileTransfer.includes('downloadThroughTerminal') &&
-    fileTransfer.includes('identifyCurrentTerminalTarget') &&
-    fileTransfer.includes('currentTerminalTarget') &&
-    fileTransfer.includes('useTerminalTargetForSftp') &&
-    fileTransfer.includes('openCurrentTerminalSftp') &&
-    fileTransfer.includes('useConfiguredTargetForSftp') &&
-    fileTransfer.includes('active: boolean') &&
-    fileTransfer.includes('initializeRemoteBrowserIfActive') &&
-    fileTransfer.includes('() => props.activationSequence') &&
-    fileTransfer.includes('options.useForSftp && !props.active') &&
-    appShell.includes(':active="activeView === \'files\'"') &&
-    !fileTransfer.includes('hasRemoteShellSnapshot') &&
-    fileTransfer.includes('useForSftp') &&
-    fileTransfer.includes('writeTerminalInput') &&
-    fileTransfer.includes('remoteReady') &&
-    transferApi.includes("invoke<LocalDirectoryResponse>('local_list_directory'") &&
-    transferApi.includes("invoke<void>('local_open_path'") &&
-    transferApi.includes("listen<string[]>('tauri://file-drop'") &&
-    transferApi.includes("listen<string[]>('tauri://file-drop-hover'") &&
-    transferApi.includes("listen('tauri://file-drop-cancelled'") &&
-    commands.includes('pub async fn local_open_path') &&
-    commands.includes('open_path as open_local_path_impl') &&
-    localFilesystem.includes('pub fn open_path') &&
-    localFilesystem.includes('open_platform_path') &&
-    localFilesystem.includes('explorer.exe') &&
-    localFilesystem.includes('CREATE_NO_WINDOW') &&
-    localFilesystem.includes('xdg-open') &&
-    taskApi.includes("invoke<boolean>('cancel_task'") &&
+    fileBrowserPane.includes('remote-drop-overlay') &&
     transferApi.includes("invoke<SftpListResponse>('sftp_list_directory'") &&
+    transferApi.includes("invoke<SftpProbeResponse>('sftp_probe'") &&
     transferApi.includes("invoke<SftpTransferResponse>('sftp_upload_path'") &&
     transferApi.includes("invoke<SftpTransferResponse>('sftp_download_path'") &&
-    transferApi.includes("invoke<SftpProbeResponse>('sftp_probe'") &&
-
-    styles.includes('.session-files-view') &&
-    styles.includes('grid-column: 3 / 5;') &&
-    styles.includes('grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);') &&
-    styles.includes('.file-type-icon.folder') &&
-    styles.includes('.remote-pane.drop-active') &&
-    styles.includes('.remote-drop-overlay') &&
-    styles.includes('.theme-light .remote-drop-overlay') &&
-    styles.includes('.file-context-menu') &&
-    appShell.includes('sftpWorkbenchActive') &&
-    appShell.includes('useSessionView({ activeTerminalId, terminalTabs })') &&
-    appShell.includes("activeView.value === 'files'") &&
-    workspacePanel.includes('workspaceTabChanged') &&
-    workspacePanel.includes('@write-terminal-input=') &&
-    terminalPane.includes('writeTerminalInput') &&
-    terminalPane.includes('enterSftpProfileMode') &&
-    terminalPane.includes('SFTP profile is ready') &&
-    !fileTransfer.includes('profile ? `Ready'),
-  'FileTransferPanel must expose real SFTP, current-terminal target detection, and terminal-channel small-file transfer flows without treating a selected profile draft as an active remote transfer session.'
+    transferApi.includes("invoke<void>('local_open_path'") &&
+    commands.includes('pub async fn local_open_path') &&
+    localFilesystem.includes('open_platform_path') &&
+    localFilesystem.includes('CREATE_NO_WINDOW'),
+  'The file workspace must use the real desktop file/SFTP services and keep connection, browsing, editing and task lifecycles separate.'
 )
-
 assert(
-  fileTransfer.includes("const begin = `AI_TERM_IDENT_BEGIN_${id}`") &&
-    fileTransfer.includes("const end = `AI_TERM_IDENT_END_${id}`") &&
-    terminalIdentity.includes('findIdentityMarker') &&
-    terminalIdentity.includes('findStandaloneIdentityMarker') &&
-    terminalIdentity.includes('^${escapeRegExp(marker)}') &&
-    terminalIdentity.includes('[\\\\t ]*$') &&
-    terminalIdentity.includes('markerCandidates') &&
-    terminalIdentity.includes('identityMarkerId') &&
-    terminalIdentity.includes('raw.matchAll(/(user|hostname|ips|pwd)=/g)') &&
-    !fileTransfer.includes('`__AI_TERM_IDENT_BEGIN_${id}__`') &&
-    terminalInputRouter.includes('function isActiveTerminalOnlyInput') &&
-    terminalInputRouter.includes("data.includes('AI_TERM_IDENT_')") &&
-    terminalInputRouter.includes("data.includes('AI_TERM_DOWNLOAD_')") &&
-    terminalInputRouter.includes("data.includes('AI_TERM_UPLOAD_')") &&
-    terminalInputRouter.includes('writeInputToActiveTerminal(data)'),
-  'SFTP terminal identity detection must parse robust plain markers and send terminal-channel probes only to the active terminal snapshot.'
+  terminalIdentity.includes('findStandaloneIdentityMarker') &&
+    terminalIdentity.includes('usableIpCandidates') &&
+    sftpConnection.includes('AI_TERM_IDENT_BEGIN_') &&
+    sftpConnection.includes('AI_TERM_IDENT_END_') &&
+    sftpConnection.includes('verifyBeforeWrite') &&
+    terminalFileTransfer.includes('identityGuard') &&
+    appShell.includes('terminalFileBridge(tab.id)') &&
+    appShell.includes('writeFileInput(data)') &&
+    terminalPane.includes('function writeFileInput(') &&
+    !fileTransfer.includes("emit('writeTerminalInput'"),
+  'Identity and terminal transfer commands must use the captured terminal bridge and verify their target, independently of keyboard synchronization.'
 )
-
 assert(
-  appShell.includes(':activation-sequence="1"') &&
-    !workspacePanel.includes('sftpTabActivationSequence') &&
-    fileTransfer.includes('activationSequence: number') &&
-    fileTransfer.includes('const isBastionConnection = computed') &&
-    fileTransfer.includes('() => props.activationSequence') &&
-    fileTransfer.includes('function activateSftpTab()') &&
-    fileTransfer.includes('selectedBastionTargetIsCurrent.value') &&
-    fileTransfer.includes("@click=\"selectTransferMode('sftp')\"") &&
-    !fileTransfer.includes('watch(transferMode') &&
-    !fileTransfer.includes('onMounted(() => {\n  initializeRemoteBrowserIfActive()') &&
-    fileTransfer.includes('host: isBastionConnection.value ? terminalTarget.ip : terminalTarget.host') &&
-    fileTransfer.includes(': probe.path || terminalTarget.pwd ||') &&
-    fileTransfer.includes('resetTerminalIdentityProbeForRetry') &&
-    fileTransfer.includes('已停止 SFTP 探测。'),
-  'Bastion SFTP must retain a successful target across tab activations, prefer the SFTP-reported path, and only detect the terminal target when needed.'
-)
-
-assert(
-  terminalTabTypes.includes('connectionGeneration: number') &&
-    terminalTabState.includes('connectionGeneration: !wasConnected && isConnected') &&
-    terminalTabState.includes('? tab.connectionGeneration + 1') &&
-    appShell.includes(':terminal-status="activeTerminal?.status ?? \'idle\'"') &&
-    appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
-    workspacePanel.includes('terminalStatus:') &&
-    workspacePanel.includes('terminalConnectionGeneration: number') &&
-    appShell.includes(':terminal-status="activeTerminal?.status ?? \'idle\'"') &&
-    appShell.includes(':terminal-connection-generation="activeTerminal?.connectionGeneration ?? 0"') &&
-    fileTransfer.includes('terminalStatus: TerminalRuntimeStatus') &&
-    fileTransfer.includes('terminalConnectionGeneration: number') &&
-    fileTransfer.includes('requiresExplicitBastionProbe') &&
-    fileTransfer.includes('bastionAutoProbeAttempted') &&
-    fileTransfer.includes('targetConnectionGeneration') &&
-    fileTransfer.includes('remoteRequestEpoch') &&
-    fileTransfer.includes('connectionRole = props.profile?.connectionRole') &&
-    fileTransfer.includes('cancelActiveRemoteTaskForStateChange()') &&
-    fileTransfer.includes('normalizeInterruptedBastionProbeForStateSave()') &&
-    fileTransfer.includes('() => props.active') &&
-    fileTransfer.includes('invalidateBastionTarget') &&
-    fileTransfer.includes('if (!bastionAutoProbeAttempted.value)') &&
-    fileTransfer.includes('openCurrentTerminalSftp({ automatic: true })') &&
-    fileTransfer.includes('if (!isBastionConnection.value || !terminalDetectionReady.value') &&
-    fileTransfer.includes("invalidateBastionTarget('终端连接已断开；上次 SFTP 目标已失效") &&
-    fileTransfer.includes('isCurrentRemoteRequest(requestEpoch, requestStateKey, requestGeneration)') &&
-    fileTransfer.includes('if (detectionEpoch !== remoteRequestEpoch) return') &&
-    transferTasks.includes('activeTask.value?.id !== taskId') &&
-    transferTasks.indexOf('activeTask.value?.id !== taskId') < transferTasks.indexOf('const response = await action(taskId)') &&
-    fileTransfer.includes('if (!isBastionConnection.value)') &&
-    fileTransfer.includes('if (isBastionConnection.value)') &&
-    fileTransfer.includes('openCurrentTerminalSftp') &&
-    fileTransfer.includes('v-if="isBastionConnection"') &&
-    !fileTransfer.includes('maybeAutoProbeCurrentTerminalSftp') &&
-    !fileTransfer.includes('配置目标 SFTP 失败，正在自动识别当前终端服务器...'),
-  'Direct connections must use configured SFTP only; bastion targets may be probed explicitly and must be invalidated across terminal disconnects or connection generations.'
-)
-
-assert(
-  terminalEventTypes.includes('interface TerminalOutputDeltaEvent extends TerminalOutputEvent') &&
-    appShell.includes('terminalOutputEvents') &&
-    appShell.includes('terminalOutputSequence') &&
-    appShell.includes('activeTerminalOutputEvent') &&
-    appShell.includes('@focus-terminal="focusActiveTerminalFromWorkspace"') &&
-    terminalPane.includes('function focusTerminal()') &&
-    terminalPane.includes('focusTerminal,') &&
-    appShell.includes('v-if="filesVisited"') &&
-    appShell.includes(`v-show="activeView === 'files'"`) &&
-    appShell.includes(':terminal-id="activeTerminalId"') &&
-    appShell.includes(':terminal-output-event="activeTerminalOutputEvent"') &&
+  appShell.includes('v-for="tab in filePanelTabs"') &&
+    appShell.includes('v-show="tab.id === activeTerminalId"') &&
+    appShell.includes('filePanelRegistry.refFor(tab.id)') &&
+    appShell.includes('<TransferTaskCenter') &&
     !workspacePanel.includes('<FileTransferPanel') &&
-    fileTransfer.includes('terminalId: string') &&
-    fileTransfer.includes('terminalOutputEvent?: TerminalOutputDeltaEvent') &&
-    fileTransfer.includes('transferStateByTerminal') &&
-    fileTransfer.includes('saveTransferState(previousKey)') &&
-    fileTransfer.includes('restoreTransferState(key)') &&
-    fileTransfer.includes('PendingIdentityProbe') &&
-    fileTransfer.includes('pendingIdentify.value.output') &&
-    fileTransfer.includes('identityProbeText') &&
-    fileTransfer.includes('snapshot.slice(-160_000)') &&
-    appShell.includes('nextSnapshot.slice(-80_000)') &&
-    appShell.includes('id="session-view-terminal"') &&
-    appShell.includes('id="session-view-files"') &&
-    appShell.includes("@click=\"selectSessionView('terminal')\"") &&
-    !fileTransfer.includes('sftp-terminal-switch'),
-  'SFTP workspace must stay mounted across tab switches, parse terminal identity from output deltas, and expose a clear switch-back-to-terminal action.'
+    fileTransfer.includes('storeView') &&
+    fileTransfer.includes('restoreServer') &&
+    directoryBrowser.includes('refreshIfStale') &&
+    fileLocationControl.includes('收藏') &&
+    fileLocationControl.includes('最近访问') &&
+    fileTransfer.includes('useFileLocations') &&
+    fileTransfer.includes('locateTerminalDirectory') &&
+    fileTransfer.includes('target.identity?.pwd'),
+  'Each visited terminal must retain its file workspace, server locations, drafts and history while shared transfer results remain available in both main views.'
 )
 assert(
-  fileTransfer.includes('lastTransfer') &&
-    fileTransfer.includes('transfer-target-strip') &&
-    fileTransfer.includes('sftpHeaderSummary') &&
-    fileTransfer.includes('localPaneSummary') &&
-    fileTransfer.includes('remotePaneSummary') &&
-    fileTransfer.includes('formatRemoteModified') &&
-    fileTransfer.includes('REMOTE_DIRECTORY_CACHE_TTL_MS') &&
-    fileTransfer.includes('remoteDirectoryCache') &&
-    fileTransfer.includes('remoteDirectoryRequests') &&
-    fileTransfer.includes('cachedRemoteDirectory') &&
-    fileTransfer.includes('invalidateRemoteDirectoryCache') &&
-    fileTransfer.includes('const directoryLoading = ref(false)') &&
-    fileTransfer.includes('const remoteBusy = computed(() => loading.value || directoryLoading.value || identifying.value)') &&
-    fileTransfer.includes(':aria-busy="directoryLoading"') &&
-    fileTransfer.includes('class="transfer-pane-summary"') &&
-    fileTransfer.includes('directoryLoading && entries.length === 0') &&
-    fileTransfer.includes('await sftpListDirectory(props.connectionId, requestedPath, targetOverride.value)') &&
-    !fileTransfer.includes("const taskId = startRemoteTask(cached ? '刷新远端目录' : '读取远端目录')") &&
-    !fileTransfer.includes("status.value = '正在读取目录...'") &&
-    fileTransfer.includes('options: LoadDirectoryOptions') &&
-    fileTransfer.includes('await loadDirectory(currentPath.value, { force: true })') &&
-    fileTransfer.includes('@click="loadDirectory(currentPath, { force: true })"') &&
-    fileTransfer.includes('sftp-title-copy') &&
-    fileTransfer.includes('transfer-route-item') &&
-    fileTransfer.includes('transfer-pane-title') &&
-    fileTransfer.includes('transfer-pane-path') &&
-    fileTransfer.includes('file-meta') &&
-    fileTransfer.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
-    fileTransfer.includes('name="arrow-up"') &&
-    fileTransfer.includes('role="tablist"') &&
-    fileTransfer.includes(':aria-selected=') &&
-    fileTransfer.includes(':title="entry.name"') &&
-    fileTransfer.includes("entry.permissions || '权限未知'") &&
-    fileTransfer.includes('transfer-progress') &&
-    fileTransfer.includes('transfer-task-stats') &&
-    fileTransfer.includes('transferAmountLabel') &&
-    fileTransfer.includes('transferSpeedLabel') &&
-    fileTransfer.includes('transferRemainingLabel') &&
-    fileTransfer.includes('transferCompletionLabel') &&
-    fileTransfer.includes('openLastTransferLocation') &&
-    fileTransfer.includes('copyLastTransferPath') &&
-    fileTransfer.includes('joinLocalPath') &&
+  fileBrowserPane.includes('role="grid"') &&
+    fileBrowserPane.includes('aria-multiselectable="true"') &&
+    fileBrowserPane.includes('ArrowDown') &&
+    fileBrowserPane.includes('ArrowUp') &&
+    fileLocationControl.includes('目录路径') &&
+    fileTransfer.includes('role="separator"') &&
+    fileTransfer.includes('remoteEditorTargetChanged') &&
+    fileTransfer.includes('复制草稿') &&
+    fileTransfer.includes('confirmClose') &&
+    styles.includes('.file-grid-row') &&
+    styles.includes('.file-pane-resizer') &&
+    styles.includes('--sftp-surface:') &&
+    styles.includes(':root .remote-file-editor-modal'),
+  'File browsing must retain keyboard and selection semantics, adjustable panes, theme colors and draft protection.'
+)
+assert(
+  transferTasks.includes('captureFileTarget') &&
     transferTasks.includes('onSftpTransferProgress') &&
-    transferApi.includes('localPath?: string') &&
-    transferApi.includes('remotePath?: string') &&
-    transferApi.includes('targetPath?: string') &&
+    transferTasks.includes('cancelTask') &&
+    transferTaskCenter.includes('job.binding.label') &&
+    transferTaskCenter.includes('transferSpeedLabel') &&
+    transferTaskCenter.includes('transferRemainingLabel') &&
+    transferTaskCenter.includes('transferCompletionLabel') &&
+    transferTaskCenter.includes('复制路径') &&
+    transferTaskCenter.includes('打开位置') &&
     transferApi.includes('transferredBytes?: number') &&
     transferApi.includes('bytesPerSecond?: number') &&
     transferApi.includes('estimatedCompletionEpochMs?: number') &&
-    transferApi.includes('onSftpTransferProgress') &&
-    styles.includes('.transfer-target-strip') &&
-    styles.includes('.sftp-panel-head') &&
-    styles.includes('.sftp-title-copy') &&
-    styles.includes('.transfer-target-strip .transfer-route-item') &&
-    styles.includes('.transfer-pane-title') &&
-    styles.includes('.transfer-pane-summary') &&
-    styles.includes('.remote-pane.directory-loading .file-row') &&
-    styles.includes('.transfer-pane-path') &&
-    styles.includes('.file-meta') &&
-    styles.includes('.file-type-icon .ui-icon') &&
-    styles.includes('.file-row:hover .file-type-icon.folder') &&
-    !styles.includes('.file-type-icon.folder::before') &&
-    !styles.includes('.file-type-icon.file::after') &&
-    styles.includes('.file-row:hover .file-actions') &&
-    styles.includes('rgba(86, 230, 163, .12)') &&
-    styles.includes('.theme-light .transfer-target-strip .transfer-route-item') &&
-    styles.includes('.theme-light .file-meta span') &&
-    styles.includes('.theme-light .transfer-pane-head') &&
-    !styles.includes('\n.transfer-pane-head {\n  border-bottom-color: var(--light-border);\n  background: #fafcfb;\n}') &&
-    styles.includes('--sftp-surface:') &&
-    styles.includes('--sftp-muted:') &&
-    styles.includes('.app-shell .files-panel .file-list') &&
-    styles.includes(':root .remote-file-editor-modal') &&
-    styles.includes('.app-shell .files-panel .transfer-progress span') &&
-    styles.includes('.app-shell.theme-dark .workspace-tabs button.active') &&
-    styles.includes('.transfer-progress') &&
-    styles.includes('.transfer-task-stats') &&
-    styles.includes('@keyframes transfer-progress-slide') &&
-    sftpBackend.includes('SftpProgressUpdate') &&
-    sftpBackend.includes('transferred_bytes: Option<u64>') &&
-    sftpBackend.includes('bytes_per_second: Option<u64>') &&
-    sftpBackend.includes('format_duration_compact') &&
-    sftpBackend.includes('extract_sftp_progress_percent') &&
-    sftpBackend.includes('download_target_path') &&
-    commands.includes('SftpTransferEvent') &&
-    commands.includes('estimated_completion_epoch_ms') &&
     commands.includes('upload_path_with_progress') &&
     commands.includes('download_path_with_progress'),
-  'SFTP file and folder transfers must show clear local/remote targets, structured speed/size/ETA progress, final paths, and actions to locate or copy completed downloads/uploads.'
+  'Background file tasks must retain ownership and expose progress, cancellation, completion and actions for their original destination.'
 )
 assert(
   workspaceSessionState.includes('draftWorkspaceSessionIds') &&
@@ -3315,10 +3116,9 @@ assert(
     scriptPanel.includes('name="copy"') &&
     scriptPanel.includes('name="more"') &&
     fileTransfer.includes('import UiIcon') &&
-    fileTransfer.includes('name="upload"') &&
-    fileTransfer.includes('name="download"') &&
-    fileTransfer.includes('name="folder-open"') &&
-    fileTransfer.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
+    fileBrowserPane.includes('import UiIcon') &&
+    fileBrowserPane.includes("'upload' : 'download'") &&
+    fileBrowserPane.includes(`UiIcon :name="entry.isDir ? 'folder' : 'file'"`) &&
     uiIcon.includes("name === 'file'") &&
     uiIcon.includes("name === 'pin'") &&
     commandHistoryPanel.includes('name="pin"'),

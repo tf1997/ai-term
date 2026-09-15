@@ -32,3 +32,4 @@
 @import '../../shared/styles/typography.css';
 @import './session-view.css';
 @import '../../domains/transfer/presentation/styles/sftp.css';
+@import '../../domains/transfer/presentation/styles/file-workspace.css';

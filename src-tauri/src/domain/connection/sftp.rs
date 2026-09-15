@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::models::{
     AuthEndpoint, AuthMode, ConnectionProfile, ConnectionRole, FileTransferMode, JumpMode,
 };
+use super::sftp_process::SftpProcessCancellation;
 use crate::domain::filesystem::local::home_path;
 use crate::domain::pty::{
     append_limited_lossy, spawn_pty_process, spawn_reader_channel, write_to_pty, PtyCommand,
@@ -37,10 +38,15 @@ const SFTP_PTY_ROWS: u16 = 32;
 const NATIVE_SFTP_POOL_TTL: Duration = Duration::from_secs(120);
 const NATIVE_SFTP_POOL_MAX: usize = 8;
 const NATIVE_SFTP_COPY_BUFFER_SIZE: usize = 1024 * 1024;
+const SFTP_ACTION_STARTED: &str = "SFTP operation started; check the target before retrying";
 pub const REMOTE_TEXT_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const REMOTE_FILE_CHANGED_PREFIX: &str = "REMOTE_FILE_CHANGED:";
 
 pub type SftpCancelToken = Arc<AtomicBool>;
+
+#[cfg(test)]
+#[path = "sftp_protocol_tests.rs"]
+mod protocol_tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +96,8 @@ pub struct SftpProbeResponse {
     pub available: bool,
     pub path: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub profile_route: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,6 +120,40 @@ pub struct SftpLaunchPlan {
 pub struct SftpTargetOverride {
     pub host: Option<String>,
     pub username: Option<String>,
+}
+
+/// Canonical non-secret route binding shared with the frontend. A queued task
+/// must not silently inherit a changed port, gateway, username or routing mode.
+pub fn sftp_profile_route(profile: &ConnectionProfile) -> String {
+    serde_json::json!([
+        "sftp-profile-route-v1",
+        profile.id,
+        profile.connection_role,
+        profile.jump_mode,
+        profile.file_transfer_mode,
+        profile.menu_profile_id,
+        [
+            profile.target.host.trim(),
+            profile.target.port.unwrap_or(22),
+            profile.target.username.trim()
+        ],
+        [
+            profile.gateway.host.trim(),
+            profile.gateway.port.unwrap_or(22),
+            profile.gateway.username.trim()
+        ],
+    ])
+    .to_string()
+}
+
+pub fn validate_sftp_profile_route(
+    profile: &ConnectionProfile,
+    expected: Option<&str>,
+) -> Result<()> {
+    if expected.is_some_and(|expected| expected != sftp_profile_route(profile)) {
+        bail!("SFTP_TARGET_CHANGED: connection routing changed; detect the file target again before retrying");
+    }
+    Ok(())
 }
 
 pub fn build_sftp_launch_plan(profile: &ConnectionProfile) -> SftpLaunchPlan {
@@ -170,6 +212,7 @@ pub fn list_directory_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpListResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(path);
     let native_list_error =
         match try_native_list_directory(profile, &remote_path, target_override, cancel_token) {
@@ -200,7 +243,8 @@ pub fn list_directory_with_cancel(
     };
 
     let parsed = parse_list_output(&output, &parsed_path)?;
-    if !parsed.entries.is_empty() || is_cancelled(cancel_token) {
+    ensure_not_cancelled(cancel_token)?;
+    if !parsed.entries.is_empty() {
         return Ok(parsed);
     }
 
@@ -215,7 +259,7 @@ pub fn list_directory_with_cancel(
         if let Some(error) = native_list_error {
             bail!(
                 "原生 SFTP 读取失败，系统 sftp 也没有返回文件项。\n{}",
-                clean_sftp_output(&error.to_string())
+                clean_sftp_output(&format!("{error:#}"))
             );
         }
         Ok(parsed)
@@ -236,10 +280,12 @@ pub fn probe_sftp_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> SftpProbeResponse {
+    let profile_route = sftp_profile_route(profile);
     match try_native_sftp_probe(profile, target_override, cancel_token) {
         Some(Ok(response)) => {
             let path = response.path;
             return SftpProbeResponse {
+                profile_route: profile_route.clone(),
                 available: true,
                 path: Some(path.clone()),
                 message: format!("SFTP 可用，远程目录 {path}"),
@@ -247,9 +293,10 @@ pub fn probe_sftp_with_cancel(
         }
         Some(Err(error)) if !should_fallback_native_sftp_error(&error) => {
             return SftpProbeResponse {
+                profile_route: profile_route.clone(),
                 available: false,
                 path: None,
-                message: summarize_sftp_error(&error.to_string()),
+                message: summarize_sftp_error(&format!("{error:#}")),
             };
         }
         Some(Err(_)) | None => {}
@@ -266,6 +313,7 @@ pub fn probe_sftp_with_cancel(
         Ok(output) => {
             let path = parse_remote_working_directory(&output).unwrap_or_else(|| ".".into());
             SftpProbeResponse {
+                profile_route: profile_route.clone(),
                 available: true,
                 path: Some(path.clone()),
                 message: format!("SFTP 可用，远程目录 {path}"),
@@ -281,21 +329,24 @@ pub fn probe_sftp_with_cancel(
                 None,
             ) {
                 Ok(_) => SftpProbeResponse {
+                    profile_route: profile_route.clone(),
                     available: true,
                     path: Some("/".into()),
                     message: "SFTP 可用，远程目录 /".into(),
                 },
                 Err(error) => SftpProbeResponse {
+                    profile_route: profile_route.clone(),
                     available: false,
                     path: None,
-                    message: summarize_sftp_error(&error.to_string()),
+                    message: summarize_sftp_error(&format!("{error:#}")),
                 },
             }
         }
         Err(error) => SftpProbeResponse {
+            profile_route,
             available: false,
             path: None,
-            message: summarize_sftp_error(&error.to_string()),
+            message: summarize_sftp_error(&format!("{error:#}")),
         },
     }
 }
@@ -305,6 +356,9 @@ fn try_native_sftp_probe(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Option<Result<SftpListResponse>> {
+    if let Err(error) = ensure_not_cancelled(cancel_token) {
+        return Some(Err(error));
+    }
     // Detection is a lifecycle boundary: discard a pooled channel for the same
     // route, then let a successful probe repopulate the pool for directory use.
     clear_cached_native_sftp_routes(profile, target_override);
@@ -343,6 +397,7 @@ pub fn create_directory_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(path);
     if let Some(response) = native_result_or_fallback(try_native_create_directory(
         profile,
@@ -386,6 +441,7 @@ pub fn delete_path_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(path);
     if let Some(response) = native_result_or_fallback(try_native_delete_path(
         profile,
@@ -449,6 +505,7 @@ pub fn upload_file_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let local_path = expand_tilde(local_path);
     if !Path::new(&local_path).is_file() {
         bail!("local file does not exist: {local_path}");
@@ -520,6 +577,7 @@ pub fn upload_path_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let local_path = expand_tilde(local_path);
     let local = Path::new(&local_path);
     if !local.exists() {
@@ -601,6 +659,7 @@ pub fn download_file_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(remote_path);
     let local_path = expand_tilde(local_path);
     if let Some(response) = native_result_or_fallback(try_native_download_file(
@@ -642,6 +701,16 @@ pub fn read_remote_text_file(
     remote_path: &str,
     target_override: &SftpTargetOverride,
 ) -> Result<RemoteTextFileResponse> {
+    read_remote_text_file_with_cancel(profile, remote_path, target_override, None)
+}
+
+pub fn read_remote_text_file_with_cancel(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Result<RemoteTextFileResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(remote_path);
     let temp_file = RemoteEditTempFile::new()?;
     download_file_with_cancel(
@@ -649,8 +718,10 @@ pub fn read_remote_text_file(
         &remote_path,
         temp_file.path_string(),
         target_override,
-        None,
+        cancel_token,
     )?;
+
+    ensure_not_cancelled(cancel_token)?;
 
     let bytes = fs::read(&temp_file.path)
         .with_context(|| format!("failed to read downloaded remote file {remote_path}"))?;
@@ -676,11 +747,37 @@ pub fn save_remote_text_file(
     force: bool,
     target_override: &SftpTargetOverride,
 ) -> Result<RemoteTextFileResponse> {
+    save_remote_text_file_with_cancel(
+        profile,
+        remote_path,
+        content,
+        expected_revision,
+        force,
+        target_override,
+        None,
+    )
+}
+
+pub fn save_remote_text_file_with_cancel(
+    profile: &ConnectionProfile,
+    remote_path: &str,
+    content: &str,
+    expected_revision: &str,
+    force: bool,
+    target_override: &SftpTargetOverride,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Result<RemoteTextFileResponse> {
+    ensure_not_cancelled(cancel_token)?;
     validate_remote_text_bytes(content.as_bytes())?;
     let remote_path = normalize_remote_path(remote_path);
 
     if !force {
-        let current = read_remote_text_file(profile, &remote_path, target_override)?;
+        let current = read_remote_text_file_with_cancel(
+            profile,
+            &remote_path,
+            target_override,
+            cancel_token,
+        )?;
         if current.revision != expected_revision {
             bail!(
                 "{REMOTE_FILE_CHANGED_PREFIX} remote file changed after it was opened: {remote_path}"
@@ -688,6 +785,7 @@ pub fn save_remote_text_file(
         }
     }
 
+    ensure_not_cancelled(cancel_token)?;
     let temp_file = RemoteEditTempFile::new()?;
     fs::write(&temp_file.path, content.as_bytes())
         .with_context(|| format!("failed to stage remote file update for {remote_path}"))?;
@@ -696,7 +794,7 @@ pub fn save_remote_text_file(
         temp_file.path_string(),
         &remote_path,
         target_override,
-        None,
+        cancel_token,
     )?;
 
     Ok(RemoteTextFileResponse {
@@ -714,6 +812,7 @@ pub fn upload_file_to_remote_path_with_cancel(
     target_override: &SftpTargetOverride,
     cancel_token: Option<&SftpCancelToken>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let local_path = expand_tilde(local_path);
     if !Path::new(&local_path).is_file() {
         bail!("local file does not exist: {local_path}");
@@ -856,6 +955,7 @@ pub fn download_path_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<SftpTransferResponse> {
+    ensure_not_cancelled(cancel_token)?;
     let remote_path = normalize_remote_path(remote_path);
     let local_dir = expand_tilde(local_dir);
     let local = Path::new(&local_dir);
@@ -1052,7 +1152,7 @@ fn try_native_upload_path(
         target_override,
         cancel_token,
         |connection, _route| {
-            let total = local_transfer_size(Path::new(local_path))?;
+            let total = local_transfer_size(Path::new(local_path), cancel_token)?;
             let mut transferred = 0;
             let started = Instant::now();
             let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
@@ -1138,7 +1238,7 @@ fn try_native_download_path(
         target_override,
         cancel_token,
         |connection, _route| {
-            let total = remote_transfer_size(&connection.sftp, remote_path, is_dir)?;
+            let total = remote_transfer_size(&connection.sftp, remote_path, is_dir, cancel_token)?;
             let mut transferred = 0;
             let started = Instant::now();
             let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
@@ -1193,6 +1293,8 @@ fn should_fallback_native_sftp_error(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
     !contains_host_key_verification_failure(&message)
         && !message.contains("authentication")
+        && !message.contains("认证失败")
+        && !message.contains("sftp operation started")
         && !message.contains("permission denied")
         && !message.contains("no such file")
         && !message.contains("not a directory")
@@ -1202,6 +1304,9 @@ fn should_fallback_native_sftp_error(error: &anyhow::Error) -> bool {
 fn should_try_next_native_sftp_route(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
     !contains_host_key_verification_failure(&message)
+        && !message.contains("authentication")
+        && !message.contains("认证失败")
+        && !message.contains("sftp operation started")
         && !message.contains("permission denied")
         && !message.contains("no such file")
         && !message.contains("not a directory")
@@ -1258,7 +1363,7 @@ fn run_cached_native_sftp_routes<T>(
             return Some(Err(error));
         }
         let cache_key = native_sftp_cache_key(profile, &route);
-        let result = run_cached_native_sftp_route(&route, &cache_key, |connection| {
+        let result = run_cached_native_sftp_route(&route, &cache_key, cancel_token, |connection| {
             action(connection, &route)
         });
         match result {
@@ -1270,7 +1375,7 @@ fn run_cached_native_sftp_routes<T>(
                 errors.push(format!(
                     "{}: {}",
                     route_label(&route),
-                    clean_sftp_output(&error.to_string())
+                    clean_sftp_output(&format!("{error:#}"))
                 ));
             }
         }
@@ -1285,23 +1390,28 @@ fn run_cached_native_sftp_routes<T>(
 fn run_cached_native_sftp_route<T>(
     route: &SftpRoute,
     cache_key: &str,
+    cancel_token: Option<&SftpCancelToken>,
     mut action: impl FnMut(&NativeSftpConnection) -> Result<T>,
 ) -> Result<T> {
     if let Some(connection) = take_cached_native_sftp_connection(cache_key) {
-        match action(&connection) {
+        match with_native_sftp_cancellation(&connection, cancel_token, &mut action) {
             Ok(value) => {
+                ensure_not_cancelled(cancel_token)?;
                 store_cached_native_sftp_connection(cache_key.to_string(), connection);
                 return Ok(value);
             }
+            Err(error) if !should_fallback_native_sftp_error(&error) => return Err(error),
             Err(_) => {
                 // Drop the stale cached session and retry the readonly listing once.
             }
         }
     }
 
-    let connection = connect_native_sftp_route(route)?;
-    match action(&connection) {
+    ensure_not_cancelled(cancel_token)?;
+    let connection = connect_native_sftp_route(route, cancel_token)?;
+    match with_native_sftp_cancellation(&connection, cancel_token, action) {
         Ok(value) => {
+            ensure_not_cancelled(cancel_token)?;
             store_cached_native_sftp_connection(cache_key.to_string(), connection);
             Ok(value)
         }
@@ -1386,8 +1496,9 @@ fn run_native_sftp_routes<T>(
             return Some(Err(error));
         }
         let cache_key = native_sftp_cache_key(profile, &route);
-        let result =
-            run_native_sftp_route(&route, &cache_key, |connection| action(connection, &route));
+        let result = run_native_sftp_route(&route, &cache_key, cancel_token, |connection| {
+            action(connection, &route)
+        });
         match result {
             Ok(value) => return Some(Ok(value)),
             Err(error) => {
@@ -1397,7 +1508,7 @@ fn run_native_sftp_routes<T>(
                 errors.push(format!(
                     "{}: {}",
                     route_label(&route),
-                    clean_sftp_output(&error.to_string())
+                    clean_sftp_output(&format!("{error:#}"))
                 ));
             }
         }
@@ -1412,22 +1523,23 @@ fn run_native_sftp_routes<T>(
 fn run_native_sftp_route<T>(
     route: &SftpRoute,
     cache_key: &str,
+    cancel_token: Option<&SftpCancelToken>,
     action: impl FnOnce(&NativeSftpConnection) -> Result<T>,
 ) -> Result<T> {
     let connection = match take_cached_native_sftp_connection(cache_key) {
         Some(connection) => connection,
-        None => connect_native_sftp_route(route)?,
+        None => connect_native_sftp_route(route, cancel_token)?,
     };
 
-    // Mutable actions can fail after changing remote state, so do not replay them
-    // on a fresh session. A failure drops the borrowed session and lets the route
-    // caller apply the existing alternate-route/fallback policy.
-    match action(&connection) {
+    // Once a mutable action has begun, a transport failure does not establish
+    // whether the write took effect. Never replay it on another route/backend.
+    match with_native_sftp_cancellation(&connection, cancel_token, action) {
         Ok(value) => {
+            ensure_not_cancelled(cancel_token)?;
             store_cached_native_sftp_connection(cache_key.to_string(), connection);
             Ok(value)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error).context(SFTP_ACTION_STARTED),
     }
 }
 
@@ -1451,13 +1563,39 @@ fn native_sftp_routes(
     routes
 }
 
-fn connect_native_sftp_route(route: &SftpRoute) -> Result<NativeSftpConnection> {
-    let ssh = connect_routed_endpoint(&route.target, route.proxy.as_ref())
+fn with_native_sftp_cancellation<T>(
+    connection: &NativeSftpConnection,
+    cancel_token: Option<&SftpCancelToken>,
+    action: impl FnOnce(&NativeSftpConnection) -> Result<T>,
+) -> Result<T> {
+    ensure_not_cancelled(cancel_token)?;
+    let _guard = connection._ssh.cancel_io_on(cancel_token)?;
+    let result = action(connection);
+    ensure_not_cancelled(cancel_token)?;
+    result
+}
+
+impl Drop for NativeSftpConnection {
+    fn drop(&mut self) {
+        // libssh2's SFTP destructor may otherwise wait for a remote close while
+        // pruning the shared pool. Close transport before dropping SFTP state.
+        self._ssh.shutdown();
+    }
+}
+
+fn connect_native_sftp_route(
+    route: &SftpRoute,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Result<NativeSftpConnection> {
+    let ssh = connect_routed_endpoint(&route.target, route.proxy.as_ref(), cancel_token)
         .with_context(|| format!("failed to connect native SFTP route {}", route_label(route)))?;
+    let _guard = ssh.cancel_io_on(cancel_token)?;
     let sftp = ssh
         .session()
         .sftp()
-        .context("failed to open native SFTP subsystem")?;
+        .context("failed to open native SFTP subsystem");
+    ensure_not_cancelled(cancel_token)?;
+    let sftp = sftp?;
     Ok(NativeSftpConnection { sftp, _ssh: ssh })
 }
 
@@ -1623,6 +1761,7 @@ fn upload_file_native_to(
     ensure_not_cancelled(cancel_token)?;
     let mut local = File::open(local_path)
         .with_context(|| format!("failed to open local file {}", local_path.display()))?;
+    ensure_not_cancelled(cancel_token)?;
     let mut remote = sftp
         .open_mode(
             Path::new(remote_path),
@@ -1718,6 +1857,7 @@ fn download_file_native_to(
     let mut remote = sftp
         .open(Path::new(remote_path))
         .with_context(|| format!("failed to open native SFTP file for read {remote_path}"))?;
+    ensure_not_cancelled(cancel_token)?;
     let mut local = File::create(local_path)
         .with_context(|| format!("failed to create local file {}", local_path.display()))?;
     copy_with_native_progress(
@@ -1745,13 +1885,26 @@ fn copy_with_native_progress<R: Read, W: Write>(
     loop {
         ensure_not_cancelled(cancel_token)?;
         let count = reader.read(buffer)?;
+        ensure_not_cancelled(cancel_token)?;
         if count == 0 {
             break;
         }
-        writer.write_all(&buffer[..count])?;
+        // Check between partial writes too: cancellation during a read or a
+        // partial write must not start the next write from an old operation.
+        let mut remaining = &buffer[..count];
+        while !remaining.is_empty() {
+            ensure_not_cancelled(cancel_token)?;
+            let written = writer.write(remaining)?;
+            if written == 0 {
+                bail!("SFTP stream closed while writing");
+            }
+            remaining = &remaining[written..];
+        }
+        ensure_not_cancelled(cancel_token)?;
         *transferred = transferred.saturating_add(count as u64);
         emit_native_transfer_progress(progress, total, *transferred, started);
     }
+    ensure_not_cancelled(cancel_token)?;
     writer.flush()?;
     Ok(())
 }
@@ -1774,7 +1927,8 @@ fn native_path_is_dir(sftp: &ssh2::Sftp, remote_path: &str) -> bool {
         .is_some_and(|stat| native_file_is_dir(&stat))
 }
 
-fn local_transfer_size(path: &Path) -> Result<u64> {
+fn local_transfer_size(path: &Path, cancel_token: Option<&SftpCancelToken>) -> Result<u64> {
+    ensure_not_cancelled(cancel_token)?;
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to stat local path {}", path.display()))?;
     if metadata.is_file() {
@@ -1787,12 +1941,18 @@ fn local_transfer_size(path: &Path) -> Result<u64> {
     for entry in fs::read_dir(path)
         .with_context(|| format!("failed to read local directory {}", path.display()))?
     {
-        total = total.saturating_add(local_transfer_size(&entry?.path())?);
+        total = total.saturating_add(local_transfer_size(&entry?.path(), cancel_token)?);
     }
     Ok(total)
 }
 
-fn remote_transfer_size(sftp: &ssh2::Sftp, remote_path: &str, is_dir: bool) -> Result<u64> {
+fn remote_transfer_size(
+    sftp: &ssh2::Sftp,
+    remote_path: &str,
+    is_dir: bool,
+    cancel_token: Option<&SftpCancelToken>,
+) -> Result<u64> {
+    ensure_not_cancelled(cancel_token)?;
     if !is_dir {
         return Ok(sftp
             .stat(Path::new(remote_path))
@@ -1806,6 +1966,7 @@ fn remote_transfer_size(sftp: &ssh2::Sftp, remote_path: &str, is_dir: bool) -> R
         .readdir(Path::new(remote_path))
         .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?
     {
+        ensure_not_cancelled(cancel_token)?;
         let name = native_entry_name(&entry_path);
         if name.is_empty() || name == "." || name == ".." {
             continue;
@@ -1815,6 +1976,7 @@ fn remote_transfer_size(sftp: &ssh2::Sftp, remote_path: &str, is_dir: bool) -> R
                 sftp,
                 &native_entry_path(remote_path, &entry_path, &name),
                 true,
+                cancel_token,
             )?);
         } else {
             total = total.saturating_add(stat.size.unwrap_or(0));
@@ -2013,7 +2175,9 @@ fn ensure_not_cancelled(cancel_token: Option<&SftpCancelToken>) -> Result<()> {
 }
 fn should_retry_sftp_root_listing(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
-    message.contains("need cwd") || message.contains("couldn't canonicalize")
+    !message.contains("sftp task cancelled")
+        && !contains_host_key_verification_failure(&message)
+        && (message.contains("need cwd") || message.contains("couldn't canonicalize"))
 }
 
 fn contains_host_key_verification_failure(message: &str) -> bool {
@@ -2026,6 +2190,12 @@ fn contains_host_key_verification_failure(message: &str) -> bool {
 fn should_try_composite_username_fallback(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}").to_ascii_lowercase();
     !message.contains("sftp task cancelled")
+        && !message.contains("sftp operation started")
+        && !message.contains("authentication")
+        && !message.contains("认证失败")
+        && !message.contains("permission denied")
+        && !message.contains("no such file")
+        && !message.contains("not a directory")
         && !should_retry_sftp_root_listing(error)
         && !contains_host_key_verification_failure(&message)
         && !message.contains("remote host identification has changed")
@@ -2066,6 +2236,7 @@ fn run_sftp_profile_commands_with_progress(
     cancel_token: Option<&SftpCancelToken>,
     mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)>,
 ) -> Result<String> {
+    ensure_not_cancelled(cancel_token)?;
     let primary_result = run_sftp_launch_plan_with_progress_ref(
         build_sftp_launch_plan_with_target(profile, target_override),
         commands.clone(),
@@ -2073,6 +2244,7 @@ fn run_sftp_profile_commands_with_progress(
         cancel_token,
         &mut progress,
     );
+    ensure_not_cancelled(cancel_token)?;
 
     match primary_result {
         Ok(output) => Ok(output),
@@ -2086,6 +2258,7 @@ fn run_sftp_profile_commands_with_progress(
             else {
                 return Err(primary_error);
             };
+            ensure_not_cancelled(cancel_token)?;
 
             if let Some(callback) = progress.as_deref_mut() {
                 callback(plain_progress_update(
@@ -2104,8 +2277,8 @@ fn run_sftp_profile_commands_with_progress(
             .map_err(|fallback_error| {
                 anyhow::anyhow!(
                     "SFTP 主路线失败\n{}\n\nSFTP 备用路线失败\n{}",
-                    clean_sftp_output(&primary_error.to_string()),
-                    clean_sftp_output(&fallback_error.to_string())
+                    clean_sftp_output(&format!("{primary_error:#}")),
+                    clean_sftp_output(&format!("{fallback_error:#}"))
                 )
             })
         }
@@ -2122,11 +2295,16 @@ fn run_sftp_launch_plan_with_progress_ref(
     if is_cancelled(cancel_token) {
         bail!("SFTP task cancelled");
     }
-
+    let started = Instant::now();
     let mut process = spawn_pty_process(
         PtyCommand::new(plan.program, plan.args),
         SFTP_PTY_COLS,
         SFTP_PTY_ROWS,
+    )?;
+    let _process_cancel = SftpProcessCancellation::new(
+        process.child.as_ref(),
+        cancel_token,
+        timeout.saturating_sub(started.elapsed()),
     )?;
     let writer = process.writer.clone();
     let output_rx = spawn_reader_channel(process.reader);
@@ -2136,17 +2314,35 @@ fn run_sftp_launch_plan_with_progress_ref(
     let mut prompt_window = String::new();
     let mut password_index = 0;
     let mut host_key_confirmed = false;
-    let started = Instant::now();
     let mut last_output_at = started;
 
-    loop {
-        if is_cancelled(cancel_token) {
-            terminate_sftp_process(&mut process.session, process.child.as_mut());
-            bail!("SFTP task cancelled");
-        }
+    let result = (|| {
+        loop {
+            if is_cancelled(cancel_token) {
+                terminate_sftp_process(&mut process.session, process.child.as_mut());
+                bail!("SFTP task cancelled");
+            }
 
-        match output_rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(chunk) => {
+            match output_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(chunk) => {
+                    ensure_not_cancelled(cancel_token)?;
+                    collect_sftp_chunk(
+                        &chunk,
+                        &mut output,
+                        &mut prompt_window,
+                        &mut last_output_at,
+                        progress,
+                    );
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {}
+            }
+
+            while let Ok(chunk) = output_rx.try_recv() {
+                ensure_not_cancelled(cancel_token)?;
+                if started.elapsed() >= timeout {
+                    bail!("SFTP command timed out");
+                }
                 collect_sftp_chunk(
                     &chunk,
                     &mut output,
@@ -2155,100 +2351,228 @@ fn run_sftp_launch_plan_with_progress_ref(
                     progress,
                 );
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {}
-        }
 
-        while let Ok(chunk) = output_rx.try_recv() {
-            collect_sftp_chunk(
-                &chunk,
-                &mut output,
-                &mut prompt_window,
-                &mut last_output_at,
-                progress,
-            );
-        }
+            // Output may arrive at the deadline. Do not answer a prompt or
+            // dispatch another command after the budget has expired.
+            if started.elapsed() >= timeout {
+                bail!("SFTP command timed out");
+            }
 
-        if let Some(response) = terminal_status_response(&prompt_window) {
-            write_to_pty(&writer, response)?;
-            prompt_window = prompt_window.replace("\x1b[6n", "");
-            continue;
-        }
+            if let Some(response) = terminal_status_response(&prompt_window) {
+                ensure_not_cancelled(cancel_token)?;
+                write_to_pty(&writer, response)?;
+                prompt_window = prompt_window.replace("\x1b[6n", "");
+                continue;
+            }
 
-        let normalized_prompt = prompt_window.to_lowercase();
-        if output_contains_host_key_warning(&prompt_window) {
-            terminate_sftp_process(&mut process.session, process.child.as_mut());
-            bail!("{}", host_key_warning_hint(&prompt_window));
-        }
-
-        if !host_key_confirmed
-            && normalized_prompt.contains("are you sure you want to continue connecting")
-        {
-            write_to_pty(&writer, format!("yes{}", line_ending).as_bytes())?;
-            host_key_confirmed = true;
-            prompt_window.clear();
-            continue;
-        }
-
-        if output_contains_password_prompt(&prompt_window) {
-            if password_index >= plan.passwords.len() {
+            let normalized_prompt = prompt_window.to_lowercase();
+            if command_index > 0 {
+                let cleaned = clean_sftp_listing_output(&prompt_window);
+                if cleaned.lines().any(is_sftp_listing_error_line) {
+                    // Interactive sftp may exit 0 after a failed cd/get/put. Stop
+                    // before sending subsequent commands to an unintended cwd.
+                    bail!("SFTP command failed\n{}", clean_sftp_output(&cleaned));
+                }
+            }
+            if output_contains_host_key_warning(&prompt_window) {
                 terminate_sftp_process(&mut process.session, process.child.as_mut());
-                let text = String::from_utf8_lossy(&output).into_owned();
-                bail!(
+                bail!("{}", host_key_warning_hint(&prompt_window));
+            }
+
+            if !host_key_confirmed
+                && normalized_prompt.contains("are you sure you want to continue connecting")
+            {
+                ensure_not_cancelled(cancel_token)?;
+                write_to_pty(&writer, format!("yes{}", line_ending).as_bytes())?;
+                host_key_confirmed = true;
+                prompt_window.clear();
+                continue;
+            }
+
+            if output_contains_password_prompt(&prompt_window) {
+                if password_index >= plan.passwords.len() {
+                    terminate_sftp_process(&mut process.session, process.child.as_mut());
+                    let text = String::from_utf8_lossy(&output).into_owned();
+                    bail!(
                     "SFTP requires a password/passphrase, but no plaintext password is saved for this profile\n{}",
                     clean_sftp_output(&text)
                 );
-            }
+                }
 
-            let secret = format!("{}{}", plan.passwords[password_index], line_ending);
-            write_to_pty(&writer, secret.as_bytes())?;
-            password_index += 1;
-            prompt_window.clear();
-            continue;
-        }
-
-        if command_index < commands.len() {
-            let ready_for_next_command = if command_index == 0 {
-                should_send_sftp_commands(
-                    &normalized_prompt,
-                    started.elapsed(),
-                    last_output_at.elapsed(),
-                    password_index,
-                    plan.passwords.len(),
-                )
-            } else {
-                should_send_next_sftp_command(&normalized_prompt)
-            };
-
-            if ready_for_next_command {
-                let command_payload = format!("{}{}", commands[command_index], line_ending);
-                write_to_pty(&writer, command_payload.as_bytes())?;
-                command_index += 1;
+                let secret = format!("{}{}", plan.passwords[password_index], line_ending);
+                ensure_not_cancelled(cancel_token)?;
+                write_to_pty(&writer, secret.as_bytes())?;
+                password_index += 1;
                 prompt_window.clear();
+                continue;
+            }
+
+            if command_index < commands.len() {
+                let ready_for_next_command = if command_index == 0 {
+                    should_send_sftp_commands(
+                        &normalized_prompt,
+                        started.elapsed(),
+                        last_output_at.elapsed(),
+                        password_index,
+                        plan.passwords.len(),
+                    )
+                } else {
+                    should_send_next_sftp_command(&normalized_prompt)
+                };
+
+                if ready_for_next_command {
+                    ensure_not_cancelled(cancel_token)?;
+                    let command_payload = format!("{}{}", commands[command_index], line_ending);
+                    command_index += 1;
+                    write_to_pty(&writer, command_payload.as_bytes())?;
+                    prompt_window.clear();
+                }
+            }
+
+            if let Some(status) = process.child.try_wait()? {
+                drain_sftp_output(
+                    &output_rx,
+                    &mut output,
+                    &mut prompt_window,
+                    &mut last_output_at,
+                    progress,
+                    SFTP_CHILD_EXIT_GRACE,
+                );
+                let text = String::from_utf8_lossy(&output).into_owned();
+                ensure_not_cancelled(cancel_token)?;
+                if !status.success() {
+                    bail!("SFTP command failed\n{}", clean_sftp_output(&text));
+                }
+                return Ok(text);
+            }
+
+            if started.elapsed() > timeout {
+                terminate_sftp_process(&mut process.session, process.child.as_mut());
+                let text = String::from_utf8_lossy(&output).into_owned();
+                bail!("SFTP command timed out\n{}", clean_sftp_output(&text));
             }
         }
+    })();
+    ensure_not_cancelled(cancel_token)?;
+    let result = if started.elapsed() >= timeout {
+        Err(anyhow::anyhow!("SFTP command timed out"))
+    } else {
+        result
+    };
+    if commands
+        .iter()
+        .take(command_index)
+        .any(|command| sftp_command_changes_files(command))
+    {
+        result.context(SFTP_ACTION_STARTED)
+    } else {
+        result
+    }
+}
 
-        if let Some(status) = process.child.try_wait()? {
-            drain_sftp_output(
-                &output_rx,
-                &mut output,
-                &mut prompt_window,
-                &mut last_output_at,
-                progress,
-                SFTP_CHILD_EXIT_GRACE,
-            );
-            let text = String::from_utf8_lossy(&output).into_owned();
-            if !status.success() {
-                bail!("SFTP command failed\n{}", clean_sftp_output(&text));
+fn sftp_command_changes_files(command: &str) -> bool {
+    matches!(
+        command.split_whitespace().next(),
+        Some("put" | "get" | "mkdir" | "rm" | "rmdir" | "rename" | "chmod" | "chown" | "chgrp")
+    )
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_during_read_prevents_any_following_write() {
+        struct CancellingReader(SftpCancelToken);
+        impl Read for CancellingReader {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                bytes[..4].copy_from_slice(b"late");
+                self.0.store(true, Ordering::SeqCst);
+                Ok(4)
             }
-            return Ok(text);
         }
+        let token = Arc::new(AtomicBool::new(false));
+        let mut writer = Vec::new();
+        let result = copy_with_native_progress(
+            &mut CancellingReader(token.clone()),
+            &mut writer,
+            &mut [0; 8],
+            Some(&token),
+            &mut None,
+            4,
+            &mut 0,
+            &Instant::now(),
+        );
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(writer.is_empty());
+    }
 
-        if started.elapsed() > timeout {
-            terminate_sftp_process(&mut process.session, process.child.as_mut());
-            let text = String::from_utf8_lossy(&output).into_owned();
-            bail!("SFTP command timed out\n{}", clean_sftp_output(&text));
+    #[test]
+    fn cancellation_during_partial_write_prevents_remaining_writes_and_flush() {
+        struct CancellingWriter {
+            token: SftpCancelToken,
+            bytes: Vec<u8>,
         }
+        impl Write for CancellingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(&bytes[..2]);
+                self.token.store(true, Ordering::SeqCst);
+                Ok(2)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("cancelled write must not flush")
+            }
+        }
+        let token = Arc::new(AtomicBool::new(false));
+        let mut writer = CancellingWriter {
+            token: token.clone(),
+            bytes: Vec::new(),
+        };
+        let result = copy_with_native_progress(
+            &mut std::io::Cursor::new(b"payload"),
+            &mut writer,
+            &mut [0; 8],
+            Some(&token),
+            &mut None,
+            7,
+            &mut 0,
+            &Instant::now(),
+        );
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert_eq!(&writer.bytes, b"pa");
+    }
+
+    #[test]
+    fn cancellation_authentication_and_started_mutations_never_fall_back() {
+        for message in [
+            "SFTP task cancelled",
+            "SSH authentication failed",
+            "SSH 认证失败",
+            SFTP_ACTION_STARTED,
+        ] {
+            let error = anyhow::anyhow!(message).context("failed to connect native SFTP route");
+            assert!(!should_fallback_native_sftp_error(&error), "{message}");
+            assert!(!should_try_next_native_sftp_route(&error), "{message}");
+            assert!(!should_try_composite_username_fallback(&error), "{message}");
+        }
+    }
+
+    #[test]
+    fn file_names_and_progress_are_not_mistaken_for_command_errors() {
+        for line in [
+            "-rw-r--r-- 1 app app 42 Sep 15 2026 Failure.txt",
+            "Uploading failure.txt to /failure.txt",
+            "permission denied.log  42% 12MB 1.0MB/s 00:08",
+            "sftp> put no-such-file.txt",
+        ] {
+            assert!(!is_sftp_listing_error_line(line), "{line}");
+        }
+        assert!(is_sftp_listing_error_line(
+            "Couldn't canonicalize: No such file"
+        ));
+        assert!(is_sftp_listing_error_line(
+            "remote open(\"/tmp/file\"): Permission denied"
+        ));
     }
 }
 fn collect_sftp_chunk(
@@ -2804,7 +3128,17 @@ fn is_sftp_listing_error_line(line: &str) -> bool {
     if line.is_empty() || line.starts_with("sftp>") {
         return false;
     }
+    if looks_like_unix_permissions(line) || parse_windows_ls_line(line, "/").is_some() {
+        return false;
+    }
     let lower = line.to_ascii_lowercase();
+    if lower.starts_with("uploading ")
+        || lower.starts_with("downloading ")
+        || lower.starts_with("fetching ")
+        || extract_sftp_progress_percent(line).is_some()
+    {
+        return false;
+    }
     lower.contains("permission denied")
         || lower.contains("no such file")
         || lower.contains("not a directory")
@@ -2812,7 +3146,12 @@ fn is_sftp_listing_error_line(line: &str) -> bool {
         || lower.contains("need cwd")
         || lower.contains("remote readdir")
         || lower.contains("usage:")
-        || lower.contains("failure")
+        || lower == "failure"
+        || lower.ends_with(": failure")
+        || lower.starts_with("couldn't ")
+        || lower.starts_with("cannot ")
+        || lower.starts_with("failed to ")
+        || lower.contains("already exists")
 }
 
 fn clean_sftp_listing_output(output: &str) -> String {
@@ -3158,6 +3497,50 @@ mod tests {
             menu_profile_id: String::new(),
             file_transfer_mode: FileTransferMode::Auto,
         }
+    }
+
+    #[test]
+    fn profile_route_binding_matches_the_frontend_wire_contract_without_secrets() {
+        let profile = direct_profile_targeting_bastion();
+        assert_eq!(
+            sftp_profile_route(&profile),
+            r#"["sftp-profile-route-v1","direct-bastion","direct","direct","auto","",["bastion.example.com",2222,"ops"],["",22,""]]"#
+        );
+        assert!(!sftp_profile_route(&profile).contains("bastion-password"));
+        let mut edited = profile.clone();
+        edited.name = "new display name".into();
+        edited.target.password = Some("changed credential".into());
+        validate_sftp_profile_route(&edited, Some(&sftp_profile_route(&profile))).unwrap();
+    }
+
+    #[test]
+    fn captured_route_rejects_endpoint_and_routing_changes_before_dispatch() {
+        let profile = direct_profile_targeting_bastion();
+        let expected = sftp_profile_route(&profile);
+        for field in 0..11 {
+            let mut edited = profile.clone();
+            match field {
+                0 => edited.target.host = "another.example.invalid".into(),
+                1 => edited.target.port = Some(2022),
+                2 => edited.target.username = "another-user".into(),
+                3 => edited.gateway.host = "different-gateway.example.invalid".into(),
+                4 => edited.gateway.port = Some(2022),
+                5 => edited.gateway.username = "another-gateway-user".into(),
+                6 => edited.connection_role = ConnectionRole::Bastion,
+                7 => edited.jump_mode = JumpMode::InteractiveMenu,
+                8 => edited.file_transfer_mode = FileTransferMode::SftpGateway,
+                9 => edited.menu_profile_id = "different-menu".into(),
+                10 => edited.id = "different-profile".into(),
+                _ => unreachable!(),
+            }
+            let error = validate_sftp_profile_route(&edited, Some(&expected)).unwrap_err();
+            assert!(
+                error.to_string().starts_with("SFTP_TARGET_CHANGED:"),
+                "field {field}"
+            );
+        }
+        validate_sftp_profile_route(&profile, Some(&expected)).unwrap();
+        validate_sftp_profile_route(&profile, None).unwrap();
     }
 
     #[test]
