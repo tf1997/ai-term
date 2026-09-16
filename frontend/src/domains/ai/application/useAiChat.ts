@@ -20,7 +20,7 @@ interface AiChatOptions {
 
 export function useAiChat({ props, emit, answerState, conversationContext }: AiChatOptions, source: ChatSource = tauri) {
   const { onAiChatStream, chatWithAiProviderStream, cancelTask } = source
-  const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer } = answerState
+  const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer, finishAnswerMessage } = answerState
   const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
   let disposed = false
   const currentRequestId = ref('')
@@ -102,7 +102,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
           if (stopRequested.value) return
           cancelStreamFlush()
           notifyAiError(event.error)
-          emit('updateMessage', createAiStreamErrorMessage(assistantMessage, event.error, streamedAnswer))
+          emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(assistantMessage, event.error, streamedAnswer)))
         }
       })
       if (disposed || currentRequestId.value !== requestId) return
@@ -127,7 +127,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
         chars: response.contextChars,
         history: response.historyCount
       })
-      emit('updateMessage', {
+      emit('updateMessage', finishAnswerMessage({
         ...assistantMessage,
         text: answer,
         command,
@@ -135,7 +135,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
         streaming: false,
         usage,
         payloadJson: usage ? JSON.stringify({ usage }) : assistantMessage.payloadJson
-      })
+      }))
       maybeGenerateSessionTitle(
         requestConnectionId,
         requestWorkspaceSessionId,
@@ -152,7 +152,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
       cancelStreamFlush()
       const detail = formatAiError(error)
       notifyAiError(detail)
-      emit('updateMessage', createAiStreamErrorMessage(assistantMessage, detail, streamedAnswer))
+      emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(assistantMessage, detail, streamedAnswer)))
     } finally {
       cancelStreamFlush()
       unlisten?.()
@@ -178,11 +178,11 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
       const stoppedText = message.text.trim()
         ? `${message.text.trimEnd()}\n\n[已停止回答]`
         : '[已停止回答]'
-      emit('updateMessage', {
+      emit('updateMessage', finishAnswerMessage({
         ...message,
         text: stoppedText,
         streaming: false
-      })
+      }))
     }
     finishAnswerTimer(message?.id ?? currentAssistantMessageId.value)
     currentRequestId.value = ''

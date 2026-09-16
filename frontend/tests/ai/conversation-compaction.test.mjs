@@ -6,6 +6,7 @@ import { planConversationCompaction } from '../../src/domains/ai/domain/conversa
 import { useAiConversationContext } from '../../src/domains/ai/application/useAiConversationContext'
 import { useAiChat } from '../../src/domains/ai/application/useAiChat'
 import { useAgentSession } from '../../src/domains/ai/application/useAgentSession'
+import { useAiAnswerState } from '../../src/domains/ai/application/useAiAnswerState'
 
 function messages(count, size = 1000) {
   return Array.from({ length: count }, (_, index) => ({
@@ -210,10 +211,7 @@ for (const mode of ['chat', 'agent']) {
     const fixture = mountConversation(t, { props: {
       messages: source, agentCommandRunner: () => { throw Error('无工具调用时不应执行命令') }
     } }, ({ props, emit, conversation }) => {
-      const answerState = {
-        isAsking: ref(false), currentAssistantMessageId: ref(''),
-        startAnswerTimer() {}, finishAnswerTimer() {}
-      }
+      const answerState = useAiAnswerState()
       const common = { props, emit, answerState, conversationContext: conversation }
       const api = { onAiChatStream: async () => () => {}, cancelTask: async () => {} }
       if (mode === 'chat') return useAiChat(common, {

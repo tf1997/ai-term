@@ -72,6 +72,8 @@ The animation above is captured from the current Vue browser preview and walks t
 - Use OpenAI-compatible endpoints, custom HTTP providers, or local Ollama-style services.
 - Attach selected terminal text, recent output, and command history on demand instead of sending full scrollback by default.
 - Stream explanations, log summaries, and command drafts, and stop generation at any time.
+- Follow Agent tasks with a persistent phase and elapsed-time indicator, command waiting times, and a shortcut to pending decisions. New replies retain their total duration in conversation history.
+- Approve a command once or choose **Always allow** for the displayed command prefixes. Saved approvals apply to subsequent steps immediately and can be removed in Settings > Agent; risk and sensitive-command checks still require confirmation.
 - Extract shell commands from Markdown and preview them before inserting them into the terminal.
 - Classify dangerous commands and require confirmation; AI does not bypass user execution.
 

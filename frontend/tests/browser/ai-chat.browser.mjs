@@ -76,6 +76,7 @@ async function click(selector) {
 
 async function screenshot(name) {
   await evaluate('document.fonts.ready.then(() => true)')
+  await evaluate('Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))).then(() => true)')
   const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
   const path = join(outputDirectory, name)
   writeFileSync(path, Buffer.from(capture.data, 'base64'))
@@ -222,16 +223,81 @@ try {
   const approval = await evaluate(`(() => {
     const step = document.querySelector('[data-status="pending"]');
     const content = step.querySelector('.tool-code-full .tool-code-content');
-    return { content: content.textContent, clipped: content.scrollHeight > content.clientHeight + 1, maxHeight: getComputedStyle(content).maxHeight, expandButton: Boolean(step.querySelector('.tool-code-more')), approvalAction: [...step.querySelectorAll('button')].some(button => button.textContent.includes('执行命令')) };
+    return { content: content.textContent, clipped: content.scrollHeight > content.clientHeight + 1, maxHeight: getComputedStyle(content).maxHeight, expandButton: Boolean(step.querySelector('.tool-code-more')), approvalAction: [...step.querySelectorAll('button')].some(button => button.textContent.includes('仅执行本次')) };
   })()`)
   assert.ok(approval.content.includes('最后输出行') && !approval.clipped, 'Approval renders the entire long command before execution')
   assert.equal(approval.maxHeight, 'none', 'Approval command has no preview height limit')
   assert.equal(approval.expandButton, false, 'Complete approval commands do not show a redundant expand button')
   assert.ok(approval.approvalAction, 'Approval command retains its execution action')
+  assert.equal(await evaluate('document.querySelector(".tool-step-decision .is-allow").disabled'), true)
+  assert.ok(await evaluate('document.querySelector(".tool-step-allow-reason").textContent.includes("仅支持本次确认")'), 'Unsupported always-allow has a visible explanation')
+  await click('.tool-step-decision .is-primary')
   checks.push('Pending approval renders the full command at 360px and 125% zoom')
 
+  await evaluate('aiFixture.beginRuntime("agent")')
+  await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查运行状态'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await click('.chat-send')
+  await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在规划任务")')
+  await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
+  await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
+  await waitFor('Boolean(document.querySelector("[data-step-id=runtime-first] .tool-step-decision"))')
+  assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-progress").textContent.includes("等待确认命令")'), 'Agent progress remains visible after tool steps appear')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), false, 'Always allow is an enabled button for an eligible command')
+  assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-allow").textContent.includes("所有会话")'), 'Approval explains the scope of saved permission')
+  await evaluate('document.querySelector(".chat-message-list").scrollTop = 0')
+  const sticky = await evaluate(`(() => {
+    const panel = document.querySelector('.ai-chat-panel').getBoundingClientRect();
+    const bar = document.querySelector('.chat-activity').getBoundingClientRect();
+    return bar.top >= panel.top && bar.bottom <= panel.bottom;
+  })()`)
+  assert.ok(sticky, 'Live task status stays visible while reading earlier messages')
+  await click('.chat-activity-jump')
+  assert.ok(await evaluate('document.activeElement.closest("[data-step-id=runtime-first]") !== null'), 'Pending-decision shortcut transfers keyboard focus to the right step')
+  const approvalScreenshot = await screenshot('ai-approval-light-360-125.png')
+  await evaluate('aiFixture.configure({ theme: "dark" })')
+  const darkApprovalScreenshot = await screenshot('ai-approval-dark-360-125.png')
+  await click('[data-step-id="runtime-first"] .is-allow')
+  await waitFor('aiFixture.runtime.pendingSaves.length === 1')
+  assert.equal(await evaluate('aiFixture.runtime.commands.length'), 0, 'Saving permission must complete before dispatch')
+  assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), 'Saving cannot be submitted twice')
+  assert.ok(await evaluate('document.querySelector(".chat-activity-stage").textContent.includes("正在保存授权")'))
+  await evaluate('aiFixture.runtime.finishSave()')
+  await waitFor('aiFixture.runtime.commands.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在执行命令")')
+  await waitFor('!document.querySelector("[data-step-id=runtime-first] .tool-step-duration").textContent.includes("0 秒")')
+  await evaluate('aiFixture.runtime.finishCommand()')
+  await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在分析执行结果")')
+  await evaluate('aiFixture.runtime.reply("继续检查", [{ id: "runtime-second", command: "printf finished" }])')
+  await waitFor('aiFixture.runtime.commands.length === 2')
+  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=runtime-second] .tool-step-decision"))'), false, 'A later command with the saved prefix runs without another approval')
+  assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-second] .tool-step-auto").textContent.includes("自动执行")'))
+  await evaluate('aiFixture.runtime.finishCommand()')
+  await waitFor('aiFixture.runtime.requests.length === 1')
+  await evaluate('aiFixture.runtime.reply("检查完成")')
+  await waitFor('!document.querySelector(".chat-activity")')
+  const duration = await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds')
+  assert.ok(duration >= 2, 'Task records real elapsed time')
+  await evaluate('aiFixture.reopen()')
+  assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds'), duration)
+  assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-duration").textContent.includes("耗时")'), 'Duration is visible after the panel is remounted from stored payloads')
+  checks.push('Agent timer persists through planning, approval, saving, execution and analysis', 'Approval saves before dispatch and applies within the same run', 'A fixed status bar links to the pending command', 'Completed duration survives reopening the conversation')
+
+  await evaluate('aiFixture.beginRuntime("agent", { agentCommandTimeoutMs: 150 })')
+  await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '等待长命令'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await click('.chat-send')
+  await waitFor('aiFixture.runtime.requests.length === 1')
+  await evaluate('aiFixture.runtime.reply("运行长命令", [{ id: "runtime-timeout", command: "printf waiting" }])')
+  await waitFor('Boolean(document.querySelector("[data-step-id=runtime-timeout] .tool-step-decision"))')
+  await click('[data-step-id="runtime-timeout"] .is-primary')
+  await waitFor('document.querySelector(".chat-activity-stage").textContent.includes("等待超时处理")')
+  assert.equal(await evaluate('document.querySelector(".chat-activity-time").getAttribute("aria-live")'), 'off')
+  await click('.chat-send')
+  await waitFor('!document.querySelector(".chat-activity")')
+  assert.ok(await evaluate('aiFixture.state.props.messages.at(-1).agentStatus === "stopped"'))
+  assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).agentSteps[0].startedAt'), undefined, 'Stopped command clocks are cleared')
+  checks.push('Timeout decisions keep elapsed time visible and stopping clears active clocks')
+
   assert.deepEqual(exceptions, [], 'Uncaught browser exceptions')
-  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot], nativeBackendTested: false }, null, 2))
+  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot], nativeBackendTested: false }, null, 2))
 } catch (error) {
   console.error('Browser failure screenshot:', await screenshot('failure.png').catch(() => 'unavailable'))
   throw error

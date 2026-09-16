@@ -1,6 +1,7 @@
 import type { AiMessage, WorkspaceSession } from './conversation'
 import type { AgentErrorKind, AgentExecutionPhase, AgentStep } from './agent'
 import { normalizeMessageUsage } from './tokenUsage'
+import { normalizeAiDuration } from './aiTiming'
 
 export const DEFAULT_AI_SESSION_ID = 'ai:default'
 export const COMMAND_HISTORY_SESSION_ID = 'connection-history'
@@ -78,9 +79,14 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
       'mode' | 'agentSteps' | 'agentStatus' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
-    >> & { usage?: unknown }
+    >> & { usage?: unknown; durationSeconds?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
-    if (payload.mode !== 'agent') return usage ? { ...message, usage } : message
+    const durationSeconds = normalizeAiDuration(payload.durationSeconds)
+    const metadata = {
+      ...(usage ? { usage } : {}),
+      ...(durationSeconds !== undefined ? { durationSeconds } : {})
+    }
+    if (payload.mode !== 'agent') return Object.keys(metadata).length ? { ...message, ...metadata } : message
     const agentSteps = hydrateAgentSteps(Array.isArray(payload.agentSteps) ? payload.agentSteps : [], message)
     const errorKind = normalizeErrorKind(payload.errorKind) ?? (message.error
       ? agentSteps.some((step) => step.status === 'failed') ? 'tool' : 'model'
@@ -98,7 +104,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       terminalConnectionGeneration: Number.isSafeInteger(payload.terminalConnectionGeneration) && payload.terminalConnectionGeneration! >= 0
         ? payload.terminalConnectionGeneration
         : message.terminalConnectionGeneration,
-      ...(usage ? { usage } : {})
+      ...metadata
     }
   } catch {
     return message

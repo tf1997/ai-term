@@ -99,6 +99,8 @@ export interface AgentStep {
   output?: string
   exitCode?: number
   durationMs?: number
+  /** 命令派发与观察开始时刻，仅运行期间用于显示已等待时间。 */
+  startedAt?: number
   /**
    * 下一次超时询问的时刻(epoch ms),供卡片倒计时;「继续等待」会把它推后。
    * 仅 running 期间有值,步骤结算时清除,因此不会进入持久化 payload。

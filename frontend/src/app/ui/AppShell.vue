@@ -498,11 +498,15 @@ async function loadAgentAllowlist() {
   }
 }
 
+async function persistAgentPattern(pattern: string, sourceCommand: string) {
+  await saveAgentCommandAllowlistEntry(pattern, sourceCommand)
+  await loadAgentAllowlist()
+  showToast('success', '已加入允许列表', `后续无风险命令匹配此前缀时自动执行：${pattern}`)
+}
+
 async function allowAgentPattern(pattern: string, sourceCommand: string) {
   try {
-    await saveAgentCommandAllowlistEntry(pattern, sourceCommand)
-    await loadAgentAllowlist()
-    showToast('success', '已加入允许列表', `以后将自动执行:${pattern}`)
+    await persistAgentPattern(pattern, sourceCommand)
   } catch (error) {
     showToast('error', '允许列表保存失败', formatError(error))
   }
@@ -1114,6 +1118,7 @@ onBeforeUnmount(() => {
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
+      :agent-allow-pattern="persistAgentPattern"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
       :agent-step-limit="appSettings.agentStepLimit"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
@@ -1127,7 +1132,6 @@ onBeforeUnmount(() => {
       @update-workspace-session-title="updateWorkspaceSessionTitle"
       @update-workspace-session-context-summary="updateWorkspaceSessionContextSummary"
       @set-workspace-session-mode="setWorkspaceSessionMode"
-      @allow-agent-pattern="allowAgentPattern"
       @append-ai-message="appendAiMessageToActiveTerminal"
       @update-ai-message="updateAiMessage"
       @set-ai-context-status="setAiContextForTerminal"

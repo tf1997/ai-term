@@ -18,7 +18,7 @@ const { copyFeedback, copyText } = useCopyFeedback()
     <header v-if="message.role === 'assistant'" class="chat-turn-head">
       <span class="chat-identity"><UiIcon name="ai" size="15" /><strong>AI</strong></span>
       <span class="chat-source" :title="`生成上下文：${source}`">{{ source }}</span>
-      <span v-if="duration && !message.streaming" class="chat-duration">{{ duration }}</span>
+      <span v-if="duration && !message.streaming" class="chat-duration" :title="message.mode === 'agent' ? '任务总耗时，包含执行命令与等待确认' : '回答耗时'">耗时 {{ duration }}</span>
       <span v-if="message.usage" class="chat-icon chat-usage" tabindex="0" :title="formatMessageUsageTitle(message.usage)" :aria-label="`Token 用量 ${formatMessageUsageLabel(message.usage)}`">
         <UiIcon name="info" size="14" />
       </span>
@@ -39,7 +39,7 @@ const { copyFeedback, copyText } = useCopyFeedback()
 .chat-identity { display: inline-flex; align-items: center; gap: 6px; color: var(--chat-text); font-size: 12px; flex: none; }
 .chat-identity .ui-icon { color: var(--chat-accent); }
 .chat-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-muted); font-size: 12px; }
-.chat-duration { margin-left: auto; flex: none; color: var(--chat-muted); font-size: 12px; }
+.chat-duration { margin-left: auto; flex: none; color: var(--chat-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-copy { margin-left: auto; opacity: 0; }
 .chat-duration ~ .chat-copy, .chat-usage ~ .chat-copy { margin-left: 0; }
 .chat-turn:hover .chat-copy, .chat-turn:focus-within .chat-copy { opacity: 1; }

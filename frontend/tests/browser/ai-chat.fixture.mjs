@@ -1,6 +1,8 @@
 import { createApp, h, nextTick, reactive } from 'vue'
 import AiPanel from '../../src/domains/ai/presentation/components/AiPanel.vue'
 import AgentStepCard from '../../src/domains/ai/presentation/components/messages/AgentStepCard.vue'
+import { hydrateAiMessagePayload } from '../../src/domains/ai/domain/workspaceSessions'
+import { installAiRuntimeFixture } from './ai-runtime.fixture.mjs'
 import '../../src/app/styles/index.css'
 
 const now = '2026-09-12T12:00:00.000Z'
@@ -50,6 +52,7 @@ const state = reactive({
   zoom: 1,
   theme: 'light',
   approvalPreview: false,
+  panelVersion: 0,
   props: {
     ...base,
     workspaceSessions: [{ id: base.workspaceSessionId, connectionId: 'local', name: 'Terminal assistant', summary: '', aiMode: 'chat', createdAt: now, updatedAt: now }],
@@ -70,6 +73,7 @@ const state = reactive({
 
 const copied = []
 const events = []
+const runtime = installAiRuntimeFixture(state.props)
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { copied.push(value) } } })
 const style = document.createElement('style')
 style.textContent = `body { min-width: 0; background: #ddd; } #fixture { min-width: 0; } .ai-browser-fixture.app-shell { display: block; min-width: 0; min-height: 0; height: 850px; overflow: hidden; margin: 12px; padding: 0; } .ai-browser-fixture > .assistant-panel { height: 100%; width: 100%; min-width: 0; }`
@@ -89,6 +93,7 @@ createApp({
       ])
     }
     return h('main', { class: `app-shell theme-${state.theme} ai-browser-fixture`, style: { width: `${state.width}px`, zoom: state.zoom } }, [h(AiPanel, {
+      key: state.panelVersion,
       ...state.props,
       onSetSessionMode: (id, mode) => { state.props.workspaceSessions[0].aiMode = mode; events.push({ type: 'mode', mode }) },
       onAppendMessage: message => state.props.messages.push(message),
@@ -102,10 +107,28 @@ window.aiFixture = {
   state,
   copied,
   events,
+  runtime,
   messages,
   async configure(value) { Object.assign(state, value); await nextTick(); await new Promise(requestAnimationFrame) },
   async update(id, values) { Object.assign(state.props.messages.find(item => item.id === id), values); await nextTick(); await new Promise(requestAnimationFrame) },
-  async reset() { state.props.messages = structuredClone(messages); await nextTick(); await new Promise(requestAnimationFrame) }
+  async reset() { state.props.messages = structuredClone(messages); await nextTick(); await new Promise(requestAnimationFrame) },
+  async beginRuntime(mode, values = {}) {
+    runtime.reset()
+    state.approvalPreview = false
+    state.panelVersion++
+    state.props.workspaceSessions[0].aiMode = mode
+    Object.assign(state.props, { agentAllowlistPatterns: [], agentBuiltinReadonlyEnabled: false, agentCommandTimeoutMs: 120000, ...values })
+    state.props.messages = structuredClone(messages.slice(0, 8))
+    await nextTick(); await new Promise(requestAnimationFrame)
+  },
+  async reopen() {
+    state.props.messages = state.props.messages.map(message => {
+      const { id, connectionId, workspaceSessionId, terminalId, role, text, command, error, payloadJson, createdAt } = message
+      return hydrateAiMessagePayload({ id, connectionId, workspaceSessionId, terminalId, role, text, command, error, payloadJson, createdAt })
+    })
+    state.panelVersion++
+    await nextTick(); await new Promise(requestAnimationFrame)
+  }
 }
 await document.fonts.ready
 window.aiFixtureReady = true

@@ -45,7 +45,7 @@ const askText = computed({
   set: (value: string) => { composerDrafts.value[composerContextKey.value] = value }
 })
 const answerState = useAiAnswerState()
-const { isAsking, currentAssistantMessageId, answerElapsedSeconds, answerDurations, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration } = answerState
+const { isAsking, currentAssistantMessageId, answerElapsedSeconds, stopAnswerTimer, messageAnswerDuration, formatAnswerDuration } = answerState
 const conversationContext = useAiConversationContext(props, emit)
 const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useAiChat({ props, emit, answerState, conversationContext })
 const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
@@ -66,7 +66,7 @@ const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
 const pendingAgentRiskReview = ref(false)
-const { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   canSendMessage: () => canSendMessage.value,
   composerBusy: () => composerBusy.value,
@@ -113,6 +113,25 @@ const activeSession = computed(() => {
 
 const panelMode = computed<AiPanelMode>(() => (activeSession.value?.aiMode === 'agent' ? 'agent' : 'chat'))
 const composerBusy = computed(() => agentPreparing.value || isAsking.value || agentRunActive.value)
+const activeAnswer = computed(() => props.messages.find(message => message.id === currentAssistantMessageId.value))
+const needsAgentDecision = computed(() => Boolean(agentPendingApproval.value || agentPendingTimeout.value) && !agentApprovalSaving.value)
+const activityLabel = computed(() => {
+  if (agentPreparing.value) return '正在检查终端'
+  if (agentApprovalSaving.value) return '正在保存授权'
+  if (agentPendingApproval.value) return '等待确认命令'
+  if (agentPendingTimeout.value) return '等待超时处理'
+  if (agentRunActive.value) {
+    if (agentRun.value?.status === 'executing') return '正在执行命令'
+    return agentRun.value?.steps.length ? '正在分析执行结果' : '正在规划任务'
+  }
+  return activeAnswer.value?.text ? '正在回复' : '正在思考'
+})
+const activityStepLabel = computed(() => {
+  const steps = agentRun.value?.steps
+  if (!agentRunActive.value || !steps?.length) return ''
+  const current = steps.findIndex(step => step.status === 'running' || step.status === 'pending')
+  return current >= 0 ? `第 ${current + 1} 步` : `已执行 ${steps.filter(step => step.status === 'completed').length} 步`
+})
 
 const composerPlaceholder = computed(() => {
   if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
@@ -407,6 +426,15 @@ function resizeComposer() {
   if (!input) return
   input.style.height = 'auto'
   input.style.height = `${Math.min(144, Math.max(56, input.scrollHeight))}px`
+}
+
+function revealActiveStep() {
+  const stepId = agentPendingApproval.value?.proposal.id || agentPendingTimeout.value?.step.id
+  const step = Array.from(messageList.value?.querySelectorAll<HTMLElement>('[data-step-id]') ?? [])
+    .find(element => element.dataset.stepId === stepId)
+  if (!step) return scrollMessagesToLatest()
+  step.scrollIntoView({ block: 'start', behavior: 'instant' })
+  step.querySelector<HTMLButtonElement>('.tool-step-decision button:not(:disabled)')?.focus({ preventScroll: true })
 }
 
 function stepOwnsError(message: AiMessage) {
@@ -876,9 +904,9 @@ watch(
         :source="messageSourceLabel(message)"
         :duration="messageAnswerDuration(message) ? formatAnswerDuration(messageAnswerDuration(message)) : ''"
       >
-          <div v-if="message.streaming && !messageHasAgentBody(message)" class="chat-progress" role="status">
+          <div v-if="message.streaming" class="chat-progress">
             <span class="chat-progress-dot" />
-            {{ message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
+            {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
           <div v-if="message.mode === 'agent' && message.agentSteps?.length" class="chat-tool-steps">
             <AgentStepCard
@@ -886,6 +914,7 @@ watch(
               :key="step.id"
               :step="step"
               :awaiting-approval="isAwaitingApprovalStep(message, step)"
+              :approval-saving="isAwaitingApprovalStep(message, step) && agentApprovalSaving"
               :awaiting-timeout="isAwaitingTimeoutStep(message, step)"
               :proposal="agentPendingApproval?.proposal"
               :timeout-info="agentPendingTimeout?.info"
@@ -945,6 +974,12 @@ watch(
     <button v-if="!followingLatest" class="chat-latest chat-icon" type="button" :title="hasNewContent ? '有新内容，回到最新' : '回到最新'" aria-label="回到最新" @click="scrollMessagesToLatest"><UiIcon name="arrow-down" size="16" /></button>
     </div>
     <div class="chat-composer">
+      <div v-if="composerBusy" class="chat-activity" :class="{ 'needs-decision': needsAgentDecision }">
+        <span class="chat-activity-stage" role="status"><span class="chat-progress-dot" aria-hidden="true" />{{ activityLabel }}</span>
+        <span v-if="activityStepLabel" class="chat-activity-step">{{ activityStepLabel }}</span>
+        <span v-if="!agentPreparing" class="chat-activity-time" role="timer" aria-live="off" title="本次总耗时，包含执行命令与等待确认">{{ formatAnswerDuration(answerElapsedSeconds) }}</span>
+        <button v-if="needsAgentDecision" type="button" class="chat-text-button chat-activity-jump" :aria-label="agentPendingApproval ? '查看待确认命令' : '查看超时命令'" :title="agentPendingApproval ? '查看待确认命令' : '查看超时命令'" @click="revealActiveStep">查看<UiIcon name="arrow-up" size="12" /></button>
+      </div>
       <div v-if="selectedTerminalContext" class="chat-selection">
         <UiIcon name="terminal" size="14" />
         <span>{{ formatSelectedLineRange(selectedTerminalContext) }} · {{ formatCharacterCount(selectedTerminalContext.text.length) }}</span>

@@ -33,7 +33,7 @@ type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | '
 
 export function useAgentSession(options: AgentSessionOptions, source: AgentSessionSource = tauri) {
   const { props, emit, askText, pendingAgentRiskReview, canSendMessage, composerBusy, selectedTerminalContext, scrollMessagesToLatest, closeAiCommandRiskConfirm } = options
-  const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer } = options.answerState
+  const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer, finishAnswerMessage } = options.answerState
   const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = options.conversationContext
   const { onAiChatStream, cancelTask, aiAgentTurnStream, touchAgentCommandAllowlistEntry } = source
   // Agent 模式运行态
@@ -48,6 +48,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   const agentPreparing = ref(false)
 
   const agentHighRiskArmed = ref(false)
+  const agentApprovalSaving = ref(false)
 
   const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
 
@@ -90,12 +91,20 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   function resolveAgentApproval(decision: AgentApprovalDecision, riskReviewed = false) {
     const pending = agentPendingApproval.value
     if (!pending) return
+    if (agentApprovalSaving.value) {
+      if (decision === 'stop') stopAgentRun()
+      return
+    }
+    if (decision === 'execute-and-allow') {
+      if (pending.proposal.sensitive || pending.proposal.risks.length || !pending.proposal.suggestedPatterns?.length) return
+      agentApprovalSaving.value = true
+    }
     // 兼容未走风险弹窗的旧入口;弹窗确认会显式传入 riskReviewed。
     if (decision === 'execute' && proposalHasHighRisk(pending.proposal) && !riskReviewed && !agentHighRiskArmed.value) {
       agentHighRiskArmed.value = true
       return
     }
-    agentPendingApproval.value = null
+    if (!agentApprovalSaving.value) agentPendingApproval.value = null
     agentHighRiskArmed.value = false
     pending.resolve(decision)
   }
@@ -314,13 +323,14 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
             })
           : undefined
       }
-      emit('updateMessage', failed
+      const message = failed
         ? createAiStreamErrorMessage(
             updated,
             updated.text,
             state.errorKind === 'model' ? agentStreamText.value : ''
           )
-        : updated)
+        : updated
+      emit('updateMessage', terminal ? finishAnswerMessage(message) : message)
     }
 
     const deps: AgentLoopDeps = {
@@ -385,13 +395,18 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           agentPendingTimeout.value = { step, info, resolve }
           scrollMessagesToLatest()
         }),
-      onAllowPattern: (pattern, sourceCommand) => {
-        emit('allowAgentPattern', pattern, sourceCommand)
+      onAllowPattern: async (pattern, sourceCommand) => {
+        if (!props.agentAllowPattern) throw new Error('允许列表保存通道未接入')
+        await props.agentAllowPattern(pattern, sourceCommand)
+        // The run keeps its target/config snapshot, but explicit approvals made
+        // within this run must apply to its following steps immediately.
+        if (!allowlistPatterns.includes(pattern)) allowlistPatterns.push(pattern)
       },
       onStateChange: (state) => {
         agentRun.value = state
         if (state.status !== 'awaiting-approval') {
           agentPendingApproval.value = null
+          agentApprovalSaving.value = false
           if (pendingAgentRiskReview.value) closeAiCommandRiskConfirm()
         }
         if (state.status !== 'awaiting-user') agentPendingTimeout.value = null
@@ -429,6 +444,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     } finally {
       agentStopHandle = null
       agentPendingApproval.value = null
+      agentApprovalSaving.value = false
       agentPendingTimeout.value = null
       agentStreamText.value = ''
       agentRunMessageId.value = ''
@@ -468,5 +484,5 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

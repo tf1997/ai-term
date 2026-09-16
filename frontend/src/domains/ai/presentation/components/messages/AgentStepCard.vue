@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { AgentStep, AgentStepProposal, AgentTimeoutInfo } from '../../../domain/agent'
+import { formatAiDuration } from '../../../domain/aiTiming'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 import AiCodeBlock from './AiCodeBlock.vue'
 import { useCopyFeedback } from './useCopyFeedback'
@@ -8,6 +9,7 @@ import { useCopyFeedback } from './useCopyFeedback'
 const props = withDefaults(defineProps<{
   step: AgentStep
   awaitingApproval?: boolean
+  approvalSaving?: boolean
   awaitingTimeout?: boolean
   proposal?: AgentStepProposal
   timeoutInfo?: AgentTimeoutInfo
@@ -45,6 +47,7 @@ const collapsed = computed(() => canCollapse.value && (explicitlyExpanded.value 
   ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)
   : !explicitlyExpanded.value))
 const statusLabel = computed(() => {
+  if (props.approvalSaving) return '正在保存授权'
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '未执行' : '已停止等待'
   if (props.awaitingTimeout) return '等待确认'
   if (props.step.status === 'failed' && didNotStart.value) return '未执行'
@@ -63,17 +66,24 @@ const riskLabels = computed(() => [...new Set(props.step.risks.map((risk) => ris
 const hasHighRisk = computed(() => props.step.risks.some((risk) => risk.severity === 'high'))
 const hasRisk = computed(() => props.step.risks.length > 0 || props.step.sensitive)
 const durationLabel = computed(() => {
+  if (!props.observationStopped && props.step.status === 'running' && props.step.startedAt !== undefined && props.nowMs !== undefined) {
+    return `已等待 ${formatAiDuration((props.nowMs - props.step.startedAt) / 1000)}`
+  }
   const value = props.step.durationMs
   if (value === undefined) return ''
   return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`
 })
 const countdownLabel = computed(() => {
-  if (props.observationStopped || props.step.status !== 'running' || props.step.deadlineAt === undefined || props.nowMs === undefined) return ''
+  if (props.observationStopped || props.awaitingTimeout || props.step.status !== 'running' || props.step.deadlineAt === undefined || props.nowMs === undefined) return ''
   const remaining = props.step.deadlineAt - props.nowMs
   return remaining <= 0 ? '即将询问' : `${Math.ceil(remaining / 1000)}s 后询问`
 })
-const allowPatterns = computed(() => props.proposal?.suggestedPatterns ?? [])
-const allowLabel = computed(() => allowPatterns.value.length > 1 ? `${allowPatterns.value[0]} 等 ${allowPatterns.value.length} 项` : allowPatterns.value[0])
+const allowPatterns = computed(() => !hasRisk.value && props.proposal?.id === props.step.id ? props.proposal.suggestedPatterns ?? [] : [])
+const allowUnavailableReason = computed(() => {
+  if (props.step.sensitive) return '涉及敏感信息，需每次确认，不能总是允许。'
+  if (hasRisk.value) return '命中风险规则，需每次确认，不能总是允许。'
+  return '此命令无法按前缀自动授权，仅支持本次确认。'
+})
 const failureReason = computed(() => {
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '任务已停止，命令未执行。' : '已停止等待；命令可能仍在终端运行。'
   if (didNotStart.value && isFailed.value) {
@@ -103,7 +113,7 @@ function toggleDetails() {
 </script>
 
 <template>
-  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': step.status === 'running' && !observationStopped, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': step.status === 'running' && !observationStopped, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
@@ -116,6 +126,7 @@ function toggleDetails() {
       </div>
       <div class="tool-step-meta">
         <span class="tool-step-status">{{ statusLabel }}</span>
+        <span v-if="step.autoApproved" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
         <span v-if="step.exitCode !== undefined" class="tool-step-exit" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
         <span v-if="durationLabel" class="tool-step-duration">{{ durationLabel }}</span>
         <span v-if="countdownLabel">{{ countdownLabel }}</span>
@@ -124,8 +135,7 @@ function toggleDetails() {
 
     <div v-if="!collapsed" class="tool-step-body">
       <div v-if="targetLabel" class="tool-step-target" :title="targetLabel"><UiIcon name="terminal" size="13" /><span>{{ targetLabel }}</span></div>
-      <div v-if="step.autoApproved || riskLabels.length || step.sensitive" class="tool-step-risk-row">
-        <span v-if="step.autoApproved" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
+      <div v-if="riskLabels.length || step.sensitive" class="tool-step-risk-row">
         <span v-for="label in riskLabels" :key="label" class="tool-step-risk" :class="{ 'is-high': hasHighRisk }"><UiIcon name="shield" size="12" />{{ label }}</span>
         <span v-if="step.sensitive" class="tool-step-risk is-high">敏感命令</span>
       </div>
@@ -146,11 +156,16 @@ function toggleDetails() {
 
       <div v-if="awaitingApproval" class="tool-step-decision">
         <div class="tool-step-actions">
-          <button type="button" class="tool-step-action is-primary" :class="{ 'is-risk': hasRisk, 'is-armed': hasHighRisk && highRiskArmed }" @click="hasRisk ? emit('reviewRisk') : emit('execute')"><UiIcon :name="hasRisk ? 'shield' : 'play'" size="13" />{{ hasRisk ? '查看风险' : '执行命令' }}</button>
-          <button type="button" class="tool-step-action" @click="emit('skip')">跳过</button>
+          <button type="button" class="tool-step-action is-primary" :disabled="approvalSaving" :class="{ 'is-risk': hasRisk, 'is-armed': hasHighRisk && highRiskArmed }" :title="hasRisk ? '检查风险后确认执行' : '仅执行本次命令，不改变允许列表'" @click="hasRisk ? emit('reviewRisk') : emit('execute')"><UiIcon :name="hasRisk ? 'shield' : 'play'" size="13" />{{ hasRisk ? '查看风险' : '仅执行本次' }}</button>
+          <button type="button" class="tool-step-action is-allow" :disabled="approvalSaving || !allowPatterns.length" :title="allowPatterns.length ? `执行本次并加入允许列表：${allowPatterns.join('、')}` : allowUnavailableReason" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" />{{ approvalSaving ? '保存授权中…' : '总是允许' }}</button>
+          <button type="button" class="tool-step-action" :disabled="approvalSaving" @click="emit('skip')">跳过</button>
           <button type="button" class="tool-step-action" @click="emit('stop')"><UiIcon name="stop" size="12" />停止任务</button>
         </div>
-        <button v-if="allowLabel" type="button" class="tool-step-allow" :title="`加入允许列表后自动执行：${allowPatterns.join('、')}`" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" /><span>总是允许</span><code>{{ allowLabel }}</code></button>
+        <div v-if="allowPatterns.length" class="tool-step-allow">
+          <span>允许前缀</span><code v-for="pattern in allowPatterns" :key="pattern">{{ pattern }}</code>
+          <p>对所有会话生效；风险命令仍需确认。可在设置 → Agent 中移除。</p>
+        </div>
+        <p v-else class="tool-step-allow-reason">{{ allowUnavailableReason }}</p>
       </div>
 
       <div v-if="awaitingTimeout" class="tool-step-decision">
@@ -166,7 +181,7 @@ function toggleDetails() {
 </template>
 
 <style scoped>
-.tool-step { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 8px; overflow: hidden; color: var(--chat-text, var(--workbench-text)); background: var(--chat-surface, var(--workbench-panel-strong)); letter-spacing: 0; overflow-anchor: none; }
+.tool-step { width: 100%; min-width: 0; flex: none; box-sizing: border-box; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 8px; overflow: hidden; color: var(--chat-text, var(--workbench-text)); background: var(--chat-surface, var(--workbench-panel-strong)); letter-spacing: 0; overflow-anchor: none; }
 .tool-step-header { min-width: 0; padding: 12px; }
 .tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: start; gap: 8px; width: 100%; min-width: 0; height: auto; color: inherit; text-align: left; white-space: normal; }
 .tool-step-toggle { border: 0; padding: 0; background: transparent; cursor: pointer; }
@@ -214,10 +229,11 @@ function toggleDetails() {
 .tool-step-error-detail::-webkit-scrollbar-thumb { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
 .tool-step-error-detail::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
 .tool-step-error-detail::-webkit-scrollbar-corner { background: transparent; }
-.tool-step-allow { display: flex; align-items: flex-start; gap: 5px; max-width: 100%; margin: 10px 0 0; padding: 0; color: var(--chat-muted, var(--workbench-muted)); background: transparent; border: 0; font-size: 11px; line-height: 1.7; text-align: left; cursor: pointer; }
-.tool-step-allow .ui-icon { margin-top: 3px; flex: 0 0 auto; }
-.tool-step-allow span { flex: 0 0 auto; }
-.tool-step-allow code { min-width: 0; overflow-wrap: anywhere; font: inherit; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); }
+.tool-step-action.is-allow:not(:disabled) { color: var(--chat-accent, var(--workbench-accent)); border-color: var(--chat-accent, var(--workbench-accent)); }
+.tool-step-allow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; max-width: 100%; margin-top: 10px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.7; }
+.tool-step-allow code { min-width: 0; overflow-wrap: anywhere; padding: 0 5px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 4px; color: var(--chat-text, var(--workbench-text)); font: inherit; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); }
+.tool-step-allow p { flex-basis: 100%; margin: 2px 0 0; }
+.tool-step-allow-reason { margin: 10px 0 0; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.7; }
 @keyframes tool-step-spin { to { transform: rotate(360deg); } }
 @keyframes tool-step-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .tool-step.is-running .tool-step-state-icon, .tool-step-body { animation: none; } }

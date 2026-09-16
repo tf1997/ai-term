@@ -36,6 +36,8 @@ export interface AiMessage {
   error?: boolean
   errorKind?: AgentErrorKind
   streaming?: boolean
+  /** 本次回答或任务的总耗时，包含命令执行与等待确认；通过 payloadJson 保存。 */
+  durationSeconds?: number
   /** 产生该消息的模式;缺省视为 chat。 */
   mode?: 'chat' | 'agent'
   /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */

@@ -27,6 +27,8 @@ export interface AiPanelProps {
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
+  /** Resolves only after the allowlist entry is saved; rejection prevents dispatch. */
+  agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
   /** 每个任务的最大步数(设置项);未传时用 agentLoop 的默认值。 */
   agentStepLimit?: number
@@ -50,7 +52,6 @@ export interface AiPanelEvents {
   updateSessionTitle: [connectionId: string, sessionId: string, title: string]
   updateSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
   setSessionMode: [sessionId: string, mode: AiPanelMode]
-  allowAgentPattern: [pattern: string, sourceCommand: string]
   aiError: [detail: string]
 }
 

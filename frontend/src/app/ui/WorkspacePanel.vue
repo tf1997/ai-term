@@ -40,6 +40,7 @@ const props = defineProps<{
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
   agentAllowlistPatterns?: string[]
+  agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
   agentStepLimit?: number
   agentCommandTimeoutMs?: number
@@ -57,7 +58,6 @@ const emit = defineEmits<{
   updateWorkspaceSessionTitle: [connectionId: string, sessionId: string, title: string]
   updateWorkspaceSessionContextSummary: [sessionId: string, summary: string, lastMessageId: string]
   setWorkspaceSessionMode: [sessionId: string, mode: AiPanelMode]
-  allowAgentPattern: [pattern: string, sourceCommand: string]
   appendAiMessage: [message: AiMessage]
   updateAiMessage: [message: AiMessage]
   setAiContextStatus: [connectionId: string, workspaceSessionId: string, status: AiContextStatus]
@@ -152,6 +152,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
       :agent-allowlist-patterns="agentAllowlistPatterns"
+      :agent-allow-pattern="agentAllowPattern"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
       :agent-step-limit="agentStepLimit"
       :agent-command-timeout-ms="agentCommandTimeoutMs"
@@ -166,7 +167,6 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       @update-session-title="(connectionId, sessionId, title) => emit('updateWorkspaceSessionTitle', connectionId, sessionId, title)"
       @update-session-context-summary="(sessionId, summary, lastMessageId) => emit('updateWorkspaceSessionContextSummary', sessionId, summary, lastMessageId)"
       @set-session-mode="(sessionId: string, mode: AiPanelMode) => emit('setWorkspaceSessionMode', sessionId, mode)"
-      @allow-agent-pattern="(pattern: string, sourceCommand: string) => emit('allowAgentPattern', pattern, sourceCommand)"
       @append-message="emit('appendAiMessage', $event)"
       @update-message="emit('updateAiMessage', $event)"
       @set-context-status="(connectionId, workspaceSessionId, status) => emit('setAiContextStatus', connectionId, workspaceSessionId, status)"

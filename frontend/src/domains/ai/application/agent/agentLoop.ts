@@ -239,6 +239,7 @@ export function runAgentTask(
         output: undefined,
         exitCode: undefined,
         durationMs: undefined,
+        startedAt: undefined,
         deadlineAt: undefined
       }
     : undefined
@@ -286,6 +287,10 @@ export function runAgentTask(
     if (finished) return
     finished = true
     mutate()
+    for (const step of state.steps) {
+      step.startedAt = undefined
+      step.deadlineAt = undefined
+    }
     notify()
     resolveDone(structuredClone(state))
   }
@@ -398,6 +403,7 @@ export function runAgentTask(
     setStatus('executing')
     step.status = 'running'
     step.executionPhase = 'dispatching'
+    step.startedAt = Date.now()
     notify()
 
     const startPromise = Promise.resolve().then(() => deps.startCommand(step.command))
@@ -542,6 +548,7 @@ export function runAgentTask(
         step.output = result.output
         step.exitCode = result.exitCode
         step.durationMs = result.durationMs
+        step.startedAt = undefined
         notify()
         turns.push({
           kind: 'toolResult',
@@ -651,7 +658,9 @@ export function runAgentTask(
           return 'ended'
         }
         if (allowOutcome.kind === 'error') {
-          finishError(`写入允许列表失败:${errorMessage(allowOutcome.error)}`, 'tool')
+          step.status = 'failed'
+          step.failureReason = `保存授权失败：${errorMessage(allowOutcome.error)}`
+          finishError(step.failureReason, 'tool')
           return 'ended'
         }
       }

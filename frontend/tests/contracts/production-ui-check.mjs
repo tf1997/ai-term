@@ -2334,7 +2334,8 @@ assert(
     aiPanel.includes('event.isComposing') &&
     aiPanel.includes('scrollMessagesToLatest') &&
     aiPanel.includes('ref="messageList"') &&
-    aiPanel.includes('class="chat-progress" role="status"') &&
+    aiPanel.includes('class="chat-activity-stage" role="status"') &&
+    aiPanel.includes('role="timer" aria-live="off"') &&
     appShell.includes('updateAiMessage') &&
     aiPanel.includes('AiMarkdownMessage from') &&
     aiMarkdownMessage.includes("import { parseMessageParts, renderMarkdown } from '../../../../../shared/content/aiMarkdown'") && aiMarkdownMessage.includes("import type { MessagePart }") &&
