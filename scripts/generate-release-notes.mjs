@@ -27,18 +27,18 @@ export function generateReleaseNotes({ tag, repository, cwd = process.cwd() }) {
   const summaryPath = `.github/release-notes/${tag}.md`
   if (git('ls-tree', '--name-only', commit, '--', summaryPath)) sections.push(git('show', `${commit}:${summaryPath}`))
   const groups = new Map([
-    ['新增功能', []], ['修复与改进', []], ['文档与维护', []]
+    ['New Features', []], ['Fixes and Improvements', []], ['Documentation and Maintenance', []]
   ])
   for (const { hash, subject } of commits) {
     const type = subject.match(/^(\w+)(?:\([^)]*\))?!?:/)?.[1]
-    const category = type === 'feat' ? '新增功能' : ['fix', 'perf', 'refactor'].includes(type) ? '修复与改进' : '文档与维护'
+    const category = type === 'feat' ? 'New Features' : ['fix', 'perf', 'refactor'].includes(type) ? 'Fixes and Improvements' : 'Documentation and Maintenance'
     groups.get(category).push(`- ${escapeMarkdown(subject)} ([${hash.slice(0, 7)}](${url}/commit/${hash}))`)
   }
   for (const [title, entries] of groups) {
     if (entries.length) sections.push(`## ${title}\n\n${entries.join('\n')}`)
   }
-  if (previousTag) sections.push(`[完整变更：${previousTag} → ${tag}](${url}/compare/${encodeURIComponent(previousTag)}...${encodeURIComponent(tag)})`)
-  sections.push('## 下载\n\n构建产物会由对应平台任务陆续上传：Windows 便携版（ZIP）、Windows 安装包（MSI）、Ubuntu 安装包（DEB）、Linux musl（tar.gz）和 macOS 通用安装包（DMG）。')
+  if (previousTag) sections.push(`[Full Changelog: ${previousTag} → ${tag}](${url}/compare/${encodeURIComponent(previousTag)}...${encodeURIComponent(tag)})`)
+  sections.push('## Downloads\n\nBuild artifacts are uploaded as each platform job finishes: Windows portable (ZIP), Windows installer (MSI), Ubuntu installer (DEB), Linux musl (tar.gz), and macOS universal installer (DMG).')
   return `${sections.join('\n\n')}\n`
 }
 
