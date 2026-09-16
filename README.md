@@ -180,7 +180,9 @@ cargo test
 
 ## Project Status
 
-The current release is `v0.1.0`. It is available for evaluation and active development, with packaged builds for Windows, Ubuntu, macOS, and musl-based Linux.
+The current release is `v0.3.0`. It is available for evaluation and active development, with packaged builds for Windows, Ubuntu, macOS, and musl-based Linux.
+
+Version tags trigger the release workflow. Release descriptions automatically group all commits since the previous version tag, including direct commits. Optional user-facing highlights live in `.github/release-notes/<tag>.md`; rerunning a release regenerates the same description from the tagged source. Keep the Cargo, Tauri, and About dialog versions aligned when preparing a new release.
 
 Planned work includes stronger SSH key management, more transfer fallbacks for restricted bastions, and richer AI context controls.
 

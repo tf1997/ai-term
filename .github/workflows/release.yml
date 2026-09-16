@@ -24,15 +24,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout release history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify release notes generator
+        run: node --test scripts/generate-release-notes.test.mjs
+
+      - name: Generate release notes
+        run: node scripts/generate-release-notes.mjs "$RELEASE_TAG" "$RUNNER_TEMP/release-notes.md"
+
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_TAG }}
-          body: |
-            Automated build for ${{ env.RELEASE_TAG }}.
-
-            Assets are uploaded by the Windows portable, Windows installer, Ubuntu installer, Linux musl, and macOS installer jobs.
+          body_path: ${{ runner.temp }}/release-notes.md
 
   cleanup-release-assets:
     name: Cleanup old installer asset names
