@@ -1,18 +1,18 @@
 /* Owned by AiPanel. Message and tool geometry never depends on status or theme. */
 .assistant-panel.ai-chat-panel {
-  --chat-surface: #17191c;
-  --chat-elevated: #202327;
-  --chat-code: #131517;
+  --chat-surface: var(--workbench-panel);
+  --chat-elevated: var(--workbench-panel-strong);
+  --chat-code: var(--workbench-terminal);
   --chat-subtle: var(--chat-code);
-  --chat-text: #e8eaed;
-  --chat-muted: #a8aeb7;
-  --chat-line: #353a40;
-  --chat-hover: #2a2e33;
-  --chat-user: #292e33;
-  --chat-accent: #65d6a7;
-  --chat-accent-soft: #243c33;
-  --chat-danger: #ff9eab;
-  --chat-danger-soft: #35242a;
+  --chat-text: var(--workbench-text);
+  --chat-muted: var(--workbench-muted);
+  --chat-line: var(--workbench-line);
+  --chat-hover: var(--workbench-hover);
+  --chat-user: var(--workbench-hover);
+  --chat-accent: var(--workbench-accent-strong);
+  --chat-accent-soft: var(--workbench-accent-soft);
+  --chat-danger: var(--workbench-danger-strong);
+  --chat-danger-soft: var(--workbench-danger-soft);
   --chat-warning: #efc47e;
   --chat-button: #087f5b;
   --chat-warning-button: #855b18;

@@ -1,19 +1,19 @@
-/* Neutral file-workspace colors also reach the editor and menus teleported to body. */
+/* Use the application palette, including the editor and menus teleported to body. */
 :root {
-  --sftp-canvas: #141414;
-  --sftp-surface: #191919;
-  --sftp-raised: #202020;
-  --sftp-input: #151515;
-  --sftp-hover: #292929;
-  --sftp-line: #383838;
-  --sftp-line-soft: #2b2b2b;
-  --sftp-ink: #ededeb;
-  --sftp-muted: #adafac;
-  --sftp-subtle: #898d88;
+  --sftp-canvas: var(--workbench-bg);
+  --sftp-surface: var(--workbench-panel);
+  --sftp-raised: var(--workbench-chrome);
+  --sftp-input: var(--workbench-panel-strong);
+  --sftp-hover: var(--workbench-hover);
+  --sftp-line: var(--workbench-line);
+  --sftp-line-soft: var(--workbench-line-soft);
+  --sftp-ink: var(--workbench-text);
+  --sftp-muted: var(--workbench-muted);
+  --sftp-subtle: var(--workbench-quiet);
   --sftp-accent: var(--workbench-accent-strong);
   --sftp-selected: color-mix(in srgb, var(--workbench-accent) 13%, var(--sftp-surface));
-  --sftp-danger: #f1a0a4;
-  --sftp-danger-bg: #2a1d1e;
+  --sftp-danger: var(--workbench-danger-strong);
+  --sftp-danger-bg: var(--workbench-danger-soft);
 }
 
 :root[data-theme="light"] {

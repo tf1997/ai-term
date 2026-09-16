@@ -6,6 +6,13 @@
   --radius-panel: 4px;
   --radius-card: 8px;
   --radius-control: 6px;
+  position: relative;
+  grid-template-rows: 46px minmax(0, 1fr);
+  background: var(--workbench-bg);
+}
+
+/* Shared theme colors also reach file-workspace dialogs teleported to body. */
+:root {
   --workbench-bg: #0b0d10;
   --workbench-chrome: #101318;
   --workbench-panel: #0e1115;
@@ -23,9 +30,6 @@
   --workbench-danger-strong: #f28b94;
   --workbench-danger-soft: rgba(223, 116, 124, .1);
   --workbench-danger-line: rgba(223, 116, 124, .38);
-  position: relative;
-  grid-template-rows: 46px minmax(0, 1fr);
-  background: var(--workbench-bg);
 }
 
 /* Shared workbench geometry: panel shells stay square, content cards and
@@ -38,6 +42,7 @@
   border-radius: var(--radius-control);
 }
 
+:root[data-theme="light"],
 .app-shell.theme-light {
   --workbench-bg: #eef2f4;
   --workbench-chrome: #ffffff;
@@ -56,7 +61,6 @@
   --workbench-danger-strong: #a61f2d;
   --workbench-danger-soft: #fff1f2;
   --workbench-danger-line: #e9a3aa;
-  background: var(--workbench-bg);
 }
 
 .titlebar,
@@ -603,9 +607,14 @@
   background: var(--workbench-accent);
 }
 
+/* Keep keyboard focus visible without turning the whole workspace edge green. */
 .workspace-resizer:focus-visible {
-  outline: 2px solid var(--workbench-accent);
-  outline-offset: -2px;
+  outline: 1px solid var(--workbench-line);
+  outline-offset: -1px;
+}
+
+.workspace-resizer:focus-visible::after {
+  background: var(--workbench-muted);
 }
 
 .app-shell .session-tools-toggle.active {

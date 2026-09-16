@@ -119,7 +119,7 @@ export function useScriptLibrary(options: ScriptLibraryOptions, source: ScriptLi
         deletePreviewScript(script.id)
       }
       scripts.value = scripts.value.filter((item) => item.id !== script.id)
-      selectedScriptId.value = scripts.value[0]?.id ?? ''
+      if (selectedScriptId.value === script.id) selectedScriptId.value = scripts.value[0]?.id ?? ''
       messages.value = messages.value.map((message) => message.savedScriptId === script.id ? { ...message, savedScriptId: undefined } : message)
     } catch (error) {
       panelError.value = formatError(error)

@@ -78,48 +78,58 @@ try {
   await send('Runtime.enable')
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const scripts = ['A', 'B'].map(id => ({ id, name: id + '-很长的脚本名称用于校验在窄栏中始终保留名称.sh', description: '检查和整理服务日志，输出摘要', content: 'LOG_DIR=""\\nrm -rf "$LOG_DIR"\\necho ready', connectionId: 'remote', workspaceSessionId: 'workspace', sourceCommands: [], createdAt: '2026-09-15', updatedAt: '2026-09-15' }));
+    localStorage.setItem('ai-term:update-scripts:v2:global', JSON.stringify(scripts));
+  })()` })
   await send('Page.navigate', { url: appUrl })
   await until(`document.querySelector('.app-shell')`)
   await evaluate(`(() => { const button = Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('辅助工具')); if (button?.getAttribute('aria-expanded') === 'false') button.click(); })()`)
-  await evaluate(`(() => {
-    const scripts = ['A', 'B'].map(id => ({ id, name: id + '-很长的脚本名称用于校验在窄栏中始终保留名称.sh', description: '检查和整理服务日志，输出摘要', content: 'LOG_DIR=""\\nrm -rf "$LOG_DIR"\\necho ready', connectionId: 'remote', workspaceSessionId: 'workspace', sourceCommands: [], createdAt: '2026-09-15', updatedAt: '2026-09-15' }));
-    localStorage.setItem('ai-term:update-scripts:v2:global', JSON.stringify(scripts));
-  })()`)
   await evaluate(`Array.from(document.querySelectorAll('.workspace-tabs button')).find(button => button.textContent.includes('脚本')).click()`)
   await until(`document.querySelector('.script-panel')`)
-  await click('.script-head button[aria-label="返回脚本库"]')
-  await until(`document.querySelectorAll('.script-library-open').length === 2`)
+  await edit('.script-draft-card textarea', 'echo initial draft')
+  await click('.script-head button[aria-label="脚本列表"]')
+  await until(`document.querySelectorAll('.script-library-list .script-library-open').length === 2`)
+  assert.equal(await evaluate(`document.querySelector('.script-draft-card textarea').value`), 'echo initial draft')
+  await until(`document.activeElement === document.querySelector('.script-library-search input')`)
+  await edit('.script-library-search input', 'B-')
+  assert.equal(await evaluate(`document.querySelectorAll('.script-library-open').length`), 1)
+  await key('Escape', 'Escape', 27)
+  assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), '脚本列表')
+  await key(' ', 'Space', 32)
+  await until(`document.querySelectorAll('.script-library-list .script-library-open').length === 2`)
   // Native buttons provide the same activation for pointer, Enter, and Space.
   await evaluate(`document.querySelector('.script-library-row button[aria-label="编辑脚本名"]').focus()`)
   assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), '编辑脚本名', await evaluate(`document.querySelector('.workspace-panel').outerHTML.slice(0, 400)`))
   await key('Enter', 'Enter', 13)
   await until(`document.querySelector('.rename-modal')`)
-  assert.equal(await evaluate(`!!document.querySelector('.script-library-editor')`), false)
+  assert.equal(await evaluate(`document.querySelector('.script-draft-card textarea').value`), 'echo initial draft')
+  assert.equal(await evaluate(`!!document.querySelector('.script-library-popover')`), false)
   await until(`document.activeElement === document.querySelector('.rename-modal input')`)
   await evaluate(`document.querySelector('.rename-modal button[type="submit"]').focus()`)
   await key('Tab', 'Tab', 9)
   assert.equal(await evaluate(`document.activeElement === document.querySelector('.rename-modal button[aria-label="关闭"]')`), true)
   await key('Escape', 'Escape', 27)
   await until(`!document.querySelector('.rename-modal')`)
-  assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), '编辑脚本名')
+  assert.equal(await evaluate(`document.activeElement?.getAttribute('aria-label')`), '脚本列表')
   await key(' ', 'Space', 32)
-  await until(`document.querySelector('.rename-modal input') === document.activeElement`)
-  await click('.rename-modal button[aria-label="关闭"]')
-  await evaluate(`document.querySelector('.script-library-open').focus()`)
+  await until(`document.querySelector('.script-library-search input') === document.activeElement`)
+  await evaluate(`document.querySelector('.script-library-list .script-library-open').focus()`)
   await key(' ', 'Space', 32)
   await until(`document.querySelector('.script-library-editor textarea') === document.activeElement`)
   await edit('.script-library-editor textarea', 'echo retained A')
-  await click('.script-back-to-library')
-  await click('.script-library-open')
+  await click('.script-head button[aria-label="脚本列表"]')
+  assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), 'echo retained A')
+  await click('.script-library-list .script-library-open')
   assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), 'echo retained A')
   await edit('.script-library-editor textarea', '')
-  assert.equal(await evaluate(`!!document.querySelector('.script-library-editor .script-dirty-dot')`), true)
-  await click('.script-back-to-library')
-  await click('.script-library-open')
+  assert.equal(await evaluate(`!!document.querySelector('.script-head .script-dirty-dot')`), true)
+  await click('.script-head button[aria-label="脚本列表"]')
+  await click('.script-library-list .script-library-open')
   assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), '')
   await edit('.script-library-editor textarea', 'LOG_DIR=""\nrm -rf "$LOG_DIR"')
   const measurements = []
-  for (const width of [360, 560]) {
+  for (const width of [320, 560]) {
     await evaluate(`document.querySelector('.workspace-resizer').focus()`)
     await key('Home', 'Home', 36)
     for (let value = 320; value < width; value += 20) await key('ArrowLeft', 'ArrowLeft', 37)
@@ -127,14 +137,17 @@ try {
     await new Promise(resolve => setTimeout(resolve, 80))
     const measurement = await evaluate(`(() => {
       const panel = document.querySelector('.script-panel');
-      const name = panel.querySelector('.script-file-tab strong');
+      const name = panel.querySelector('.script-current-title strong');
       const editor = panel.querySelector('.script-library-editor textarea');
       const expand = panel.querySelector('.script-expand-button');
-      return { width: panel.getBoundingClientRect().width, nameWidth: name.getBoundingClientRect().width, editorHeight: editor.getBoundingClientRect().height, expandWidth: expand.getBoundingClientRect().width, overflow: panel.scrollWidth - panel.clientWidth, risk: panel.querySelector('.script-risk-details').textContent, target: panel.querySelector('.script-execution-target').textContent };
+      const title = panel.querySelector('.script-current-title').getBoundingClientRect();
+      const dirty = panel.querySelector('.script-dirty-dot').getBoundingClientRect();
+      return { width: panel.getBoundingClientRect().width, nameWidth: name.getBoundingClientRect().width, titleHeight: title.height, dirtyWithinTitle: dirty.top >= title.top && dirty.bottom <= title.bottom, editorHeight: editor.getBoundingClientRect().height, expandWidth: expand.getBoundingClientRect().width, overflow: panel.scrollWidth - panel.clientWidth, risk: panel.querySelector('.script-risk-details').textContent, target: panel.querySelector('.script-execution-target').textContent };
     })()`)
     assert.ok(measurement.nameWidth > 100, JSON.stringify(measurement))
+    assert.ok(measurement.titleHeight <= 28 && measurement.dirtyWithinTitle, JSON.stringify(measurement))
     assert.ok(measurement.editorHeight > 140, JSON.stringify(measurement))
-    assert.ok(measurement.expandWidth > 50, JSON.stringify(measurement))
+    assert.ok(measurement.expandWidth >= 28, JSON.stringify(measurement))
     assert.ok(measurement.overflow < 2, JSON.stringify(measurement))
     assert.match(measurement.target, /Bash/)
     assert.match(measurement.risk, /运行前需确认/)
@@ -144,12 +157,18 @@ try {
       if (!await evaluate(`document.querySelector('.app-shell').classList.contains('theme-${theme}')`)) await click('.theme-toggle-button')
       await until(`document.querySelector('.app-shell.theme-${theme}')`)
       await screenshot(`script-${theme}-${width}.png`)
+      await click('.script-head button[aria-label="脚本列表"]')
+      const popover = await evaluate(`(() => { const box = document.querySelector('.script-library-popover').getBoundingClientRect(); return { right: box.right, bottom: box.bottom, width: box.width, viewportWidth: innerWidth, viewportHeight: innerHeight }; })()`)
+      assert.ok(popover.right <= popover.viewportWidth && popover.bottom <= popover.viewportHeight, JSON.stringify(popover))
+      await screenshot(`script-list-${theme}-${width}.png`)
+      await key('Escape', 'Escape', 27)
     }
   }
-  await click('.script-library-editor .script-expand-button')
+  await click('.script-expand-button')
   await until(`document.querySelector('.script-preview-modal textarea')`)
   assert.ok(await evaluate(`document.querySelector('.script-preview-modal textarea').getBoundingClientRect().height > 250`))
   await edit('.script-preview-modal textarea', 'rm -rf /tmp/ai-term-review')
+  await screenshot('script-expanded.png')
   await click('.script-preview-modal button[aria-label="执行脚本"]')
   await until(`document.activeElement === document.querySelector('.script-risk-actions button:not(.danger)')`)
   await key('Escape', 'Escape', 27)
@@ -157,7 +176,7 @@ try {
   assert.equal(await evaluate(`document.activeElement === document.querySelector('.script-preview-modal button[aria-label="执行脚本"]')`), true)
   await key('Escape', 'Escape', 27)
   await until(`!document.querySelector('.script-preview-modal')`)
-  assert.equal(await evaluate(`document.activeElement === document.querySelector('.script-library-editor .script-expand-button')`), true)
+  assert.equal(await evaluate(`document.activeElement === document.querySelector('.script-expand-button')`), true)
   await evaluate(`(() => {
     const state = document.querySelector('.script-panel').__vueParentComponent.setupState;
     const doc = state.documents.A;
@@ -172,15 +191,25 @@ try {
   await click('.script-generation-review > button:first-of-type')
   assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), 'echo accepted A')
   assert.match(await evaluate(`document.querySelector('.script-code-card .code-head').textContent`), /已应用，尚未保存/)
-  await click('.script-library-editor button[aria-label="保存修改"]')
+  await click('.script-editor-toolbar button[aria-label="保存修改"]')
   await until(`document.querySelector('.script-code-card .code-head').textContent.includes('已应用并保存')`)
   await edit('.script-library-editor textarea', 'echo newer A')
   assert.match(await evaluate(`document.querySelector('.script-code-card .code-head').textContent`), /草稿已有后续修改/)
+  await click('.script-head button[aria-label="脚本列表"]')
+  await evaluate(`window.confirm = () => true`)
+  await click('.script-library-list .script-library-row:last-child button[aria-label="删除脚本"]')
+  await until(`document.querySelectorAll('.script-library-list .script-library-row').length === 1`)
+  assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), 'echo newer A')
+  await click('.script-library-list button[aria-label="编辑脚本名"]')
+  await edit('.rename-modal input', 'Renamed A')
+  await click('.rename-modal button[type="submit"]')
+  await until(`document.querySelector('.script-current-title strong').textContent === 'Renamed A'`)
+  assert.equal(await evaluate(`document.querySelector('.script-library-editor textarea').value`), 'echo newer A')
   await click('.script-head button[title="新增脚本"]')
   await edit('.script-draft-card textarea', 'echo first draft')
   await click('.script-head button[title="新增脚本"]')
   await edit('.script-draft-card textarea', 'echo second draft')
-  await click('.script-head button[aria-label="返回脚本库"]')
+  await click('.script-head button[aria-label="脚本列表"]')
   await evaluate(`Array.from(document.querySelectorAll('.script-retained-drafts button')).find(button => button.textContent.includes('未命名脚本 2')).click()`)
   await until(`document.querySelector('.script-draft-card textarea')?.value === 'echo first draft'`)
   assert.deepEqual(errors, [])

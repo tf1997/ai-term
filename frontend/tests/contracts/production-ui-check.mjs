@@ -1730,7 +1730,7 @@ assert(
 assert(
   scriptPanelTypes.includes("type ScriptPanelMode = 'library' | 'generate'") &&
     scriptPanelTypes.includes("type ScriptLibraryView = 'list' | 'detail'") &&
-    scriptPanel.includes('class="script-library"') &&
+    scriptPanel.includes('class="script-library detail-view"') &&
     scriptPanel.includes('class="script-library-editor"') &&
     scriptPanel.includes('class="script-draft-card"') &&
     scriptPanel.includes('class="script-replies-panel script-conversation"') &&
@@ -1747,7 +1747,7 @@ assert(
     scriptPanel.includes('ContextMenu') &&
     scriptPanel.includes('openScriptEditorMenu') &&
     scriptPanel.includes('title="更多操作"') &&
-    scriptPanel.includes('class="text-button script-run-button"') &&
+    scriptPanel.includes('class="icon-button script-run-button"') &&
     styles.includes('.script-conversation .script-reply-message') &&
     styles.includes('.script-panel > .script-ai-compose') &&
     scriptPanel.includes(':disabled="!canExecuteDraft"') &&
@@ -1868,8 +1868,8 @@ assert(
     scriptPanel.includes("return '未发现高风险'") &&
     scriptReadiness.includes("label: '填写完整'") &&
     scriptExecutionState.includes('脚本尚未填写完整') &&
-    scriptPanel.includes("'has-risk': draftScriptRiskStatus.level === 'medium' || draftScriptRiskStatus.level === 'high'") &&
-    scriptPanel.includes("'high-risk-run': draftScriptRiskStatus.level === 'high'") &&
+    scriptPanel.includes(':risk="draftScriptRiskStatus"') &&
+    scriptPanel.includes(':risk="selectedScriptRiskStatus"') &&
     scriptPanel.includes('draftEditorCursor') &&
     scriptPanel.includes('selectedEditorCursor') &&
     scriptPanel.includes('Shell &middot; UTF-8 &middot; LF') &&
@@ -2532,13 +2532,13 @@ assert(
     styles.includes('.script-code-card pre') &&
     styles.includes('.script-code-card code') &&
     styles.includes('max-height: min(420px, 52vh);') &&
-    !scriptPanel.includes('script-history-popover') &&
-    !scriptPanel.includes('historyPopover') &&
-    !scriptPanel.includes('historyButton') &&
-    !styles.includes('.script-history-popover') &&
+    scriptPanel.includes('class="script-library-popover"') &&
+    scriptPanel.includes('v-if="libraryOpen"') &&
+    scriptPanel.includes('dismissLibraryOutside') &&
+    !scriptPanel.includes('scriptLibraryView') &&
     styles.includes('.script-code-card textarea') &&
     !scriptPanel.includes('script-result-editor'),
-  'Workspace must include recording-backed script generation with a chat interaction, inline script library, in-card editing, deletion, and guarded execution.'
+  'Workspace must include recording-backed script generation, a searchable library popover independent of the editor, deletion, and guarded execution.'
 )
 
 assert(
