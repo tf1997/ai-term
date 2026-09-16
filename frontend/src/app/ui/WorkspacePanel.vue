@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { AiProviderConfig } from '../../domains/ai/types'
 import type { ConnectionProfile } from '../../domains/connections/types'
 import type { AiContextStatus, AiMessage, WorkspaceSession } from '../../domains/ai/types'
@@ -11,8 +11,9 @@ import { CommandHistoryPanel } from '../../domains/terminal/views'
 import { ScriptPanel } from '../../domains/scripts/views'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
-defineProps<{
+const props = defineProps<{
   collapsed: boolean
+  activeTab: 'history' | 'ai' | 'scripts'
   terminalId: string
   connectionId: string
   connectionProfile?: ConnectionProfile
@@ -48,7 +49,6 @@ const emit = defineEmits<{
   selectAiConfig: [configId: string]
   configureAi: []
   clearTerminalSelection: []
-  close: []
   workspaceTabChanged: [tab: 'history' | 'ai' | 'scripts']
   selectWorkspaceSession: [sessionId: string]
   createWorkspaceSession: []
@@ -72,12 +72,11 @@ const emit = defineEmits<{
   aiError: [detail: string]
 }>()
 
-const activeWorkspaceTab = ref<'history' | 'ai' | 'scripts'>('ai')
-const scriptPanelVisited = ref(false)
+const activeWorkspaceTab = computed(() => props.activeTab)
+const visitedTabs = ref(new Set([props.activeTab]))
 
 function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
-  activeWorkspaceTab.value = tab
-  if (tab === 'scripts') scriptPanelVisited.value = true
+  visitedTabs.value.add(tab)
   emit('workspaceTabChanged', tab)
 }
 </script>
@@ -117,20 +116,20 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
           <span>脚本</span>
         </button>
       </nav>
-      <button class="icon-button workspace-close" type="button" title="关闭工作区" aria-label="关闭工作区" @click="emit('close')">
-        <UiIcon name="close" />
-      </button>
     </div>
 
     <CommandHistoryPanel
-      v-if="activeWorkspaceTab === 'history'"
+      v-if="visitedTabs.has('history')"
+      v-show="activeWorkspaceTab === 'history'"
+      :connection-id="connectionId"
       :commands="commandHistory"
       :connection-label="connectionLabels[connectionId] ?? connectionProfile?.name ?? '当前连接'"
       @fill="emit('fillCommand', $event)"
       @pin="emit('pinQuickCommand', $event)"
     />
     <AiPanel
-      v-if="activeWorkspaceTab === 'ai'"
+      v-if="visitedTabs.has('ai')"
+      v-show="activeWorkspaceTab === 'ai'"
       :terminal-id="terminalId"
       :terminal-connection-generation="terminalConnectionGeneration"
       :connection-id="connectionId"
@@ -175,7 +174,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       @ai-error="emit('aiError', $event)"
     />
     <ScriptPanel
-      v-if="scriptPanelVisited"
+      v-if="visitedTabs.has('scripts')"
       v-show="activeWorkspaceTab === 'scripts'"
       :terminal-id="terminalId"
       :connection-id="connectionId"

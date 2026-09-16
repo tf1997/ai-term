@@ -118,7 +118,7 @@
 }
 
 .script-generate .script-draft-card {
-  grid-template-rows: auto minmax(0, 1fr) 28px;
+  grid-template-rows: auto auto minmax(0, 1fr) 28px;
 }
 
 /* Keep the transparent textarea and visible syntax layer pixel-aligned. */

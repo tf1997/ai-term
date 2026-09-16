@@ -3,7 +3,7 @@
 }
 .workspace-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   padding: 10px 10px 8px;

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } from 'vue'
 import type { TerminalTab } from '../../domain/terminal'
-import { terminalStatusClass } from '../../domain/terminalTabs'
+import { terminalStatusClass, terminalTitleOrdinals } from '../../domain/terminalTabs'
 import { useTerminalTabScroll } from '../../application/useTerminalTabScroll'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
+import { isMenuOwnedBy } from '../../../../shared/ui/contextMenuInteraction'
 
 const props = defineProps<{
   terminalTabs: readonly TerminalTab[]
@@ -54,19 +55,7 @@ const filteredTabs = computed(() => {
     .some(value => value?.toLocaleLowerCase().includes(query)))
 })
 const allVisibleSelected = computed(() => filteredTabs.value.every(tab => targetIds.value.has(tab.id)))
-const titleOrdinals = computed(() => {
-  const counts = new Map<string, number>()
-  const ordinals = new Map<string, number>()
-  for (const tab of props.terminalTabs) counts.set(tab.title, (counts.get(tab.title) ?? 0) + 1)
-  const seen = new Map<string, number>()
-  for (const tab of props.terminalTabs) {
-    if ((counts.get(tab.title) ?? 0) < 2) continue
-    const ordinal = (seen.get(tab.title) ?? 0) + 1
-    seen.set(tab.title, ordinal)
-    ordinals.set(tab.id, ordinal)
-  }
-  return ordinals
-})
+const titleOrdinals = computed(() => terminalTitleOrdinals(props.terminalTabs))
 
 function displayTitle(tab: TerminalTab) {
   const ordinal = titleOrdinals.value.get(tab.id)
@@ -125,6 +114,7 @@ function selectTab(tabId: string, focusTerminal = true) {
 }
 
 function handleTabKeydown(event: KeyboardEvent, tabId: string) {
+  if (document.querySelector('.context-menu')) return
   if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return
   const tabs = props.terminalTabs
   const index = tabs.findIndex(tab => tab.id === tabId)
@@ -144,8 +134,18 @@ function handleTabKeydown(event: KeyboardEvent, tabId: string) {
 }
 
 function openTabMenu(event: MouseEvent, tab: TerminalTab) {
-  closePopover()
+  if (!(event.currentTarget instanceof Node) || !popover.value?.contains(event.currentTarget)) closePopover()
   emit('contextMenu', event, tab)
+}
+
+function openKeyboardMenu(event: KeyboardEvent, tab: TerminalTab) {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+  event.preventDefault()
+  event.stopPropagation()
+  const target = event.currentTarget as HTMLElement
+  target.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled)')?.focus({ preventScroll: true })
+  const rect = target.getBoundingClientRect()
+  target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 12, clientY: rect.bottom }))
 }
 
 function handleMiddleClick(event: MouseEvent, tabId: string) {
@@ -194,7 +194,7 @@ function revealListEntry(element?: HTMLElement | null) {
 }
 
 function handleListKeydown(event: KeyboardEvent) {
-  if (event.isComposing) return
+  if (event.isComposing || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return
   const entries = Array.from(popover.value?.querySelectorAll<HTMLElement>(
     '.terminal-switcher-select, .terminal-sync-option input:not(:disabled)'
   ) ?? [])
@@ -216,12 +216,14 @@ function handleListKeydown(event: KeyboardEvent) {
 
 function dismissOutside(event: Event) {
   if (!popoverMode.value || !(event.target instanceof Node)) return
+  if (isMenuOwnedBy(event.target, 'terminal-tabs-popover')) return
   if (popover.value?.contains(event.target) || listButton.value?.contains(event.target) || syncButton.value?.contains(event.target)) return
   closePopover()
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.isComposing || event.defaultPrevented) return
+  if (document.querySelector('.context-menu')) return
   if (event.key === 'Escape' && popoverMode.value) {
     event.preventDefault()
     event.stopPropagation()
@@ -266,6 +268,7 @@ onBeforeUnmount(() => {
           :data-terminal-id="tab.id"
           :class="{ active: tab.id === activeTerminalId, target: syncing && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id) }"
           @contextmenu.prevent.stop="openTabMenu($event, tab)"
+          @keydown="openKeyboardMenu($event, tab)"
           @mousedown="($event.button === 1) && $event.preventDefault()"
           @auxclick="handleMiddleClick($event, tab.id)"
         >
@@ -308,15 +311,15 @@ onBeforeUnmount(() => {
           <span>{{ syncing ? `同步 ${targetTerminalIds.length}` : '同步输入' }}</span>
           <span v-if="pausedCount" class="terminal-sync-paused-count">暂停 {{ pausedCount }}</span>
         </button>
-        <button v-if="syncing" type="button" class="terminal-sync-stop" title="停止同步，仅输入当前终端" aria-label="停止同步，仅输入当前终端" @click="stopSync"><UiIcon name="close" size="12" /></button>
+        <button v-if="syncing" type="button" class="terminal-sync-stop" title="停止同步，仅输入当前终端" aria-label="停止同步，仅输入当前终端" @click="stopSync"><UiIcon name="stop" size="12" /></button>
       </div>
     </div>
 
-    <section v-if="popoverMode" id="terminal-tabs-popover" ref="popover" class="terminal-tabs-popover" :data-mode="popoverMode" role="dialog" :aria-label="popoverMode === 'sync' ? '设置同步输入' : '全部终端'" @keydown="handleListKeydown">
+    <section v-if="popoverMode" id="terminal-tabs-popover" data-overlay-id="terminal-tabs-popover" ref="popover" class="terminal-tabs-popover" :data-mode="popoverMode" role="dialog" :aria-label="popoverMode === 'sync' ? '设置同步输入' : '全部终端'" @keydown="handleListKeydown">
       <div class="terminal-popover-heading">
         <strong>{{ popoverMode === 'sync' ? '同步输入' : '全部终端' }}</strong>
         <span>{{ popoverMode === 'sync' ? `已选 ${targetTerminalIds.length} / ${terminalTabs.length}` : `${terminalTabs.length} 个会话` }}</span>
-        <button type="button" class="session-tab-action" aria-label="关闭面板" title="关闭面板（Esc）" @click="closePopover(true)"><UiIcon name="close" size="14" /></button>
+        <button type="button" class="session-tab-action" :aria-label="popoverMode === 'sync' ? '关闭同步列表' : '关闭终端列表'" :title="`${popoverMode === 'sync' ? '关闭同步列表' : '关闭终端列表'}（Esc）`" @click="closePopover(true)"><UiIcon name="close" size="14" /></button>
       </div>
       <p v-if="popoverMode === 'sync'" class="terminal-sync-description">输入和命令会发送到勾选的终端。<br />切换到未选终端时结束同步。</p>
       <p v-if="popoverMode === 'sync' && pausedCount" class="terminal-sync-notice">{{ pausedCount }} 个终端的键盘同步已暂停，回到空提示符后自动恢复。</p>
@@ -325,7 +328,7 @@ onBeforeUnmount(() => {
         <input ref="searchInput" v-model="terminalSearch" class="terminal-tab-search" type="search" placeholder="搜索终端、主机或连接…" aria-label="搜索终端" autocomplete="off" spellcheck="false" />
       </div>
       <ul ref="terminalList" class="terminal-switcher-list">
-        <li v-for="tab in filteredTabs" :key="tab.id" class="terminal-switcher-row" :data-terminal-id="tab.id" :class="{ active: tab.id === activeTerminalId, selected: popoverMode === 'sync' && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id) }" @contextmenu.prevent.stop="openTabMenu($event, tab)">
+        <li v-for="tab in filteredTabs" :key="tab.id" class="terminal-switcher-row" tabindex="-1" :data-terminal-id="tab.id" :class="{ active: tab.id === activeTerminalId, selected: popoverMode === 'sync' && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id) }" @contextmenu.prevent.stop="openTabMenu($event, tab)" @keydown="openKeyboardMenu($event, tab)">
           <label v-if="popoverMode === 'sync'" class="terminal-sync-option" :title="tab.id === activeTerminalId ? '当前终端始终接收输入' : tabTitle(tab)">
             <input type="checkbox" :checked="targetIds.has(tab.id)" :disabled="tab.id === activeTerminalId" :aria-label="`${displayTitle(tab)}${tab.id === activeTerminalId ? '（当前终端，始终接收输入）' : '，同步输入'}`" @change="emit('toggleTarget', tab.id)" />
             <span class="terminal-entry-copy"><strong>{{ displayTitle(tab) }}</strong><small>{{ tabDescription(tab) }}</small></span>

@@ -180,8 +180,19 @@ async function openMenu(selector = `${tabs}.active`) {
 }
 
 async function menuAction(label, selector) {
+  if (label === '同步全部终端') {
+    await openPopover('sync')
+    await replaceText(search, '')
+    await click(`${popover} .terminal-sync-select-all`)
+    await dismissPopover()
+    return
+  }
+  if (label === '停止同步') {
+    await click('.session-sync-control > .terminal-sync-stop')
+    return
+  }
   await openMenu(selector)
-  const index = await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).findIndex(button => button.textContent.trim() === ${JSON.stringify(label)})`)
+  const index = await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).findIndex(button => button.querySelector('span').textContent.trim() === ${JSON.stringify(label)})`)
   assert.ok(index >= 0, `Missing menu item: ${label}`)
   assert.equal(await evaluate(`document.querySelector('.context-menu button:nth-of-type(${index + 1})').disabled`), false, `Disabled menu item: ${label}`)
   await click(`.context-menu button:nth-of-type(${index + 1})`)
@@ -200,9 +211,8 @@ async function assertLastTerminalGuard() {
   assert.equal(await evaluate('document.querySelectorAll(".session-tab-strip .tab-close").length'), 0)
   assert.deepEqual(await targetIds(), [], 'A single terminal must not look like a sync group')
   await openMenu()
-  for (const label of ['关闭终端标签', '关闭其他终端', '关闭右侧终端']) {
-    assert.equal(await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(button => button.textContent.trim() === ${JSON.stringify(label)})?.disabled`), true, label)
-  }
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(button => button.querySelector('span').textContent === '关闭此终端')?.disabled`), true)
+  assert.equal(await evaluate(`document.querySelectorAll('.context-menu button').length`), 2, 'Single terminal menus explain the last-terminal guard without unrelated actions')
   await press('Escape')
   await waitFor('!document.querySelector(".context-menu")')
   await click(tab(id), 'middle')
@@ -275,7 +285,8 @@ async function assertSessionViews() {
   })`), toolsBefore, 'Returning to the terminal must restore the auxiliary tool and its width')
   await assertStableTerminal()
 
-  await click('.workspace-close')
+  assert.equal(await evaluate('Boolean(document.querySelector(".workspace-close"))'), false)
+  await click('.session-tools-toggle')
   await click('#session-view-files')
   await click('#session-view-terminal')
   assert.equal(await evaluate('document.querySelector(".right-panel").getBoundingClientRect().width'), 0, 'A previously closed auxiliary panel must stay closed')
@@ -285,6 +296,89 @@ async function assertSessionViews() {
   assert.equal(await evaluate('document.querySelector(".workspace-tabs button.active").textContent.trim()'), toolsBefore.tab)
   assert.equal(await evaluate('document.querySelector(".files-panel") === window.__filePanel'), true)
   await click('.workspace-tabs button:nth-child(2)')
+}
+
+async function assertAuxiliaryState() {
+  await click('.workspace-tabs button:nth-child(2)')
+  await evaluate(`(() => {
+    const ai = document.querySelector('.ai-chat-panel').__vueParentComponent;
+    window.__reviewAi = ai;
+    Object.assign(ai.props.config, { baseUrl: 'https://fixture.invalid', model: 'fixture', apiKey: 'memory-only-fixture' });
+  })()`)
+  const composer = '.chat-composer textarea'
+  await waitFor(`document.querySelector('${composer}') && !document.querySelector('${composer}').disabled`)
+  await replaceText(composer, '保留在当前终端的未发送草稿')
+  await click('.workspace-tabs button:nth-child(1)')
+  await waitFor('Boolean(document.querySelector(".history-panel"))')
+  await evaluate(`(() => {
+    const history = document.querySelector('.history-panel').__vueParentComponent;
+    window.__reviewHistory = history;
+    for (let i = 0; i < 40; i++) history.props.commands.push({ id: 'review-' + i, command: 'pwd # ' + i, createdAt: new Date().toISOString() });
+  })()`)
+  await click('#history-tab-frequent')
+  await replaceText('.history-search-wrap input', 'pwd')
+  await evaluate('document.querySelector(".history-list").scrollTop = 200')
+  const scrollTop = await evaluate('document.querySelector(".history-list").scrollTop')
+  await click('.workspace-tabs button:nth-child(3)')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".history-panel")).display'), 'none')
+  await click('.workspace-tabs button:nth-child(2)')
+  assert.equal(await evaluate(`document.querySelector('${composer}').value`), '保留在当前终端的未发送草稿')
+  assert.equal(await evaluate('document.querySelector(".ai-chat-panel").__vueParentComponent === window.__reviewAi'), true)
+  await click('.session-tools-toggle')
+  await click('.session-tools-toggle')
+  assert.equal(await evaluate(`document.querySelector('${composer}').value`), '保留在当前终端的未发送草稿')
+  await click('.workspace-tabs button:nth-child(1)')
+  assert.equal(await evaluate('document.querySelector(".history-panel").__vueParentComponent === window.__reviewHistory'), true)
+  assert.equal(await evaluate('document.querySelector(".history-search-wrap input").value'), 'pwd')
+  assert.equal(await evaluate('document.querySelector("#history-tab-frequent").getAttribute("aria-selected")'), 'true')
+  assert.equal(await evaluate('document.querySelector(".history-list").scrollTop'), scrollTop)
+  assert.ok(await evaluate('document.querySelector(".history-list").getBoundingClientRect().top - document.querySelector(".right-panel").getBoundingClientRect().top') <= 145)
+  await click('.workspace-tabs button:nth-child(2)')
+  const originalTerminal = await activeId()
+  await click('.terminal-new-tab')
+  await waitForTabCount(2)
+  assert.equal(await evaluate(`document.querySelector('${composer}').value`), '', 'A new terminal must not inherit another terminal draft')
+  await replaceText(composer, '另一个终端的草稿')
+  await click(`${tab(originalTerminal)} .tab-select`)
+  await waitForActive(originalTerminal)
+  assert.equal(await evaluate(`document.querySelector('${composer}').value`), '保留在当前终端的未发送草稿')
+  await menuAction('关闭其他终端')
+  await waitForTabCount(1)
+}
+
+async function assertNestedMenu() {
+  const active = await activeId()
+  await openPopover('terminals')
+  await replaceText(search, '本地')
+  await evaluate(`document.querySelector('${popover} ul').scrollTop = 120`)
+  const id = await evaluate(`document.querySelector('${popover} .terminal-switcher-row').dataset.terminalId`)
+  await openMenu(row(id))
+  assert.equal(await evaluate(`Boolean(document.querySelector('${popover}'))`), true)
+  assert.equal(await evaluate(`document.querySelector('${search}').value`), '本地')
+  assert.equal(await evaluate('document.querySelector(".context-menu").contains(document.activeElement)'), true)
+  assert.ok(await evaluate('document.querySelector(".context-menu > strong").textContent.includes("·")'))
+  for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'End', 'Home', 'ArrowUp']) {
+    await press(key)
+    assert.equal(await activeId(), active, 'Menus consume navigation keys')
+    assert.equal(await evaluate('document.querySelector(".context-menu").contains(document.activeElement)'), true)
+  }
+  await press('Escape')
+  await waitFor('!document.querySelector(".context-menu")')
+  assert.equal(await evaluate(`Boolean(document.querySelector('${popover}'))`), true)
+  assert.equal(await evaluate(`document.activeElement.closest('.terminal-switcher-row')?.dataset.terminalId`), id)
+  await dismissPopover()
+  assert.equal(await evaluate('document.activeElement === document.querySelector(".terminal-list-toggle")'), true)
+  await openMenu(tab(active))
+  const other = await evaluate(`Array.from(document.querySelectorAll('${tabs}')).find(element => {
+    const rect = element.getBoundingClientRect();
+    return element.dataset.terminalId !== ${JSON.stringify(active)}
+      && element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  })?.dataset.terminalId`)
+  assert.ok(other, 'A second unobscured tab is available for direct menu replacement')
+  await openMenu(tab(other))
+  assert.equal(await evaluate(`document.querySelector('.context-menu').__vueParentComponent.props.sourceElement.closest('.tab').dataset.terminalId`), other)
+  await press('Escape')
+  await waitFor('!document.querySelector(".context-menu")')
 }
 
 async function openHistory() {
@@ -304,6 +398,58 @@ async function screenshot(name) {
   return path
 }
 
+async function assertResponsiveLayout() {
+  const measurements = []
+  for (const width of [1280, 1100, 1040, 980]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 760, deviceScaleFactor: 1, mobile: false })
+    await waitFor(`innerWidth === ${width} && document.querySelector('.terminal-stack').getBoundingClientRect().width >= 559`)
+    measurements.push(await evaluate(`({ viewport: innerWidth, terminal: document.querySelector('.terminal-stack').getBoundingClientRect().width, tools: document.querySelector('.right-panel').getBoundingClientRect().width })`))
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true)
+    for (const index of [0, 1]) {
+      const trigger = `.app-rail button[aria-controls="left-sidebar-panel"]:nth-child(${index + 1})`
+      if (await evaluate(`document.querySelector(${JSON.stringify(trigger)}).getAttribute('aria-expanded') !== 'true'`)) await click(trigger)
+      await waitFor(`document.querySelector('#left-sidebar-panel').getBoundingClientRect().width > 0`)
+      if (await evaluate('document.querySelector(".app-shell").classList.contains("left-sidebar-overlay")')) {
+        assert.equal(await evaluate('document.querySelector("#left-sidebar-panel").getAttribute("role")'), 'dialog')
+        await evaluate(`(() => {
+          const items = Array.from(document.querySelectorAll('#left-sidebar-panel button:not(:disabled), #left-sidebar-panel input:not(:disabled), #left-sidebar-panel select:not(:disabled), #left-sidebar-panel [tabindex="0"]')).filter(element => element.getClientRects().length > 0);
+          items.at(-1).focus();
+        })()`)
+        await press('Tab')
+        assert.equal(await evaluate('document.activeElement === document.querySelector(".sidebar-drawer-close")'), true)
+        await press('Escape')
+      } else {
+        await click('.sidebar-drawer-close')
+      }
+      await waitFor('document.querySelector("#left-sidebar-panel").getBoundingClientRect().width === 0')
+      assert.equal(await evaluate(`document.activeElement === document.querySelectorAll('.app-rail button[aria-controls="left-sidebar-panel"]')[${index}]`), true)
+    }
+  }
+  await evaluate('document.querySelector(".workspace-resizer").focus()')
+  await press('Home')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width === 320')
+  await press('End')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width === 372')
+  const narrowScreenshot = await screenshot('workspace-980.png')
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
+  await press('End')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width === 560')
+  if (await evaluate('document.querySelector("#left-sidebar-panel").getBoundingClientRect().width > 0')) await click('.sidebar-drawer-close')
+  await click('.workspace-tabs button:nth-child(1)')
+  await click('.session-tools-toggle')
+  await send('Page.reload')
+  await waitForTabCount(1)
+  assert.equal(await evaluate('document.querySelector(".app-shell").classList.contains("left-collapsed")'), true)
+  assert.equal(await evaluate('document.querySelector(".session-tools-toggle").getAttribute("aria-expanded")'), 'false')
+  await click('.session-tools-toggle')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width === 560')
+  assert.equal(await evaluate('document.querySelector(".workspace-tabs button.active").textContent.trim()'), '历史')
+  // Leave repeat runs with the usual open tools and connection sidebar.
+  await click('.app-rail button[aria-controls="left-sidebar-panel"]:first-child')
+  await click('.workspace-tabs button:nth-child(2)')
+  return { measurements, narrowScreenshot }
+}
+
 try {
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true })
@@ -317,8 +463,10 @@ try {
   await send('Page.navigate', { url: appUrl })
   await waitForTabCount(1)
   assert.equal(await evaluate('Boolean(window.__TAURI_IPC__)'), false, 'Run this smoke test against browser preview, not a native workspace.')
+  if (await evaluate('document.querySelector(".session-tools-toggle").getAttribute("aria-expanded") === "false"')) await click('.session-tools-toggle')
   await evaluate('window.__firstTerminalPane = document.querySelector(".terminal-stack").firstElementChild; window.__firstXterm = document.querySelector(".terminal-stack .xterm")')
   await assertLastTerminalGuard()
+  await assertAuxiliaryState()
   await assertSessionViews()
   assert.equal(await evaluate('Boolean(document.querySelector(".session-tab-scroll-prev, .session-tab-scroll-next"))'), false)
 
@@ -399,6 +547,7 @@ try {
   assert.equal(await activeId(), allTabs[0], 'Scrolling tabs must not switch the active terminal')
   await scrollToBoundary(-1)
   assert.equal(await evaluate('document.querySelector(".session-tab-scroll-next").disabled'), false)
+  await assertNestedMenu()
 
   await openPopover('terminals')
   await waitFor(`document.activeElement === document.querySelector('${search}')`)
@@ -438,6 +587,14 @@ try {
   await assertNoActiveShadow('dark')
   await dismissToasts()
   const darkScreenshot = await screenshot('terminal-tabs-dark-wide.png')
+  await openMenu()
+  assert.equal(await evaluate(`(() => {
+    const menu = document.querySelector('.context-menu');
+    return menu.scrollHeight <= menu.clientHeight + 1 && getComputedStyle(menu.querySelector('button:last-child')).backgroundColor === 'rgba(0, 0, 0, 0)';
+  })()`), true)
+  const darkMenuScreenshot = await screenshot('terminal-menu-dark.png')
+  await press('Escape')
+  await waitFor('!document.querySelector(".context-menu")')
   await click('button[title="切换白色主题"]')
   await waitFor('Boolean(document.querySelector(".app-shell.theme-light"))')
   await send('Emulation.setDeviceMetricsOverride', { width: 1120, height: 760, deviceScaleFactor: 1, mobile: false })
@@ -446,6 +603,11 @@ try {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'Many terminal tabs must not widen the page')
   await dismissToasts()
   const lightScreenshot = await screenshot('terminal-tabs-light-narrow.png')
+  await openMenu()
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).every(button => getComputedStyle(button).borderTopColor === 'rgba(0, 0, 0, 0)')`), true)
+  const lightMenuScreenshot = await screenshot('terminal-menu-light.png')
+  await press('Escape')
+  await waitFor('!document.querySelector(".context-menu")')
   await openPopover('sync')
   assert.equal(await evaluate(`(() => { const rectangle = document.querySelector('${popover}').getBoundingClientRect(); return rectangle.left >= 0 && rectangle.top >= 0 && rectangle.right <= innerWidth + 1 && rectangle.bottom <= innerHeight + 1; })()`), true, 'The terminal picker must fit the narrow viewport')
   const syncScreenshot = await screenshot('terminal-sync-light-narrow.png')
@@ -498,7 +660,7 @@ try {
   assert.deepEqual(await tabIds(), beforeCloseRight.slice(0, 8))
   await waitForActive(rightBoundary)
   await openMenu(tab(rightBoundary))
-  assert.equal(await evaluate('Array.from(document.querySelectorAll(".context-menu button")).find(button => button.textContent.trim() === "关闭右侧终端")?.disabled'), true)
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".context-menu button")).some(button => button.textContent.trim() === "关闭右侧终端")'), false)
   await press('Escape')
   await waitFor('!document.querySelector(".context-menu")')
   await menuAction('关闭其他终端', tab(allTabs[0]))
@@ -518,10 +680,12 @@ try {
   await assertLastTerminalGuard()
   await assertStableTerminal()
   await waitFor('!document.querySelector(".session-tab-scroll-prev, .session-tab-scroll-next")')
+  const responsive = await assertResponsiveLayout()
   assert.deepEqual(exceptions, [])
   console.log(JSON.stringify({
     result: 'passed', terminalTabsExercised: terminalCount, themes: ['dark', 'light'],
-    viewports: ['1440x1000', '1120x760'], nativeBackendTested: false,
+    viewports: ['1440x1000', '1280x760', '1120x760', '1100x760', '1040x760', '980x760'], nativeBackendTested: false,
+    responsiveMeasurements: responsive.measurements,
     checks: [
       'stable terminal DOM', 'current terminal required in sync group', 'sync group switch and exit', 'filtered sync selection and stop',
       '20 tabs with duplicate title ordinals', 'wheel and arrow scrolling with disabled boundaries', 'automatic active tab reveal',
@@ -530,7 +694,7 @@ try {
       'background close preserves active instance', 'middle-click and Delete close', 'close other and right tabs', 'last terminal guard',
       'global draft session create/rename/delete', 'terminal switch preserves AI session', 'no uncaught exceptions'
     ],
-    screenshots: [darkScreenshot, lightScreenshot, syncScreenshot, sessionScreenshot]
+    screenshots: [darkScreenshot, darkMenuScreenshot, lightScreenshot, lightMenuScreenshot, syncScreenshot, sessionScreenshot, responsive.narrowScreenshot]
   }, null, 2))
 } catch (error) {
   console.error('Browser failure screenshot:', await screenshot('failure.png').catch(() => 'unavailable'))

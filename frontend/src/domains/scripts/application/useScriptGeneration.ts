@@ -4,6 +4,7 @@ import type { ScriptPanelProps, ScriptChatMessage, ScriptPanelMode } from '../do
 import type { SaveState } from '../../../shared/forms/configuration'
 import { extractBashScript, displayAnswerWithoutScript, formatError } from '../domain/scriptPresentation'
 import * as tauri from '../../ai/infrastructure/api'
+import type { ScriptGenerationTarget } from './useScriptDrafts'
 
 interface ScriptGenerationOptions {
   props: Readonly<ScriptPanelProps>
@@ -23,18 +24,19 @@ interface ScriptGenerationOptions {
   hasDraftScript: () => boolean
   hasUsableConfig: () => boolean
   openGenerateMode: () => void
-  updateSelectedScriptDraft: (content: string) => void
-  applyDraftScript: (content: string, messageId: string) => void
+  captureTarget: (target: 'draft' | 'selected') => ScriptGenerationTarget
+  applyGeneratedScript: (target: ScriptGenerationTarget, content: string, messageId: string) => 'applied' | 'pending' | 'unavailable'
 }
 type ScriptGenerationSource = Pick<typeof tauri, 'onAiChatStream' | 'chatWithAiProviderStream' | 'cancelTask'>
 
 export function useScriptGeneration(options: ScriptGenerationOptions, source: ScriptGenerationSource = tauri) {
-  const { props, saveState, panelError, scriptPanelMode, askText, messages, collapsedMessages, draftScriptContent, recordedCommands, sourceCommands, recordedOutput, recordingHasData, scriptSourceConnectionId, scriptSourceWorkspaceSessionId, hasDraftScript, hasUsableConfig, openGenerateMode, updateSelectedScriptDraft, applyDraftScript } = options
+  const { props, saveState, panelError, scriptPanelMode, askText, messages, collapsedMessages, draftScriptContent, recordedCommands, sourceCommands, recordedOutput, recordingHasData, scriptSourceConnectionId, scriptSourceWorkspaceSessionId, hasDraftScript, hasUsableConfig, openGenerateMode, captureTarget, applyGeneratedScript } = options
   const { onAiChatStream, chatWithAiProviderStream, cancelTask } = source
   let disposed = false
   const STREAM_TIMER_INTERVAL_MS = 1000
 
   const isGenerating = ref(false)
+  const currentTargetTitle = ref('')
 
   const currentRequestId = ref('')
 
@@ -55,7 +57,8 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
     if (target === 'draft' && scriptPanelMode.value !== 'generate') openGenerateMode()
     if (disposed || isGenerating.value) return
     const explicitText = askText.value.trim()
-    const hasScriptContext = hasDraftScript() || recordingHasData() || sourceCommands().length > 0
+    const targetSnapshot = captureTarget(target)
+    const hasScriptContext = Boolean(targetSnapshot.content.trim()) || recordingHasData() || sourceCommands().length > 0
     if (!hasScriptContext && !explicitText) {
       panelError.value = '请先录制操作、粘贴脚本，或描述你要生成的脚本。'
       return
@@ -68,10 +71,18 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
 
     const userMessage = createMessage('user', text)
     const assistantMessage = createMessage('assistant', '', '', true)
+    for (const message of [userMessage, assistantMessage]) {
+      message.targetDocumentId = targetSnapshot.id
+      message.targetTitle = targetSnapshot.title
+      message.sourceConnectionId = targetSnapshot.connectionId
+      message.sourceWorkspaceSessionId = targetSnapshot.workspaceSessionId
+      message.sourceCommands = [...targetSnapshot.sourceCommands]
+    }
     messages.value = [...messages.value, userMessage, assistantMessage]
     askText.value = ''
     panelError.value = ''
     isGenerating.value = true
+    currentTargetTitle.value = targetSnapshot.title
     stopRequested.value = false
     collapsedMessages.value = {
       ...collapsedMessages.value,
@@ -83,7 +94,7 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
     currentRequestId.value = requestId
     currentAssistantMessageId.value = assistantMessage.id
     startAnswerTimer()
-    const prompt = buildScriptPrompt(text, mode)
+    const prompt = buildScriptPrompt(text, mode, targetSnapshot.content)
     let answer = ''
     let unlisten: (() => void) | undefined
     // Writing every streamed token into `messages` re-renders (and re-parses)
@@ -132,12 +143,9 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
       finishAnswerTimer(assistantMessage.id)
       updateAssistantMessage(assistantMessage.id, displayAnswerWithoutScript(finalAnswer), false, false, script)
       if (script) {
-        if (target === 'selected') {
-          updateSelectedScriptDraft(script)
-        } else {
-          applyDraftScript(script, assistantMessage.id)
-        }
-        saveState.value = 'idle'
+        const applicationState = applyGeneratedScript(targetSnapshot, script, assistantMessage.id)
+        messages.value = messages.value.map((message) => message.id === assistantMessage.id ? { ...message, applicationState } : message)
+        if (saveState.value !== 'saving') saveState.value = 'idle'
       }
     } catch (error) {
       if (disposed || stopRequested.value || currentRequestId.value !== requestId) return
@@ -261,8 +269,8 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
     return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`
   }
 
-  function buildScriptPrompt(userRequest: string, mode: 'generate' | 'revise' | 'regenerate') {
-    const draft = draftScriptContent.value.trim()
+  function buildScriptPrompt(userRequest: string, mode: 'generate' | 'revise' | 'regenerate', content = draftScriptContent.value) {
+    const draft = content.trim()
     const modeText = mode === 'regenerate' ? '重新生成' : mode === 'revise' ? '继续修改当前草稿' : '生成新脚本'
     return [
       '你是 AI Term 的脚本工坊助手。',
@@ -302,5 +310,5 @@ export function useScriptGeneration(options: ScriptGenerationOptions, source: Sc
     if (requestId) void cancelTask(requestId).catch(() => {})
   })
 
-  return { isGenerating, currentRequestId, currentAssistantMessageId, stopRequested, answerElapsedSeconds, answerDurations, sendScriptRequest, stopScriptGeneration, createMessage, updateAssistantMessage, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration, buildScriptPrompt, defaultScriptRequest }
+  return { isGenerating, currentTargetTitle, currentRequestId, currentAssistantMessageId, stopRequested, answerElapsedSeconds, answerDurations, sendScriptRequest, stopScriptGeneration, createMessage, updateAssistantMessage, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration, buildScriptPrompt, defaultScriptRequest }
 }

@@ -12,6 +12,9 @@ export interface ContextMenuItem {
   label: string
   danger?: boolean
   disabled?: boolean
+  disabledReason?: string
+  group?: string
+  restoreFocus?: boolean
   action: () => void
 }
 
@@ -19,6 +22,9 @@ export interface ContextMenuState {
   x: number
   y: number
   title?: string
+  description?: string
+  sourceElement?: HTMLElement
+  parentId?: string
   items: readonly ContextMenuItem[]
 }
 

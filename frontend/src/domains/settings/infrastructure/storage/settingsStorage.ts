@@ -1,6 +1,7 @@
 import type { AppTheme, AppUserSettings } from '../../domain/settings'
 import { createDefaultUserSettings, DEFAULT_TERMINAL_FONT_SIZE, LEGACY_WINDOWS_TERMINAL_FONT_FAMILY, normalizeUserSettings, SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from '../../domain/userSettings'
-import { DEFAULT_WORKSPACE_WIDTH, parseWorkspaceWidth } from '../../domain/workspaceLayout'
+import { DEFAULT_WORKSPACE_WIDTH, parseWorkspaceWidth, parseWorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
+import type { WorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
 
 export interface SettingsStorage {
   getItem: (key: string) => string | null
@@ -12,6 +13,7 @@ export const LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-den
 export const WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY = 'ai-term:windows-terminal-size-correction:v1'
 export const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
 export const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
+export const WORKSPACE_LAYOUT_STORAGE_KEY = 'ai-term:workspace-layout:v1'
 
 function readStoredValue(key: string, storage?: SettingsStorage): string | null {
   try {
@@ -91,4 +93,12 @@ export function loadWorkspaceWidth(storage?: SettingsStorage): number {
 
 export function persistWorkspaceWidth(width: number, storage?: SettingsStorage): boolean {
   return writeStoredValue(WORKSPACE_WIDTH_STORAGE_KEY, String(width), storage)
+}
+
+export function loadWorkspaceLayoutPreferences(storage?: SettingsStorage): WorkspaceLayoutPreferences {
+  return parseWorkspaceLayoutPreferences(readStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, storage))
+}
+
+export function persistWorkspaceLayoutPreferences(preferences: WorkspaceLayoutPreferences, storage?: SettingsStorage): boolean {
+  return writeStoredValue(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify(preferences), storage)
 }

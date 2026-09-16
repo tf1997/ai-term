@@ -146,6 +146,11 @@ export function useScriptExecution(options: ScriptExecutionOptions, source: Scri
   }
 
   function executeScriptContent(content: string, sourceScript?: ScriptExecutionSource) {
+    const language = detectShellScriptLanguage(content, sourceScript?.name)
+    if (language === 'powershell' || language === 'cmd') {
+      panelError.value = '运行脚本需要 Bash。请先将 PowerShell / CMD 内容转换为 Bash 脚本。'
+      return
+    }
     const executableContent = preparedScriptContent(content, sourceScript?.name)
     const readinessIssues = analyzeScriptReadiness(executableContent)
     if (readinessIssues.length > 0) {

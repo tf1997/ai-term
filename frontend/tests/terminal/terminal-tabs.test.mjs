@@ -349,3 +349,33 @@ test('独立应用的标签与同步状态不共享', () => {
   assert.equal(second.terminalTabs.value.length, 1)
   assert.deepEqual(second.targetTerminalIds.value, ['local-1'])
 })
+
+test('同名终端身份在菜单中显示相同序号，动作绑定被右键的 ID', async () => {
+  const { terminalContextMenu } = await import('../../src/domains/terminal/application/terminalContextMenu')
+  const tabs = [{ id: 'a', title: '本地终端' }, { id: 'b', title: '本地终端' }, { id: 'c', title: '生产连接' }]
+  const calls = []
+  const menu = terminalContextMenu({ tabs, tabId: 'b', activeId: 'a', targetIds: ['a'],
+    select: id => calls.push(['select', id]), toggleTarget: id => calls.push(['sync', id]), create() {},
+    close: id => calls.push(['close', id]), closeOthers() {}, closeRight() {},
+  })
+  assert.equal(menu.title, '本地终端 · 2')
+  menu.items.find(item => item.id === 'switch').action()
+  menu.items.find(item => item.id === 'toggle-target').action()
+  menu.items.find(item => item.id === 'close').action()
+  assert.deepEqual(calls, [['select', 'b'], ['sync', 'b'], ['close', 'b']])
+  assert.deepEqual(menu.items.map(item => item.group), ['common', 'common', 'sync', 'close', 'close', 'close'])
+})
+
+test('当前单终端菜单精简无效操作，并说明关闭禁用原因', async () => {
+  const { terminalContextMenu } = await import('../../src/domains/terminal/application/terminalContextMenu')
+  const options = { tabs: [{ id: 'a', title: '本地终端' }], tabId: 'a', activeId: 'a', targetIds: ['a'],
+    select() {}, toggleTarget() {}, create() {}, close() {}, closeOthers() {}, closeRight() {},
+  }
+  const menu = terminalContextMenu(options)
+  assert.equal(menu.title, '本地终端')
+  assert.equal(menu.description, '当前终端始终接收输入')
+  assert.deepEqual(menu.items.map(item => item.id), ['new-local', 'close'])
+  assert.equal(menu.items[1].disabled, true)
+  assert.equal(menu.items[1].disabledReason, '至少保留一个终端')
+  assert.equal(terminalContextMenu({ ...options, tabId: 'missing' }), undefined)
+})

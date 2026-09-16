@@ -1,6 +1,6 @@
 :root {
-  --file-popover-backdrop-layer: 70;
-  --file-popover-panel-layer: 71;
+  --file-popover-backdrop-layer: 34;
+  --file-popover-panel-layer: 35;
   --file-sticky-header-layer: 1;
 }
 
@@ -146,6 +146,7 @@
 }
 .file-location-value > input {
   width: 100%;
+  min-width: 0;
   height: 26px;
   border: 0;
   font-family: var(--font-mono);
@@ -157,6 +158,7 @@
   flex: 1;
   min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
 }
 .file-location-crumbs::-webkit-scrollbar {
@@ -164,6 +166,7 @@
 }
 .app-shell .file-location-crumbs button {
   flex-shrink: 0;
+  height: 22px;
   min-height: 22px;
   padding: 2px 5px;
   border: 0;
@@ -173,12 +176,13 @@
   font-size: 11px;
   white-space: nowrap;
 }
-.file-location-crumbs button + button::before {
-  content: '/';
-  margin-right: 3px;
+.file-location-separator {
+  flex: 0 0 12px;
   color: var(--sftp-muted);
 }
 .app-shell .file-location-value > .icon-button {
+  flex: 0 0 26px;
+  height: 26px;
   border: 0;
   border-radius: 0 3px 3px 0;
   background: transparent;
@@ -599,11 +603,11 @@
   display: flex;
   flex-direction: column;
   border: 1px solid var(--sftp-line);
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 8px;
   background: var(--sftp-surface);
   color: var(--sftp-ink);
-  box-shadow: 0 8px 28px #0003;
+  box-shadow: var(--menu-shadow);
   font-family: var(--font-sans);
   font-size: 12px;
 }

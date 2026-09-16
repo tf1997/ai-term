@@ -3,11 +3,15 @@ import { shellCommandForPart } from '../../domain/scriptPresentation'
 import { useScriptExecution } from '../../application/useScriptExecution'
 import { useScriptGeneration } from '../../application/useScriptGeneration'
 import { useScriptLibrary } from '../../application/useScriptLibrary'
+import { useScriptDrafts } from '../../application/useScriptDrafts'
+import type { ScriptGenerationTarget } from '../../application/useScriptDrafts'
 import { MAX_SCRIPT_SOURCE_COMMANDS, compactCommands, inferScriptName, inferDescription, isAutoScriptName, formatError, isTauriUnavailableError, nowText } from '../../domain/scriptPresentation'
 import { cursorPositionForTextarea, lineNumbersForScript, highlightShellScript, readinessLinesText } from '../../domain/scriptEditor'
 import type { ScriptPanelProps, ScriptPanelEvents, ScriptChatMessage, ScriptPanelMode, ScriptLibraryView, ScriptPreviewSource, ScriptEditorSource, EditorCursor } from '../../domain/scriptPanel'
 import type { SaveState } from '../../../../shared/forms/configuration'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { Ref } from 'vue'
+import { trapTabFocus } from '../../../../shared/ui/overlays'
 
 import type { UpdateScript } from '../../domain/recording'
 import { riskLabelsForLine, scriptRiskStatusForContent } from '../../../../shared/security/scriptRisk'
@@ -24,6 +28,8 @@ import { codeBlockLabel } from '../../../../shared/shell/shellCommand'
 
 import ContextMenu from '../../../../shared/ui/ContextMenu.vue'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
+import ScriptEditorContext from './ScriptEditorContext.vue'
+import { detectShellScriptLanguage } from '../../../../shared/shell/shellCommand'
 
 const props = defineProps<ScriptPanelProps>()
 
@@ -32,6 +38,7 @@ const MAX_RECORDED_OUTPUT_CHARS = 80_000
 const LONG_MESSAGE_CHARS = 900
 const LONG_MESSAGE_LINES = 12
 const saveState = ref<SaveState>('idle')
+const lastSavedScriptId = ref('')
 const panelError = ref('')
 const { scriptExecutionNotice, pendingScriptExecution, pendingScriptSource, scriptRiskExplanation, scriptRiskExplanationError, scriptRiskExplanationLoading, scriptRiskExplanationRequestId, preparedScriptContent, pendingScriptRisks, scriptRiskConfirmOpen, pendingScriptRiskSummary, pendingScriptRiskLines, pendingScriptConnectionMismatch, pendingExecutionTitle, pendingExecutionSubtitle, buildScriptRiskExplanationPrompt, explainPendingScriptRisk, clearScriptRiskExplanation, executeScriptContent, writeScriptToTerminal, confirmPendingScriptExecution, closeScriptRiskConfirm, executionTargetsDifferFromSource } = useScriptExecution({
   props, emit, panelError, sourceCommands: () => sourceCommands.value,
@@ -58,11 +65,16 @@ const expandedScriptHighlight = ref<HTMLElement | null>(null)
 const librarySearchInput = ref<HTMLInputElement | null>(null)
 const editingMessageId = ref('')
 const scriptDrafts = ref<Record<string, string>>({})
-const selectedScriptDraft = ref('')
+const { documents, createDraft, ensureSaved, updateContent, snapshot, receiveGeneration, acceptPending, markSaved } = useScriptDrafts()
+const draftScriptId = ref(createDraft({ connectionId: props.connectionId, workspaceSessionId: props.workspaceSessionId }).id)
+const activeDraft = computed(() => documents.value[draftScriptId.value])
+const selectedScriptDraft = computed({
+  get: () => selectedScript.value ? ensureSaved(selectedScript.value).content : '',
+  set: (content: string) => { if (selectedScript.value) updateContent(ensureSaved(selectedScript.value).id, content) }
+})
 const selectedScriptEditing = ref(false)
-const draftScriptId = ref('')
-const draftScriptContent = ref('')
-const { isGenerating, currentRequestId, currentAssistantMessageId, stopRequested, answerElapsedSeconds, answerDurations, sendScriptRequest, stopScriptGeneration, createMessage, updateAssistantMessage, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration, buildScriptPrompt, defaultScriptRequest } = useScriptGeneration({
+const draftScriptContent = computed({ get: () => activeDraft.value.content, set: (content: string) => updateContent(draftScriptId.value, content) })
+const { isGenerating, currentTargetTitle, currentRequestId, currentAssistantMessageId, stopRequested, answerElapsedSeconds, answerDurations, sendScriptRequest, stopScriptGeneration, createMessage, updateAssistantMessage, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration, buildScriptPrompt, defaultScriptRequest } = useScriptGeneration({
   props, saveState, panelError, scriptPanelMode, askText, messages, collapsedMessages, draftScriptContent,
   recordedCommands: () => recordedCommands.value,
   sourceCommands: () => sourceCommands.value,
@@ -72,13 +84,16 @@ const { isGenerating, currentRequestId, currentAssistantMessageId, stopRequested
   scriptSourceWorkspaceSessionId: () => scriptSourceWorkspaceSessionId.value,
   hasDraftScript: () => hasDraftScript.value,
   hasUsableConfig: () => hasUsableConfig.value,
-  openGenerateMode, updateSelectedScriptDraft, applyDraftScript
+  openGenerateMode, captureTarget, applyGeneratedScript
 })
-const draftSourceConnectionId = ref('')
-const draftSourceWorkspaceSessionId = ref('')
-const draftSourceCommands = ref<string[]>([])
+const draftSourceConnectionId = computed({ get: () => activeDraft.value.connectionId, set: (value: string) => { activeDraft.value.connectionId = value } })
+const draftSourceWorkspaceSessionId = computed({ get: () => activeDraft.value.workspaceSessionId, set: (value: string) => { activeDraft.value.workspaceSessionId = value } })
+const draftSourceCommands = computed({ get: () => activeDraft.value.sourceCommands, set: (value: string[]) => { activeDraft.value.sourceCommands = value } })
 const scriptPreviewSource = ref<ScriptPreviewSource>('')
-const scriptEditorMenu = ref<{ source: ScriptEditorSource; x: number; y: number } | null>(null)
+const scriptEditorMenu = ref<{ source: ScriptEditorSource; x: number; y: number; sourceElement: HTMLElement } | null>(null)
+const renameDialog = ref<HTMLElement | null>(null)
+const previewDialog = ref<HTMLElement | null>(null)
+const riskDialog = ref<HTMLElement | null>(null)
 const draftEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
 const selectedEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
 const expandedEditorCursor = ref<EditorCursor>({ line: 1, column: 1 })
@@ -112,28 +127,113 @@ const scriptReplyCountText = computed(() => `${messages.value.length} 条消息`
 const draftLineNumbers = computed(() => lineNumbersForScript(draftScriptContent.value))
 const selectedScriptLineNumbers = computed(() => lineNumbersForScript(selectedScriptContent.value))
 const scriptPreviewOpen = computed(() => scriptPreviewSource.value !== '')
-const expandedScriptTitle = computed(() => scriptPreviewSource.value === 'selected' ? selectedScript.value?.name || '脚本预览' : '脚本预览')
+const expandedScriptTitle = computed(() => scriptPreviewSource.value === 'selected' ? selectedScript.value?.name || '脚本' : draftScriptTitle.value)
 const expandedScriptContent = computed(() => scriptPreviewSource.value === 'selected' ? selectedScriptContent.value : draftScriptContent.value)
 const expandedScriptLineNumbers = computed(() => lineNumbersForScript(expandedScriptContent.value))
 const draftSavedScript = computed(() => scripts.value.find((script) => script.id === draftScriptId.value))
 const draftScriptHighlightedHtml = computed(() => highlightShellScript(draftScriptContent.value, draftSavedScript.value?.name))
 const selectedScriptHighlightedHtml = computed(() => highlightShellScript(selectedScriptContent.value, selectedScript.value?.name))
 const expandedScriptHighlightedHtml = computed(() => highlightShellScript(expandedScriptContent.value, expandedScriptTitle.value))
-const draftScriptTitle = computed(() => draftSavedScript.value?.name || '未命名脚本')
+const draftScriptTitle = computed(() => draftSavedScript.value?.name || activeDraft.value.title)
 const draftScriptDirty = computed(() => {
-  if (!hasDraftScript.value) return false
-  return !draftSavedScript.value || draftScriptContent.value.trimEnd() !== draftSavedScript.value.content.trimEnd()
+  return draftSavedScript.value ? draftScriptContent.value !== draftSavedScript.value.content : activeDraft.value.revision > 0
 })
 const selectedScriptDirty = computed(() => {
-  if (!selectedScript.value || !hasSelectedScriptContent.value) return false
-  return selectedScriptContent.value.trimEnd() !== selectedScript.value.content.trimEnd()
+  if (!selectedScript.value) return false
+  return selectedScriptContent.value !== selectedScript.value.content
 })
+const activeDocumentId = computed(() => editingSelectedScript.value ? selectedScriptId.value : scriptPanelMode.value === 'generate' ? draftScriptId.value : '')
+const activeDocument = computed(() => documents.value[activeDocumentId.value])
+const activeScriptTitle = computed(() => editingSelectedScript.value ? selectedScript.value?.name || '脚本' : draftScriptTitle.value)
+const retainedDrafts = computed(() => Object.values(documents.value).filter((document) => !document.savedScriptId))
+const pendingDocuments = computed(() => Object.values(documents.value).filter((document) => document.pending))
+const lastSavedScript = computed(() => scripts.value.find((script) => script.id === lastSavedScriptId.value))
+const executionContextTitle = computed(() => `运行到：${props.executionTargetLabel || '当前终端'} · 需要 Bash`)
+const runReadinessHint = (content: string, name = '') => {
+  if (!content.trim()) return '输入脚本后可运行'
+  if (!isBashCompatible(content, name)) return '请先转换为 Bash 脚本后运行'
+  const issues = scriptReadinessStatusForContent(content).issues
+  return issues.length ? `补全 ${issues.length} 项后可运行` : executionContextTitle.value
+}
+
+function generationContext() {
+  return `${props.connectionId}:${props.workspaceSessionId}:${props.terminalId}:${props.selectedConfigId}`
+}
+
+function captureTarget(target: 'draft' | 'selected') {
+  if (target === 'selected' && selectedScript.value) ensureSaved(selectedScript.value)
+  const id = target === 'selected' ? selectedScriptId.value : draftScriptId.value
+  const document = documents.value[id]
+  if (!document.sourceCommands.length && recordingHasData.value) {
+    document.connectionId = scriptSourceConnectionId.value
+    document.workspaceSessionId = scriptSourceWorkspaceSessionId.value
+    document.sourceCommands = [...sourceCommands.value]
+  }
+  return snapshot(id, generationContext())
+}
+
+function applyGeneratedScript(target: ScriptGenerationTarget, content: string, messageId: string) {
+  return receiveGeneration(target, content, messageId, activeDocumentId.value, generationContext())
+}
+
+function openDocument(id: string) {
+  const document = documents.value[id]
+  if (!document) return
+  if (document.savedScriptId && scripts.value.some((script) => script.id === id)) loadSelectedScript(id)
+  else { draftScriptId.value = id; openGenerateMode(); void nextTick(() => draftEditorTextarea.value?.focus()) }
+}
+
+function acceptGeneratedVersion() {
+  const document = activeDocument.value
+  if (!document?.pending) return
+  const messageId = document.pending.messageId
+  acceptPending(document.id)
+  messages.value = messages.value.map((message) => message.id === messageId ? { ...message, applicationState: 'applied' } : message)
+  if (saveState.value !== 'saving') saveState.value = 'idle'
+}
+
+function dismissGeneratedVersion() {
+  const document = activeDocument.value
+  if (!document?.pending) return
+  const messageId = document.pending.messageId
+  document.pending = undefined
+  messages.value = messages.value.map((message) => message.id === messageId ? { ...message, applicationState: 'dismissed' } : message)
+}
+
+function messageScriptStatus(message: ScriptChatMessage) {
+  if (message.savedScriptId) return '已保存副本'
+  const document = documents.value[message.targetDocumentId || '']
+  if (document?.pending?.messageId === message.id) return '待采纳'
+  if (message.applicationState === 'dismissed') return '未采纳'
+  if (message.applicationState === 'applied') {
+    const content = scriptContentForMessage(message)
+    if (document?.content !== content) return '草稿已有后续修改'
+    return scripts.value.some(script => script.id === document.savedScriptId && script.content === content)
+      ? '已应用并保存' : '已应用，尚未保存'
+  }
+  return 'AI 生成版本'
+}
+
+function reviewMessageVersion(message: ScriptChatMessage) {
+  const document = documents.value[message.targetDocumentId || '']
+  if (!document) return
+  document.pending = {
+    content: scriptContentForMessage(message), messageId: message.id,
+    baseContent: document.content, baseRevision: document.revision, baseContext: generationContext()
+  }
+  messages.value = messages.value.map(item => item.id === message.id ? { ...item, applicationState: 'pending' } : item)
+  openDocument(document.id)
+}
 const draftScriptReadiness = computed(() => scriptReadinessStatusForContent(draftScriptContent.value))
 const selectedScriptReadiness = computed(() => scriptReadinessStatusForContent(selectedScriptContent.value))
 const expandedScriptReadiness = computed(() => scriptReadinessStatusForContent(expandedScriptContent.value))
-const canExecuteDraft = computed(() => hasDraftScript.value && draftScriptReadiness.value.issues.length === 0)
-const canExecuteSelectedScript = computed(() => hasSelectedScriptContent.value && selectedScriptReadiness.value.issues.length === 0)
-const canExecuteExpandedScript = computed(() => expandedScriptContent.value.trim().length > 0 && expandedScriptReadiness.value.issues.length === 0)
+function isBashCompatible(content: string, name = '') {
+  const language = detectShellScriptLanguage(content, name)
+  return language !== 'powershell' && language !== 'cmd'
+}
+const canExecuteDraft = computed(() => hasDraftScript.value && draftScriptReadiness.value.issues.length === 0 && isBashCompatible(draftScriptContent.value, draftScriptTitle.value))
+const canExecuteSelectedScript = computed(() => hasSelectedScriptContent.value && selectedScriptReadiness.value.issues.length === 0 && isBashCompatible(selectedScriptContent.value, selectedScript.value?.name))
+const canExecuteExpandedScript = computed(() => expandedScriptContent.value.trim().length > 0 && expandedScriptReadiness.value.issues.length === 0 && isBashCompatible(expandedScriptContent.value, expandedScriptTitle.value))
 const recordingActionLabel = computed(() => recordingHasData.value ? '重新录制' : '开始录制')
 const draftSaveStatus = computed(() => editorSaveStatus(hasDraftScript.value, draftScriptDirty.value))
 const selectedSaveStatus = computed(() => editorSaveStatus(hasSelectedScriptContent.value, selectedScriptDirty.value))
@@ -142,12 +242,12 @@ const scriptEditorMenuItems = computed(() => {
   if (source === 'selected') {
     return [
       { id: 'copy', label: '复制脚本', disabled: !hasSelectedScriptContent.value, action: () => void copySelectedScript() },
-      { id: 'preview', label: '放大预览', disabled: !hasSelectedScriptContent.value, action: () => openScriptPreview('selected') }
+      { id: 'preview', label: '放大编辑', action: () => openScriptPreview('selected') }
     ]
   }
   return [
     { id: 'copy', label: '复制脚本', disabled: !hasDraftScript.value, action: () => void copyDraftScript() },
-    { id: 'preview', label: '放大预览', disabled: !hasDraftScript.value, action: () => openScriptPreview('draft') },
+    { id: 'preview', label: '放大编辑', action: () => openScriptPreview('draft') },
     { id: 'clear', label: '清空编辑器', danger: true, disabled: !hasDraftScript.value, action: clearDraftScript }
   ]
 })
@@ -175,8 +275,8 @@ function scriptRiskDisplayLabel(status: ReturnType<typeof scriptEditorRiskStatus
 }
 
 function editorSaveStatus(hasContent: boolean, dirty: boolean) {
-  if (!hasContent) return ''
   if (saveState.value === 'saving') return '保存中'
+  if (!hasContent && !dirty) return ''
   return dirty ? '未保存' : '已保存'
 }
 
@@ -195,7 +295,7 @@ onMounted(() => {
 watch(
   () => selectedScript.value?.id ?? '',
   () => {
-    selectedScriptDraft.value = selectedScript.value?.content ?? ''
+    if (selectedScript.value) ensureSaved(selectedScript.value)
     selectedScriptEditing.value = false
   },
   { immediate: true }
@@ -207,17 +307,43 @@ watch(
   { flush: 'post' }
 )
 
+function watchDialogFocus(isOpen: () => boolean, dialog: Ref<HTMLElement | null>, initialFocus: string) {
+  let trigger: HTMLElement | null = null
+  watch(isOpen, async (open) => {
+    if (open) trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    await nextTick()
+    if (open && isOpen()) dialog.value?.querySelector<HTMLElement>(initialFocus)?.focus()
+    else if (!isOpen() && trigger?.isConnected && trigger.getClientRects().length) trigger.focus({ preventScroll: true })
+  })
+}
+
+watchDialogFocus(() => Boolean(renamingScript.value), renameDialog, 'input')
+watchDialogFocus(() => scriptPreviewOpen.value, previewDialog, 'textarea')
+watchDialogFocus(() => scriptRiskConfirmOpen.value, riskDialog, '.modal-actions button:not(.danger)')
+
+function handleDialogKeydown(event: KeyboardEvent, close: () => void) {
+  if (event.defaultPrevented || event.isComposing) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    close()
+  } else if (event.currentTarget instanceof HTMLElement) trapTabFocus(event, event.currentTarget)
+}
+
 onBeforeUnmount(() => {
   stopAnswerTimer()
 })
 
 function loadSelectedScript(scriptId: string) {
+  const script = scripts.value.find((item) => item.id === scriptId)
+  if (!script) return
+  ensureSaved(script)
   selectedScriptId.value = scriptId
-  selectedScriptDraft.value = scripts.value.find((item) => item.id === scriptId)?.content ?? ''
   selectedScriptEditing.value = false
   scriptPanelMode.value = 'library'
   scriptLibraryView.value = 'detail'
   panelError.value = ''
+  void nextTick(() => selectedScriptTextarea.value?.focus())
 }
 
 function openLibraryMode() {
@@ -249,7 +375,6 @@ function startRecording() {
   openGenerateMode()
   emit('startRecording')
   panelError.value = ''
-  messages.value = []
 }
 
 function stopRecording() {
@@ -262,6 +387,7 @@ function clearRecording() {
 }
 
 function clearConversation() {
+  if (isGenerating.value || saveState.value === 'saving') return
   stopAnswerTimer()
   answerElapsedSeconds.value = 0
   answerDurations.value = {}
@@ -276,12 +402,11 @@ function clearConversation() {
 function openScriptEditorMenu(event: MouseEvent, source: ScriptEditorSource) {
   const target = event.currentTarget as HTMLElement
   const rect = target.getBoundingClientRect()
-  const menuWidth = 220
-  const menuHeight = source === 'draft' ? 174 : 138
   scriptEditorMenu.value = {
     source,
-    x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8))
+    sourceElement: target,
+    x: rect.left,
+    y: rect.bottom + 4
   }
 }
 
@@ -391,11 +516,14 @@ function focusSelectedReadinessIssue(line: number) {
 }
 
 async function saveMessageScript(message: ScriptChatMessage) {
+  if (saveState.value === 'saving') return
   const content = scriptContentForMessage(message).trimEnd()
   if (!content.trim()) {
     panelError.value = '当前没有可保存的脚本内容。'
     return
   }
+  saveState.value = 'saving'
+  panelError.value = ''
   const now = nowText()
   const id = message.savedScriptId || `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const existing = scripts.value.find((script) => script.id === id)
@@ -424,7 +552,7 @@ async function saveMessageScript(message: ScriptChatMessage) {
       savePreviewScript(script)
     }
     scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
-    selectedScriptId.value = script.id
+    lastSavedScriptId.value = script.id
     markMessageSaved(message.id, script.id, content)
     saveState.value = 'saved'
   } catch (error) {
@@ -432,7 +560,7 @@ async function saveMessageScript(message: ScriptChatMessage) {
       scriptStoreMode.value = 'preview'
       savePreviewScript(script)
       scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
-      selectedScriptId.value = script.id
+      lastSavedScriptId.value = script.id
       markMessageSaved(message.id, script.id, content)
       saveState.value = 'saved'
       return
@@ -448,8 +576,6 @@ async function sendSelectedScriptRequest() {
     panelError.value = '当前脚本为空，无法请求 AI 修改。'
     return
   }
-  draftScriptId.value = selectedScript.value.id
-  draftScriptContent.value = content
   await sendScriptRequest('revise', 'selected')
 }
 
@@ -475,14 +601,15 @@ function toggleSelectedScriptEditor() {
 
 function updateSelectedScriptDraft(value: string) {
   selectedScriptDraft.value = value
-  saveState.value = 'idle'
+  if (saveState.value !== 'saving') saveState.value = 'idle'
   scriptExecutionNotice.value = ''
 }
 
 async function saveSelectedScript() {
+  if (saveState.value === 'saving') return
   const script = selectedScript.value
   if (!script) return
-  const content = selectedScriptContent.value.trimEnd()
+  const content = selectedScriptContent.value
   if (!content.trim()) {
     panelError.value = '当前没有可保存的脚本内容。'
     return
@@ -501,7 +628,8 @@ async function saveSelectedScript() {
       savePreviewScript(updated)
     }
     scripts.value = scripts.value.map((item) => (item.id === updated.id ? updated : item))
-    selectedScriptDraft.value = content
+    markSaved(updated)
+    lastSavedScriptId.value = updated.id
     selectedScriptEditing.value = false
     saveState.value = 'saved'
   } catch (error) {
@@ -573,6 +701,7 @@ function toggleMessage(messageId: string) {
 }
 
 function applyDraftScript(content: string, messageId = '') {
+  createScriptConversation()
   draftScriptContent.value = content
   if (messageId) {
     const sourceMessage = messages.value.find((message) => message.id === messageId)
@@ -584,23 +713,20 @@ function applyDraftScript(content: string, messageId = '') {
       [messageId]: content
     }
   }
+  void nextTick(() => draftEditorTextarea.value?.focus())
 }
 
 function updateDraftScriptContent(value: string) {
   draftScriptContent.value = value
-  saveState.value = 'idle'
+  if (saveState.value !== 'saving') saveState.value = 'idle'
   scriptExecutionNotice.value = ''
 }
 
 function clearDraftScript() {
   if (hasDraftScript.value && !window.confirm('清空当前脚本草稿？未保存的内容将丢失。')) return
   draftScriptContent.value = ''
-  draftScriptId.value = ''
-  draftSourceConnectionId.value = ''
-  draftSourceWorkspaceSessionId.value = ''
-  draftSourceCommands.value = []
   draftEditorCursor.value = { line: 1, column: 1 }
-  saveState.value = 'idle'
+  if (saveState.value !== 'saving') saveState.value = 'idle'
   panelError.value = ''
   scriptExecutionNotice.value = ''
 }
@@ -635,13 +761,21 @@ function syncScriptEditorScroll(event: Event, lineRail: HTMLElement | null, high
 }
 
 async function saveDraftScript() {
-  const content = draftScriptContent.value.trimEnd()
+  if (saveState.value === 'saving') return
+  const document = activeDraft.value
+  const content = document.content
   if (!content.trim()) {
     panelError.value = '当前没有可保存的脚本内容。'
     return
   }
+  saveState.value = 'saving'
+  panelError.value = ''
   const now = nowText()
-  const existing = draftScriptId.value ? scripts.value.find((script) => script.id === draftScriptId.value) : undefined
+  const existing = scripts.value.find((script) => script.id === document.id)
+  const savedConnectionId = existing?.connectionId ?? (document.connectionId || scriptSourceConnectionId.value)
+  const savedSessionId = existing?.workspaceSessionId ?? (document.workspaceSessionId || scriptSourceWorkspaceSessionId.value)
+  const savedCommands = [...(document.sourceCommands.length ? document.sourceCommands : sourceCommands.value)]
+  const savedDescription = inferDescription(latestAssistantText()) || inferDescription(latestUserScriptRequest()) || '手动保存脚本'
   const fallbackName = inferScriptName(content, existing?.name || '脚本')
   const shouldGenerateName = !existing || isAutoScriptName(existing.name)
   const name = shouldGenerateName
@@ -649,17 +783,17 @@ async function saveDraftScript() {
         content,
         fallbackName,
         latestUserScriptRequest(),
-        draftSourceCommands.value.length ? draftSourceCommands.value : undefined
+        savedCommands
       )
     : existing.name
   const script: UpdateScript = {
-    id: existing?.id || `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    connectionId: existing?.connectionId ?? (draftSourceConnectionId.value || scriptSourceConnectionId.value),
-    workspaceSessionId: existing?.workspaceSessionId ?? (draftSourceWorkspaceSessionId.value || scriptSourceWorkspaceSessionId.value),
+    id: document.id,
+    connectionId: savedConnectionId,
+    workspaceSessionId: savedSessionId,
     name,
-    description: inferDescription(latestAssistantText()) || inferDescription(latestUserScriptRequest()) || '手动保存脚本',
+    description: savedDescription,
     content,
-    sourceCommands: draftSourceCommands.value.length ? draftSourceCommands.value : sourceCommands.value,
+    sourceCommands: savedCommands,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -672,24 +806,16 @@ async function saveDraftScript() {
       savePreviewScript(script)
     }
     scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
-    draftScriptId.value = script.id
-    draftSourceConnectionId.value = script.connectionId
-    draftSourceWorkspaceSessionId.value = script.workspaceSessionId
-    draftSourceCommands.value = [...script.sourceCommands]
-    selectedScriptId.value = script.id
-    selectedScriptDraft.value = content
+    markSaved(script)
+    lastSavedScriptId.value = script.id
     saveState.value = 'saved'
   } catch (error) {
     if (isTauriUnavailableError(error)) {
       scriptStoreMode.value = 'preview'
       savePreviewScript(script)
       scripts.value = [script, ...scripts.value.filter((item) => item.id !== script.id)]
-      draftScriptId.value = script.id
-      draftSourceConnectionId.value = script.connectionId
-      draftSourceWorkspaceSessionId.value = script.workspaceSessionId
-      draftSourceCommands.value = [...script.sourceCommands]
-      selectedScriptId.value = script.id
-      selectedScriptDraft.value = content
+      markSaved(script)
+      lastSavedScriptId.value = script.id
       saveState.value = 'saved'
       return
     }
@@ -702,10 +828,7 @@ function optimizeSelectedScript() {
   const script = selectedScript.value
   const content = selectedScriptContent.value.trimEnd()
   if (!script || !content.trim()) return
-  draftScriptId.value = script.id
-  draftScriptContent.value = content
   selectedScriptEditing.value = false
-  openGenerateMode()
   if (!askText.value.trim()) {
     askText.value = '优化当前脚本，保留原意，并提升安全性、可读性和可复用性。'
   }
@@ -753,6 +876,7 @@ async function copySelectedScript() {
 function openScriptPreview(source: Exclude<ScriptPreviewSource, ''>) {
   scriptPreviewSource.value = source
   panelError.value = ''
+  void nextTick(() => expandedScriptTextarea.value?.focus())
 }
 
 function closeScriptPreview() {
@@ -793,11 +917,8 @@ async function regenerateSelectedScript() {
     panelError.value = '当前脚本为空，无法重新生成。'
     return
   }
-  draftScriptId.value = script.id
-  draftScriptContent.value = content
-  selectedScriptDraft.value = content
   panelError.value = ''
-  await sendScriptRequest('regenerate')
+  await sendScriptRequest('regenerate', 'selected')
 }
 
 function latestUserScriptRequest() {
@@ -810,22 +931,22 @@ function latestAssistantText() {
 
 function createScriptConversation() {
   openGenerateMode()
-  stopAnswerTimer()
-  answerElapsedSeconds.value = 0
-  answerDurations.value = {}
-  messages.value = []
-  scriptDrafts.value = {}
   editingMessageId.value = ''
-  selectedScriptId.value = ''
-  draftScriptId.value = ''
-  draftScriptContent.value = ''
-  draftSourceConnectionId.value = ''
-  draftSourceWorkspaceSessionId.value = ''
-  draftSourceCommands.value = []
-  collapsedMessages.value = {}
-  saveState.value = 'idle'
+  draftScriptId.value = createDraft({ connectionId: props.connectionId, workspaceSessionId: props.workspaceSessionId }).id
+  askText.value = ''
+  if (saveState.value !== 'saving') saveState.value = 'idle'
   panelError.value = ''
+  void nextTick(() => draftEditorTextarea.value?.focus())
 }
+
+function resizeScriptComposer() {
+  const input = scriptComposerInput.value
+  if (!input) return
+  input.style.height = 'auto'
+  input.style.height = `${Math.min(160, Math.max(40, input.scrollHeight))}px`
+}
+
+watch(askText, () => { void nextTick(resizeScriptComposer) })
 
 async function sendActiveScriptRequest() {
   if (editingSelectedScript.value) {
@@ -900,7 +1021,7 @@ function focusScriptComposer() {
     <div class="workspace-section-head script-head">
       <div class="panel-actions">
         <div class="script-primary-actions">
-        <button class="icon-button" type="button" title="脚本库" aria-label="脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
+        <button class="icon-button" type="button" title="返回脚本库" aria-label="返回脚本库" @click="openLibraryMode"><UiIcon name="list" /></button>
         <button class="text-button" type="button" title="新增脚本" @click="createScriptConversation"><UiIcon name="plus" />新建脚本</button>
         <button v-if="!props.recording.isRecording" class="text-button record-action" type="button" @click="startRecording">
           <UiIcon :name="recordingHasData ? 'refresh' : 'play'" />{{ recordingActionLabel }}
@@ -910,17 +1031,33 @@ function focusScriptComposer() {
       </div>
     </div>
 
+    <div v-if="pendingDocuments.length" class="script-pending-notice" role="status">
+      <span>AI 结果待采纳：</span>
+      <button v-for="document in pendingDocuments" :key="document.id" class="text-button" type="button" @click="openDocument(document.id)">{{ document.title }}</button>
+    </div>
+    <details v-if="activeDocument?.pending" class="script-generation-review" open>
+      <summary>查看「{{ activeScriptTitle }}」的 AI 修改</summary>
+      <p>请求后编辑对象或内容发生变化。核对当前内容和 AI 版本后，可采纳到此草稿。</p>
+      <div class="script-version-comparison">
+        <section><strong>当前草稿</strong><pre>{{ activeDocument.content }}</pre></section>
+        <section><strong>AI 版本</strong><pre>{{ activeDocument.pending.content }}</pre></section>
+      </div>
+      <button class="text-button" type="button" @click="acceptGeneratedVersion">采纳 AI 版本到「{{ activeScriptTitle }}」</button>
+      <button class="text-button" type="button" @click="dismissGeneratedVersion">保留当前草稿</button>
+    </details>
+
     <ContextMenu
       v-if="scriptEditorMenu"
       :x="scriptEditorMenu.x"
       :y="scriptEditorMenu.y"
+      :source-element="scriptEditorMenu.sourceElement"
       :title="scriptEditorMenu.source === 'draft' ? '草稿操作' : '脚本操作'"
       :items="scriptEditorMenuItems"
       @close="closeScriptEditorMenu"
     />
 
     <div v-if="renamingScript" class="modal-backdrop" role="presentation" @click.self="closeRenameScriptDialog">
-      <form class="modal rename-modal" role="dialog" aria-modal="true" aria-label="编辑脚本名称" @submit.prevent="renameScript">
+      <form ref="renameDialog" class="modal rename-modal" role="dialog" aria-modal="true" aria-label="编辑脚本名称" @submit.prevent="renameScript" @keydown="handleDialogKeydown($event, closeRenameScriptDialog)">
         <div class="modal-head">
           <div>
             <strong>编辑脚本名称</strong>
@@ -940,27 +1077,21 @@ function focusScriptComposer() {
     </div>
 
     <div v-if="scriptPreviewOpen" class="modal-backdrop script-preview-backdrop" role="presentation" @click.self="closeScriptPreview">
-      <section class="modal script-preview-modal" role="dialog" aria-modal="true" aria-label="脚本放大预览">
+      <section ref="previewDialog" class="modal script-preview-modal" role="dialog" aria-modal="true" aria-label="放大编辑脚本" @keydown="handleDialogKeydown($event, closeScriptPreview)">
         <div class="modal-head">
           <div class="script-preview-title">
             <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
-            <strong>{{ expandedScriptTitle }}</strong>
-            <button
-              v-if="expandedScriptReadiness.issues.length"
-              class="script-readiness-status readiness-pending"
-              type="button"
-              :title="expandedScriptReadiness.message"
-              @click="focusNextExpandedReadinessIssue"
-            >{{ expandedScriptReadiness.label }} · 第 {{ readinessLinesText(expandedScriptReadiness.issues) }} 行</button>
-            <span v-else class="script-preview-mode">编辑模式</span>
+            <strong :title="expandedScriptTitle">{{ expandedScriptTitle }}</strong>
+            <span class="script-preview-mode">编辑模式</span>
           </div>
           <div class="script-editor-tools">
-            <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!expandedScriptContent.trim()" @click="saveExpandedScript"><UiIcon name="save" /></button>
+            <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!expandedScriptContent.trim() || saveState === 'saving'" @click="saveExpandedScript"><UiIcon name="save" /></button>
             <button class="icon-button" type="button" title="复制脚本" aria-label="复制脚本" @click="copyExpandedScript"><UiIcon name="copy" /></button>
             <button class="icon-button" type="button" title="执行脚本" aria-label="执行脚本" :disabled="!canExecuteExpandedScript" @click="executeExpandedScript"><UiIcon name="play" /></button>
-            <button class="icon-button" type="button" title="关闭预览" aria-label="关闭预览" @click="closeScriptPreview"><UiIcon name="close" /></button>
+            <button class="icon-button" type="button" title="关闭放大编辑" aria-label="关闭放大编辑" @click="closeScriptPreview"><UiIcon name="close" /></button>
           </div>
         </div>
+        <ScriptEditorContext :content="expandedScriptContent" :name="expandedScriptTitle" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="expandedScriptRiskStatus" @focus-readiness="focusNextExpandedReadinessIssue" />
         <div class="script-expanded-editor">
           <div class="script-editor-shell">
             <pre ref="expandedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ expandedScriptLineNumbers }}</pre>
@@ -989,7 +1120,7 @@ function focusScriptComposer() {
     </div>
 
     <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
-      <section class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingExecutionTitle">
+      <section ref="riskDialog" class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingExecutionTitle" @keydown="handleDialogKeydown($event, closeScriptRiskConfirm)">
         <div class="modal-head">
           <div>
             <strong>{{ pendingExecutionTitle }}</strong>
@@ -1066,13 +1197,18 @@ function focusScriptComposer() {
     </div>
     <p v-if="panelError" class="script-feedback error">{{ panelError }}</p>
     <p v-else-if="scriptExecutionNotice" class="script-feedback">{{ scriptExecutionNotice }}</p>
-    <p v-else-if="saveState === 'saved'" class="script-feedback">脚本已保存到 {{ scriptStoreMode === 'sqlite' ? 'SQLite' : 'localStorage' }}.</p>
+    <p v-else-if="saveState === 'saved' && lastSavedScript" class="script-feedback">已保存「{{ lastSavedScript.name }}」<button class="text-button" type="button" @click="loadSelectedScript(lastSavedScript.id)">查看脚本</button></p>
 
     <div v-if="scriptPanelMode === 'library'" class="script-library" :class="{ 'detail-view': scriptLibraryView === 'detail' }">
       <template v-if="scriptLibraryView === 'list'">
         <div class="session-search script-library-search">
           <span><UiIcon name="search" size="14" /></span>
           <input ref="librarySearchInput" v-model="scriptSearch" placeholder="搜索脚本..." aria-label="搜索脚本" />
+        </div>
+
+        <div v-if="retainedDrafts.length" class="script-retained-drafts">
+          <strong>未保存草稿</strong>
+          <button v-for="document in retainedDrafts" :key="document.id" class="text-button" type="button" :title="document.title" @click="openDocument(document.id)">{{ document.title }}<span v-if="document.revision"> · 未保存</span></button>
         </div>
 
         <div v-if="filteredScripts.length === 0" class="script-library-empty">
@@ -1087,15 +1223,12 @@ function focusScriptComposer() {
               :key="script.id"
               class="script-library-row"
               :class="{ active: script.id === selectedScriptId }"
-              role="button"
-              tabindex="0"
-              @click="loadSelectedScript(script.id)"
-              @keydown.enter.prevent="loadSelectedScript(script.id)"
             >
-              <span>
-                <strong>{{ script.name }}</strong>
-                <small>{{ script.description || script.updatedAt }} · 来源 {{ scriptSourceLabel(script) }}</small>
-              </span>
+              <button class="script-library-open" type="button" :aria-label="`编辑 ${script.name}`" @click="loadSelectedScript(script.id)">
+                <strong :title="script.name">{{ script.name }}<span v-if="documents[script.id] && documents[script.id].content !== script.content"> · 未保存</span></strong>
+                <small v-if="script.description" :title="script.description">{{ script.description }}</small>
+                <small class="script-library-meta" :title="`来源 ${scriptSourceLabel(script)} · 更新 ${script.updatedAt}`">{{ scriptSourceLabel(script) }} · {{ script.updatedAt.slice(0, 10) }}</small>
+              </button>
               <button class="icon-button" type="button" title="编辑脚本名" aria-label="编辑脚本名" @click.stop="openRenameScriptDialog(script)"><UiIcon name="edit" /></button>
               <button class="icon-button danger" type="button" title="删除脚本" aria-label="删除脚本" @click.stop="removeScript(script)"><UiIcon name="trash" /></button>
             </article>
@@ -1104,6 +1237,7 @@ function focusScriptComposer() {
       </template>
 
       <section v-else-if="scriptLibraryView === 'detail' && selectedScript" class="script-preview">
+        <button class="text-button script-back-to-library" type="button" @click="returnToScriptList"><UiIcon name="arrow-left" />返回脚本库</button>
         <div class="script-library-editor">
           <div class="script-editor-toolbar">
             <div
@@ -1114,25 +1248,12 @@ function focusScriptComposer() {
               }"
             >
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
-              <strong>{{ selectedScript.name }}</strong>
+              <strong :title="selectedScript.name">{{ selectedScript.name }}</strong>
               <span v-if="selectedScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
-              <button
-                v-if="hasSelectedScriptContent"
-                class="script-readiness-status"
-                :class="`readiness-${selectedScriptReadiness.level}`"
-                :title="selectedScriptReadiness.message"
-                type="button"
-                @click="focusNextSelectedReadinessIssue"
-              ><template v-if="selectedScriptReadiness.issues.length">待填 {{ selectedScriptReadiness.issues.length }} · {{ readinessLinesText(selectedScriptReadiness.issues) }}行</template><template v-else>{{ selectedScriptReadiness.label }}</template></button>
-              <span
-                v-if="hasSelectedScriptContent"
-                class="script-editor-risk"
-                :class="`risk-${selectedScriptRiskStatus.level}`"
-                :title="selectedScriptRiskStatus.message"
-              >{{ scriptRiskDisplayLabel(selectedScriptRiskStatus) }}</span>
+
             </div>
             <div class="script-editor-tools">
-              <button class="icon-button" type="button" title="保存脚本" aria-label="保存脚本" :disabled="!hasSelectedScriptContent" @click="saveSelectedScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" title="保存修改" aria-label="保存修改" :disabled="!hasSelectedScriptContent || saveState === 'saving'" @click="saveSelectedScript"><UiIcon name="save" /></button>
               <button
                 class="text-button script-run-button"
                 :class="{
@@ -1140,13 +1261,15 @@ function focusScriptComposer() {
                   'high-risk-run': selectedScriptRiskStatus.level === 'high'
                 }"
                 type="button"
-                :title="selectedScriptRiskStatus.level === 'high' ? '检测到高风险命令，运行前必须确认' : '运行脚本'"
+                :title="runReadinessHint(selectedScriptContent, selectedScript.name)"
                 :disabled="!canExecuteSelectedScript"
                 @click="executeSelectedScript"
               ><UiIcon name="play" />运行</button>
+              <button class="text-button script-expand-button" type="button" title="放大编辑" aria-label="放大编辑" @click="openScriptPreview('selected')"><UiIcon name="maximize" />放大编辑</button>
               <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click="openScriptEditorMenu($event, 'selected')"><UiIcon name="more" /></button>
             </div>
           </div>
+          <ScriptEditorContext :content="selectedScriptContent" :name="selectedScript.name" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="selectedScriptRiskStatus" @focus-readiness="focusNextSelectedReadinessIssue" />
           <div class="script-editor-shell">
             <pre ref="selectedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ selectedScriptLineNumbers }}</pre>
             <pre ref="selectedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="selectedScriptHighlightedHtml" /></pre>
@@ -1196,25 +1319,12 @@ function focusScriptComposer() {
               }"
             >
               <span class="script-file-icon"><UiIcon name="script" size="13" /></span>
-              <strong>{{ draftScriptTitle }}</strong>
+              <strong :title="draftScriptTitle">{{ draftScriptTitle }}</strong>
               <span v-if="draftScriptDirty" class="script-dirty-dot" title="有未保存的修改" aria-label="有未保存的修改" />
-              <button
-                v-if="hasDraftScript"
-                class="script-readiness-status"
-                :class="`readiness-${draftScriptReadiness.level}`"
-                :title="draftScriptReadiness.message"
-                type="button"
-                @click="focusNextDraftReadinessIssue"
-              ><template v-if="draftScriptReadiness.issues.length">待填 {{ draftScriptReadiness.issues.length }} · {{ readinessLinesText(draftScriptReadiness.issues) }}行</template><template v-else>{{ draftScriptReadiness.label }}</template></button>
-              <span
-                v-if="hasDraftScript"
-                class="script-editor-risk"
-                :class="`risk-${draftScriptRiskStatus.level}`"
-                :title="draftScriptRiskStatus.message"
-              >{{ scriptRiskDisplayLabel(draftScriptRiskStatus) }}</span>
+
             </div>
             <div class="script-editor-tools">
-              <button class="icon-button" type="button" title="保存脚本草稿" aria-label="保存脚本草稿" :disabled="!hasDraftScript" @click="saveDraftScript"><UiIcon name="save" /></button>
+              <button class="icon-button" type="button" :title="draftSavedScript ? '保存修改' : '首次保存脚本'" :aria-label="draftSavedScript ? '保存修改' : '首次保存脚本'" :disabled="!hasDraftScript || saveState === 'saving'" @click="saveDraftScript"><UiIcon name="save" /></button>
               <button
                 class="text-button script-run-button"
                 :class="{
@@ -1222,13 +1332,15 @@ function focusScriptComposer() {
                   'high-risk-run': draftScriptRiskStatus.level === 'high'
                 }"
                 type="button"
-                :title="draftScriptRiskStatus.level === 'high' ? '检测到高风险命令，运行前必须确认' : '运行脚本'"
+                :title="runReadinessHint(draftScriptContent, draftScriptTitle)"
                 :disabled="!canExecuteDraft"
                 @click="executeDraftScript"
               ><UiIcon name="play" />运行</button>
+              <button class="text-button script-expand-button" type="button" title="放大编辑" aria-label="放大编辑" @click="openScriptPreview('draft')"><UiIcon name="maximize" />放大编辑</button>
               <button class="icon-button" type="button" title="更多操作" aria-label="更多操作" @click="openScriptEditorMenu($event, 'draft')"><UiIcon name="more" /></button>
             </div>
           </div>
+          <ScriptEditorContext :content="draftScriptContent" :name="draftScriptTitle" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="draftScriptRiskStatus" @focus-readiness="focusNextDraftReadinessIssue" />
           <div class="script-editor-shell">
             <pre ref="draftEditorLineRail" class="script-line-rail" aria-hidden="true">{{ draftLineNumbers }}</pre>
             <pre ref="draftScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="draftScriptHighlightedHtml" /></pre>
@@ -1264,9 +1376,9 @@ function focusScriptComposer() {
           <span class="script-replies-title">
             <UiIcon name="ai" size="13" />
             <strong>AI 对话</strong>
-            <small>{{ isGenerating ? '正在生成…' : scriptReplyCountText }}</small>
+            <small>{{ isGenerating ? `正在修改「${currentTargetTitle}」` : scriptReplyCountText }}</small>
           </span>
-          <button class="icon-button danger" type="button" title="清空对话" aria-label="清空对话" @click="clearConversation"><UiIcon name="trash" size="13" /></button>
+          <button class="icon-button danger" type="button" title="清空对话" aria-label="清空对话" :disabled="isGenerating" @click="clearConversation"><UiIcon name="trash" size="13" /></button>
         </div>
         <div ref="messageList" class="script-replies-list" role="log" aria-live="polite" aria-relevant="additions text">
           <article
@@ -1295,7 +1407,7 @@ function focusScriptComposer() {
               </div>
             </div>
             <div class="message-body">
-              <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在处理脚本，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</div>
+              <div v-if="message.streaming && !message.text" class="thinking-row"><span /><span /><span />正在修改「{{ message.targetTitle }}」，已等待 {{ formatAnswerDuration(messageAnswerDuration(message)) }}</div>
               <template v-for="(part, index) in parseMessageParts(message.text)" :key="`${message.id}-${index}`">
                 <div
                   v-if="part.type === 'text' && part.content.trim()"
@@ -1314,7 +1426,7 @@ function focusScriptComposer() {
                       {{ scriptRiskStatusForScript(shellCommandForPart(part)).label }}
                     </span>
                     <div v-if="shellCommandForPart(part)" class="script-reply-code-actions">
-                      <button class="text-button" type="button" @click="applyDraftScript(shellCommandForPart(part), message.id)">设为草稿</button>
+                      <button class="text-button" type="button" @click="applyDraftScript(shellCommandForPart(part), message.id)">创建独立草稿并打开</button>
                       <button class="text-button primary-action" type="button" @click="executeScriptContent(shellCommandForPart(part), message.sourceConnectionId ? { connectionId: message.sourceConnectionId } : undefined)">执行</button>
                     </div>
                   </div>
@@ -1323,14 +1435,15 @@ function focusScriptComposer() {
               </template>
               <div v-if="message.scriptContent" class="code-block script-code-card">
                 <div class="code-head">
-                  <span>{{ message.savedScriptId ? '已保存' : '草稿' }}</span>
+                  <span>{{ messageScriptStatus(message) }}<span v-if="message.targetTitle"> · {{ message.targetTitle }}</span></span>
                   <span class="command-risk-status" :class="`risk-${scriptRiskStatusForScript(scriptContentForMessage(message)).level}`">{{ scriptRiskStatusForScript(scriptContentForMessage(message)).label }}</span>
                   <div class="script-reply-code-actions">
                     <button class="text-button" type="button" @click="toggleScriptEditor(message)">
                       {{ editingMessageId === message.id ? '完成' : '编辑' }}
                     </button>
-                    <button class="text-button" type="button" @click="applyDraftScript(scriptContentForMessage(message), message.id)">设为草稿</button>
-                    <button class="text-button" type="button" @click="saveMessageScript(message)">保存</button>
+                    <button v-if="message.targetDocumentId && documents[message.targetDocumentId]" class="text-button" type="button" @click="reviewMessageVersion(message)">核对并应用到「{{ message.targetTitle }}」</button>
+                    <button class="text-button" type="button" @click="applyDraftScript(scriptContentForMessage(message), message.id)">创建独立草稿并打开</button>
+                    <button class="text-button" type="button" :disabled="saveState === 'saving'" @click="saveMessageScript(message)">{{ message.savedScriptId ? '保存到「' + (scripts.find(script => script.id === message.savedScriptId)?.name || '脚本') + '」' : '保存为新脚本' }}</button>
                     <button class="text-button primary-action" type="button" @click="executeMessageScript(message)">执行</button>
                   </div>
                 </div>
@@ -1347,13 +1460,14 @@ function focusScriptComposer() {
           </article>
         </div>
     </section>
+    <div v-if="showScriptComposer" class="script-compose-context" :title="hasUsableConfig ? config.model : '请在设置中心配置 AI'">{{ isGenerating ? `正在修改「${currentTargetTitle}」` : `AI 修改：${activeScriptTitle}` }}<span>{{ hasUsableConfig ? config.model : '请先配置 AI' }}</span></div>
     <div v-if="showScriptComposer" class="assistant-compose unified-ai-compose script-ai-compose" @pointerdown="focusScriptComposer">
         <textarea
           ref="scriptComposerInput"
           id="script-ai-prompt"
           v-model="askText"
           :disabled="!hasUsableConfig"
-          rows="2"
+          rows="1"
           :placeholder="scriptComposerPlaceholder"
           :title="scriptComposerPlaceholder"
           aria-label="询问 AI 修改脚本"
@@ -1368,7 +1482,7 @@ function focusScriptComposer() {
           @click="isGenerating ? stopScriptGeneration() : sendActiveScriptRequest()"
         >
           <UiIcon v-if="isGenerating" name="stop" />
-          <UiIcon v-else name="arrow-right" />
+          <UiIcon v-else name="arrow-up" />
         </button>
       </div>
   </section>

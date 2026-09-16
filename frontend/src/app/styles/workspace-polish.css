@@ -2,7 +2,7 @@
 .app-shell {
   --rail-width: 48px;
   --sidebar-width: 248px;
-  --workspace-width: clamp(360px, var(--workspace-user-width, 420px), 560px);
+  --workspace-width: 320px;
   --radius-panel: 4px;
   --radius-card: 8px;
   --radius-control: 6px;
@@ -30,13 +30,11 @@
 
 /* Shared workbench geometry: panel shells stay square, content cards and
    controls use two predictable radii so the interface reads as one system. */
-.workspace-tabs,
-.workspace-close {
+.workspace-tabs {
   border-radius: var(--radius-card);
 }
 
-.workspace-tabs button,
-.workspace-close {
+.workspace-tabs button {
   border-radius: var(--radius-control);
 }
 
@@ -87,15 +85,13 @@
   border-radius: 6px;
 }
 
-.terminal-tools .icon-button,
-.workspace-close {
+.terminal-tools .icon-button {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
 
-.terminal-tools .icon-button:hover:not(:disabled),
-.workspace-close:hover:not(:disabled) {
+.terminal-tools .icon-button:hover:not(:disabled) {
   border-color: transparent;
   background: var(--workbench-hover);
   color: var(--workbench-text-strong);
@@ -473,15 +469,16 @@
   background: var(--workbench-bg);
 }
 
-.terminal-wrap {
-  padding: 8px 8px 6px;
+.terminal-wrap,
+.theme-light .terminal-wrap {
+  padding: 0;
 }
 
 .terminal-frame,
 .theme-light .terminal-frame {
   grid-template-rows: minmax(0, 1fr);
-  border-color: var(--workbench-line);
-  border-radius: 7px;
+  border: 0;
+  border-radius: 0;
   background: var(--workbench-terminal);
 }
 
@@ -533,10 +530,11 @@
 .theme-light .quick-command-bar {
   min-height: 33px;
   gap: 4px;
-  border-color: var(--workbench-line);
-  border-radius: 7px;
-  background: var(--workbench-panel-strong);
-  margin: 0 8px 8px;
+  border: 0;
+  border-top: 1px solid var(--workbench-line-soft);
+  border-radius: 0;
+  background: var(--workbench-terminal);
+  margin: 0;
   padding: 3px 5px 3px 10px;
 }
 
@@ -579,10 +577,10 @@
 .workspace-resizer {
   position: absolute;
   top: 46px;
-  right: calc(var(--workspace-width) - 3px);
+  right: calc(var(--workspace-width) - 5px);
   bottom: 0;
   z-index: 18;
-  width: 6px;
+  width: 10px;
   cursor: col-resize;
   touch-action: none;
 }
@@ -590,14 +588,29 @@
 .workspace-resizer::after {
   content: "";
   position: absolute;
-  inset: 0 2px;
-  background: transparent;
+  top: calc(50% - 22px);
+  bottom: calc(50% - 22px);
+  left: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--workbench-muted);
   transition: background .15s ease;
 }
 
 .workspace-resizer:hover::after,
+.workspace-resizer:focus-visible::after,
 .workspace-is-resizing .workspace-resizer::after {
   background: var(--workbench-accent);
+}
+
+.workspace-resizer:focus-visible {
+  outline: 2px solid var(--workbench-accent);
+  outline-offset: -2px;
+}
+
+.app-shell .session-tools-toggle.active {
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
 }
 
 body.workspace-resizing,
@@ -616,7 +629,7 @@ body.workspace-resizing * {
 
 .workspace-bar,
 .theme-light .workspace-bar {
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   min-height: 43px;
   border-bottom: 1px solid var(--workbench-line);
@@ -682,20 +695,6 @@ body.workspace-resizing * {
 .app-shell.theme-light .terminal-frame {
   background: var(--workbench-terminal);
   border-color: var(--workbench-line);
-}
-
-.workspace-close,
-.theme-light .workspace-close {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  color: var(--workbench-muted);
-}
-
-.workspace-close:hover:not(:disabled),
-.theme-light .workspace-close:hover:not(:disabled) {
-  background: var(--workbench-line-soft);
-  color: var(--workbench-text);
 }
 
 .workspace-open-handle,

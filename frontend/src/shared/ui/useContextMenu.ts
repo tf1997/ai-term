@@ -1,19 +1,21 @@
-import { onBeforeUnmount, onMounted, readonly, ref } from 'vue'
+import { onBeforeUnmount, shallowReadonly, shallowRef } from 'vue'
 import type { ContextMenuItem, ContextMenuState } from './overlays'
+import { contextMenuSource } from './contextMenuInteraction'
 
 export function useContextMenu() {
-  const contextMenu = ref<ContextMenuState | null>(null)
+  const contextMenu = shallowRef<ContextMenuState | null>(null)
   let disposed = false
 
-  function openContextMenu(event: MouseEvent, title: string, items: readonly ContextMenuItem[]) {
+  function openContextMenu(event: MouseEvent, title: string, items: readonly ContextMenuItem[], description?: string) {
     if (disposed) return
-    const menuWidth = 220
-    const menuHeight = Math.min(320, 34 + items.length * 38)
+    const sourceElement = contextMenuSource(event)
     contextMenu.value = {
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      x: event.clientX,
+      y: event.clientY,
       title,
-      items
+      items,
+      ...(description ? { description } : {}),
+      ...(sourceElement ? { sourceElement, parentId: sourceElement.closest<HTMLElement>('[data-overlay-id]')?.dataset.overlayId } : {}),
     }
   }
 
@@ -21,24 +23,13 @@ export function useContextMenu() {
     contextMenu.value = null
   }
 
-  function handleContextMenuKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') closeContextMenu()
-  }
-
-  onMounted(() => {
-    window.addEventListener('click', closeContextMenu)
-    window.addEventListener('keydown', handleContextMenuKeydown)
-  })
-
   onBeforeUnmount(() => {
     disposed = true
-    window.removeEventListener('click', closeContextMenu)
-    window.removeEventListener('keydown', handleContextMenuKeydown)
     closeContextMenu()
   })
 
   return {
-    contextMenu: readonly(contextMenu),
+    contextMenu: shallowReadonly(contextMenu),
     openContextMenu,
     closeContextMenu
   }

@@ -183,14 +183,15 @@ assert(
     toastState.includes('toastTimers') &&
     toastState.includes('onBeforeUnmount') &&
     toastState.includes('window.clearTimeout') &&
-    contextMenuState.includes("removeEventListener('click', closeContextMenu)") &&
-    contextMenuState.includes("removeEventListener('keydown', handleContextMenuKeydown)") &&
+    contextMenuState.includes('onBeforeUnmount') &&
+    contextMenu.includes("removeEventListener('pointerdown', dismissOutside") &&
+    contextMenu.includes("removeEventListener('keydown', handleKeydown") &&
     contextMenu.includes("from './overlays'") &&
     contextMenu.includes('items: readonly ContextMenuItem[]') &&
     contextMenu.includes('if (item.disabled) return') &&
     contextMenu.includes('item.action()') &&
     contextMenu.indexOf('if (item.disabled) return') < contextMenu.indexOf('item.action()') &&
-    contextMenu.indexOf('item.action()') < contextMenu.indexOf("emit('close')") &&
+    contextMenu.includes('close()\n  item.action()') &&
     chromeSelection.includes('clearChromeSelection(event.target)') &&
     appShell.includes('closeAboutPage()'),
   'Notifications and context-menu state must own their lifecycle cleanup while menu actions, disabled items, selection handling and About shortcuts retain their existing behavior.'
@@ -692,14 +693,14 @@ assert(
     appShell.includes('useWorkspaceResize({ leftCollapsed, rightCollapsed, sftpWorkbenchActive })') &&
     !appShell.includes('function beginWorkspaceResize') &&
     !appShell.includes('function loadWorkspaceWidth') &&
-    workspaceResize.includes('getWorkspaceWidthForPointer(window.innerWidth, event.clientX, options.leftCollapsed.value)') &&
-    workspaceResize.includes('getWorkspaceWidthForKey(workspaceWidth.value, event.key)') &&
-    workspaceResize.includes('onBeforeUnmount(endWorkspaceResize)') &&
+    workspaceResize.includes('getWorkspaceWidthForPointer(viewportWidth.value, event.clientX, options.leftCollapsed.value, preferredWidth.value)') &&
+    workspaceResize.includes('getWorkspaceWidthForKey(workspaceWidth.value, event.key, workspaceMinWidth.value, workspaceMaxWidth.value)') &&
+    workspaceResize.includes('onBeforeUnmount(() =>') &&
     workspaceResize.includes("removeEventListener('pointermove', handleWorkspaceResize)") &&
     workspaceResize.includes("removeEventListener('pointerup', endWorkspaceResize)") &&
     workspaceResize.includes("removeEventListener('pointercancel', endWorkspaceResize)") &&
-    appShell.includes(':aria-valuemin="MIN_WORKSPACE_WIDTH"') &&
-    appShell.includes(':aria-valuemax="MAX_WORKSPACE_WIDTH"') &&
+    appShell.includes(':aria-valuemin="workspaceMinWidth"') &&
+    appShell.includes(':aria-valuemax="workspaceMaxWidth"') &&
     appShell.includes('workspaceLayoutStyle') &&
     appShell.includes('beginWorkspaceResize') &&
     appShell.includes('handleWorkspaceResizeKeydown') &&
@@ -2122,22 +2123,21 @@ assert(
     appShell.includes('toggleSettingsPanel') &&
     appShell.includes('isLeftPanelActive') &&
     appShell.includes('leftPanelButtonTitle') &&
-    !appShell.includes('sidebar-collapse-button') &&
-    !styles.includes('.sidebar-collapse-button') &&
     !appShell.includes('toggle-left') &&
     !appShell.includes('toggle-right') &&
     !appShell.includes('top-actions') &&
     appShell.includes('session-tools-toggle') &&
     appShell.includes(':aria-expanded="!rightCollapsed"') &&
     appShell.includes('@click="rightCollapsed = !rightCollapsed"') &&
-    appShell.includes('@close="rightCollapsed = true"') &&
-    workspacePanel.includes("emit('close')") &&
-    workspacePanel.includes('workspace-close'),
+    appShell.includes(':active-tab="workspacePanelTab"') &&
+    !workspacePanel.includes('workspace-close'),
   'Terminal workspace must allow hiding both the left connection sidebar and the right workspace.'
 )
 
 assert(
-  workspacePanel.includes("activeWorkspaceTab = ref<'history' | 'ai' | 'scripts'>") &&
+  workspacePanel.includes('activeWorkspaceTab = computed(() => props.activeTab)') &&
+    workspacePanel.includes('visitedTabs') &&
+    workspacePanel.includes('v-show="activeWorkspaceTab') &&
     workspacePanel.includes("activeWorkspaceTab === 'history'") &&
     workspacePanel.includes("activeWorkspaceTab === 'ai'") &&
     workspacePanel.includes("activeWorkspaceTab === 'scripts'") &&
@@ -2396,10 +2396,9 @@ assert(
 assert(
   workspacePanel.includes('ScriptPanel') &&
     workspacePanel.includes('<ScriptPanel') &&
-    workspacePanel.includes('scriptPanelVisited') &&
-    workspacePanel.includes("if (tab === 'scripts') scriptPanelVisited.value = true") &&
-    workspacePanel.includes('v-if="scriptPanelVisited"') &&
-    workspacePanel.includes(`v-if="activeWorkspaceTab === 'ai'"`) &&
+    workspacePanel.includes('visitedTabs.value.add(tab)') &&
+    workspacePanel.includes(`v-if="visitedTabs.has('scripts')"`) &&
+    workspacePanel.includes(`v-show="activeWorkspaceTab === 'ai'"`) &&
     !workspacePanel.includes('"-if=') &&
     workspacePanel.includes(`v-show="activeWorkspaceTab === 'scripts'"`) &&
     !workspacePanel.includes(`v-else-if="activeWorkspaceTab === 'scripts'"`) &&
@@ -2467,7 +2466,7 @@ assert(
     scriptPanel.includes('saveUpdateScript') &&
     scriptLibrary.includes('deleteUpdateScript') &&
     scriptPanel.includes('loadPreviewScripts') &&
-    scriptPanel.includes('localStorage') &&
+    scriptPreviewStorage.includes('localStorage') &&
     scriptExecution.includes('export function buildBashScriptTerminalInput') &&
     scriptExecution.includes('base64 --decode') &&
     scriptExecutionState.includes('buildBashScriptTerminalInput(prepared)') &&
@@ -2719,9 +2718,8 @@ assert(
     terminalPane.includes('const event: TerminalInputEvent | undefined = synchronize') &&
     workspacePanel.includes('fillCommand: [command: string]') &&
     workspacePanel.includes('pinQuickCommand: [command: string]') &&
-    workspacePanel.includes(`v-if="activeWorkspaceTab === 'history'"`) &&
-    !workspacePanel.includes('historyPanelVisited') &&
-    !workspacePanel.includes(`v-show="activeWorkspaceTab === 'history'"`) &&
+    workspacePanel.includes(`v-if="visitedTabs.has('history')"`) &&
+    workspacePanel.includes(`v-show="activeWorkspaceTab === 'history'"`) &&
     workspacePanel.includes("@fill=\"emit('fillCommand', $event)\"") &&
     workspacePanel.includes("@pin=\"emit('pinQuickCommand', $event)\"") &&
     appShell.includes('fillHistoryCommandOnActiveTerminal') &&

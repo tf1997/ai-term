@@ -3,16 +3,31 @@
   background: #0b1018;
 }
 .history-head {
-  min-height: 54px;
+  min-height: 28px;
   border-bottom-color: #1d2838;
   background: rgba(9, 14, 22, .92);
+}
+.history-head > div:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.history-head strong {
+  flex-shrink: 0;
+}
+.history-head .history-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .history-toolbar {
   border-bottom-color: #1d2838;
   background: #0b1018;
   display: grid;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 4px 12px;
 }
 .history-view-tabs {
   min-width: 0;
@@ -26,7 +41,7 @@
   font-size: var(--font-xs);
 }
 .history-view-tab {
-  height: 27px;
+  height: 26px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
@@ -59,7 +74,7 @@
   pointer-events: none;
 }
 .history-toolbar input {
-  height: 32px;
+  height: 30px;
   border-color: #263246;
   border-radius: 8px;
   background: #080e16;
@@ -138,8 +153,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 3px;
   min-width: max-content;
+}
+@media (hover: hover) and (pointer: fine) {
+  .history-actions .icon-button:not(.history-action-fill) {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .history-row:hover .history-actions .icon-button,
+  .history-row:focus-within .history-actions .icon-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .history-actions .icon-button {
   width: 30px;

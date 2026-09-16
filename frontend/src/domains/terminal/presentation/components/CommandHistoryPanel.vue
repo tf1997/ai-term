@@ -18,6 +18,7 @@ interface HistoryListItem {
 
 const props = defineProps<{
   commands: CommandHistoryEntry[]
+  connectionId: string
   connectionLabel: string
 }>()
 
@@ -26,10 +27,24 @@ const emit = defineEmits<{
   pin: [command: string]
 }>()
 
-const activeView = ref<HistoryView>('recent')
+const connectionViews = ref<Record<string, { view: HistoryView; search: string; scrollTop: number }>>({})
+const currentView = computed(() => {
+  if (!connectionViews.value[props.connectionId]) {
+    connectionViews.value[props.connectionId] = { view: 'recent', search: '', scrollTop: 0 }
+  }
+  return connectionViews.value[props.connectionId]
+})
+const activeView = computed({
+  get: () => currentView.value.view,
+  set: (view: HistoryView) => { currentView.value.view = view }
+})
 const recentTab = ref<HTMLButtonElement | null>(null)
 const frequentTab = ref<HTMLButtonElement | null>(null)
-const historySearch = ref('')
+const historySearch = computed({
+  get: () => currentView.value.search,
+  set: (search: string) => { currentView.value.search = search }
+})
+const historyList = ref<HTMLElement | null>(null)
 const previewEntry = ref<CommandHistoryEntry | null>(null)
 const previewModal = ref<HTMLElement | null>(null)
 const previewCloseButton = ref<HTMLButtonElement | null>(null)
@@ -81,6 +96,19 @@ const visibleCommands = computed(() => activeView.value === 'recent' ? recentCom
 const matchingCommandCount = computed(() => {
   if (activeView.value === 'frequent') return matchingFrequentCommands.value.length
   return props.commands.filter(entryMatchesSearch).length
+})
+const totalCommandCount = computed(() => activeView.value === 'recent'
+  ? props.commands.length
+  : new Set(props.commands.map(entry => entry.command.trim()).filter(Boolean)).size)
+const countLabel = computed(() => {
+  if (normalizedSearch.value) return `${matchingCommandCount.value} / ${totalCommandCount.value} 条匹配`
+  if (visibleCommands.value.length < matchingCommandCount.value) return `显示 ${visibleCommands.value.length} / ${matchingCommandCount.value} 条`
+  return `${matchingCommandCount.value} 条`
+})
+
+watch(() => props.connectionId, () => {
+  closePreview(false)
+  void nextTick(() => { if (historyList.value) historyList.value.scrollTop = currentView.value.scrollTop })
 })
 
 function selectView(view: HistoryView, focus = false) {
@@ -232,7 +260,7 @@ onBeforeUnmount(() => {
     <div class="workspace-section-head history-head">
       <div>
         <strong>历史命令</strong>
-        <span class="history-meta">{{ connectionLabel }} · 已加载 {{ commands.length }} 条</span>
+        <span class="history-meta" :title="connectionLabel">{{ connectionLabel }}</span>
       </div>
     </div>
 
@@ -264,7 +292,7 @@ onBeforeUnmount(() => {
         >
           常用
         </button>
-        <span>{{ visibleCommands.length }} / {{ matchingCommandCount }}</span>
+        <span>{{ countLabel }}</span>
       </div>
       <div class="history-search-wrap">
         <UiIcon name="search" size="14" />
@@ -277,9 +305,11 @@ onBeforeUnmount(() => {
 
     <div
       id="history-command-list"
+      ref="historyList"
       class="history-list"
       role="tabpanel"
       :aria-labelledby="activeView === 'recent' ? 'history-tab-recent' : 'history-tab-frequent'"
+      @scroll="currentView.scrollTop = historyList?.scrollTop ?? 0"
     >
       <div v-if="commands.length === 0" class="empty-state">执行命令后，记录会显示在这里。</div>
       <div v-else-if="visibleCommands.length === 0" class="empty-state history-empty-search">
@@ -313,8 +343,6 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="!previewEntry" class="history-status" role="status" aria-live="polite" aria-atomic="true">{{ copyStatus }}</p>
-  </section>
-
   <div v-if="previewEntry" class="modal-backdrop history-preview-backdrop" role="presentation" @click.self="closePreview()">
     <article
       ref="previewModal"
@@ -342,4 +370,5 @@ onBeforeUnmount(() => {
       </div>
     </article>
   </div>
+  </section>
 </template>

@@ -1,4 +1,225 @@
 /* Script workbench final density and readiness pass. */
+.script-panel .script-editor-toolbar {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 5px 7px;
+}
+.script-panel .script-editor-tools {
+  justify-content: flex-end;
+}
+.script-panel .script-expand-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding-inline: 8px;
+  font-size: var(--font-xs);
+}
+.script-panel .script-library > .script-preview {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.script-back-to-library {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  margin-bottom: 6px;
+}
+.script-panel .script-library:has(.script-retained-drafts) {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.script-retained-drafts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 112px;
+  overflow: auto;
+  padding: 6px 8px;
+  color: var(--workbench-text);
+  font-size: var(--font-xs);
+}
+.script-retained-drafts > strong {
+  flex-basis: 100%;
+}
+.script-panel .script-library-open {
+  min-width: 0;
+  height: auto;
+  display: grid;
+  gap: 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  padding: 2px 0;
+  text-align: left;
+  color: inherit;
+  box-shadow: none;
+}
+.script-panel .script-library-list {
+  background: var(--workbench-panel);
+}
+.script-panel .script-library-row {
+  border-bottom: 1px solid var(--workbench-line-soft);
+}
+.script-panel .script-library-row.active {
+  background: var(--workbench-accent-soft);
+  box-shadow: inset 3px 0 0 var(--workbench-accent);
+}
+.script-library-row .icon-button {
+  opacity: 0;
+}
+.script-library-row:hover .icon-button,
+.script-library-row:focus-within .icon-button {
+  opacity: 1;
+}
+@media (hover: none) {
+  .script-library-row .icon-button { opacity: 1; }
+}
+.script-library-meta {
+  color: var(--workbench-muted);
+}
+.script-editor-context {
+  min-width: 0;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--workbench-line);
+  background: var(--workbench-panel);
+  color: var(--workbench-text);
+  font-size: var(--font-xs);
+  line-height: 1.55;
+}
+.script-execution-target {
+  overflow-wrap: anywhere;
+}
+.script-execution-target span {
+  white-space: nowrap;
+}
+.script-condition-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 5px;
+}
+.script-condition-status .script-readiness-status {
+  height: auto;
+  min-height: 25px;
+  white-space: normal;
+  line-height: 1.5;
+  text-align: left;
+}
+.script-run-reason {
+  color: var(--workbench-text);
+}
+.script-risk-details {
+  flex-basis: 100%;
+}
+.script-risk-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.script-risk-details.risk-high summary {
+  color: #f5a3ac;
+}
+.script-risk-details.risk-medium summary {
+  color: #f2c675;
+}
+.app-shell.theme-light .script-risk-details.risk-high summary {
+  color: #9f1239;
+}
+.app-shell.theme-light .script-risk-details.risk-medium summary {
+  color: #854d0e;
+}
+.script-risk-details p,
+.script-compatibility-hint {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.script-panel .script-preview-modal {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.script-compose-context,
+.script-pending-notice {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 5px 9px;
+  background: var(--workbench-panel);
+  color: var(--workbench-text);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+.script-compose-context span {
+  color: var(--workbench-muted);
+}
+.script-panel > .assistant-compose.script-ai-compose textarea {
+  min-height: 40px;
+  max-height: 160px;
+  padding: 10px 44px 10px 10px;
+}
+.script-panel .script-generation-review {
+  flex: 0 1 auto;
+  min-height: 48px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 8px;
+  border-block: 1px solid var(--workbench-line);
+  color: var(--workbench-text);
+  font-size: var(--font-xs);
+}
+.script-generation-review summary {
+  cursor: pointer;
+}
+.script-generation-review > button,
+.script-pending-notice button,
+.script-reply-code-actions button {
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.script-panel .script-code-card > .code-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.script-panel .script-code-card > .code-head > span:first-child {
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.script-panel .script-code-card > .code-head > .command-risk-status {
+  max-width: none;
+}
+.script-panel .script-code-card > .code-head > .script-reply-code-actions {
+  grid-column: 1 / -1;
+}
+.script-version-comparison {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.script-version-comparison section {
+  min-width: 0;
+}
+.script-version-comparison pre {
+  max-height: 120px;
+  margin: 4px 0;
+  overflow: auto;
+  padding: 6px;
+  background: var(--workbench-terminal);
+  color: var(--workbench-text);
+  font-family: var(--font-mono);
+}
+@container (min-width: 480px) {
+  .script-panel .script-editor-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .script-version-comparison {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .script-panel {
   container-type: inline-size;
 }
@@ -107,7 +328,7 @@
 
 .script-generate .script-draft-card,
 .script-library-editor {
-  grid-template-rows: auto minmax(0, 1fr) 28px;
+  grid-template-rows: auto auto minmax(0, 1fr) 28px;
 }
 
 .script-library-editor .script-editor-toolbar,
@@ -391,10 +612,6 @@ button.script-readiness-status:hover {
   }
 
   .script-file-tab.has-risk .script-readiness-status.readiness-ready {
-    display: none;
-  }
-
-  .script-file-tab.has-risk.has-readiness-issues strong {
     display: none;
   }
 

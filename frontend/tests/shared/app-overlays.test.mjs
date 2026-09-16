@@ -4,6 +4,7 @@ import test from 'node:test'
 import { createRenderer, isReadonly } from 'vue'
 import { useToasts } from "../../src/shared/ui/useToasts"
 import { useContextMenu } from "../../src/shared/ui/useContextMenu"
+import { activateMenuLayer, nextMenuIndex, placeContextMenu } from "../../src/shared/ui/contextMenuInteraction"
 
 function createClock() {
   const timers = new Map()
@@ -209,114 +210,82 @@ test('不同通知实例的状态和计时器互不影响', context => {
   assert.equal(second.toasts.value.length, 0)
 })
 
-test('菜单初始关闭且只读暴露，每种全局事件只注册一次', context => {
+test('菜单状态只读暴露，窗口监听器由实际挂载的菜单管理', context => {
   const { menu, viewport } = mountOverlays(context)
   assert.equal(isReadonly(menu.contextMenu), true)
   assert.equal(menu.contextMenu.value, null)
-  assert.equal(getEventListeners(viewport, 'click').length, 1)
-  assert.equal(getEventListeners(viewport, 'keydown').length, 1)
   for (let index = 0; index < 10; index++) menu.openContextMenu(menuEvent(), '菜单', createItems())
-  assert.equal(getEventListeners(viewport, 'click').length, 1)
-  assert.equal(getEventListeners(viewport, 'keydown').length, 1)
+  assert.equal(getEventListeners(viewport, 'click').length, 0)
+  assert.equal(getEventListeners(viewport, 'keydown').length, 0)
 })
 
-test('菜单保留标题、坐标、禁用/危险标记和业务回调，开关菜单不执行动作', context => {
+test('菜单保留坐标、状态和业务回调，开关菜单不执行动作', context => {
   const { menu } = mountOverlays(context)
-  let actionCalls = 0
-  const action = () => { actionCalls++ }
-  const items = [{ id: 'delete', label: '删除', danger: true, disabled: true, action }]
+  let calls = 0
+  const items = [{ id: 'delete', label: '删除', danger: true, disabled: true, action: () => { calls++ } }]
   const event = menuEvent(120, 240)
-  menu.openContextMenu(event, '终端菜单', items)
+  menu.openContextMenu(event, '终端菜单', items, '当前终端始终接收输入')
   assert.equal(event.defaultPrevented, false)
-  assert.deepEqual(menu.contextMenu.value, { x: 120, y: 240, title: '终端菜单', items })
-  assert.equal(menu.contextMenu.value.items[0].action, action)
+  assert.deepEqual(menu.contextMenu.value, { x: 120, y: 240, title: '终端菜单', items, description: '当前终端始终接收输入' })
   menu.closeContextMenu()
-  assert.equal(actionCalls, 0)
+  assert.equal(calls, 0)
   assert.equal(menu.contextMenu.value, null)
 })
 
-test('菜单定位保留 220px 宽度、8px 边距和按条目数量估算的高度', context => {
-  const { menu, viewport } = mountOverlays(context)
-  menu.openContextMenu(menuEvent(1500, 1000), '菜单', createItems(3))
-  assert.equal(menu.contextMenu.value.x, 1212)
-  assert.equal(menu.contextMenu.value.y, 744)
-  menu.openContextMenu(menuEvent(-20, -30), '菜单', createItems())
-  assert.equal(menu.contextMenu.value.x, 8)
-  assert.equal(menu.contextMenu.value.y, 8)
-  viewport.innerWidth = 1000
-  viewport.innerHeight = 700
-  menu.openContextMenu(menuEvent(1200, 900), '菜单', createItems(2))
-  assert.equal(menu.contextMenu.value.x, 772)
-  assert.equal(menu.contextMenu.value.y, 582)
+test('定位使用实际尺寸处理边界，短菜单无需固定高度上限', () => {
+  assert.deepEqual(placeContextMenu(100, 200, 232, 360, 1440, 900), { x: 100, y: 200 })
+  assert.deepEqual(placeContextMenu(1430, 890, 232, 360, 1440, 900), { x: 1200, y: 532 })
+  assert.deepEqual(placeContextMenu(-20, -30, 232, 360, 1440, 900), { x: 8, y: 8 })
+  assert.deepEqual(placeContextMenu(700, 500, 184, 74, 200, 90), { x: 8, y: 8 })
+  assert.deepEqual(placeContextMenu(950, 650, 280, 416, 1000, 700), { x: 712, y: 276 })
 })
 
-test('多条菜单高度上限仍为 320px，极小窗口也保留原有 8px 下限', context => {
-  const { menu, viewport } = mountOverlays(context)
-  menu.openContextMenu(menuEvent(1400, 900), '菜单', createItems(20))
-  assert.equal(menu.contextMenu.value.y, 572)
-  viewport.innerWidth = 200
-  viewport.innerHeight = 90
-  menu.openContextMenu(menuEvent(500, 500), '菜单', createItems(2))
-  assert.equal(menu.contextMenu.value.x, 8)
-  assert.equal(menu.contextMenu.value.y, 8)
+test('打开时保留原始锚点，实际 DOM 渲染后再决定位置', context => {
+  const { menu } = mountOverlays(context)
+  menu.openContextMenu(menuEvent(1500, 1000), '菜单', createItems(20))
+  assert.equal(menu.contextMenu.value.x, 1500)
+  assert.equal(menu.contextMenu.value.y, 1000)
 })
 
-test('重新打开菜单替换旧状态，关闭操作幂等且不调用任何业务动作', context => {
+test('菜单导航在可用项中循环，支持首尾及空菜单', () => {
+  assert.equal(nextMenuIndex(0, -1, 'ArrowDown'), -1)
+  assert.equal(nextMenuIndex(3, -1, 'ArrowDown'), 0)
+  assert.equal(nextMenuIndex(3, -1, 'ArrowUp'), 2)
+  assert.equal(nextMenuIndex(3, 2, 'ArrowDown'), 0)
+  assert.equal(nextMenuIndex(3, 0, 'ArrowUp'), 2)
+  assert.equal(nextMenuIndex(3, 1, 'Home'), 0)
+  assert.equal(nextMenuIndex(3, 1, 'End'), 2)
+})
+
+test('打开新菜单关闭旧层，旧层清理不能释放新的顶层', () => {
+  let firstCloses = 0
+  const first = activateMenuLayer(() => { firstCloses++; first.release() })
+  assert.equal(first.isTop(), true)
+  const second = activateMenuLayer(() => {})
+  assert.equal(firstCloses, 1)
+  assert.equal(first.isTop(), false)
+  first.release()
+  assert.equal(second.isTop(), true)
+  second.release()
+  assert.equal(second.isTop(), false)
+})
+
+test('一个右键手势可以直接替换菜单目标及动作', context => {
   const { menu } = mountOverlays(context)
   menu.openContextMenu(menuEvent(), '连接', createItems(3))
   menu.openContextMenu(menuEvent(300, 400), '终端', createItems(2))
   assert.equal(menu.contextMenu.value.title, '终端')
   assert.equal(menu.contextMenu.value.items.length, 2)
-  assert.equal(menu.contextMenu.value.x, 300)
   menu.closeContextMenu()
   menu.closeContextMenu()
   assert.equal(menu.contextMenu.value, null)
 })
 
-test('全局点击关闭菜单但不阻止默认行为', context => {
-  const { menu, viewport } = mountOverlays(context)
-  menu.openContextMenu(menuEvent(), '菜单', createItems())
-  const event = new Event('click', { cancelable: true })
-  viewport.dispatchEvent(event)
-  assert.equal(menu.contextMenu.value, null)
-  assert.equal(event.defaultPrevented, false)
-})
-
-test('仅 Escape 关闭菜单，不吞掉按键或影响其他快捷键处理器', context => {
-  const { menu, viewport } = mountOverlays(context)
-  menu.openContextMenu(menuEvent(), '菜单', createItems())
-  const keys = []
-  viewport.addEventListener('keydown', event => keys.push(event.key))
-  for (const key of ['Enter', 'Tab', 'ArrowDown']) {
-    viewport.dispatchEvent(Object.assign(new Event('keydown'), { key }))
-    assert.notEqual(menu.contextMenu.value, null)
-  }
-  const escape = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' })
-  viewport.dispatchEvent(escape)
-  assert.equal(menu.contextMenu.value, null)
-  assert.equal(escape.defaultPrevented, false)
-  assert.deepEqual(keys, ['Enter', 'Tab', 'ArrowDown', 'Escape'])
-})
-
-test('卸载时关闭菜单并移除全局监听器，之后不能再次打开已销毁菜单', context => {
-  const { menu, viewport, unmount } = mountOverlays(context)
+test('卸载关闭菜单，迟到的事件不能重新打开', context => {
+  const { menu, unmount } = mountOverlays(context)
   menu.openContextMenu(menuEvent(), '菜单', createItems())
   unmount()
   assert.equal(menu.contextMenu.value, null)
-  assert.equal(getEventListeners(viewport, 'click').length, 0)
-  assert.equal(getEventListeners(viewport, 'keydown').length, 0)
   menu.openContextMenu(menuEvent(), '迟到的菜单', createItems())
   assert.equal(menu.contextMenu.value, null)
-})
-
-test('多个菜单实例不共享状态，卸载移除各自注册的处理器', context => {
-  const { first, second, viewport, unmount } = mountOverlays(context, () => ({ first: useContextMenu(), second: useContextMenu() }))
-  first.openContextMenu(menuEvent(), '第一个', createItems())
-  second.openContextMenu(menuEvent(), '第二个', createItems())
-  first.closeContextMenu()
-  assert.equal(second.contextMenu.value.title, '第二个')
-  assert.equal(getEventListeners(viewport, 'click').length, 2)
-  unmount()
-  assert.equal(getEventListeners(viewport, 'click').length, 0)
-  assert.equal(getEventListeners(viewport, 'keydown').length, 0)
 })

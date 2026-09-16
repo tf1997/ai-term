@@ -74,7 +74,7 @@
 .theme-light .modal-head span, .theme-light .app-toast small {
   color: #64748b;
 }
-.theme-light .context-menu button:hover {
+.theme-light .context-menu button:hover:not(:disabled) {
   background: var(--workbench-accent-soft);
 }
 .theme-light .script-risk-modal {
@@ -929,21 +929,15 @@
 .theme-light .context-menu strong, .theme-light .session-history-main small, .theme-light .session-history-time {
   color: var(--light-muted);
 }
-.theme-light .context-menu button {
-  color: var(--light-text);
-}
-.theme-light .context-menu button:hover {
-  border-color: #ccebdd;
-  background: var(--light-accent-soft);
-  color: var(--light-accent-strong);
-}
-.theme-light .context-menu button.danger {
-  color: #be123c;
-}
-.theme-light .context-menu button.danger:hover {
-  border-color: #f3c6cb;
-  background: #fff1f2;
-  color: #9f1239;
+.theme-light {
+  --menu-surface: var(--light-panel, #fff);
+  --menu-border: var(--light-border);
+  --menu-text: var(--light-text);
+  --menu-muted: var(--light-muted);
+  --menu-hover: var(--light-accent-soft);
+  --menu-danger: #be123c;
+  --menu-danger-hover: #fff1f2;
+  --menu-shadow: 0 8px 28px rgba(15, 23, 42, .14);
 }
 .theme-light .session-search {
   border-bottom-color: var(--light-border);

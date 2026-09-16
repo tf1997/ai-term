@@ -19,11 +19,12 @@ import { useSessionView } from '../layout/useSessionView'
 import type { SessionView } from '../layout/useSessionView'
 import { useToasts } from '../../shared/ui/useToasts'
 import { useContextMenu } from '../../shared/ui/useContextMenu'
+import { terminalContextMenu } from '../../domains/terminal/index'
 import { useCommandHistory } from '../../domains/terminal/index'
 import { useWorkspaceSessions } from '../../domains/ai/index'
 import { useAiMessages } from '../../domains/ai/index'
 import { DEFAULT_AI_SESSION_ID } from '../../domains/ai/index'
-import { MAX_WORKSPACE_WIDTH, MIN_WORKSPACE_WIDTH } from '../../domains/settings/index'
+import { loadWorkspaceLayoutPreferences, persistWorkspaceLayoutPreferences } from '../../domains/settings/index'
 import type { TerminalTab } from '../../domains/terminal/types'
 import { useTerminalTabs } from '../../domains/terminal/index'
 import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
@@ -47,10 +48,14 @@ type LeftPanelMode = 'connections' | 'settings'
 const LOCAL_CONNECTION_ID = 'local'
 const connectingProfileId = ref('')
 const aboutOpen = ref(false)
-const leftPanelMode = ref<LeftPanelMode>('connections')
-const leftCollapsed = ref(false)
-const rightCollapsed = ref(false)
-const workspacePanelTab = ref<'history' | 'ai' | 'scripts'>('ai')
+const layoutPreferences = loadWorkspaceLayoutPreferences()
+const leftPanelMode = ref<LeftPanelMode>(layoutPreferences.leftPanelMode)
+const leftCollapsed = ref(layoutPreferences.leftCollapsed)
+const rightCollapsed = ref(layoutPreferences.rightCollapsed)
+const workspacePanelTab = ref<'history' | 'ai' | 'scripts'>(layoutPreferences.workspacePanelTab)
+watch([leftCollapsed, rightCollapsed, workspacePanelTab, leftPanelMode], () => {
+  persistWorkspaceLayoutPreferences({ leftCollapsed: leftCollapsed.value, rightCollapsed: rightCollapsed.value, workspacePanelTab: workspacePanelTab.value, leftPanelMode: leftPanelMode.value })
+})
 const terminalTabState = useTerminalTabs()
 const {
   terminalTabs, activeTerminalId, activeTerminal, targetTerminalIds, targetConnectionIds,
@@ -162,11 +167,68 @@ const aboutRuntimeStats = computed(() => [
 const sftpWorkbenchActive = computed(() => activeView.value === 'files')
 const {
   workspaceWidth,
+  workspaceMinWidth,
+  workspaceMaxWidth,
+  sidebarOverlay,
   workspaceResizing,
   workspaceLayoutStyle,
   beginWorkspaceResize,
   handleWorkspaceResizeKeydown
 } = useWorkspaceResize({ leftCollapsed, rightCollapsed, sftpWorkbenchActive })
+
+const leftDrawerVisible = ref(false)
+const leftSidebarPanel = ref<HTMLElement>()
+const connectionsPanelButton = ref<HTMLButtonElement>()
+const settingsPanelButton = ref<HTMLButtonElement>()
+const leftDrawerOpen = computed(() => sidebarOverlay.value && leftDrawerVisible.value)
+const leftPanelVisible = computed(() => sidebarOverlay.value ? leftDrawerVisible.value : !leftCollapsed.value)
+
+watch(sidebarOverlay, (overlay) => {
+  // Preserve interaction when resizing while keeping the docked preference separate.
+  leftDrawerVisible.value = overlay && Boolean(leftSidebarPanel.value?.contains(document.activeElement))
+})
+watch([leftDrawerOpen, leftPanelMode], async ([open]) => {
+  if (open) {
+    await nextTick()
+    if (leftDrawerOpen.value) leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus()
+  }
+})
+
+function leftPanelTrigger() {
+  return leftPanelMode.value === 'connections' ? connectionsPanelButton.value : settingsPanelButton.value
+}
+
+function closeLeftPanel() {
+  if (sidebarOverlay.value) leftDrawerVisible.value = false
+  else leftCollapsed.value = true
+  void nextTick(() => leftPanelTrigger()?.focus())
+}
+
+function handleLeftDrawerKeydown(event: KeyboardEvent) {
+  if (!leftDrawerOpen.value || event.defaultPrevented || contextMenu.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (connectionEditorOpen.value) {
+      closeConnectionEditor()
+      void nextTick(() => leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus())
+    }
+    else if (aiConfigEditorOpen.value) {
+      closeAiConfigEditor()
+      void nextTick(() => leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus())
+    }
+    else closeLeftPanel()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const panel = leftSidebarPanel.value
+  const scope = panel?.querySelector<HTMLElement>('.modal') ?? panel
+  const focusable = [...(scope?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') ?? [])].filter(element => element.getClientRects().length > 0)
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
 
 async function connectProfileFromSidebar(profileId: string) {
   const draft = profiles.value.find((profile) => profile.id === profileId)
@@ -180,6 +242,11 @@ async function connectProfileFromSidebar(profileId: string) {
     profileStoreStatus.value = 'ready'
     await ensureActiveAiSession(profile.id)
     createTerminalTab(profile)
+    await nextTick()
+    if (leftDrawerOpen.value) {
+      leftDrawerVisible.value = false
+      focusActiveTerminalFromWorkspace()
+    }
     profiles.value = await listConnectionProfiles()
     selectedProfileId.value = profile.id
   } catch (error) {
@@ -203,25 +270,27 @@ function openLocalTerminal() {
 
 function openConnectionsPanel() {
   leftPanelMode.value = 'connections'
-  leftCollapsed.value = false
+  if (sidebarOverlay.value) leftDrawerVisible.value = true
+  else leftCollapsed.value = false
 }
 
 function openSettingsPanel() {
   leftPanelMode.value = 'settings'
-  leftCollapsed.value = false
+  if (sidebarOverlay.value) leftDrawerVisible.value = true
+  else leftCollapsed.value = false
 }
 
 function toggleConnectionsPanel() {
-  if (leftPanelMode.value === 'connections') {
-    leftCollapsed.value = !leftCollapsed.value
+  if (isLeftPanelActive('connections')) {
+    closeLeftPanel()
     return
   }
   openConnectionsPanel()
 }
 
 function toggleSettingsPanel() {
-  if (leftPanelMode.value === 'settings') {
-    leftCollapsed.value = !leftCollapsed.value
+  if (isLeftPanelActive('settings')) {
+    closeLeftPanel()
     return
   }
   openSettingsPanel()
@@ -237,7 +306,7 @@ function closeAboutPage() {
 }
 
 function isLeftPanelActive(mode: LeftPanelMode) {
-  return leftPanelMode.value === mode && !leftCollapsed.value
+  return leftPanelMode.value === mode && leftPanelVisible.value
 }
 
 function leftPanelButtonTitle(mode: LeftPanelMode) {
@@ -307,58 +376,14 @@ function openAiConfigContextMenu(event: MouseEvent, configId: string) {
 }
 
 function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
-  const tabIndex = terminalTabs.value.findIndex(item => item.id === tab.id)
-  openContextMenu(event, tab.title, [
-    {
-      id: 'switch',
-      label: '切换到此终端',
-      action: () => selectTerminalTab(tab.id)
-    },
-    {
-      id: 'toggle-target',
-      label: tab.id === activeTerminalId.value ? '当前终端始终接收输入' : isTerminalTargetSelected(tab.id) ? '从同步目标移除' : '加入同步目标',
-      disabled: tab.id === activeTerminalId.value,
-      action: () => toggleTerminalTarget(tab.id)
-    },
-    {
-      id: 'select-all-targets',
-      label: '同步全部终端',
-      disabled: terminalTabs.value.length <= 1 || targetTerminalIds.value.length === terminalTabs.value.length,
-      action: selectAllTerminalTargets
-    },
-    {
-      id: 'reset-targets',
-      label: '停止同步',
-      disabled: !multiTerminalInputEnabled.value,
-      action: resetTerminalTargetsToActive
-    },
-    {
-      id: 'new-local',
-      label: '新建本地终端',
-      action: openLocalTerminal
-    },
-    {
-      id: 'close',
-      label: '关闭终端标签',
-      danger: true,
-      disabled: terminalTabs.value.length === 1,
-      action: () => closeTerminalTab(tab.id)
-    },
-    {
-      id: 'close-others',
-      label: '关闭其他终端',
-      danger: true,
-      disabled: terminalTabs.value.length <= 1,
-      action: () => closeOtherTerminalTabs(tab.id)
-    },
-    {
-      id: 'close-right',
-      label: '关闭右侧终端',
-      danger: true,
-      disabled: tabIndex < 0 || tabIndex === terminalTabs.value.length - 1,
-      action: () => closeTerminalTabsToRight(tab.id)
-    }
-  ])
+  const menu = terminalContextMenu({
+    tabs: terminalTabs.value, tabId: tab.id, activeId: activeTerminalId.value, targetIds: targetTerminalIds.value,
+    select: id => { selectTerminalTab(id); focusActiveTerminalFromWorkspace() },
+    toggleTarget: toggleTerminalTarget,
+    create: () => { openLocalTerminal(); focusActiveTerminalFromWorkspace() },
+    close: closeTerminalTab, closeOthers: closeOtherTerminalTabs, closeRight: closeTerminalTabsToRight,
+  })
+  if (menu) openContextMenu(event, menu.title, menu.items, menu.description)
 }
 function openTerminalAreaContextMenu(event: MouseEvent) {
   openContextMenu(event, activeTerminal.value?.title ?? '终端', [
@@ -783,7 +808,11 @@ async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    closeAboutPage()
+    if (aboutOpen.value) closeAboutPage()
+    else if (!event.defaultPrevented && !contextMenu.value && leftDrawerOpen.value) {
+      event.preventDefault()
+      closeLeftPanel()
+    }
   }
 }
 
@@ -814,7 +843,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
+  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed || sidebarOverlay, 'left-sidebar-overlay': sidebarOverlay, 'left-drawer-open': leftDrawerOpen, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
     <header class="titlebar">
       <div class="brand">
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
@@ -841,10 +870,13 @@ onBeforeUnmount(() => {
     </header>
     <aside class="app-rail" aria-label="主导航">
       <button
+        ref="connectionsPanelButton"
         class="rail-button"
         :class="{ active: isLeftPanelActive('connections') }"
         :title="leftPanelButtonTitle('connections')"
         :aria-label="leftPanelButtonTitle('connections')"
+        :aria-expanded="isLeftPanelActive('connections')"
+        aria-controls="left-sidebar-panel"
         @click="toggleConnectionsPanel"
       >
         <UiIcon name="terminal" />
@@ -854,6 +886,9 @@ onBeforeUnmount(() => {
         :class="{ active: isLeftPanelActive('settings') }"
         :title="leftPanelButtonTitle('settings')"
         :aria-label="leftPanelButtonTitle('settings')"
+        ref="settingsPanelButton"
+        :aria-expanded="isLeftPanelActive('settings')"
+        aria-controls="left-sidebar-panel"
         @click="toggleSettingsPanel"
       >
         <UiIcon name="settings" />
@@ -879,52 +914,68 @@ onBeforeUnmount(() => {
         <UiIcon name="info" />
       </button>
     </aside>
-    <ConnectionSidebar
-      v-if="leftPanelMode === 'connections'"
-      :profiles="profiles"
-      :selected-profile-id="selectedProfileId"
-      :selected-profile="sidebarProfile"
-      :connecting-profile-id="connectingProfileId"
-      :connected-profile-ids="connectedProfileIds"
-      :pending-connection-profile-ids="pendingConnectionProfileIds"
-      :connection-error="connectionError"
-      :editor-open="connectionEditorOpen"
-      :editor-mode="connectionEditorMode"
-      :save-state="connectionSaveState"
-      :save-error="connectionSaveError"
-      @select="selectProfile"
-      @edit="editSelectedProfile"
-      @copy="copySelectedProfile"
-      @delete="deleteSelectedProfile"
-      @open-menu="openConnectionContextMenu"
-      @close-editor="closeConnectionEditor"
-      @connect="connectProfileFromSidebar"
-      @create="createProfile"
-      @save="saveSelectedProfile"
-    />
-    <SettingsSidebar
-      v-else
-      :ai-configs="aiConfigs"
-      :selected-ai-config-id="selectedAiConfigId"
-      :ai-config="settingsAiConfig"
-      :editor-open="aiConfigEditorOpen"
-      :editor-mode="aiConfigEditorMode"
-      :save-state="aiConfigSaveState"
-      :save-error="aiConfigSaveError"
-      :settings="appSettings"
-      :agent-allowlist="agentAllowlist"
-      @select-ai-config="selectAiConfig"
-      @create-ai-config="createAiConfig"
-      @edit-ai-config="editAiConfig"
-      @delete-ai-config="deleteSelectedAiConfig"
-      @open-menu="openAiConfigContextMenu"
-      @close-ai-config="closeAiConfigEditor"
-      @delete-agent-pattern="removeAgentAllowlistPattern"
-      @add-agent-pattern="(pattern: string) => allowAgentPattern(pattern, '')"
-      @clear-agent-patterns="clearAgentAllowlist"
-      @save-ai-config="saveAiConfig"
-      @update-settings="updateUserSettings"
-    />
+    <div v-if="leftDrawerOpen" class="sidebar-drawer-backdrop" aria-hidden="true" @click="closeLeftPanel" />
+    <section
+      id="left-sidebar-panel"
+      ref="leftSidebarPanel"
+      v-show="leftPanelVisible"
+      class="left-sidebar-panel"
+      :role="leftDrawerOpen ? 'dialog' : undefined"
+      :aria-label="leftPanelMode === 'connections' ? '连接管理' : '设置中心'"
+      @keydown="handleLeftDrawerKeydown"
+    >
+      <div class="sidebar-layout-controls">
+        <button class="icon-button sidebar-drawer-close" type="button" :title="leftDrawerOpen ? '关闭侧栏' : '收起侧栏'" :aria-label="leftDrawerOpen ? '关闭侧栏' : '收起侧栏'" @click="closeLeftPanel">
+          <UiIcon name="arrow-left" size="14" />
+        </button>
+      </div>
+      <ConnectionSidebar
+        v-if="leftPanelMode === 'connections'"
+        :profiles="profiles"
+        :selected-profile-id="selectedProfileId"
+        :selected-profile="sidebarProfile"
+        :connecting-profile-id="connectingProfileId"
+        :connected-profile-ids="connectedProfileIds"
+        :pending-connection-profile-ids="pendingConnectionProfileIds"
+        :connection-error="connectionError"
+        :editor-open="connectionEditorOpen"
+        :editor-mode="connectionEditorMode"
+        :save-state="connectionSaveState"
+        :save-error="connectionSaveError"
+        @select="selectProfile"
+        @edit="editSelectedProfile"
+        @copy="copySelectedProfile"
+        @delete="deleteSelectedProfile"
+        @open-menu="openConnectionContextMenu"
+        @close-editor="closeConnectionEditor"
+        @connect="connectProfileFromSidebar"
+        @create="createProfile"
+        @save="saveSelectedProfile"
+      />
+      <SettingsSidebar
+        v-else
+        :ai-configs="aiConfigs"
+        :selected-ai-config-id="selectedAiConfigId"
+        :ai-config="settingsAiConfig"
+        :editor-open="aiConfigEditorOpen"
+        :editor-mode="aiConfigEditorMode"
+        :save-state="aiConfigSaveState"
+        :save-error="aiConfigSaveError"
+        :settings="appSettings"
+        :agent-allowlist="agentAllowlist"
+        @select-ai-config="selectAiConfig"
+        @create-ai-config="createAiConfig"
+        @edit-ai-config="editAiConfig"
+        @delete-ai-config="deleteSelectedAiConfig"
+        @open-menu="openAiConfigContextMenu"
+        @close-ai-config="closeAiConfigEditor"
+        @delete-agent-pattern="removeAgentAllowlistPattern"
+        @add-agent-pattern="(pattern: string) => allowAgentPattern(pattern, '')"
+        @clear-agent-patterns="clearAgentAllowlist"
+        @save-ai-config="saveAiConfig"
+        @update-settings="updateUserSettings"
+      />
+    </section>
     <div class="session-view-bar">
       <nav class="session-view-tabs" role="tablist" aria-label="当前会话视图" @keydown="handleSessionViewKeydown">
         <button
@@ -958,6 +1009,7 @@ onBeforeUnmount(() => {
       <button
         v-if="activeView === 'terminal'"
         class="session-tools-toggle"
+        :class="{ active: !rightCollapsed }"
         type="button"
         :aria-expanded="!rightCollapsed"
         aria-controls="session-workspace-tools"
@@ -1023,15 +1075,17 @@ onBeforeUnmount(() => {
       class="workspace-resizer"
       role="separator"
       tabindex="0"
-      aria-label="调整工作区宽度"
+      aria-label="调整辅助工具宽度"
+      title="拖动调整宽度；方向键调整，Home 最窄，End 最宽"
       aria-orientation="vertical"
       :aria-valuenow="workspaceWidth"
-      :aria-valuemin="MIN_WORKSPACE_WIDTH"
-      :aria-valuemax="MAX_WORKSPACE_WIDTH"
+      :aria-valuemin="workspaceMinWidth"
+      :aria-valuemax="workspaceMaxWidth"
       @pointerdown="beginWorkspaceResize"
       @keydown="handleWorkspaceResizeKeydown"
     />
     <WorkspacePanel
+      :active-tab="workspacePanelTab"
       id="session-workspace-tools"
       :collapsed="rightCollapsed || activeView === 'files'"
       :terminal-id="activeTerminalId"
@@ -1063,7 +1117,6 @@ onBeforeUnmount(() => {
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
       :agent-step-limit="appSettings.agentStepLimit"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
-      @close="rightCollapsed = true"
       @select-ai-config="selectAiConfig"
       @configure-ai="editAiConfig()"
       @clear-terminal-selection="clearTerminalSelection"
@@ -1103,10 +1156,7 @@ onBeforeUnmount(() => {
     </div>
     <ContextMenu
       v-if="contextMenu"
-      :x="contextMenu.x"
-      :y="contextMenu.y"
-      :title="contextMenu.title"
-      :items="contextMenu.items"
+      v-bind="contextMenu"
       @close="closeContextMenu"
     />
   </div>

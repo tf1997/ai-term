@@ -115,16 +115,18 @@ defineExpose({ focus: edit, isEditing: () => editing.value })
         @keydown.esc.prevent.stop="cancelEdit"
       />
       <nav v-else class="file-location-crumbs" :aria-label="`${label}目录`" @click.self="edit">
-        <button
-          v-for="crumb in breadcrumbs"
-          :key="crumb.path"
-          type="button"
-          :title="crumb.path"
-          :disabled="disabled"
-          @click="open(crumb.path)"
-        >
-          {{ crumb.label }}
-        </button>
+        <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
+          <UiIcon v-if="index > 0" class="file-location-separator" name="chevron-right" size="12" />
+          <button
+            type="button"
+            :title="crumb.path"
+            :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined"
+            :disabled="disabled"
+            @click="open(crumb.path)"
+          >
+            {{ crumb.label }}
+          </button>
+        </template>
         <button
           v-if="!breadcrumbs.length"
           class="file-location-placeholder"

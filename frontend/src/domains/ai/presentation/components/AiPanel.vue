@@ -37,7 +37,13 @@ const props = defineProps<AiPanelProps>()
 
 const emit = defineEmits<AiPanelEvents>()
 
-const askText = ref('')
+// A terminal's unsent context must never become another session's question.
+const composerDrafts = ref<Record<string, string>>({})
+const composerContextKey = computed(() => JSON.stringify([props.workspaceSessionId, props.connectionId, props.terminalId]))
+const askText = computed({
+  get: () => composerDrafts.value[composerContextKey.value] ?? '',
+  set: (value: string) => { composerDrafts.value[composerContextKey.value] = value }
+})
 const answerState = useAiAnswerState()
 const { isAsking, currentAssistantMessageId, answerElapsedSeconds, answerDurations, startAnswerTimer, stopAnswerTimer, finishAnswerTimer, messageAnswerDuration, formatAnswerDuration } = answerState
 const conversationContext = useAiConversationContext(props, emit)

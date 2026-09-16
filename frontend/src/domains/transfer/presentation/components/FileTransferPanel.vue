@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import ContextMenu from '../../../../shared/ui/ContextMenu.vue'
+import { contextMenuSource } from '../../../../shared/ui/contextMenuInteraction'
 import type { ConnectionProfile } from '../../../connections/types'
 import type { TerminalOutputDeltaEvent } from '../../../terminal/types'
 import type { FileTargetBinding, TerminalFileBridge } from '../../domain/fileSession'
@@ -211,6 +213,7 @@ const currentContextMenu = ref<{
   x: number
   y: number
   name: string
+  sourceElement?: HTMLElement
   items: { label: string; danger?: boolean; disabled?: boolean; action: () => void }[]
 } | null>(null)
 const localInit = Promise.all([
@@ -663,35 +666,12 @@ function showMenu(event: MouseEvent | KeyboardEvent, entry: BrowserEntry, side: 
           },
         ]
   currentContextMenu.value = {
-    x: Math.max(8, Math.min(x, window.innerWidth - 230)),
-    y: Math.max(8, Math.min(y, window.innerHeight - 220)),
+    x,
+    y,
     name: entry.name,
+    sourceElement: contextMenuSource(event as MouseEvent),
     items,
   }
-  void nextTick(() =>
-    document.querySelector<HTMLButtonElement>('.file-context-menu button:not(:disabled)')?.focus(),
-  )
-}
-function menuKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    currentContextMenu.value = null
-    focusView()
-    return
-  }
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-  event.preventDefault()
-  const buttons = [
-    ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
-  ]
-  const current = buttons.indexOf(document.activeElement as HTMLButtonElement),
-    index =
-      event.key === 'Home'
-        ? 0
-        : event.key === 'End'
-          ? buttons.length - 1
-          : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-  buttons[index]?.focus()
 }
 
 async function locateTerminalDirectory() {
@@ -1159,35 +1139,10 @@ onBeforeUnmount(() => {
       <input ref="fileInput" type="file" class="visually-hidden" multiple @change="uploadSmallFiles" />
     </section>
 
-    <Teleport to="body"
-      ><div
-        v-if="currentContextMenu"
-        class="file-popover-scrim"
-        @click="currentContextMenu = null"
-        @contextmenu.prevent="currentContextMenu = null"
-      />
-      <section
-        v-if="currentContextMenu"
-        class="file-context-menu context-menu"
-        role="menu"
-        :aria-label="currentContextMenu.name"
-        :style="{ left: `${currentContextMenu.x}px`, top: `${currentContextMenu.y}px` }"
-        @keydown="menuKeydown"
-      >
-        <strong>{{ currentContextMenu.name }}</strong
-        ><button
-          v-for="item in currentContextMenu.items"
-          :key="item.label"
-          type="button"
-          role="menuitem"
-          :class="{ danger: item.danger }"
-          :disabled="item.disabled"
-          @click="runMenuAction(item.action)"
-        >
-          {{ item.label }}
-        </button>
-      </section></Teleport
-    >
+    <ContextMenu v-if="currentContextMenu" :x="currentContextMenu.x" :y="currentContextMenu.y"
+      :title="currentContextMenu.name" :source-element="currentContextMenu.sourceElement"
+      :items="currentContextMenu.items.map(item => ({ ...item, id: item.label, group: item.danger ? 'danger' : 'common', action: () => runMenuAction(item.action) }))"
+      @close="currentContextMenu = null" />
     <Teleport to="body"
       ><div v-if="editor.remoteEditor && props.active" class="modal-backdrop remote-file-editor-backdrop">
         <section

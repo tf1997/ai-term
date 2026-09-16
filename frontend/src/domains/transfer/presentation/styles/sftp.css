@@ -379,7 +379,9 @@
   color: var(--sftp-ink);
 }
 
-:root .file-context-menu button.danger {
+:root .file-context-menu button.danger,
+:root .file-context-menu button.danger:hover:not(:disabled),
+:root .file-context-menu button.danger:focus-visible:not(:disabled) {
   color: var(--sftp-danger);
 }
 

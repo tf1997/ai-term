@@ -28,6 +28,9 @@ export interface ScriptChatMessage {
   text: string
   scriptContent?: string
   savedScriptId?: string
+  targetDocumentId?: string
+  targetTitle?: string
+  applicationState?: 'applied' | 'pending' | 'unavailable' | 'dismissed'
   streaming?: boolean
   error?: boolean
   createdAt: string

@@ -123,6 +123,8 @@ async function navigate(side, path) {
 }
 async function connectProfile(name) {
   const before = await evaluate('document.querySelector(".session-tab-strip .tab.active")?.dataset.terminalId')
+  const trigger = '.app-rail button[aria-controls="left-sidebar-panel"]:first-child'
+  if (await evaluate(`document.querySelector(${JSON.stringify(trigger)}).getAttribute('aria-expanded') !== 'true'`)) await click(trigger)
   const selector = await evaluate(`(() => { const cards = [...document.querySelectorAll('.server-card')]; const index = cards.findIndex(card => card.textContent.includes(${JSON.stringify(name)})); if (index < 0) throw new Error('Missing profile'); return '.server-card:nth-of-type(' + (index + 1) + ')'; })()`)
   await click(selector, { double: true })
   await waitFor(`document.querySelector('.session-tab-strip .tab.active .status-dot.live') && document.querySelector('.session-tab-strip .tab.active')?.dataset.terminalId !== ${JSON.stringify(before)}`)
@@ -194,6 +196,18 @@ try {
   })
   const alphaId = await connectProfile('Atlas')
   await showFiles()
+  await check('file menus take keyboard focus and Escape returns to the source row', async () => {
+    const row = `${remote} [data-file-path]`
+    await click(row, { button: 'right' })
+    await waitFor('document.querySelector(".context-menu")?.contains(document.activeElement)')
+    const originalPath = await evaluate('document.querySelector(".context-menu").__vueParentComponent.props.sourceElement.dataset.filePath')
+    await press('End')
+    assert.equal(await evaluate('document.activeElement === document.querySelector(".context-menu button:last-child")'), true)
+    await press('ArrowUp')
+    await press('Escape')
+    await waitFor('!document.querySelector(".context-menu")')
+    assert.equal(await evaluate('document.activeElement?.dataset.filePath'), originalPath)
+  })
   await check('multi-address discovery skips loopback, deduplicates and falls back to reachable interface', async () => {
     const probes = await nativeCalls('sftp_probe')
     assert.deepEqual(probes.map(call => call.targetHost), ['10.20.0.17', '172.20.0.17'])

@@ -1,8 +1,7 @@
-import { computed, onBeforeUnmount, readonly, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, readonly, ref } from 'vue'
 import type { Ref } from 'vue'
-import { loadWorkspaceWidth, persistWorkspaceWidth } from '../../domains/settings/index'
+import { loadWorkspaceWidth, persistWorkspaceWidth, getWorkspaceLayout, getWorkspaceWidthForKey, getWorkspaceWidthForPointer } from '../../domains/settings/index'
 import type { SettingsStorage } from '../../domains/settings/types'
-import { getWorkspaceWidthForKey, getWorkspaceWidthForPointer } from '../../domains/settings/index'
 
 interface WorkspaceResizeOptions {
   leftCollapsed: Readonly<Ref<boolean>>
@@ -12,13 +11,25 @@ interface WorkspaceResizeOptions {
 }
 
 export function useWorkspaceResize(options: WorkspaceResizeOptions) {
-  const workspaceWidth = ref(loadWorkspaceWidth(options.storage))
+  const preferredWidth = ref(loadWorkspaceWidth(options.storage))
+  const viewportWidth = ref(window.innerWidth)
   const workspaceResizing = ref(false)
-  const workspaceLayoutStyle = computed(() => ({ '--workspace-user-width': workspaceWidth.value + 'px' }))
+  const layout = computed(() => getWorkspaceLayout(viewportWidth.value, preferredWidth.value, options.leftCollapsed.value, options.rightCollapsed.value || options.sftpWorkbenchActive.value))
+  const workspaceWidth = computed(() => layout.value.width)
+  const workspaceMinWidth = computed(() => layout.value.minWidth)
+  const workspaceMaxWidth = computed(() => layout.value.maxWidth)
+  const sidebarOverlay = computed(() => layout.value.sidebarOverlay)
+  const workspaceLayoutStyle = computed(() => ({
+    '--sidebar-width': layout.value.sidebarWidth + 'px',
+    '--workspace-width': workspaceWidth.value + 'px'
+  }))
+
+  function updateViewportWidth() { viewportWidth.value = window.innerWidth }
 
   function handleWorkspaceResize(event: PointerEvent) {
     if (!workspaceResizing.value) return
-    workspaceWidth.value = getWorkspaceWidthForPointer(window.innerWidth, event.clientX, options.leftCollapsed.value)
+    updateViewportWidth()
+    preferredWidth.value = getWorkspaceWidthForPointer(viewportWidth.value, event.clientX, options.leftCollapsed.value, preferredWidth.value)
   }
 
   function endWorkspaceResize() {
@@ -28,7 +39,7 @@ export function useWorkspaceResize(options: WorkspaceResizeOptions) {
     window.removeEventListener('pointermove', handleWorkspaceResize)
     window.removeEventListener('pointerup', endWorkspaceResize)
     window.removeEventListener('pointercancel', endWorkspaceResize)
-    persistWorkspaceWidth(workspaceWidth.value, options.storage)
+    persistWorkspaceWidth(preferredWidth.value, options.storage)
   }
 
   function beginWorkspaceResize(event: PointerEvent) {
@@ -42,20 +53,22 @@ export function useWorkspaceResize(options: WorkspaceResizeOptions) {
   }
 
   function handleWorkspaceResizeKeydown(event: KeyboardEvent) {
-    const nextWidth = getWorkspaceWidthForKey(workspaceWidth.value, event.key)
+    if (options.rightCollapsed.value || options.sftpWorkbenchActive.value) return
+    updateViewportWidth()
+    const nextWidth = getWorkspaceWidthForKey(workspaceWidth.value, event.key, workspaceMinWidth.value, workspaceMaxWidth.value)
     if (nextWidth === undefined) return
     event.preventDefault()
-    workspaceWidth.value = nextWidth
-    persistWorkspaceWidth(workspaceWidth.value, options.storage)
+    preferredWidth.value = nextWidth
+    persistWorkspaceWidth(preferredWidth.value, options.storage)
   }
 
-  onBeforeUnmount(endWorkspaceResize)
+  onMounted(() => window.addEventListener('resize', updateViewportWidth))
+  onBeforeUnmount(() => {
+    endWorkspaceResize()
+    window.removeEventListener('resize', updateViewportWidth)
+  })
 
-  return {
-    workspaceWidth: readonly(workspaceWidth),
-    workspaceResizing: readonly(workspaceResizing),
-    workspaceLayoutStyle,
-    beginWorkspaceResize,
-    handleWorkspaceResizeKeydown
-  }
+  return { workspaceWidth, workspaceMinWidth, workspaceMaxWidth, sidebarOverlay,
+    workspaceResizing: readonly(workspaceResizing), workspaceLayoutStyle,
+    beginWorkspaceResize, handleWorkspaceResizeKeydown }
 }
