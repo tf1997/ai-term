@@ -43,7 +43,7 @@ const { copyFeedback, copyText } = useCopyFeedback()
 .chat-copy { margin-left: auto; opacity: 0; }
 .chat-duration ~ .chat-copy, .chat-usage ~ .chat-copy { margin-left: 0; }
 .chat-turn:hover .chat-copy, .chat-turn:focus-within .chat-copy { opacity: 1; }
-.chat-turn-body { display: grid; min-width: 0; gap: 12px; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+.chat-turn-body { display: grid; min-width: 0; gap: 12px; overflow-wrap: anywhere; font-size: var(--font-md); line-height: 1.6; }
 .chat-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; flex: none; border: 0; border-radius: 5px; background: transparent; color: var(--chat-muted); }
 .chat-icon:hover { background: var(--chat-hover); color: var(--chat-text); }
 .chat-icon:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: 1px; }

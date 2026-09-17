@@ -323,7 +323,7 @@
   display: block;
   flex: 1;
   color: var(--workbench-text-strong);
-  font-size: 13px;
+  font-size: var(--font-sm);
   font-weight: 600;
   line-height: 18px;
 }
@@ -336,7 +336,7 @@
   align-items: center;
   gap: 6px;
   color: var(--workbench-muted);
-  font-size: 12px;
+  font-size: var(--font-xs);
   line-height: 16px;
 }
 

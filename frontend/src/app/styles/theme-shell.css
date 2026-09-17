@@ -15,6 +15,7 @@
 }
 .history-head strong {
   flex-shrink: 0;
+  font-weight: 600;
 }
 .history-head .history-meta {
   min-width: 0;
@@ -118,12 +119,12 @@
 }
 .history-row {
   position: relative;
-  min-height: 50px;
+  min-height: 46px;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   border-bottom: 1px solid rgba(112, 129, 154, .14);
   background: transparent;
-  padding: 8px 10px 8px 12px;
+  padding: 6px 10px 6px 12px;
   transition: background-color .16s ease, border-color .16s ease;
 }
 .history-row:hover {
@@ -134,17 +135,19 @@
   border-bottom-color: color-mix(in srgb, var(--workbench-accent) 38%, transparent);
   background: color-mix(in srgb, var(--workbench-accent) 8%, transparent);
 }
-.history-command-cell {
-  gap: 5px;
+.history-row > .history-command-cell {
+  gap: 3px;
 }
 .history-row code {
   color: #e8f0ff;
-  font-size: var(--font-sm);
-  line-height: 1.35;
+  font-size: var(--font-xs);
+  font-weight: 400;
+  line-height: 1.5;
   letter-spacing: 0;
 }
 .history-row span {
   color: #718198;
+  line-height: 16px;
 }
 .history-row .history-frequency {
   color: #8291a8;

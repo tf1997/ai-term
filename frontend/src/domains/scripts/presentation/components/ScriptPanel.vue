@@ -791,6 +791,7 @@ function saveExpandedScript() {
 
 function syncScriptEditorScroll(event: Event, lineRail: HTMLElement | null, highlightLayer: HTMLElement | null) {
   const target = event.target as HTMLTextAreaElement
+  target.parentElement?.style.setProperty('--script-editor-scroll-top', `${target.scrollTop}px`)
   if (lineRail) lineRail.scrollTop = target.scrollTop
   if (highlightLayer) {
     highlightLayer.scrollTop = target.scrollTop
@@ -1176,7 +1177,7 @@ function focusScriptComposer() {
         </div>
         <ScriptEditorContext :content="expandedScriptContent" :name="expandedScriptTitle" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="expandedScriptRiskStatus" @focus-readiness="focusNextExpandedReadinessIssue" />
         <div class="script-expanded-editor">
-          <div class="script-editor-shell">
+          <div class="script-editor-shell" :style="{ '--script-editor-cursor-line': expandedEditorCursor.line }">
             <pre ref="expandedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ expandedScriptLineNumbers }}</pre>
             <pre ref="expandedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="expandedScriptHighlightedHtml" /></pre>
             <textarea
@@ -1185,7 +1186,8 @@ function focusScriptComposer() {
               wrap="off"
               spellcheck="false"
               aria-label="编辑放大脚本"
-              @input="updateExpandedScriptContent(($event.target as HTMLTextAreaElement).value)"
+              @focus="updateExpandedEditorCursor"
+              @input="updateExpandedScriptContent(($event.target as HTMLTextAreaElement).value); updateExpandedEditorCursor($event)"
               @click="updateExpandedEditorCursor"
               @keyup="updateExpandedEditorCursor"
               @select="updateExpandedEditorCursor"
@@ -1286,7 +1288,7 @@ function focusScriptComposer() {
       <section class="script-preview">
         <div class="script-library-editor">
           <ScriptEditorContext :content="selectedScriptContent" :name="selectedScript.name" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="selectedScriptRiskStatus" @focus-readiness="focusNextSelectedReadinessIssue" />
-          <div class="script-editor-shell">
+          <div class="script-editor-shell" :style="{ '--script-editor-cursor-line': selectedEditorCursor.line }">
             <pre ref="selectedScriptLineRail" class="script-line-rail" aria-hidden="true">{{ selectedScriptLineNumbers }}</pre>
             <pre ref="selectedScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="selectedScriptHighlightedHtml" /></pre>
             <textarea
@@ -1295,6 +1297,7 @@ function focusScriptComposer() {
               wrap="off"
               spellcheck="false"
               aria-label="编辑脚本"
+              @focus="updateSelectedEditorCursor"
               placeholder="在这里编辑保存的脚本..."
               @input="handleSelectedEditorInput"
               @click="updateSelectedEditorCursor"
@@ -1326,7 +1329,7 @@ function focusScriptComposer() {
         <section class="script-draft-card">
 
           <ScriptEditorContext :content="draftScriptContent" :name="draftScriptTitle" :target="executionTargetLabel" :target-title="executionTargetTitle" :risk="draftScriptRiskStatus" @focus-readiness="focusNextDraftReadinessIssue" />
-          <div class="script-editor-shell">
+          <div class="script-editor-shell" :style="{ '--script-editor-cursor-line': draftEditorCursor.line }">
             <pre ref="draftEditorLineRail" class="script-line-rail" aria-hidden="true">{{ draftLineNumbers }}</pre>
             <pre ref="draftScriptHighlight" class="script-code-overlay" aria-hidden="true"><code v-html="draftScriptHighlightedHtml" /></pre>
             <textarea
@@ -1335,6 +1338,7 @@ function focusScriptComposer() {
               wrap="off"
               spellcheck="false"
               aria-label="脚本草稿"
+              @focus="updateDraftEditorCursor"
               placeholder="在这里粘贴、生成或编写 Shell 脚本..."
               @input="handleDraftEditorInput"
               @click="updateDraftEditorCursor"

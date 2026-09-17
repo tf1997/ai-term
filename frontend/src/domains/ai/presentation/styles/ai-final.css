@@ -46,7 +46,7 @@
 }
 
 .chat-head { position: relative; display: flex; align-items: center; gap: 12px; min-height: 44px; flex: none; padding: 0 var(--chat-gutter); background: var(--chat-surface); }
-.chat-session-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--chat-text); }
+.chat-session-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-md); font-weight: 600; color: var(--chat-text); }
 .chat-head-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .chat-head .session-history-popover { top: 44px; left: 12px; right: 12px; width: auto; max-height: min(420px, 65vh); overflow: hidden; border-radius: 8px; border: 1px solid var(--chat-line); background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 6px 20px #0000001a; }
 .chat-head .session-history-list { max-height: min(340px, 50vh); }
@@ -91,7 +91,7 @@
 .chat-activity.needs-decision .chat-progress-dot { background: var(--chat-warning); animation: none; }
 .chat-input-shell { border: 1px solid var(--chat-line); border-radius: 8px; background: var(--chat-elevated); overflow: hidden; }
 .chat-input-shell:focus-within { border-color: var(--chat-accent); box-shadow: 0 0 0 1px var(--chat-accent); }
-.chat-input-shell textarea { display: block; width: 100%; min-width: 0; min-height: 56px; max-height: 144px; box-sizing: border-box; margin: 0; resize: none; border: 0; border-radius: 0; padding: 10px 12px 6px; background: transparent; color: var(--chat-text); font-size: 14px; line-height: 1.6; outline: none; box-shadow: none; }
+.chat-input-shell textarea { display: block; width: 100%; min-width: 0; min-height: 56px; max-height: 144px; box-sizing: border-box; margin: 0; resize: none; border: 0; border-radius: 0; padding: 10px 12px 6px; background: transparent; color: var(--chat-text); font-size: var(--font-md); line-height: 1.6; outline: none; box-shadow: none; }
 .chat-input-shell textarea::placeholder { color: var(--chat-muted); opacity: 1; }
 .chat-composer-toolbar { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 8px 8px; min-width: 0; }
 .chat-mode-switch { display: inline-flex; gap: 1px; flex: none; padding: 2px; border: 0; border-radius: 6px; background: var(--chat-hover); }
@@ -107,12 +107,13 @@
 .chat-selection > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-mode-notice { font-size: 12px; line-height: 1.55; margin-bottom: 8px; }
 
-/* Markdown typography is confined to prose, never error or command components. */
-.ai-chat-panel :deep(.chat-turn-body .markdown-content) { font-size: 14px; line-height: 1.6; color: var(--chat-text); gap: 10px; }
+/* AiMarkdownMessage owns prose sizes; panel colors must not flatten heading levels. */
+.ai-chat-panel :deep(.chat-turn-body .markdown-content) { color: var(--chat-text); gap: 10px; }
 .ai-chat-panel :deep(.chat-turn-body .markdown-content p) { color: inherit; margin: 0; }
 .ai-chat-panel :deep(.chat-turn-body .markdown-content h1),
 .ai-chat-panel :deep(.chat-turn-body .markdown-content h2),
-.ai-chat-panel :deep(.chat-turn-body .markdown-content h3) { color: var(--chat-text); font-size: 16px; line-height: 1.5; }
+.ai-chat-panel :deep(.chat-turn-body .markdown-content h3),
+.ai-chat-panel :deep(.chat-turn-body .markdown-content h4) { color: var(--chat-text); }
 .ai-chat-panel :deep(.chat-turn-body .markdown-content code) { color: var(--chat-text); background: var(--chat-elevated); border-color: var(--chat-line); font-size: 12px; }
 .ai-chat-panel :deep(.chat-turn-body .markdown-content a) { color: var(--chat-accent); }
 .ai-chat-panel :deep(.chat-turn-body .markdown-content blockquote) { background: var(--chat-elevated); border: 1px solid var(--chat-line); color: var(--chat-muted); padding: 8px 12px; }
