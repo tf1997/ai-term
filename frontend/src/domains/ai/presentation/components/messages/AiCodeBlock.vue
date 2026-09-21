@@ -167,14 +167,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .tool-code {
-  --code-line-background: var(--chat-subtle, var(--workbench-panel));
+  --code-line-background: var(--chat-surface, var(--workbench-panel));
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--chat-line, var(--workbench-line));
   border-radius: 7px;
-  background: var(--chat-subtle, var(--workbench-panel));
+  background: var(--chat-surface, var(--workbench-panel));
   color: var(--chat-text, var(--workbench-text));
   letter-spacing: 0;
 }
@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
 .tool-code-content::-webkit-scrollbar-thumb:hover, .tool-preview-content::-webkit-scrollbar-thumb:hover, .tool-step-error-detail::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
 .tool-code-content::-webkit-scrollbar-corner, .tool-preview-content::-webkit-scrollbar-corner, .tool-step-error-detail::-webkit-scrollbar-corner { background: transparent; }
 .tool-code-content { max-height: 216px; }
-.tool-code-output { background: var(--chat-surface, var(--workbench-panel-strong)); }
+.tool-code-command .tool-code-content, .tool-code-output { background: var(--chat-surface, var(--workbench-panel-strong)); }
 /* Spacing stays outside the scroll viewport, preserving four complete preview lines. */
 .tool-code-command .tool-code-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(1.7em * 4); }
 .tool-code-full .tool-code-content { max-height: none; }

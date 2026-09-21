@@ -29,7 +29,7 @@ const APP_CHANNEL = 'Stable'
 
 const APP_LICENSE = 'Apache-2.0'
 
-const APP_AUTHOR = 'tf1997 & gpt-5.5 & gpt-5.6-sol'
+const APP_AUTHOR = 'tf1997 & gpt-6-astra & gpt-5.5 & gpt-5.6-sol'
 
 const aboutSignals: AboutSignal[] = [
   { icon: 'terminal', label: 'Terminal Core', value: 'PTY / SSH' },

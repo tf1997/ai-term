@@ -31,6 +31,11 @@ interface AgentSessionOptions {
 }
 type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | 'aiAgentTurnStream' | 'touchAgentCommandAllowlistEntry'>
 
+/** Retry messages are reactive; unwrap both the step and its nested risk records. */
+function snapshotAgentStep(step: AgentStep): AgentStep {
+  return { ...step, risks: step.risks.map((risk) => ({ ...risk })) }
+}
+
 export function useAgentSession(options: AgentSessionOptions, source: AgentSessionSource = tauri) {
   const { props, emit, askText, pendingAgentRiskReview, canSendMessage, composerBusy, selectedTerminalContext, scrollMessagesToLatest, closeAiCommandRiskConfirm } = options
   const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer, finishAnswerMessage } = options.answerState
@@ -416,15 +421,17 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
     // 步数上限与命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
     // 重试时传入已完成的步骤,恢复执行上下文
-    const { done, stop } = runAgentTask(goal, deps, {
-      stepLimit: props.agentStepLimit,
-      commandTimeoutMs: props.agentCommandTimeoutMs,
-      initialSteps: assistantMessage.agentSteps?.filter(step => step.status === 'completed' || step.status === 'skipped'),
-      retryStep
-    })
-    agentStopHandle = stop
     try {
-      const finalState = await done
+      const task = runAgentTask(goal, deps, {
+        stepLimit: props.agentStepLimit,
+        commandTimeoutMs: props.agentCommandTimeoutMs,
+        initialSteps: assistantMessage.agentSteps
+          ?.filter(step => step.status === 'completed' || step.status === 'skipped')
+          .map(snapshotAgentStep),
+        retryStep: retryStep ? snapshotAgentStep(retryStep) : undefined
+      })
+      agentStopHandle = task.stop
+      const finalState = await task.done
       agentRun.value = finalState
       syncAgentRunToMessage(finalState)
       if (finalState.status === 'error' && finalState.error) emit('aiError', finalState.error)
@@ -441,6 +448,31 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         )
         void maybeCompactConversation(requestWorkspaceSessionId)
       }
+    } catch (error) {
+      const detail = `Agent 任务异常:${formatAiError(error)}`
+      const steps = agentRun.value?.steps ?? [
+        ...(assistantMessage.agentSteps ?? []),
+        ...(retryStep && !assistantMessage.agentSteps?.some(step => step.id === retryStep.id) ? [retryStep] : [])
+      ]
+      agentRun.value = null
+      const failedMessage: AiMessage = {
+        ...assistantMessage,
+        mode: 'agent',
+        agentSteps: steps,
+        agentStatus: 'error',
+        errorKind: 'protocol',
+        stopReason: undefined,
+        payloadJson: JSON.stringify({
+          mode: 'agent',
+          agentSteps: persistableAgentSteps(steps),
+          agentStatus: 'error',
+          errorKind: 'protocol',
+          terminalConnectionGeneration: boundConnectionGeneration,
+          usage: assistantMessage.usage
+        })
+      }
+      emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(failedMessage, detail, agentStreamText.value)))
+      emit('aiError', detail)
     } finally {
       agentStopHandle = null
       agentPendingApproval.value = null

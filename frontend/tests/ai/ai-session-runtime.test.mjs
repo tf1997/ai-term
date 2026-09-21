@@ -42,6 +42,8 @@ function mountRuntime(t, options = {}) {
   const commands = []
   const saves = []
   const events = []
+  const modelRequests = []
+  const cancellations = []
   const props = reactive({
     config: { id: 'config', baseUrl: 'https://fixture.invalid/v1', model: 'test', apiKey: 'fixture' },
     apiKey: '', workspaceSessionId: 'session', connectionId: 'local', terminalId: 'terminal',
@@ -74,7 +76,13 @@ function mountRuntime(t, options = {}) {
         maybeGenerateSessionTitle() {}, maybeCompactConversation: async () => {}
       }
     }
-    const api = { onAiChatStream: async (_id, listener) => { streamListener = listener; return () => {} }, cancelTask: async () => {} }
+    const api = {
+      onAiChatStream: async (_id, listener) => { streamListener = listener; return () => {} },
+      cancelTask: async id => {
+        cancellations.push(id)
+        await options.cancelTask?.(id)
+      }
+    }
     chat = useAiChat(common, { ...api, chatWithAiProviderStream: options.chatResponse ?? (async () => ({ answer: '完成' })) })
     agent = useAgentSession({
       ...common, askText: ref(''), pendingAgentRiskReview: ref(false), canSendMessage: () => true,
@@ -82,10 +90,11 @@ function mountRuntime(t, options = {}) {
       scrollMessagesToLatest() {}, closeAiCommandRiskConfirm() {}
     }, {
       ...api, touchAgentCommandAllowlistEntry: async () => {},
-      aiAgentTurnStream: async () => {
+      aiAgentTurnStream: async (id, request) => {
+        modelRequests.push({ id, request })
         const next = scriptedResponses.shift()
         if (!next) throw Error('Unexpected extra model request')
-        return next
+        return typeof next === 'function' ? next(request) : next
       }
     })
     return () => null
@@ -99,13 +108,137 @@ function mountRuntime(t, options = {}) {
     else globalThis.window = previousWindow
   })
   return {
-    props, commands, saves, events, answerState, chat, agent, assistant,
+    props, commands, saves, events, modelRequests, cancellations, answerState, chat, agent, assistant,
     advance: seconds => { now += seconds * 1000 },
     stream: event => streamListener(event),
     runAgent: () => agent.runAgentTurn(assistant, '检查状态', undefined, 'question'),
+    retryAgent: () => {
+      const message = props.messages[0]
+      const retryStep = message.agentSteps?.findLast(step => step.status === 'failed')
+      const pending = {
+        ...message, text: '', error: false, errorKind: undefined, stopReason: undefined,
+        streaming: true, agentStatus: 'running', payloadJson: undefined,
+        agentSteps: message.agentSteps?.filter(step => step.status === 'completed' || step.status === 'skipped')
+      }
+      emit('updateMessage', pending)
+      return agent.runAgentTurn(pending, '检查状态', undefined, 'question', retryStep)
+    },
     runChat: () => chat.runChatTurn(assistant, '检查状态', undefined, 'question')
   }
 }
+
+test('完成工具后遇到 HTTP 502，响应式消息重试可停止并取消新请求', { timeout: 2000 }, async t => {
+  const request = deferred()
+  const cancelled = deferred()
+  t.after(() => request.resolve(response()))
+  const fixture = mountRuntime(t, {
+    responses: [response(commandCall('first')), () => { throw Error('HTTP 502') }, () => request.promise],
+    cancelTask: id => cancelled.resolve(id)
+  })
+  const firstRun = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  fixture.agent.resolveAgentApproval('execute')
+  await firstRun
+  const failed = fixture.props.messages[0]
+  assert.equal(failed.agentStatus, 'error')
+  assert.match(failed.text, /HTTP 502/)
+  assert.equal(failed.agentSteps[0].status, 'completed')
+
+  const retry = fixture.retryAgent()
+  await until(() => fixture.modelRequests.length === 3)
+  assert.equal(fixture.agent.agentRunActive.value, true)
+  assert.equal(fixture.agent.agentTaskPending(), true)
+  assert.equal(fixture.answerState.isAsking.value, true)
+  const retriedRequest = fixture.modelRequests[2]
+  assert.notEqual(retriedRequest.id, fixture.modelRequests[1].id)
+  assert.equal(JSON.parse(retriedRequest.request.turns[1].content).output, 'ok')
+  assert.deepEqual(fixture.commands, ['printf status'], '已完成的命令不能重复执行')
+
+  fixture.advance(12)
+  fixture.agent.stopAgentRun()
+  await retry
+  assert.equal(fixture.props.messages[0].id, failed.id)
+  assert.equal(fixture.props.messages[0].agentStatus, 'stopped')
+  assert.equal(fixture.props.messages[0].streaming, false)
+  assert.equal(fixture.props.messages[0].durationSeconds, 12)
+  assert.equal(fixture.answerState.isAsking.value, false)
+  assert.equal(fixture.answerState.currentAssistantMessageId.value, '')
+  assert.equal(fixture.agent.agentTaskPending(), false)
+  assert.equal(await cancelled.promise, retriedRequest.id)
+  assert.deepEqual(fixture.cancellations, [retriedRequest.id])
+
+  fixture.stream({ kind: 'chunk', delta: '停止后迟到的内容' })
+  request.resolve(response(commandCall('late-command')))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(fixture.props.messages[0].agentStatus, 'stopped')
+  assert.equal(fixture.agent.agentStreamText.value, '')
+  assert.deepEqual(fixture.commands, ['printf status'])
+})
+
+test('失败命令重试复制响应式风险记录，执行时可停止且不改写旧步骤', { timeout: 2000 }, async t => {
+  const commandResult = deferred()
+  let commandCancelled = false
+  const fixture = mountRuntime(t, { responses: [response(commandCall('failed', 'systemctl restart nginx'))] })
+  fixture.props.agentCommandRunner = () => { throw Error('Shell 未就绪') }
+  const firstRun = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  fixture.agent.resolveAgentApproval('execute', true)
+  await firstRun
+  const failed = fixture.props.messages[0].agentSteps[0]
+  assert.equal(failed.status, 'failed')
+  assert.ok(failed.risks.length, '覆盖嵌套的 Vue 响应式风险对象')
+
+  fixture.props.agentCommandRunner = (_terminal, command) => {
+    fixture.commands.push(command)
+    return {
+      result: commandResult.promise, peekOutput: () => '',
+      cancel: () => { commandCancelled = true; commandResult.resolve({ status: 'cancelled' }) }
+    }
+  }
+  const retry = fixture.retryAgent()
+  await until(() => fixture.agent.agentRun.value?.steps[0].deadlineAt)
+  assert.deepEqual(fixture.commands, ['systemctl restart nginx'])
+  assert.equal(fixture.props.messages[0].agentSteps[0].status, 'running')
+  assert.equal(failed.status, 'failed', '重试不能修改之前的响应式步骤')
+  assert.deepEqual(fixture.props.messages[0].agentSteps[0].risks, failed.risks)
+  fixture.agent.stopAgentRun()
+  await retry
+  assert.equal(commandCancelled, true)
+  assert.equal(fixture.modelRequests.length, 1, '停止后不再请求模型')
+  assert.equal(fixture.props.messages[0].agentStatus, 'stopped')
+  assert.equal(fixture.answerState.isAsking.value, false)
+})
+
+test('重试循环同步启动异常会保存错误并清理忙碌状态，之后仍可重试', { timeout: 2000 }, async t => {
+  const fixture = mountRuntime(t, {
+    responses: [response(commandCall('first')), () => { throw Error('HTTP 502') }, response()]
+  })
+  const firstRun = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  fixture.agent.resolveAgentApproval('execute')
+  await firstRun
+  t.mock.method(globalThis, 'structuredClone', () => { throw Error('无法恢复步骤快照') }, { times: 1 })
+  await fixture.retryAgent()
+  const failed = fixture.props.messages[0]
+  assert.equal(failed.agentStatus, 'error')
+  assert.equal(failed.error, true)
+  assert.equal(failed.streaming, false)
+  assert.match(failed.text, /无法恢复步骤快照/)
+  assert.equal(fixture.answerState.isAsking.value, false)
+  assert.equal(fixture.answerState.currentAssistantMessageId.value, '')
+  assert.equal(fixture.agent.agentTaskPending(), false)
+  assert.equal(fixture.agent.agentRunActive.value, false)
+  assert.equal(fixture.agent.agentRunMessageId.value, '')
+  const restored = hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: failed.payloadJson })
+  assert.equal(restored.agentStatus, 'error')
+  assert.equal(restored.errorKind, 'protocol')
+  assert.equal(restored.agentSteps[0].output, 'ok')
+  assert.ok(fixture.events.some(([event, detail]) => event === 'aiError' && detail.includes('无法恢复步骤快照')))
+
+  await fixture.retryAgent()
+  assert.equal(fixture.props.messages[0].agentStatus, 'done')
+  assert.deepEqual(fixture.commands, ['printf status'])
+})
 
 test('总是允许等待保存成功，并立即用于同一任务的后续命令', { timeout: 2000 }, async t => {
   const saving = deferred()

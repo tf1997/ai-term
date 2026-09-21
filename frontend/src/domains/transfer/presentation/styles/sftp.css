@@ -17,19 +17,9 @@
 }
 
 :root[data-theme="light"] {
-  --sftp-canvas: #f5f7f6;
-  --sftp-surface: #ffffff;
-  --sftp-raised: #f3f5f4;
-  --sftp-input: #ffffff;
-  --sftp-hover: #eef2ef;
-  --sftp-line: #cdd5cf;
-  --sftp-line-soft: #e3e8e4;
-  --sftp-ink: #202923;
-  --sftp-muted: #5e6b62;
-  --sftp-subtle: #6b796f;
-  --sftp-selected: #e6f3eb;
-  --sftp-danger: #ad303e;
-  --sftp-danger-bg: #fff0f1;
+  /* Use the terminal canvas and the shared selection color in the light theme. */
+  --sftp-canvas: var(--workbench-terminal);
+  --sftp-selected: var(--workbench-accent-soft);
 }
 
 .app-shell .files-panel {

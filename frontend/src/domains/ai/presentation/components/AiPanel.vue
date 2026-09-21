@@ -266,9 +266,7 @@ function selectPanelMode(mode: AiPanelMode) {
 }
 
 function composerPrimaryAction() {
-  if (agentPreparing.value) return cancelAgentPreparation()
-  if (agentRunActive.value) return stopAgentRun()
-  if (isAsking.value) return stopCurrentAnswer()
+  if (composerBusy.value) return stopActiveAiWork()
   if (panelMode.value === 'agent') return void startAgentTask()
   return void sendMessage()
 }
