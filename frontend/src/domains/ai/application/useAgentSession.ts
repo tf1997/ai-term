@@ -48,6 +48,9 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   const agentStreamText = ref('')
 
+  /** Provider reasoning deltas are display-only and never enter Agent turns. */
+  const agentReasoningText = ref('')
+
   const agentModeNotice = ref('')
 
   const agentPreparing = ref(false)
@@ -155,6 +158,15 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   /** Agent 任务的最大命令输出捕获量(回传模型前的截断上限)。 */
   const AGENT_OUTPUT_MAX_CHARS = 4000
+  const AGENT_REASONING_MAX_CHARS = 12_000
+
+  function appendAgentReasoning(delta: string) {
+    if (!delta) return
+    const next = `${agentReasoningText.value}${delta}`
+    agentReasoningText.value = next.length > AGENT_REASONING_MAX_CHARS
+      ? next.slice(next.length - AGENT_REASONING_MAX_CHARS)
+      : next
+  }
 
   /**
    * Agent 发起前的通道预检。返回空串表示可以开跑,否则是要显示在编辑器上方的提示。
@@ -305,6 +317,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     agentRun.value = null
     agentRunMessageId.value = assistantMessage.id
     agentStreamText.value = ''
+    agentReasoningText.value = ''
     currentAssistantMessageId.value = assistantMessage.id
     startAnswerTimer()
 
@@ -319,6 +332,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         mode: 'agent',
         text: failed ? state.error || '任务出错' : state.finalText,
         agentSteps: state.steps,
+        agentReasoning: agentReasoningText.value || undefined,
         agentStatus: status,
         errorKind: failed ? state.errorKind : undefined,
         stopReason: status === 'stopped' ? state.stopReason : undefined,
@@ -331,6 +345,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
               mode: 'agent',
               agentSteps: persistableAgentSteps(state.steps),
               agentStatus: status,
+              agentReasoning: agentReasoningText.value || undefined,
               errorKind: failed ? state.errorKind : undefined,
               stopReason: status === 'stopped' ? state.stopReason : undefined,
               terminalConnectionGeneration: boundConnectionGeneration,
@@ -352,6 +367,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       callModel: async (turns, signal) => {
         const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${boundTerminalId}-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         agentStreamText.value = ''
+        // Keep reasoning from earlier model turns visible after a tool result;
+        // this field is display-only and is never added to the next request.
+        if (agentReasoningText.value) {
+          agentReasoningText.value += '\n\n'
+        }
         let unlisten: (() => void) | undefined
         let cancelRequested = false
         // stop() 只翻转 signal.cancelled,由这里把取消传导给后端流式请求
@@ -365,6 +385,9 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           unlisten = await onAiChatStream(requestId, (event) => {
             if (event.kind === 'chunk' && !signal.cancelled) {
               agentStreamText.value += event.delta
+            }
+            if (event.kind === 'reasoning' && !signal.cancelled) {
+              appendAgentReasoning(event.delta)
             }
           })
           return await aiAgentTurnStream(requestId, {
@@ -475,6 +498,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         ...assistantMessage,
         mode: 'agent',
         agentSteps: steps,
+        agentReasoning: agentReasoningText.value || undefined,
         agentStatus: 'error',
         errorKind: 'protocol',
         stopReason: undefined,
@@ -482,6 +506,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           mode: 'agent',
           agentSteps: persistableAgentSteps(steps),
           agentStatus: 'error',
+          agentReasoning: agentReasoningText.value || undefined,
           errorKind: 'protocol',
           terminalConnectionGeneration: boundConnectionGeneration,
           usage: assistantMessage.usage
@@ -499,6 +524,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       agentApprovalSaving.value = false
       agentPendingTimeout.value = null
       agentStreamText.value = ''
+      agentReasoningText.value = ''
       agentRunMessageId.value = ''
       finishAnswerTimer(assistantMessage.id)
       if (currentAssistantMessageId.value === assistantMessage.id) currentAssistantMessageId.value = ''
@@ -536,5 +562,5 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

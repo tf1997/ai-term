@@ -51,6 +51,7 @@ pub struct AiChatStreamEvent {
 #[serde(rename_all = "kebab-case")]
 pub enum AiChatStreamEventKind {
     Chunk,
+    Reasoning,
     Done,
     Error,
 }

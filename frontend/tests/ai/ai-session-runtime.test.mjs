@@ -364,3 +364,19 @@ test('旧消息不伪造耗时，异常耗时不会破坏记录恢复', () => {
     assert.equal(restored.durationSeconds, undefined)
   }
 })
+
+test('Agent 思考过程随 payload 恢复，但不会改写上下文正文', () => {
+  const restored = hydrateAiMessagePayload({
+    id: 'reasoning',
+    mode: 'agent',
+    text: '任务已完成',
+    payloadJson: JSON.stringify({
+      mode: 'agent',
+      agentStatus: 'done',
+      agentReasoning: '先检查服务状态，再确认配置。',
+      agentSteps: []
+    })
+  })
+  assert.equal(restored.agentReasoning, '先检查服务状态，再确认配置。')
+  assert.equal(restored.text, '任务已完成')
+})

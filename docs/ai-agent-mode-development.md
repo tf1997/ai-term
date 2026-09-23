@@ -58,7 +58,7 @@ composer(模式选择)─┤
                       ai_agent_turn_stream(新 Tauri 命令)
                           │ 复用 send_openai_compatible_stream_request / 取消令牌 / 错误解析
                           ▼
-                      文本 delta 走现有事件通道;tool_calls 随命令返回值带回
+                      文本/推理 delta 走事件通道;tool_calls 随命令返回值带回
 ```
 
 ### 4.2 Agent 任务数据流
@@ -66,7 +66,7 @@ composer(模式选择)─┤
 ```
 用户输入任务(agent 模式)
   → agentLoop:调 ai_agent_turn_stream(goal + 已有轮次 + 终端上下文)
-  → 模型返回 text(流式)+ tool_calls
+  → 模型返回 text/reasoning(流式)+ tool_calls
       ├─ tool_calls 为空 → 任务完成,text 即总结
       └─ 含 run_command
            → 风险/敏感检查 + 自动执行判定(6.4)
@@ -204,6 +204,7 @@ messages 组装顺序:
 扩展点在 agent 模块内,不修改 chat 的 `parse_sse_event_deltas`:
 
 - 文本增量:沿用 `choices/0/delta/content` 等指针,通过 `on_delta` 回调外发(前端体验与 chat 一致)。
+- 推理增量:兼容 `reasoning_content`、`reasoning`、`analysis`、`thinking` 字段,通过独立事件仅供 Agent 卡片展示；不写入 `AiAgentTurn.Assistant.text`、对话摘要或下一轮请求上下文。
 - 工具调用增量:`choices/0/delta/tool_calls` 是数组,元素形如 `{index, id?, type?, function:{name?, arguments?}}`。按 `index` 维护累积表:`id`/`name`/`arguments` 均支持分片；重复发送完整字段时去重。兼容流末尾补发完整 `choices/0/message/tool_calls`、对象形式 `arguments` 和缺失调用 ID 的网关。
 - SSE 事件按规范合并同一事件内的多个 `data:` 行，忽略空数据事件，并兼容 LF / CRLF / CR 分隔。
 - 结束判定:流结束后累积表非空即视为有 tool call(不依赖 `finish_reason`,部分网关不回传);`arguments` 在后端仅做非空校验,JSON 解析留给前端以便把格式错误呈现在步骤卡片上重试。
@@ -216,7 +217,7 @@ messages 组装顺序:
 
 新增 `#[tauri::command] ai_agent_turn_stream(request_id, request, app, state) -> Result<AiAgentTurnResponse, String>`,实现完全套用 `chat_with_ai_provider_stream` 的模板(`src-tauri/src/app/commands.rs:481`):`state.register_task` 注册取消令牌、文本 delta 经 `ai_chat_stream_event_name(request_id)` 通道 `emit_all`、结束发 `Done`/`Error`。
 
-事件类型不扩展:`AiChatStreamEventKind` 保持 `Chunk | Done | Error`,tool_calls 通过命令返回值 `AiAgentTurnResponse` 带回(每轮请求天然有一次 await,无需增量推送工具调用)。
+事件类型增加 `Reasoning`;它与 `Chunk` 分开传输，tool_calls 仍通过命令返回值 `AiAgentTurnResponse` 带回(每轮请求天然有一次 await,无需增量推送工具调用)。
 
 `lib.rs` 的 `invoke_handler` 注册新命令;`frontend/src/lib/tauri.ts` 增加 `aiAgentTurnStream(requestId, request)` 包装,事件监听复用现有 `onAiChatStream`。
 

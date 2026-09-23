@@ -48,7 +48,7 @@ export interface AiChatResponse {
 
 export interface AiChatStreamEvent {
   requestId: string
-  kind: 'chunk' | 'done' | 'error'
+  kind: 'chunk' | 'reasoning' | 'done' | 'error'
   delta: string
   error?: string
   contextCompressed?: boolean

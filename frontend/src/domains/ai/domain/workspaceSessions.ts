@@ -78,7 +78,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
   try {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
-      'mode' | 'agentSteps' | 'agentStatus' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
+      'mode' | 'agentSteps' | 'agentStatus' | 'agentReasoning' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
     >> & { usage?: unknown; durationSeconds?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
     const durationSeconds = normalizeAiDuration(payload.durationSeconds)
@@ -92,10 +92,14 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       ? agentSteps.some((step) => step.status === 'failed') ? 'tool' : 'model'
       : undefined)
     const stopReason = typeof payload.stopReason === 'string' ? payload.stopReason : undefined
+    const agentReasoning = typeof payload.agentReasoning === 'string' && payload.agentReasoning.trim()
+      ? payload.agentReasoning
+      : undefined
     return {
       ...message,
       mode: 'agent',
       agentSteps,
+      ...(agentReasoning ? { agentReasoning } : {}),
       agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
         ? payload.agentStatus
         : 'done',

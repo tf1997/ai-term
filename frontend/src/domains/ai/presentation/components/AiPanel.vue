@@ -66,7 +66,7 @@ const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
 const pendingAgentRiskReview = ref(false)
-const { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   canSendMessage: () => canSendMessage.value,
   composerBusy: () => composerBusy.value,
@@ -934,6 +934,18 @@ watch(
               @focus-terminal="emit('focusTerminal')"
             />
           </div>
+          <details
+            v-if="message.mode === 'agent' && (message.agentReasoning || (message.id === agentRunMessageId && agentReasoningText))"
+            class="agent-reasoning"
+            :open="message.id === agentRunMessageId"
+          >
+            <summary>
+              <UiIcon name="ai" size="13" />
+              <span>思考过程</span>
+              <small>仅本次运行展示，不参与上下文</small>
+            </summary>
+            <p>{{ message.id === agentRunMessageId ? agentReasoningText : message.agentReasoning }}</p>
+          </details>
           <p v-if="message.id === agentRunMessageId && agentStreamText && !message.error" class="chat-progress">{{ agentStreamText }}</p>
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>

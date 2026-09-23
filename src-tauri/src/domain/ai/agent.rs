@@ -93,13 +93,15 @@ pub struct AiAgentTurnResponse {
     pub usage: Option<AiTokenUsage>,
 }
 
-pub async fn agent_turn_with_provider_stream<F>(
+pub async fn agent_turn_with_provider_stream<F, R>(
     request: AiAgentTurnRequest,
     on_delta: F,
+    on_reasoning: R,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<AiAgentTurnResponse>
 where
     F: FnMut(String) + Send,
+    R: FnMut(String) + Send,
 {
     validate_agent_turn_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
@@ -114,6 +116,7 @@ where
         payload,
         request.config.timeout_seconds,
         on_delta,
+        on_reasoning,
         cancel_token,
     )
     .await?;
@@ -370,16 +373,18 @@ fn flush_pending_tool_results(messages: &mut Vec<Value>, pending_tool_call_ids: 
 /// 流循环结构与 chat 的 send_openai_compatible_stream_request 一致：
 /// 文本增量经 on_delta 外发，工具调用增量按 index 累积，usage 帧合并进用量，
 /// 全程无 SSE 增量时走非流式兜底。
-async fn send_agent_stream_request<F>(
+async fn send_agent_stream_request<F, R>(
     endpoint: &str,
     api_key: &str,
     payload: Value,
     timeout_seconds: u32,
     mut on_delta: F,
+    mut on_reasoning: R,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<(String, Vec<AiToolCall>, Option<AiTokenUsage>)>
 where
     F: FnMut(String) + Send,
+    R: FnMut(String) + Send,
 {
     let response =
         match open_stream(endpoint, api_key, payload, timeout_seconds, cancel_token).await? {
@@ -420,7 +425,10 @@ where
         event_buffer.push(&chunk_text);
 
         while let Some(event) = event_buffer.next_event() {
-            for delta in parse_agent_sse_event(&event, &mut accumulator, &mut usage)? {
+            let AgentStreamDeltas { text: text_deltas, reasoning } =
+                parse_agent_sse_event(&event, &mut accumulator, &mut usage)?;
+            let has_reasoning = !reasoning.is_empty();
+            for delta in text_deltas {
                 if is_cancelled(cancel_token) {
                     return Ok((text, finalize_tool_calls(accumulator), usage));
                 }
@@ -428,7 +436,13 @@ where
                 text.push_str(&delta);
                 on_delta(delta);
             }
-            saw_sse_delta = saw_sse_delta || !accumulator.is_empty();
+            for delta in reasoning {
+                if is_cancelled(cancel_token) {
+                    return Ok((text, finalize_tool_calls(accumulator), usage));
+                }
+                on_reasoning(delta);
+            }
+            saw_sse_delta = saw_sse_delta || !accumulator.is_empty() || has_reasoning;
             if is_stream_done(&event) {
                 if !saw_sse_delta {
                     bail!("模型返回为空");
@@ -443,8 +457,10 @@ where
     }
 
     if !event_buffer.remaining().trim().is_empty() {
-        for delta in parse_agent_sse_event(event_buffer.remaining(), &mut accumulator, &mut usage)?
-        {
+        let AgentStreamDeltas { text: text_deltas, reasoning } =
+            parse_agent_sse_event(event_buffer.remaining(), &mut accumulator, &mut usage)?;
+        let has_reasoning = !reasoning.is_empty();
+        for delta in text_deltas {
             if is_cancelled(cancel_token) {
                 return Ok((text, finalize_tool_calls(accumulator), usage));
             }
@@ -452,7 +468,13 @@ where
             text.push_str(&delta);
             on_delta(delta);
         }
-        saw_sse_delta = saw_sse_delta || !accumulator.is_empty();
+        for delta in reasoning {
+            if is_cancelled(cancel_token) {
+                return Ok((text, finalize_tool_calls(accumulator), usage));
+            }
+            on_reasoning(delta);
+        }
+        saw_sse_delta = saw_sse_delta || !accumulator.is_empty() || has_reasoning;
     }
 
     if saw_sse_delta {
@@ -467,14 +489,20 @@ where
     Ok((text, tool_calls, usage_from_json(&raw)))
 }
 
-/// 解析一个 SSE 事件：返回文本增量，工具调用增量累积进 accumulator，
-/// usage 快照合并进 usage。
+#[derive(Debug, Default)]
+struct AgentStreamDeltas {
+    text: Vec<String>,
+    reasoning: Vec<String>,
+}
+
+/// 解析一个 SSE 事件：分别返回文本和思考增量；工具调用增量累积进
+/// accumulator，usage 快照合并进 usage。reasoning 永远不进入 Agent 轮次。
 fn parse_agent_sse_event(
     event: &str,
     accumulator: &mut BTreeMap<u64, AiToolCall>,
     usage: &mut Option<AiTokenUsage>,
-) -> Result<Vec<String>> {
-    let mut deltas = Vec::new();
+) -> Result<AgentStreamDeltas> {
+    let mut deltas = AgentStreamDeltas::default();
 
     for data in sse_data_payloads(event) {
         if data == "[DONE]" {
@@ -487,13 +515,41 @@ fn parse_agent_sse_event(
             bail!("模型流式返回错误：{error}");
         }
         if let Some(delta) = extract_stream_delta(&payload) {
-            deltas.push(delta);
+            deltas.text.push(delta);
+        }
+        if let Some(delta) = extract_reasoning_delta(&payload) {
+            deltas.reasoning.push(delta);
         }
         accumulate_tool_call_deltas(accumulator, &payload);
         merge_usage(usage, &payload);
     }
 
     Ok(deltas)
+}
+
+/// Compatible reasoning field names used by OpenAI-compatible providers.
+/// This stream is display-only and is intentionally excluded from context.
+fn extract_reasoning_delta(payload: &Value) -> Option<String> {
+    for pointer in [
+        "/choices/0/delta/reasoning_content",
+        "/choices/0/delta/reasoning",
+        "/choices/0/delta/analysis",
+        "/choices/0/delta/thinking",
+        "/choices/0/message/reasoning_content",
+        "/choices/0/message/reasoning",
+        "/reasoning_content",
+        "/reasoning",
+    ] {
+        if let Some(content) = payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(content.to_string());
+        }
+    }
+
+    None
 }
 
 /// 按 index 累积工具调用增量：id/name/arguments 都兼容分片下发。
@@ -714,7 +770,10 @@ mod tests {
         let mut usage = None;
         let mut text = String::new();
         for event in events {
-            for delta in parse_agent_sse_event(event, &mut accumulator, &mut usage).unwrap() {
+            for delta in parse_agent_sse_event(event, &mut accumulator, &mut usage)
+                .unwrap()
+                .text
+            {
                 text.push_str(&delta);
             }
         }
@@ -993,7 +1052,9 @@ mod tests {
         let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
         let mut accumulator = BTreeMap::new();
         assert_eq!(
-            parse_agent_sse_event(event, &mut accumulator, &mut None).unwrap(),
+            parse_agent_sse_event(event, &mut accumulator, &mut None)
+                .unwrap()
+                .text,
             vec!["完成"]
         );
         assert!(accumulator.is_empty());
@@ -1194,6 +1255,21 @@ mod tests {
         let calls = finalize_tool_calls(accumulator);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "run_command");
+    }
+
+    #[test]
+    fn separates_reasoning_from_contextual_assistant_text() {
+        let mut accumulator = BTreeMap::new();
+        let deltas = parse_agent_sse_event(
+            r#"data: {"choices":[{"delta":{"reasoning_content":"先检查磁盘","content":"我先查看磁盘。"}}]}"#,
+            &mut accumulator,
+            &mut None,
+        )
+        .unwrap();
+
+        assert_eq!(deltas.reasoning, vec!["先检查磁盘"]);
+        assert_eq!(deltas.text, vec!["我先查看磁盘。"]);
+        assert!(accumulator.is_empty());
     }
 
     #[test]

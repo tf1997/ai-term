@@ -78,6 +78,13 @@
 .chat-stop-reason, .chat-mode-notice { color: var(--chat-warning); }
 .chat-progress { display: flex; align-items: center; gap: 7px; }
 .chat-progress-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--chat-accent); animation: chat-pulse 1.4s ease-in-out infinite; }
+.agent-reasoning { min-width: 0; border: 1px solid color-mix(in srgb, var(--chat-accent) 24%, var(--chat-line)); border-radius: 7px; background: color-mix(in srgb, var(--chat-accent) 5%, var(--chat-elevated)); overflow: hidden; }
+.agent-reasoning summary { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 9px; color: var(--chat-accent); font-size: 12px; cursor: pointer; list-style: none; }
+.agent-reasoning summary::-webkit-details-marker { display: none; }
+.agent-reasoning summary::after { content: '⌄'; margin-left: auto; color: var(--chat-muted); transition: transform .16s ease; }
+.agent-reasoning[open] summary::after { transform: rotate(180deg); }
+.agent-reasoning summary small { overflow: hidden; color: var(--chat-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-reasoning p { max-height: 220px; overflow: auto; margin: 0; border-top: 1px solid color-mix(in srgb, var(--chat-accent) 14%, var(--chat-line)); padding: 8px 10px; color: var(--chat-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-collapse-footer { display: flex; justify-content: flex-start; }
 .chat-text-button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--chat-muted); font-size: 12px; }
 .chat-text-button:hover { color: var(--chat-accent); }
