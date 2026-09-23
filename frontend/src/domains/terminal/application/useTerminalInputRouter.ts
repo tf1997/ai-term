@@ -9,9 +9,10 @@ interface TerminalInputRouterOptions {
   tabs: Pick<ReturnType<typeof useTerminalTabs>, 'terminalTabs' | 'activeTerminalId' | 'targetTerminalIds' | 'multiTerminalInputEnabled' | 'isTerminalSyncPaused' | 'pauseTerminalTargets' | 'resumeTerminalSyncTarget'>
   terminalRefs: ShallowRef<Record<string, TerminalPaneInstance | null>>
   showToast: ReturnType<typeof useToasts>['showToast']
+  isTerminalAgentControlled?: (terminalId: string) => boolean
 }
 
-export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: TerminalInputRouterOptions) {
+export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTerminalAgentControlled = () => false }: TerminalInputRouterOptions) {
   const { terminalTabs, activeTerminalId, targetTerminalIds, multiTerminalInputEnabled, isTerminalSyncPaused, pauseTerminalTargets, resumeTerminalSyncTarget } = tabs
   const pendingDelays = new Map<number, (active: boolean) => void>()
   let disposed = false
@@ -54,7 +55,12 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: Termin
   async function executeCommandOnTerminalIds(command: string, targets: string[]) {
     const value = command.trim()
     if (!value) return
-    const pendingTargets = new Set(targets)
+    const availableTargets = targets.filter((terminalId) => !isTerminalAgentControlled(terminalId))
+    if (availableTargets.length === 0 && targets.length > 0) {
+      showToast('warning', '终端输入已锁定', '当前终端正在由 Agent 接管；可切换到其他终端执行命令。')
+      return
+    }
+    const pendingTargets = new Set(availableTargets)
     const lastReadiness = new Map<string, ReturnType<TerminalPaneInstance['commandExecutionReadiness']>>()
     let sentCount = 0
 
@@ -101,6 +107,10 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: Termin
     const value = command.trim()
     if (!value) return
     const terminalId = activeTerminalId.value
+    if (isTerminalAgentControlled(terminalId)) {
+      showToast('warning', '终端输入已锁定', '当前终端正在由 Agent 接管；任务结束后恢复手动输入。')
+      return
+    }
     let lastReadiness: ReturnType<TerminalPaneInstance['commandExecutionReadiness']> = 'unavailable'
 
     for (const delay of COMMAND_EXECUTION_RETRY_DELAYS_MS) {
@@ -147,10 +157,19 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast }: Termin
   async function writeInputToTargetTerminals(data: string) {
     if (!data) return
     if (isActiveTerminalOnlyInput(data)) {
+      if (isTerminalAgentControlled(activeTerminalId.value)) {
+        showToast('warning', '终端输入已锁定', '当前终端正在由 Agent 接管；任务结束后恢复手动输入。')
+        return
+      }
       writeInputToActiveTerminal(data)
       return
     }
-    const pendingTargets = new Set(targetTerminalIds.value)
+    const targets = targetTerminalIds.value.filter((terminalId) => !isTerminalAgentControlled(terminalId))
+    if (targets.length === 0 && targetTerminalIds.value.length > 0) {
+      showToast('warning', '终端输入已锁定', '当前终端正在由 Agent 接管；可切换到其他终端执行命令。')
+      return
+    }
+    const pendingTargets = new Set(targets)
     const lineBusyTargets = new Set<string>()
     const lastReadiness = new Map<string, ReturnType<TerminalPaneInstance['commandExecutionReadiness']>>()
     let sentCount = 0

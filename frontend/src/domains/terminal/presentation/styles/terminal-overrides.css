@@ -6,15 +6,52 @@
   position: relative;
   min-width: 0;
   min-height: 0;
-  display: block;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   box-sizing: border-box;
   background: #03070c;
   padding: 8px;
 }
+.terminal-agent-takeover {
+  position: relative;
+  z-index: 6;
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 0;
+  border: 1px solid color-mix(in srgb, var(--workbench-accent-strong) 48%, var(--workbench-line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--workbench-accent) 11%, var(--workbench-terminal));
+  color: var(--workbench-text-strong);
+  padding: 0 10px;
+  margin-bottom: 6px;
+  font-size: var(--font-xs);
+  pointer-events: none;
+}
+.terminal-agent-takeover small {
+  color: var(--workbench-muted);
+  margin-left: auto;
+}
+.app-shell.theme-light .terminal-agent-takeover {
+  border-color: #bfe5d1;
+  background: #effaf4;
+  color: #075e41;
+}
+.app-shell.theme-light .terminal-agent-takeover small {
+  color: #47705f;
+}
+.terminal-agent-takeover + .xterm-host {
+  padding-top: 0;
+}
+.terminal-pane.agent-controlled .quick-command-bar {
+  opacity: .7;
+}
 .terminal-native-code .xterm-host {
   min-height: 0;
-  height: 100%;
+  height: auto;
+  flex: 1 1 auto;
   background: linear-gradient(180deg, rgba(5, 12, 13, .98), rgba(3, 8, 10, .98));
 }
 .xterm-host .xterm-rows {

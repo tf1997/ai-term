@@ -12,6 +12,7 @@ const props = defineProps<{
   targetTerminalIds: readonly string[]
   pausedTerminalIds: readonly string[]
   terminalTargetTitle: string
+  agentControlledTerminalIds?: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +48,7 @@ const terminalSearch = ref('')
 const tabButtons = new Map<string, HTMLButtonElement>()
 const targetIds = computed(() => new Set(props.targetTerminalIds))
 const pausedIds = computed(() => new Set(props.pausedTerminalIds))
+const agentControlledIds = computed(() => new Set(props.agentControlledTerminalIds ?? []))
 const syncing = computed(() => props.targetTerminalIds.length > 1)
 const pausedCount = computed(() => props.targetTerminalIds.filter(id => pausedIds.value.has(id)).length)
 const filteredTabs = computed(() => {
@@ -74,10 +76,11 @@ function tabDescription(tab: TerminalTab) {
 }
 
 function tabTitle(tab: TerminalTab) {
+  const agentState = agentControlledIds.value.has(tab.id) ? 'Agent 正在接管，任务结束后恢复输入；任务期间不能关闭' : ''
   const syncState = syncing.value && targetIds.value.has(tab.id)
     ? pausedIds.value.has(tab.id) ? '键盘同步已暂停，空提示符时自动恢复' : '同步输入目标'
     : ''
-  return [displayTitle(tab), tabDescription(tab), syncState].filter(Boolean).join('\n')
+  return [displayTitle(tab), tabDescription(tab), syncState, agentState].filter(Boolean).join('\n')
 }
 
 function registerTabButton(tabId: string, element: unknown) {
@@ -266,7 +269,7 @@ onBeforeUnmount(() => {
           class="tab"
           role="presentation"
           :data-terminal-id="tab.id"
-          :class="{ active: tab.id === activeTerminalId, target: syncing && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id) }"
+          :class="{ active: tab.id === activeTerminalId, target: syncing && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id), 'agent-controlled': agentControlledIds.has(tab.id) }"
           @contextmenu.prevent.stop="openTabMenu($event, tab)"
           @keydown="openKeyboardMenu($event, tab)"
           @mousedown="($event.button === 1) && $event.preventDefault()"
@@ -288,9 +291,10 @@ onBeforeUnmount(() => {
             <span class="status-dot" :class="terminalStatusClass(tab.status)" aria-hidden="true" />
             <span class="tab-title">{{ tab.title }}</span>
             <span v-if="titleOrdinals.has(tab.id)" class="tab-ordinal">{{ titleOrdinals.get(tab.id) }}</span>
+            <UiIcon v-if="agentControlledIds.has(tab.id)" class="tab-agent-icon" name="shield" size="12" />
             <UiIcon v-if="syncing && targetIds.has(tab.id)" class="tab-sync-icon" :name="pausedIds.has(tab.id) ? 'alert' : 'network'" size="12" />
           </button>
-          <button v-if="terminalTabs.length > 1" type="button" class="tab-close" :tabindex="tab.id === activeTerminalId ? 0 : -1" :title="`关闭 ${displayTitle(tab)}`" :aria-label="`关闭 ${displayTitle(tab)}`" @click.stop="closeTab(tab.id, $event)">
+          <button v-if="terminalTabs.length > 1" type="button" class="tab-close" :disabled="agentControlledIds.has(tab.id)" :tabindex="tab.id === activeTerminalId ? 0 : -1" :title="agentControlledIds.has(tab.id) ? 'Agent 任务运行期间不能关闭此终端' : `关闭 ${displayTitle(tab)}`" :aria-label="agentControlledIds.has(tab.id) ? `${displayTitle(tab)}（Agent 使用中，不能关闭）` : `关闭 ${displayTitle(tab)}`" @click.stop="closeTab(tab.id, $event)">
             <UiIcon name="close" size="12" />
           </button>
         </div>
@@ -342,7 +346,7 @@ onBeforeUnmount(() => {
               <span v-if="tab.id === activeTerminalId" class="terminal-entry-badge">当前</span>
               <span v-else-if="syncing && targetIds.has(tab.id)" class="terminal-entry-badge" :class="{ paused: pausedIds.has(tab.id) }">{{ pausedIds.has(tab.id) ? '同步暂停' : '同步' }}</span>
             </button>
-            <button v-if="terminalTabs.length > 1" type="button" class="terminal-entry-close" :title="`关闭 ${displayTitle(tab)}`" :aria-label="`关闭 ${displayTitle(tab)}`" @click="closeListTab(tab.id)"><UiIcon name="close" size="13" /></button>
+            <button v-if="terminalTabs.length > 1" type="button" class="terminal-entry-close" :disabled="agentControlledIds.has(tab.id)" :title="agentControlledIds.has(tab.id) ? 'Agent 任务运行期间不能关闭此终端' : `关闭 ${displayTitle(tab)}`" :aria-label="agentControlledIds.has(tab.id) ? `${displayTitle(tab)}（Agent 使用中，不能关闭）` : `关闭 ${displayTitle(tab)}`" @click="closeListTab(tab.id)"><UiIcon name="close" size="13" /></button>
           </template>
         </li>
         <li v-if="!filteredTabs.length" class="terminal-list-empty">没有找到匹配的终端</li>

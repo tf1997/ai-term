@@ -26,6 +26,8 @@ export interface AiPanelProps {
   /** 异步确认(无标记终端会跑哨兵探针);返回空串表示可用。 */
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
+  /** Agent 任务接管目标终端时通知宿主，任务结束后传入 false 释放。 */
+  agentTakeoverChange?: (terminalId: string, active: boolean) => void
   agentAllowlistPatterns?: string[]
   /** Resolves only after the allowlist entry is saved; rejection prevents dispatch. */
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>

@@ -195,6 +195,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   async function prepareAgentAction(target: AgentPreparationTarget) {
     const sequence = ++agentPreparationSequence
+    const takeoverChange = props.agentTakeoverChange
+    // Lock the selected terminal before the asynchronous capability probe so
+    // manual input cannot race with the probe command.
+    takeoverChange?.(target.terminalId, true)
     agentPreparing.value = true
     try {
       let blocked = ''
@@ -204,7 +208,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         blocked = `Agent 启动检查失败:${formatAiError(error)}`
       }
       if (sequence !== agentPreparationSequence || !agentTargetIsCurrent(target)) {
+        takeoverChange?.(target.terminalId, false)
         return { cancelled: true, blocked: '' }
+      }
+      if (blocked) {
+        takeoverChange?.(target.terminalId, false)
       }
       return { cancelled: false, blocked }
     } finally {
@@ -240,7 +248,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     }
     emit('appendMessage', assistantMessage)
     askText.value = ''
-    await runAgentTurn(assistantMessage, text, selectedContext, userMessage.id)
+    await runAgentTurn(assistantMessage, text, selectedContext, userMessage.id, undefined, true)
   }
 
   /**
@@ -252,10 +260,12 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     rawGoal: string,
     selectedContext: TerminalSelectionEvent | undefined,
     historyCutoffMessageId: string,
-    retryStep?: AgentStep
+    retryStep?: AgentStep,
+    takeoverAlreadyAcquired = false
   ) {
     const runner = props.agentCommandRunner
     if (!runner) {
+      if (takeoverAlreadyAcquired) props.agentTakeoverChange?.(assistantMessage.terminalId, false)
       agentModeNotice.value = 'Agent 执行通道未接入,请更新应用或切回对话模式'
       return
     }
@@ -421,6 +431,12 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
     // 步数上限与命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
     // 重试时传入已完成的步骤,恢复执行上下文
+    // The task owns the terminal from this point until every model/approval/
+    // command promise has settled. The host uses this signal to block manual
+    // input and protect the tab from being closed while the task is running.
+    const takeoverChange = props.agentTakeoverChange
+    if (!takeoverAlreadyAcquired) takeoverChange?.(boundTerminalId, true)
+    let takeoverAcquired = true
     try {
       const task = runAgentTask(goal, deps, {
         stepLimit: props.agentStepLimit,
@@ -474,6 +490,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(failedMessage, detail, agentStreamText.value)))
       emit('aiError', detail)
     } finally {
+      if (takeoverAcquired) {
+        takeoverAcquired = false
+        takeoverChange?.(boundTerminalId, false)
+      }
       agentStopHandle = null
       agentPendingApproval.value = null
       agentApprovalSaving.value = false

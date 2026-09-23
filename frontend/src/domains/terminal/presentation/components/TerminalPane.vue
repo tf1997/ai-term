@@ -73,6 +73,7 @@ interface PreparedTerminalInputOptions {
   source: TerminalInputWriteSource
   sourceTerminalId?: string
   submittedCommands?: readonly string[]
+  preserveFocus?: boolean
   onWritten?: () => void
   onWriteFailed?: (error: unknown) => void
 }
@@ -99,6 +100,8 @@ interface CompletionSuggestion {
 const props = defineProps<{
   terminalId: string
   active: boolean
+  /** Agent 正在使用此终端时，屏蔽所有人工输入和普通命令派发。 */
+  agentControlled?: boolean
   profile?: ConnectionProfile
   connectRequest: number
   commandHistory: CommandHistoryEntry[]
@@ -1780,6 +1783,10 @@ onMounted(async () => {
 
   dataDisposable = terminal.onData((data) => {
     if (handleTerminalProtocolResponse(data)) return
+    if (props.agentControlled) {
+      closeCompletion()
+      return
+    }
     if (terminalInputDestinationAvailable()) {
       if (handleCompletionInput(data)) return
       forwardInteractiveTerminalInput(data)
@@ -2103,6 +2110,10 @@ async function copyTerminalOutput() {
 }
 
 function restartLocalTerminal() {
+  if (props.agentControlled) {
+    showQuickCommandBarNotice('Agent 正在接管当前终端，任务结束后恢复操作。')
+    return
+  }
   void connectLocal()
 }
 
@@ -2118,6 +2129,10 @@ function showQuickCommandBarNotice(message: string) {
 function fillCommand(command: string) {
   const value = command.trim()
   if (!value) return false
+  if (props.agentControlled) {
+    showQuickCommandBarNotice('Agent 正在接管当前终端，暂不允许手动输入。')
+    return false
+  }
   // 提示语按就绪判定给,而不是看影子缓冲:缓冲为空只说明跟踪不知道行里有什么,
   // 不代表行是空的,反过来也一样
   const readiness = commandExecutionReadiness()
@@ -2184,7 +2199,7 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
     if (!enqueueTerminalInput(data, options.source, commits, failures, options.sourceTerminalId)) return false
     // vim 鼠标模式下 xterm 会以 onData 形式发出鼠标上报等转义序列,并不代表
     // 用户在终端打字;此时不抢焦点,避免把 AI/脚本面板输入框的焦点拉回终端
-    if (options.source !== 'interactive' || !data.startsWith('\x1b')) {
+    if (!options.preserveFocus && (options.source !== 'interactive' || !data.startsWith('\x1b'))) {
       void nextTick(() => terminal?.focus())
     }
     return true
@@ -2200,9 +2215,10 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
  * 派发一条命令到终端。`historyCommand` 用于哨兵路径:派发的是包装后的长命令,
  * 但命令历史与事件应记录用户/模型看到的干净命令;传空串则不记历史(探针)。
  */
-function executeCommand(command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void }) {
+function executeCommand(command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) {
   const value = command.trim()
   if (!value) return false
+  if (props.agentControlled && !options?.allowDuringAgentTakeover) return false
   const recorded = options?.historyCommand ?? value
   refreshTerminalInputContext()
   if (terminalBackendInputReady()) {
@@ -2211,6 +2227,7 @@ function executeCommand(command: string, options?: { historyCommand?: string; on
     const integrationCaptures = shellIntegrationInputActive()
     const accepted = writePreparedTerminalInput(value + '\r', {
       source: 'command',
+      preserveFocus: props.agentControlled && options?.allowDuringAgentTakeover === true,
       // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
       onWritten: () => {
         if (!integrationCaptures) recordCommand(recorded)
@@ -2268,6 +2285,7 @@ function sendInteractiveTerminalInput(data: string, synchronize = true) {
 }
 
 function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
+  if (props.agentControlled) return false
   if (!data || !terminalInputDestinationAvailable()) return false
   resumeUserOutput()
   const inputResult = trackUserInput(data)
@@ -2285,6 +2303,7 @@ function writeSyncedTerminalInput(data: string, sourceTerminalId: string) {
 }
 
 function writeTerminalInput(data: string) {
+  if (props.agentControlled) return false
   if (!data || !terminalInputDestinationAvailable()) return false
   resumeUserOutput()
   if (data.includes('\r') || data.includes('\n')) shellCommandAwaitingPrompt = true
@@ -2295,6 +2314,7 @@ function writeTerminalInput(data: string) {
 }
 
 function writeFileInput(data: string): Promise<boolean> {
+  if (props.agentControlled) return Promise.resolve(false)
   if (!data || !terminalBackendInputReady() || commandExecutionReadiness() !== 'ready') return Promise.resolve(false)
   const timeoutMs = data.includes('AI_TERM_IDENT_BEGIN_') ? 12_000 : 60_000
   const token = internalOutputFilter.begin(data, {
@@ -2317,6 +2337,7 @@ function writeFileInput(data: string): Promise<boolean> {
 }
 
 function interruptFileInput(): Promise<boolean> {
+  if (props.agentControlled) return Promise.resolve(false)
   if (!terminalBackendInputReady()) return Promise.resolve(false)
   return new Promise((resolve, reject) => {
     if (!enqueueTerminalInput('\x03', 'direct', [() => resolve(true)], [reject])) resolve(false)
@@ -2324,9 +2345,11 @@ function interruptFileInput(): Promise<boolean> {
 }
 
 async function pasteClipboardToTerminal() {
+  if (props.agentControlled) return
   try {
     const text = await readClipboard()
     if (!text) return
+    if (props.agentControlled) return
     if (terminal && terminalBackendInputReady()) {
       terminal.paste(text)
       return
@@ -2384,6 +2407,10 @@ function disconnect(renderReady = true, cancelPending = true) {
 }
 
 function disconnectFromButton() {
+  if (props.agentControlled) {
+    showQuickCommandBarNotice('Agent 正在接管当前终端，任务结束后才能断开。')
+    return
+  }
   disconnect()
 }
 
@@ -2440,10 +2467,15 @@ defineExpose({
 </script>
 
 <template>
-  <main class="terminal-pane">
+  <main class="terminal-pane" :class="{ 'agent-controlled': props.agentControlled }">
     <section class="terminal-wrap">
       <div class="terminal-frame terminal-native-code">
         <div ref="terminalBodyWrap" class="terminal-body-wrap">
+          <div v-if="props.agentControlled" class="terminal-agent-takeover" role="status">
+            <UiIcon name="shield" size="13" />
+            <span>Agent 正在接管此终端，任务结束后恢复输入</span>
+            <small>可切换到其他终端操作</small>
+          </div>
           <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
           <div
             v-if="terminalCompletionOpen"
@@ -2477,11 +2509,11 @@ defineExpose({
     </section>
     <section class="quick-command-bar" aria-label="固定命令">
       <span>固定命令</span>
-      <button v-for="command in quickCommands" :key="command" type="button" title="填入终端" @click="fillCommand(command)">
+      <button v-for="command in quickCommands" :key="command" type="button" :disabled="props.agentControlled" title="填入终端" @click="fillCommand(command)">
         {{ command }}
       </button>
       <span v-if="quickCommandBarNotice" class="quick-command-bar-notice" aria-live="polite">{{ quickCommandBarNotice }}</span>
-      <button ref="quickCommandSettingsButton" class="icon-button" type="button" title="固定命令设置" aria-label="固定命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
+      <button ref="quickCommandSettingsButton" class="icon-button" type="button" :disabled="props.agentControlled" title="固定命令设置" aria-label="固定命令设置" @click.stop="openQuickCommandSettings"><UiIcon name="settings" /></button>
     </section>
 
     <teleport to="body">

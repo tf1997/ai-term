@@ -6,6 +6,7 @@ interface TabMenuOptions {
   tabId: string
   activeId: string
   targetIds: readonly string[]
+  protectedIds?: readonly string[]
   select: (id: string) => void
   toggleTarget: (id: string) => void
   create: () => void
@@ -16,6 +17,7 @@ interface TabMenuOptions {
 
 export function terminalContextMenu(options: TabMenuOptions) {
   const { tabs, tabId, activeId, targetIds } = options
+  const protectedTab = options.protectedIds?.includes(tabId) ?? false
   const index = tabs.findIndex(tab => tab.id === tabId)
   if (index < 0) return undefined
   const items: ContextMenuItem[] = []
@@ -27,7 +29,8 @@ export function terminalContextMenu(options: TabMenuOptions) {
   })
   items.push({
     id: 'close', label: '关闭此终端', group: 'close', danger: true,
-    disabled: tabs.length === 1, disabledReason: tabs.length === 1 ? '至少保留一个终端' : undefined,
+    disabled: tabs.length === 1 || protectedTab,
+    disabledReason: tabs.length === 1 ? '至少保留一个终端' : protectedTab ? 'Agent 任务运行期间不能关闭此终端' : undefined,
     action: () => options.close(tabId),
   })
   if (tabs.length > 1) items.push({ id: 'close-others', label: '关闭其他终端', group: 'close', danger: true, action: () => options.closeOthers(tabId) })

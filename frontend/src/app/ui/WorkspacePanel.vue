@@ -39,6 +39,7 @@ const props = defineProps<{
   agentAvailabilityCheck?: () => string
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
+  agentTakeoverChange?: (terminalId: string, active: boolean) => void
   agentAllowlistPatterns?: string[]
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
@@ -151,6 +152,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :agent-availability-check="agentAvailabilityCheck"
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
+      :agent-takeover-change="agentTakeoverChange"
       :agent-allowlist-patterns="agentAllowlistPatterns"
       :agent-allow-pattern="agentAllowPattern"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"

@@ -12,7 +12,7 @@ interface TerminalCaptureOptions {
   getSessionId: () => string
   getShellIntegration: () => AttachedShellIntegration | undefined
   commandExecutionReadiness: TerminalPaneHandle['commandExecutionReadiness']
-  executeCommand: (command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void }) => boolean
+  executeCommand: (command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) => boolean
 }
 
 export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand }: TerminalCaptureOptions) {
@@ -130,7 +130,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     activeAgentCaptureAbort = abortCapture
     const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
 
-    if (!executeCommand(command, { onWriteFailed: failWrite })) {
+    if (!executeCommand(command, { onWriteFailed: failWrite, allowDuringAgentTakeover: true })) {
       armed.dispose()
       settled = true
       clearActiveCapture()
@@ -231,7 +231,8 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     sentinelSink = feed
     if (!executeCommand(wrapped, {
       historyCommand: options?.skipHistory ? '' : command,
-      onWriteFailed: failWrite
+      onWriteFailed: failWrite,
+      allowDuringAgentTakeover: true
     })) {
       settled = true
       detach()

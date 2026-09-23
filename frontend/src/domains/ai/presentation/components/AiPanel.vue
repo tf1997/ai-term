@@ -373,7 +373,7 @@ async function retryMessage(message: AiMessage) {
 
   // 选中内容是实时的:仍然选中就沿用,已经取消则本次不带终端片段
   const selectedContext = selectedTerminalContext.value
-  if (agentMode) await runAgentTurn(pending, question, selectedContext, userMessage.id, retryStep)
+  if (agentMode) await runAgentTurn(pending, question, selectedContext, userMessage.id, retryStep, true)
   else await runChatTurn(pending, question, selectedContext, userMessage.id)
 }
 
@@ -858,7 +858,7 @@ watch(
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? '确认后继续 Agent 任务，并在当前终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
+          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? '确认后继续 Agent 任务，并在任务绑定的终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
           <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
           <template v-if="agentRiskReviewOpen">
             <button class="text-button" type="button" @click="skipAgentRiskReview">跳过命令</button>

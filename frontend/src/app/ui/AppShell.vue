@@ -64,6 +64,8 @@ const {
   pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
   resetTerminalTargetsToActive
 } = terminalTabState
+/** Agent 当前接管的终端标签。任务运行期间只保护这一个启动时绑定的终端。 */
+const agentTakeoverTerminalId = ref('')
 const { activeView, selectView } = useSessionView({ activeTerminalId, terminalTabs })
 const visitedFileTerminals = ref<string[]>([])
 const filePanelTabs = computed(() => terminalTabs.value.filter(tab => visitedFileTerminals.value.includes(tab.id)))
@@ -111,7 +113,12 @@ const {
 const { commandHistoryForConnection, loadCommandHistoryForConnection, recordCommandForConnection } = useCommandHistory()
 const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu()
 const { toasts, showToast, dismissToast } = useToasts()
-const { executeCommandOnTargetTerminals, fillHistoryCommandOnActiveTerminal, pinQuickCommandOnActiveTerminal, writeInputToTargetTerminals, syncTerminalInputToTargets, handleTerminalInputWriteFailure } = useTerminalInputRouter({ tabs: terminalTabState, terminalRefs, showToast })
+const { executeCommandOnTargetTerminals, fillHistoryCommandOnActiveTerminal, pinQuickCommandOnActiveTerminal, writeInputToTargetTerminals, syncTerminalInputToTargets, handleTerminalInputWriteFailure } = useTerminalInputRouter({
+  tabs: terminalTabState,
+  terminalRefs,
+  showToast,
+  isTerminalAgentControlled: terminalId => agentTakeoverTerminalId.value === terminalId
+})
 const { profiles, selectedProfileId, profileStoreStatus, connectionError, connectionSaveState, connectionSaveError, connectionEditorOpen, connectionEditorMode, connectionDraft, selectedProfile, sidebarProfile, connectionLabels, selectProfile, createProfile, editSelectedProfile, copySelectedProfile, closeConnectionEditor, loadProfiles, saveSelectedProfile, deleteSelectedProfile } = useConnectionProfiles({ openConnectionsPanel, showToast })
 const { aiConfigs, selectedAiConfigId, aiConfigSaveState, aiConfigSaveError, aiConfigEditorOpen, aiConfigEditorMode, aiConfigDraft, aiConfig, settingsAiConfig, activeAiRuntimeApiKey, createAiConfig, selectAiConfig, editAiConfig, closeAiConfigEditor, saveAiConfig, deleteSelectedAiConfig, loadAiConfig } = useAiConfigs({ profileStoreStatus, openSettingsPanel, showToast })
 const { appSettings, updateUserSettings: saveUserSettings } = useUserSettings()
@@ -378,6 +385,7 @@ function openAiConfigContextMenu(event: MouseEvent, configId: string) {
 function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
   const menu = terminalContextMenu({
     tabs: terminalTabs.value, tabId: tab.id, activeId: activeTerminalId.value, targetIds: targetTerminalIds.value,
+    protectedIds: agentTakeoverTerminalId.value ? [agentTakeoverTerminalId.value] : [],
     select: id => { selectTerminalTab(id); focusActiveTerminalFromWorkspace() },
     toggleTarget: toggleTerminalTarget,
     create: () => { openLocalTerminal(); focusActiveTerminalFromWorkspace() },
@@ -575,6 +583,14 @@ function agentCommandRunner(terminalId: string, command: string, options?: Agent
   })
 }
 
+function handleAgentTakeoverChange(terminalId: string, active: boolean) {
+  if (active) {
+    agentTakeoverTerminalId.value = terminalId
+    return
+  }
+  if (agentTakeoverTerminalId.value === terminalId) agentTakeoverTerminalId.value = ''
+}
+
 /** Agent 模式可用性快检(同步):返回空串表示可用,否则为不可用原因。 */
 function agentAvailabilityCheck(): string {
   const pane = terminalRefs.value[activeTerminalId.value]
@@ -638,6 +654,10 @@ function createTerminalTab(profile?: ConnectionProfile) {
 }
 
 function closeTerminalTab(tabId: string) {
+  if (agentTakeoverTerminalId.value === tabId) {
+    showToast('warning', '终端正在被 Agent 使用', '任务结束后才能关闭此终端；你可以切换到其他终端。')
+    return
+  }
   if (filePanelRegistry.values[tabId]?.confirmClose() === false) return
   if (!removeTerminalTab(tabId)) return
   cleanUpClosedTerminal(tabId)
@@ -658,7 +678,9 @@ function cleanUpClosedTerminal(tabId: string) {
 
 function closeOtherTerminalTabs(tabId: string) {
   if (!terminalTabs.value.some(tab => tab.id === tabId)) return
-  const ids = terminalTabs.value.filter(tab => tab.id !== tabId).map(tab => tab.id)
+  const ids = terminalTabs.value
+    .filter(tab => tab.id !== tabId && tab.id !== agentTakeoverTerminalId.value)
+    .map(tab => tab.id)
   if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
   const closedIds = removeTerminalTabs(ids, tabId)
   closedIds.forEach(cleanUpClosedTerminal)
@@ -667,7 +689,9 @@ function closeOtherTerminalTabs(tabId: string) {
 function closeTerminalTabsToRight(tabId: string) {
   const index = terminalTabs.value.findIndex(tab => tab.id === tabId)
   if (index < 0) return
-  const ids = terminalTabs.value.slice(index + 1).map(tab => tab.id)
+  const ids = terminalTabs.value.slice(index + 1)
+    .filter(tab => tab.id !== agentTakeoverTerminalId.value)
+    .map(tab => tab.id)
   if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
   const closedIds = removeTerminalTabs(ids, tabId)
   closedIds.forEach(cleanUpClosedTerminal)
@@ -858,6 +882,7 @@ onBeforeUnmount(() => {
         :active-terminal-id="activeTerminalId"
         :target-terminal-ids="targetTerminalIds"
         :paused-terminal-ids="pausedTerminalSyncIds"
+        :agent-controlled-terminal-ids="agentTakeoverTerminalId ? [agentTakeoverTerminalId] : []"
         :terminal-target-title="terminalTargetTitle"
         @select="selectTerminalTab"
         @close="closeTerminalTab"
@@ -1036,6 +1061,7 @@ onBeforeUnmount(() => {
         :aria-labelledby="`terminal-tab-${tab.id}`"
         :terminal-id="tab.id"
         :active="tab.id === activeTerminalId && activeView === 'terminal'"
+        :agent-controlled="tab.id === agentTakeoverTerminalId"
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         :command-history="commandHistoryForTab(tab)"
@@ -1117,6 +1143,7 @@ onBeforeUnmount(() => {
       :agent-availability-check="agentAvailabilityCheck"
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
+      :agent-takeover-change="handleAgentTakeoverChange"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
       :agent-allow-pattern="persistAgentPattern"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
