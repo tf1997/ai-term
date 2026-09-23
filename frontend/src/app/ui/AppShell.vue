@@ -29,7 +29,7 @@ import type { TerminalTab } from '../../domains/terminal/types'
 import { useTerminalTabs } from '../../domains/terminal/index'
 import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
 
-import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntry } from '../../domains/ai/infrastructure/api'
+import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntries } from '../../domains/ai/infrastructure/api'
 import { listConnectionProfiles, saveConnectionProfile } from '../../domains/connections/infrastructure/api'
 import type { AgentAllowlistEntry, AgentCommandHandle, AgentCommandRunOptions } from '../../domains/ai/types'
 
@@ -507,9 +507,17 @@ async function loadAgentAllowlist() {
 }
 
 async function persistAgentPattern(pattern: string, sourceCommand: string) {
-  await saveAgentCommandAllowlistEntry(pattern, sourceCommand)
+  await saveAgentCommandAllowlistEntries([pattern], sourceCommand)
   await loadAgentAllowlist()
   showToast('success', '已加入允许列表', `后续无风险命令匹配此前缀时自动执行：${pattern}`)
+}
+
+async function persistAgentPatterns(patterns: string[], sourceCommand: string) {
+  const uniquePatterns = [...new Set(patterns.map((pattern) => pattern.trim()).filter(Boolean))]
+  if (!uniquePatterns.length) return
+  await saveAgentCommandAllowlistEntries(uniquePatterns, sourceCommand)
+  await loadAgentAllowlist()
+  showToast('success', '已加入允许列表', `已原子保存 ${uniquePatterns.length} 个命令前缀，后续复合命令可按段自动执行。`)
 }
 
 async function allowAgentPattern(pattern: string, sourceCommand: string) {
@@ -1146,6 +1154,7 @@ onBeforeUnmount(() => {
       :agent-takeover-change="handleAgentTakeoverChange"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
       :agent-allow-pattern="persistAgentPattern"
+      :agent-allow-patterns="persistAgentPatterns"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
       :agent-step-limit="appSettings.agentStepLimit"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"

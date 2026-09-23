@@ -1,4 +1,4 @@
-export type ScriptRiskKind = 'delete' | 'edit' | 'reboot' | 'upgrade' | 'service' | 'network' | 'permission' | 'disk'
+export type ScriptRiskKind = 'delete' | 'edit' | 'reboot' | 'upgrade' | 'service' | 'network' | 'permission' | 'disk' | 'execution'
 export type ScriptRiskSeverity = 'high' | 'medium'
 export type ScriptRiskLevel = 'safe' | 'medium' | 'high'
 
@@ -59,9 +59,14 @@ const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
 
   { kind: 'network', label: '网络防火墙', severity: 'high', message: '会修改防火墙或网络规则，可能导致连接中断。', pattern: /\b(?:iptables\s+-f|nft\s+flush|ufw\s+disable|firewall-cmd\b.*--reload)\b/i },
   { kind: 'network', label: 'Windows 网络配置', severity: 'high', message: '会修改 Windows 防火墙、网络栈或连接状态，可能导致远程连接中断。', pattern: /(?:^|[&|()\s])(?:netsh\s+(?:advfirewall|firewall|interface|winsock)|ipconfig\s+\/(?:release|flushdns)|route\s+(?:delete|add)|New-NetFirewallRule|Remove-NetFirewallRule|Set-NetFirewallProfile)\b/i },
+  { kind: 'network', label: 'Linux 网络配置', severity: 'high', message: '会修改 Linux 网络地址、路由、接口或防火墙规则，可能导致远程连接中断。', pattern: /(?:^|[&|()\s])(?:ip\s+(?:addr|address|route|link)\s+(?:add|del|delete|set|replace|change)|iptables\b.*\s(?:-A|-I|-D|-F)|nft\s+(?:add|delete|flush)|ufw\s+(?:allow|deny|delete|enable|disable)|firewall-cmd\b.*(?:--add|--remove|--zone))/i },
 
   { kind: 'permission', label: '权限变更', severity: 'medium', message: '会放宽或改写权限，可能扩大访问风险。', pattern: /\b(?:chmod\s+(?:-R\s+)?777|chown\s+(?:-R\s+)?\S+)\b/i },
   { kind: 'permission', label: 'Windows 权限变更', severity: 'medium', message: '会更改 Windows ACL、所有者或执行策略。', pattern: /(?:^|[&|()\s])(?:icacls|takeown)\b|\b(?:Set-Acl|Set-ExecutionPolicy)\b/i },
+
+  { kind: 'execution', label: '动态执行', severity: 'high', message: '会通过解释器、脚本或动态命令执行任意代码，无法仅凭外层命令判断影响。', pattern: /(?:^|[&|()\s])(?:eval|source|exec|xargs)\b|(?:^|[&|()\s])(?:sh|bash|zsh|dash|ksh|fish|python(?:3)?|perl|ruby|node|php|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-c|--command|\/c|\/r|\/command)\b/i },
+
+  { kind: 'edit', label: '文件写入', severity: 'medium', message: '会通过输出重定向写入文件，请确认目标路径和覆盖行为。', pattern: /(?:^|[\s;|&])(?:\d+)?>{1,2}\s*(?!\/dev\/null\b|&\d\b)\S+/i },
 
   { kind: 'disk', label: '磁盘分区', severity: 'high', message: '会写入磁盘、格式化或修改分区，风险极高。', pattern: /\b(?:dd\s+.*\bof=\/dev\/|mkfs(?:\.|\s|$)|fdisk\b|parted\b|wipefs\b)\b/i },
   { kind: 'disk', label: 'Windows 磁盘操作', severity: 'high', message: '会格式化、清理、加密或修改启动/磁盘配置，风险极高。', pattern: /(?:^|[&|()\s])(?:format(?:\.com)?\b|diskpart\b|bcdedit\b|bootrec\b|manage-bde\b|cipher\s+\/w)|\b(?:Clear-Disk|Initialize-Disk|Format-Volume|Remove-Partition|Set-Partition)\b/i }
@@ -69,17 +74,182 @@ const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
 
 export function analyzeScriptRisks(content: string): ScriptRiskMatch[] {
   return content.split(/\r?\n/).flatMap((line, index) => {
-    const text = normalizeRiskScanLine(line)
-    if (!text || isCommentLine(text)) return []
-    return SCRIPT_RISK_RULES.filter((rule) => rule.pattern.test(text)).map((rule) => ({
-      kind: rule.kind,
-      label: rule.label,
-      severity: rule.severity,
-      line: index + 1,
-      text: line,
-      message: rule.message
-    }))
+    const normalized = normalizeRiskScanLine(line)
+    if (!normalized || isCommentLine(normalized)) return []
+    const segments = splitShellSegments(normalized)
+    const matches = new Map<ScriptRiskKind, ScriptRiskMatch>()
+    segments.forEach((segment) => {
+      const head = riskCommandHead(segment)
+      const preservePaths = PATH_WRITING_COMMANDS.has(head)
+      const text = maskShellLiterals(segment, preservePaths)
+      SCRIPT_RISK_RULES.filter((rule) => rule.pattern.test(text)).forEach((rule) => {
+        if (!matches.has(rule.kind)) matches.set(rule.kind, {
+          kind: rule.kind,
+          label: rule.label,
+          severity: rule.severity,
+          line: index + 1,
+          text: line,
+          message: rule.message
+        })
+      })
+    })
+    return [...matches.values()]
   })
+}
+
+const PATH_WRITING_COMMANDS = new Set([
+  'cp', 'mv', 'tee', 'sed', 'perl', 'rm', 'chmod', 'chown', 'dd', 'install',
+  'set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'rename-item'
+])
+
+const RISK_WRAPPER_COMMANDS = new Set(['sudo', 'doas', 'command', 'nohup', 'nice', 'timeout'])
+
+function splitShellSegments(line: string) {
+  const segments: string[] = []
+  let start = 0
+  let quote: 'single' | 'double' | 'ansi' | null = null
+  let escaped = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    const previous = line[index - 1]
+    if (escaped) { escaped = false; continue }
+    if (quote === 'single') {
+      if (character === "'") quote = null
+      continue
+    }
+    if (quote === 'ansi') {
+      if (character === '\\') escaped = true
+      else if (character === "'") quote = null
+      continue
+    }
+    if (quote === 'double') {
+      if (character === '\\') escaped = true
+      else if (character === '"') quote = null
+      continue
+    }
+    if (character === "'" || character === '"') { quote = character === "'" ? 'single' : 'double'; continue }
+    if (character === '$' && line[index + 1] === "'") { quote = 'ansi'; index += 1; continue }
+    if (character === '\\') { escaped = true; continue }
+    if (character === '#' && (index === 0 || /[\s;]/.test(previous ?? ''))) break
+    if (character === ';' || character === '|' || character === '&') {
+      const segment = line.slice(start, index).trim()
+      if (segment) segments.push(segment)
+      if (line[index + 1] === character || (character === '|' && line[index + 1] === '&')) index += 1
+      start = index + 1
+    }
+  }
+  const last = line.slice(start).trim()
+  if (last) segments.push(last)
+  return segments
+}
+
+function riskCommandHead(segment: string) {
+  const tokens = shellWords(segment)
+  let index = 0
+  while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(tokens[index])) index += 1
+  while (index < tokens.length && RISK_WRAPPER_COMMANDS.has(tokens[index].toLowerCase())) {
+    const wrapper = tokens[index].toLowerCase()
+    index += 1
+    if (wrapper === 'timeout') {
+      while (index < tokens.length && tokens[index].startsWith('-')) index += 1
+      if (/^\d+(?:\.\d+)?[smhd]?$/.test(tokens[index] ?? '')) index += 1
+    }
+  }
+  return (tokens[index] ?? '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase()
+}
+
+function shellWords(value: string) {
+  const words: string[] = []
+  let word = ''
+  let quote: 'single' | 'double' | 'ansi' | null = null
+  let escaped = false
+  const finish = () => { if (word) words.push(word); word = '' }
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    if (escaped) { word += character; escaped = false; continue }
+    if (quote === 'single') { if (character === "'") quote = null; else word += character; continue }
+    if (quote === 'ansi') { if (character === '\\') escaped = true; else if (character === "'") quote = null; else word += character; continue }
+    if (quote === 'double') { if (character === '\\') escaped = true; else if (character === '"') quote = null; else word += character; continue }
+    if (character === "'" || character === '"') { quote = character === "'" ? 'single' : 'double'; continue }
+    if (character === '$' && value[index + 1] === "'") { quote = 'ansi'; index += 1; continue }
+    if (/\s/.test(character)) finish()
+    else word += character
+  }
+  finish()
+  return words
+}
+
+/**
+ * Remove quoted literals and shell comments before applying risk rules. A
+ * regex such as `rm -rf` must not flag `echo "rm -rf ..."`, while the actual
+ * command `rm -rf "/tmp"` still retains its unquoted command and flags.
+ * Escaped characters remain visible because they can change the command's
+ * actual token (for example `\rm`).
+ */
+function maskShellLiterals(line: string, preservePaths = false) {
+  let result = ''
+  let quote: 'single' | 'double' | 'ansi' | null = null
+  let escaped = false
+  let quotedValue = ''
+  let quoteStart = 0
+  const appendQuoted = () => {
+    const value = preservePaths && /^(?:\/?(?:etc|boot|usr|var|opt|tmp|home|root)(?:\/|$)|[A-Za-z]:[\\/]|[~.][\\/])/.test(quotedValue)
+      ? quotedValue
+      : ' '.repeat(Math.max(1, quotedValue.length))
+    result += value
+    quotedValue = ''
+  }
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    const previous = line[index - 1]
+    if (escaped) {
+      if (quote !== null) quotedValue += character
+      else result += character
+      escaped = false
+      continue
+    }
+    if (quote === 'single') {
+      if (character === "'") { quote = null; appendQuoted() }
+      else quotedValue += character
+      continue
+    }
+    if (quote === 'ansi') {
+      if (character === '\\') escaped = true
+      else if (character === "'") quote = null
+      if (character === "'") { quote = null; appendQuoted() }
+      else quotedValue += character
+      continue
+    }
+    if (quote === 'double') {
+      if (character === '\\') escaped = true
+      else if (character === '"') quote = null
+      if (character === '"') { quote = null; appendQuoted() }
+      else quotedValue += character
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character === "'" ? 'single' : 'double'
+      quoteStart = index
+      quotedValue = ''
+      result += ' '
+      continue
+    }
+    if (character === '$' && line[index + 1] === "'") {
+      quote = 'ansi'
+      quoteStart = index
+      quotedValue = ''
+      result += '  '
+      index += 1
+      continue
+    }
+    if (character === '#' && (index === 0 || /[\s;|&()]/.test(previous ?? ''))) break
+    result += character
+  }
+
+  if (quote !== null) result += ' '.repeat(Math.max(1, line.length - quoteStart))
+
+  return result
 }
 
 function normalizeRiskScanLine(line: string) {

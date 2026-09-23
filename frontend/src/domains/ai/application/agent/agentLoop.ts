@@ -20,6 +20,8 @@ export interface AgentLoopDeps {
   requestTimeoutDecision(step: AgentStep, info: AgentTimeoutInfo): Promise<AgentTimeoutDecision>
   /** 「总是允许」:把 pattern 写入允许列表(先落地再执行)。 */
   onAllowPattern(pattern: string, sourceCommand: string): void | Promise<void>
+  /** Atomic multi-pattern grant for compound commands. */
+  onAllowPatterns?(patterns: string[], sourceCommand: string): void | Promise<void>
   /** 每次状态变化的快照回调;收到的是结构化克隆,可安全渲染/暂存。 */
   onStateChange(state: AgentRunState): void
 }
@@ -651,18 +653,22 @@ export function runAgentTask(
     if (decision === 'execute-and-allow' && suggestedPatterns.length) {
       // 先落地允许列表再执行,保证「总是允许」点击即持久化。
       // 多段命令需要补齐每一段,只写第一段会导致下次仍然要人工审批。
-      for (const pattern of suggestedPatterns) {
-        const allowOutcome = await raceWithStop(Promise.resolve(deps.onAllowPattern(pattern, step.command)))
-        if (allowOutcome.kind === 'stopped') {
-          finishStopped()
-          return 'ended'
-        }
-        if (allowOutcome.kind === 'error') {
-          step.status = 'failed'
-          step.failureReason = `保存授权失败：${errorMessage(allowOutcome.error)}`
-          finishError(step.failureReason, 'tool')
-          return 'ended'
-        }
+      const savePatterns = deps.onAllowPatterns
+        ? deps.onAllowPatterns(suggestedPatterns, step.command)
+        : suggestedPatterns.reduce<Promise<void>>(
+          (previous, pattern) => previous.then(() => deps.onAllowPattern(pattern, step.command)),
+          Promise.resolve()
+        )
+      const allowOutcome = await raceWithStop(Promise.resolve(savePatterns))
+      if (allowOutcome.kind === 'stopped') {
+        finishStopped()
+        return 'ended'
+      }
+      if (allowOutcome.kind === 'error') {
+        step.status = 'failed'
+        step.failureReason = `保存授权失败：${errorMessage(allowOutcome.error)}`
+        finishError(step.failureReason, 'tool')
+        return 'ended'
       }
     }
 

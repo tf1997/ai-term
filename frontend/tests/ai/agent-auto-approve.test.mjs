@@ -56,6 +56,9 @@ test('链式命令逐段判定', () => {
   assert.equal(classify('df -h && rm -rf /tmp/x').eligible, false)
   assert.equal(classify('ls & rm -rf /tmp/x').eligible, false, '后台 & 不能夹带写操作')
   assert.equal(classify('df -h; reboot').eligible, false)
+  assert.equal(classify('df -h &&').eligible, false, '悬空操作符不能通过总是允许')
+  assert.equal(classify('df -h |').eligible, false, '悬空管道不能通过总是允许')
+  assert.equal(classify('df -h # && rm -rf /tmp/x').eligible, true, '注释中的操作符不应制造额外命令段')
 })
 
 test('输出重定向一票否决与 /dev/null、fd 复制例外', () => {
@@ -99,6 +102,7 @@ test('命令替换与进程替换否决,单引号内例外', () => {
   // 单引号内为字面量,不否决
   assert.equal(classify("grep '$(pwd)' /tmp/f").eligible, true)
   assert.equal(classify("ls '`x`'").eligible, true)
+  assert.equal(classify('ls (pwd)').eligible, false, '未建模的分组语法不能自动执行')
 })
 
 test('timeout/command 包装与环境变量前缀剥离', () => {

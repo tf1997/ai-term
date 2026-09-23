@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::{
     fmt,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
@@ -133,6 +133,14 @@ impl Deref for StoreConnection<'_> {
     fn deref(&self) -> &Connection {
         self.guard
             .as_ref()
+            .expect("sqlite connection must be initialized while guard exists")
+    }
+}
+
+impl DerefMut for StoreConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.guard
+            .as_mut()
             .expect("sqlite connection must be initialized while guard exists")
     }
 }
@@ -860,6 +868,28 @@ impl SqliteConfigStore {
             "#,
             params![pattern, source_command],
         )?;
+        Ok(())
+    }
+
+    /// Saves all patterns for one compound command in one transaction. A
+    /// partial allowlist would make the next identical command behave
+    /// differently from the approval the user just granted.
+    pub fn save_agent_command_allowlist_entries(&self, entries: &[(String, String)]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for (pattern, source_command) in entries {
+            transaction.execute(
+                r#"
+                INSERT OR IGNORE INTO agent_command_allowlist (pattern, source_command)
+                VALUES (?1, ?2)
+                "#,
+                params![pattern, source_command],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 

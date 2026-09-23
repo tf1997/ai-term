@@ -147,6 +147,8 @@ interface CommandScan {
   redirectVeto: boolean
   /** 存在命令替换 $(、反引号、进程替换 <( )( 或历史展开等注入结构(单引号内除外)。 */
   substitutionVeto: boolean
+  /** 未建模的分组、子 shell 或函数语法，必须人工确认。 */
+  ambiguousSyntaxVeto: boolean
   unclosedQuote: boolean
   heredoc: boolean
   /**
@@ -188,6 +190,7 @@ function scanCommand(command: string): CommandScan {
   let awaitingRedirectTarget = false
   let redirectVeto = false
   let substitutionVeto = false
+  let ambiguousSyntaxVeto = false
   let heredoc = false
   /** 最近一个未被实际内容跟随的分隔符;null 表示末尾有内容。 */
   let danglingSeparator: string | null = null
@@ -291,6 +294,18 @@ function scanCommand(command: string): CommandScan {
     if (ch === '$' && next === '(') { substitutionVeto = true; index += 2; continue }
     if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = null; quote = 'backtick'; index += 1; continue }
     if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; index += 1; continue }
+    if (ch === '#' && (index === 0 || /[\s;]/.test(text[index - 1] ?? ''))) {
+      const newline = text.indexOf('\n', index)
+      if (newline < 0) break
+      index = newline
+      continue
+    }
+    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') {
+      ambiguousSyntaxVeto = true
+      appendChar(ch, false)
+      index += 1
+      continue
+    }
     if (ch === ' ' || ch === '\t') { finishWord(); index += 1; continue }
     if (ch === '\n' || ch === ';') { finishSegment(); danglingSeparator = ';'; index += 1; continue }
     if (ch === '|') {
@@ -373,6 +388,7 @@ function scanCommand(command: string): CommandScan {
     segments,
     redirectVeto,
     substitutionVeto,
+    ambiguousSyntaxVeto,
     unclosedQuote,
     heredoc,
     trailingOperator: danglingSeparator !== null && danglingSeparator !== ';'
@@ -491,8 +507,8 @@ export function classifyForAutoExec(
   const rejected: AgentAutoExecClassification = { eligible: false, suggestedPatterns: [] }
 
   // 不可靠结构与全局一票否决:未闭合引号 / heredoc / 写重定向 / 命令替换类。
-  if (scan.unclosedQuote || scan.heredoc) return rejected
-  if (scan.redirectVeto || scan.substitutionVeto) return rejected
+  if (scan.unclosedQuote || scan.heredoc || scan.trailingOperator) return rejected
+  if (scan.redirectVeto || scan.substitutionVeto || scan.ambiguousSyntaxVeto) return rejected
   if (!scan.segments.length) return rejected
 
   const userPatterns = sources.userPatterns.map((pattern) => pattern.trim()).filter(Boolean)

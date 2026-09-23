@@ -106,6 +106,10 @@ export function saveAgentCommandAllowlistEntry(pattern: string, sourceCommand: s
   return invoke<void>('save_agent_command_allowlist_entry', { pattern, sourceCommand })
 }
 
+export function saveAgentCommandAllowlistEntries(patterns: string[], sourceCommand: string) {
+  return invoke<void>('save_agent_command_allowlist_entries', { patterns, sourceCommand })
+}
+
 export function deleteAgentCommandAllowlistEntry(pattern: string) {
   return invoke<boolean>('delete_agent_command_allowlist_entry', { pattern })
 }

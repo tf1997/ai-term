@@ -425,8 +425,10 @@ where
         event_buffer.push(&chunk_text);
 
         while let Some(event) = event_buffer.next_event() {
-            let AgentStreamDeltas { text: text_deltas, reasoning } =
-                parse_agent_sse_event(&event, &mut accumulator, &mut usage)?;
+            let AgentStreamDeltas {
+                text: text_deltas,
+                reasoning,
+            } = parse_agent_sse_event(&event, &mut accumulator, &mut usage)?;
             let has_reasoning = !reasoning.is_empty();
             for delta in text_deltas {
                 if is_cancelled(cancel_token) {
@@ -457,8 +459,10 @@ where
     }
 
     if !event_buffer.remaining().trim().is_empty() {
-        let AgentStreamDeltas { text: text_deltas, reasoning } =
-            parse_agent_sse_event(event_buffer.remaining(), &mut accumulator, &mut usage)?;
+        let AgentStreamDeltas {
+            text: text_deltas,
+            reasoning,
+        } = parse_agent_sse_event(event_buffer.remaining(), &mut accumulator, &mut usage)?;
         let has_reasoning = !reasoning.is_empty();
         for delta in text_deltas {
             if is_cancelled(cancel_token) {

@@ -440,6 +440,19 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         // within this run must apply to its following steps immediately.
         if (!allowlistPatterns.includes(pattern)) allowlistPatterns.push(pattern)
       },
+      onAllowPatterns: async (patterns, sourceCommand) => {
+        if (props.agentAllowPatterns) {
+          await props.agentAllowPatterns(patterns, sourceCommand)
+        } else {
+          for (const pattern of patterns) {
+            if (!props.agentAllowPattern) throw new Error('允许列表保存通道未接入')
+            await props.agentAllowPattern(pattern, sourceCommand)
+          }
+        }
+        patterns.forEach((pattern) => {
+          if (!allowlistPatterns.includes(pattern)) allowlistPatterns.push(pattern)
+        })
+      },
       onStateChange: (state) => {
         agentRun.value = state
         if (state.status !== 'awaiting-approval') {

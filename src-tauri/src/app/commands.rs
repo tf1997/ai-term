@@ -664,6 +664,18 @@ pub async fn save_agent_command_allowlist_entry(
 }
 
 #[tauri::command]
+pub async fn save_agent_command_allowlist_entries(
+    patterns: Vec<String>,
+    source_command: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .save_agent_command_allowlist_entries(&patterns, &source_command)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub async fn delete_agent_command_allowlist_entry(
     pattern: String,
     state: State<'_, AppState>,

@@ -31,6 +31,7 @@ export interface AiPanelProps {
   agentAllowlistPatterns?: string[]
   /** Resolves only after the allowlist entry is saved; rejection prevents dispatch. */
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
+  agentAllowPatterns?: (patterns: string[], sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
   /** 每个任务的最大步数(设置项);未传时用 agentLoop 的默认值。 */
   agentStepLimit?: number

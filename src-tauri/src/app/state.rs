@@ -245,6 +245,22 @@ impl AppState {
         .await
     }
 
+    pub async fn save_agent_command_allowlist_entries(
+        &self,
+        patterns: &[String],
+        source_command: &str,
+    ) -> Result<()> {
+        let store = self.store("agent allowlist")?;
+        let entries = patterns
+            .iter()
+            .map(|pattern| (pattern.clone(), source_command.to_string()))
+            .collect::<Vec<_>>();
+        run_store_task(store, move |store| {
+            store.save_agent_command_allowlist_entries(&entries)
+        })
+        .await
+    }
+
     pub async fn delete_agent_command_allowlist_entry(&self, pattern: &str) -> Result<bool> {
         let store = self.store("agent allowlist")?;
         let pattern = pattern.to_string();

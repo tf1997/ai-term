@@ -206,6 +206,27 @@ fn sqlite_store_manages_agent_command_allowlist_entries() {
 }
 
 #[test]
+fn sqlite_store_saves_compound_allowlist_entries_as_one_batch() {
+    let store = SqliteConfigStore::new(temp_db_path("agent-allowlist-batch"));
+    let patterns = vec!["ps".to_string(), "grep".to_string(), "head".to_string()];
+
+    store
+        .save_agent_command_allowlist_entries(
+            &patterns
+                .iter()
+                .map(|p| (p.clone(), "ps | grep | head".to_string()))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+    let entries = store.list_agent_command_allowlist().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert!(entries
+        .iter()
+        .all(|entry| entry.source_command == "ps | grep | head"));
+}
+
+#[test]
 fn workspace_models_keep_camel_case_contract_and_legacy_defaults() {
     // 旧前端数据不带 aiMode / payloadJson,反序列化取默认值而不报错。
     let legacy_session: WorkspaceSession = serde_json::from_str(
