@@ -15,7 +15,7 @@ export interface InternalTerminalOutputFilter {
   active(): boolean
 }
 
-type Markers = { token: string; end: string; kind: 'IDENT' | 'FILE' }
+type Markers = { token: string; end: string; kind: 'IDENT' | 'FILE' | 'PROBE' }
 type Operation = Markers & {
   deadline: number
   restorePrefix: string
@@ -33,7 +33,7 @@ const MAX_MARKER_LINE_CHARS = 512
 const MAX_LOOKAHEAD_CHARS = 2_048
 
 function markersFor(commandOrToken: string): Markers | undefined {
-  const match = /AI_TERM_(IDENT|FILE)_BEGIN_([A-Za-z0-9_]{1,160})(?![A-Za-z0-9_])/.exec(commandOrToken)
+  const match = /AI_TERM_(IDENT|FILE|PROBE)_BEGIN_([A-Za-z0-9_]{1,160})(?![A-Za-z0-9_])/.exec(commandOrToken)
   if (!match) return undefined
   return {
     token: match[0],
@@ -172,7 +172,7 @@ export function createInternalTerminalOutputFilter(
       closingLookahead = ''
       resetLine()
       controls.reset()
-      const defaultTimeout = markers.kind === 'IDENT' ? 12_000 : 60_000
+      const defaultTimeout = markers.kind === 'PROBE' ? 8_000 : markers.kind === 'IDENT' ? 12_000 : 60_000
       const timeout = options.timeoutMs === undefined || !Number.isFinite(options.timeoutMs)
         ? defaultTimeout
         : Math.max(1, Math.min(options.timeoutMs, MAX_TIMEOUT_MS))

@@ -24,6 +24,10 @@ export interface AiContextStatus {
   history: number
 }
 
+export type AgentTimelineEntry =
+  | { kind: 'thinking'; id: string; reasoning: string; text: string; legacy?: boolean }
+  | { kind: 'tool'; id: string; stepId: string }
+
 export interface AiMessage {
   id: string
   /** Source connection for this turn; it does not control conversation visibility. */
@@ -44,6 +48,8 @@ export interface AiMessage {
   agentSteps?: AgentStep[]
   /** Agent 推理及工具调用前的过程文字；通过 payloadJson 保存，不额外注入上下文。 */
   agentReasoning?: string
+  /** Ordered display events, separate from the model's execution context. */
+  agentTimeline?: AgentTimelineEntry[]
   agentStatus?: 'running' | 'done' | 'stopped' | 'error'
   stopReason?: string
   /** Agent 启动时绑定的终端连接代次；用于阻止重连后误执行旧任务。 */

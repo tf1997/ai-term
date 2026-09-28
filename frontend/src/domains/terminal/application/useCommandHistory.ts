@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import type { CommandHistoryEntry, CommandRecordedEvent } from '../domain/events'
 import { listCommandHistory, saveCommandHistoryRecord } from '../infrastructure/api'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
+import { isInternalTerminalCommand } from '../domain/internalTerminalCommand'
 import { COMMAND_HISTORY_CACHE_LIMIT, COMMAND_HISTORY_SESSION_ID, nowText } from '../../ai/index'
 
 const defaultStorage = { listCommandHistory, saveCommandHistoryRecord }
@@ -23,7 +24,7 @@ export function useCommandHistory(storage = defaultStorage) {
     if (loadedConnections.has(connectionId)) return Promise.resolve()
     const task = (async () => {
       try {
-        const commands = await listCommandHistory(connectionId)
+        const commands = (await listCommandHistory(connectionId)).filter(entry => !isInternalTerminalCommand(entry.command))
         const localCommands = commandHistoryForConnection(connectionId)
         const persistedIds = new Set(commands.map((entry) => entry.id))
         commandHistoryByConnection.value = {
@@ -43,7 +44,7 @@ export function useCommandHistory(storage = defaultStorage) {
   }
 
   function recordCommandForConnection(connectionId: string, event: CommandRecordedEvent) {
-    if (isSensitiveCommand(event.command)) return
+    if (isSensitiveCommand(event.command) || isInternalTerminalCommand(event.command)) return
     const entry: CommandHistoryEntry = {
       id: `${connectionId}-${event.terminalId}-${Date.now()}-${++commandSequence}`,
       connectionId,

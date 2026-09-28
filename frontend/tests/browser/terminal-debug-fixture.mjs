@@ -125,8 +125,8 @@ export function installTerminalDebugFixture() {
     fixture.calls.push({ cmd, ...args })
     const profileId = profileFor(args.sessionId)
     const identity = fixture.identities[profileId]
-    const begin = args.data.match(/AI_TERM_(?:IDENT|FILE)_BEGIN_[A-Za-z0-9_]+/)?.[0]
-    const end = args.data.match(/AI_TERM_(?:IDENT|FILE)_END_[A-Za-z0-9_]+/)?.[0]
+    const begin = args.data.match(/AI_TERM_(?:IDENT|FILE|PROBE)_BEGIN_[A-Za-z0-9_]+/)?.[0]
+    const end = args.data.match(/AI_TERM_(?:IDENT|FILE|PROBE)_END_[A-Za-z0-9_]+/)?.[0]
     if (identity && begin && end) {
       const mode = fixture.identityMode[profileId]
       const record = { sessionId: args.sessionId, profileId, command: args.data, begin, end, mode: mode ?? 'complete' }
@@ -137,7 +137,10 @@ export function installTerminalDebugFixture() {
       }
       if (mode !== 'hold') {
         const echo = `${args.data.replace(/\r?\n/g, '\r\n')}\x1b[?2004l${debug.shellIntegration ? '\x1b]133;C\x07' : ''}`
-        const body = begin.startsWith('AI_TERM_IDENT_')
+        const sentinelNonce = args.data.match(/\b([a-f0-9]{8})B\b/)?.[1]
+        const body = begin.startsWith('AI_TERM_PROBE_')
+          ? sentinelNonce ? `__AI_TERM_${sentinelNonce}B__\r\n\r\n__AI_TERM_${sentinelNonce}E__:7` : 'probe-result'
+          : begin.startsWith('AI_TERM_IDENT_')
           ? `user=${identity.username}\r\nhostname=${identity.hostname}\r\nips=${identity.ips.join(' ')}\r\npwd=${identity.pwd}\r\nmachine=${identity.machine}`
           : debug.fileBody
         if (mode === 'split-end-control') {

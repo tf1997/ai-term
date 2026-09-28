@@ -12,7 +12,7 @@ interface TerminalCaptureOptions {
   getSessionId: () => string
   getShellIntegration: () => AttachedShellIntegration | undefined
   commandExecutionReadiness: TerminalPaneHandle['commandExecutionReadiness']
-  executeCommand: (command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) => boolean
+  executeCommand: (command: string, options?: { historyCommand?: string; internal?: boolean; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) => boolean
 }
 
 export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand }: TerminalCaptureOptions) {
@@ -231,6 +231,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     sentinelSink = feed
     if (!executeCommand(wrapped, {
       historyCommand: options?.skipHistory ? '' : command,
+      internal: options?.skipHistory === true,
       onWriteFailed: failWrite,
       allowDuringAgentTakeover: true
     })) {

@@ -1,7 +1,10 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
 import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
-import type { AiMessage } from '../domain/conversation'
+import type { AiMessage, AgentTimelineEntry } from '../domain/conversation'
+import { agentTimelineEntries } from '../domain/agentTimeline'
+import { resolveTerminalContext } from '../domain/terminalContext'
+import type { TerminalContextMode } from '../domain/terminalContext'
 import type { TerminalSelectionEvent } from '../../terminal/types'
 import type { AgentApprovalDecision, AgentRunState, AgentStep, AgentStepProposal, AgentTimeoutDecision, AgentTimeoutInfo } from '../domain/agent'
 import type { useAiAnswerState } from './useAiAnswerState'
@@ -24,6 +27,7 @@ interface AgentSessionOptions {
   canSendMessage: () => boolean
   composerBusy: () => boolean
   selectedTerminalContext: () => TerminalSelectionEvent | undefined
+  terminalContextMode?: () => TerminalContextMode
   scrollMessagesToLatest: () => void
   closeAiCommandRiskConfirm: () => void
   answerState: ReturnType<typeof useAiAnswerState>
@@ -292,11 +296,14 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const conversationMessages = unsummarized
       .slice(-MAX_AI_CONVERSATION_MESSAGES)
       .map((message) => ({ role: message.role, content: message.text }))
+    const terminalContext = resolveTerminalContext(
+      options.terminalContextMode?.() ?? 'auto', props.terminalSnapshot, aiCommandHistory(), selectedContext
+    )
     const runSnapshot = createAgentRunSnapshot({
       config: props.config,
       apiKey: props.config.apiKey?.trim() || props.apiKey.trim(),
-      terminalSnapshot: props.terminalSnapshot,
-      commandHistory: aiCommandHistory(),
+      terminalSnapshot: terminalContext.terminalSnapshot,
+      commandHistory: terminalContext.commandHistory,
       conversationMessages,
       conversationSummary,
       allowlistPatterns: props.agentAllowlistPatterns ?? [],
@@ -310,7 +317,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       allowlistPatterns,
       builtinReadonlyEnabled
     } = runSnapshot
-    const goal = buildQuestionWithSelectedTerminalText(rawGoal, selectedContext)
+    const goal = buildQuestionWithSelectedTerminalText(rawGoal, terminalContext.selection)
     const text = rawGoal
 
     isAsking.value = true
@@ -321,7 +328,15 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     currentAssistantMessageId.value = assistantMessage.id
     startAnswerTimer()
 
+    const timeline = agentTimelineEntries(assistantMessage)
+      .filter(entry => entry.kind !== 'tool' || entry.stepId !== retryStep?.id)
+    const snapshotTimeline = () => timeline.map(entry => ({ ...entry }))
+
     function syncAgentRunToMessage(state: AgentRunState) {
+      const recordedSteps = new Set(timeline.flatMap(entry => entry.kind === 'tool' ? [entry.stepId] : []))
+      for (const step of state.steps) {
+        if (!recordedSteps.has(step.id)) timeline.push({ kind: 'tool', id: `tool:${step.id}`, stepId: step.id })
+      }
       const status = agentStatusFromRun(state)
       const terminal = status !== 'running'
       const failed = status === 'error'
@@ -333,6 +348,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         text: failed ? state.error || '任务出错' : state.finalText,
         agentSteps: state.steps,
         agentReasoning: agentReasoningText.value || undefined,
+        agentTimeline: snapshotTimeline(),
         agentStatus: status,
         errorKind: failed ? state.errorKind : undefined,
         stopReason: status === 'stopped' ? state.stopReason : undefined,
@@ -346,6 +362,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
               agentSteps: persistableAgentSteps(state.steps),
               agentStatus: status,
               agentReasoning: agentReasoningText.value || undefined,
+              agentTimeline: snapshotTimeline(),
               errorKind: failed ? state.errorKind : undefined,
               stopReason: status === 'stopped' ? state.stopReason : undefined,
               terminalConnectionGeneration: boundConnectionGeneration,
@@ -367,6 +384,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       callModel: async (turns, signal) => {
         const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${boundTerminalId}-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         agentStreamText.value = ''
+        const thinking: Extract<AgentTimelineEntry, { kind: 'thinking' }> = {
+          kind: 'thinking', id: requestId, reasoning: '', text: ''
+        }
+        timeline.push(thinking)
+        const syncThinking = () => {
+          if (!signal.cancelled && agentRun.value) syncAgentRunToMessage(agentRun.value)
+        }
         // Keep reasoning from earlier model turns visible after a tool result;
         // this field is display-only and is never added to the next request.
         if (agentReasoningText.value) {
@@ -385,9 +409,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           unlisten = await onAiChatStream(requestId, (event) => {
             if (event.kind === 'chunk' && !signal.cancelled) {
               agentStreamText.value += event.delta
+              thinking.text = agentStreamText.value
+              syncThinking()
             }
             if (event.kind === 'reasoning' && !signal.cancelled) {
               appendAgentReasoning(event.delta)
+              thinking.reasoning = `${thinking.reasoning}${event.delta}`.slice(-AGENT_REASONING_MAX_CHARS)
+              syncThinking()
             }
           })
           const response = await aiAgentTurnStream(requestId, {
@@ -407,7 +435,12 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           if (!signal.cancelled && response.toolCalls.length && response.text.trim()) {
             appendAgentReasoning(`${agentReasoningText.value.trim() ? '\n\n' : ''}${response.text}`)
           }
+          if (!signal.cancelled) thinking.text = response.toolCalls.length ? response.text : ''
           return response
+        } catch (error) {
+          // Model errors already retain partial answer text in the error body.
+          if (!signal.cancelled) thinking.text = ''
+          throw error
         } finally {
           window.clearInterval(cancelWatch)
           unlisten?.()
@@ -520,6 +553,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         mode: 'agent',
         agentSteps: steps,
         agentReasoning: agentReasoningText.value || undefined,
+        agentTimeline: snapshotTimeline(),
         agentStatus: 'error',
         errorKind: 'protocol',
         stopReason: undefined,
@@ -528,6 +562,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           agentSteps: persistableAgentSteps(steps),
           agentStatus: 'error',
           agentReasoning: agentReasoningText.value || undefined,
+          agentTimeline: snapshotTimeline(),
           errorKind: 'protocol',
           terminalConnectionGeneration: boundConnectionGeneration,
           usage: assistantMessage.usage

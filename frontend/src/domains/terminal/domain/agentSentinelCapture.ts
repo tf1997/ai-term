@@ -95,6 +95,7 @@ export function createSentinelScanner(options: SentinelScannerOptions): Sentinel
   let pending = ''
   let collected = ''
   let droppedHead = false
+  let pendingCarriageReturn = ''
 
   /**
    * 追加时处理裸 \r:终端语义是回到行首,后续内容覆盖当前行(进度条)。
@@ -129,7 +130,12 @@ export function createSentinelScanner(options: SentinelScannerOptions): Sentinel
   return {
     push(chunk: string) {
       if (phase === 'done' || !chunk) return
-      const text = normalizeChunk(chunk)
+      // A CRLF split across PTY chunks is one newline, not a progress-line
+      // overwrite. Otherwise a trailing CR can erase the just-received END.
+      let incoming = pendingCarriageReturn + chunk
+      pendingCarriageReturn = incoming.endsWith('\r') ? '\r' : ''
+      if (pendingCarriageReturn) incoming = incoming.slice(0, -1)
+      const text = normalizeChunk(incoming)
       if (!text) return
 
       if (phase === 'waiting-begin') {

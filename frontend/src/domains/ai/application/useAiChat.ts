@@ -9,6 +9,8 @@ import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, fo
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { addTokenUsage } from '../domain/tokenUsage'
 import * as tauri from '../infrastructure/api'
+import { resolveTerminalContext } from '../domain/terminalContext'
+import type { TerminalContextMode } from '../domain/terminalContext'
 
 type ChatSource = Pick<typeof tauri, 'onAiChatStream' | 'chatWithAiProviderStream' | 'cancelTask'>
 interface AiChatOptions {
@@ -16,9 +18,10 @@ interface AiChatOptions {
   emit: AiPanelEmit
   answerState: ReturnType<typeof useAiAnswerState>
   conversationContext: ReturnType<typeof useAiConversationContext>
+  terminalContextMode?: () => TerminalContextMode
 }
 
-export function useAiChat({ props, emit, answerState, conversationContext }: AiChatOptions, source: ChatSource = tauri) {
+export function useAiChat({ props, emit, answerState, conversationContext, terminalContextMode }: AiChatOptions, source: ChatSource = tauri) {
   const { onAiChatStream, chatWithAiProviderStream, cancelTask } = source
   const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer, finishAnswerMessage } = answerState
   const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
@@ -44,8 +47,9 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
     const requestTerminalId = assistantMessage.terminalId
     const requestConfig = { ...props.config }
     const requestApiKey = requestConfig.apiKey?.trim() || props.apiKey.trim()
-    const terminalSnapshot = props.terminalSnapshot
-    const commandHistory = aiCommandHistory()
+    const { terminalSnapshot, commandHistory, selection } = resolveTerminalContext(
+      terminalContextMode?.() ?? 'auto', props.terminalSnapshot, aiCommandHistory(), selectedContext
+    )
     const { summary: conversationSummary, unsummarized } = conversationContextParts(
       requestWorkspaceSessionId,
       historyCutoffMessageId
@@ -110,7 +114,7 @@ export function useAiChat({ props, emit, answerState, conversationContext }: AiC
         requestId,
         requestConfig,
         requestApiKey,
-        buildQuestionWithSelectedTerminalText(question, selectedContext),
+        buildQuestionWithSelectedTerminalText(question, selection),
         terminalSnapshot,
         commandHistory,
         conversationMessages,

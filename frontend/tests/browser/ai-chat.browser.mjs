@@ -275,18 +275,29 @@ try {
   await evaluate('aiFixture.runtime.reply("检查完成")')
   await waitFor('!document.querySelector(".chat-activity")')
   const reasoningSelector = '.chat-message-content > :last-child .agent-reasoning'
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').open`), true, 'Completion keeps the process visible')
-  const reasoning = await evaluate(`document.querySelector('${reasoningSelector} p').textContent`)
-  assert.ok(reasoning.includes('先检查状态') && reasoning.includes('继续检查'))
-  assert.ok(!reasoning.includes('检查完成'), 'Final answer is not duplicated in the process')
+  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').classList.contains('chat-markdown')`), true, 'Thinking uses the same Markdown renderer as the answer')
+  const timelineExpression = `Array.from(document.querySelector('.chat-message-content > :last-child .agent-timeline').children).map(element => element.matches('.agent-reasoning') ? element.textContent : element.dataset.stepId)`
+  const timeline = await evaluate(timelineExpression)
+  assert.deepEqual(timeline, ['先检查状态', 'runtime-first', '继续检查', 'runtime-second'], 'Thinking and tools follow actual turn order')
+  await evaluate('document.querySelector(".chat-message-content > :last-child").scrollIntoView({ block: "end", behavior: "instant" })')
+  const timelineScreenshot = await screenshot('ai-agent-ordered-timeline.png')
   const duration = await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds')
   assert.ok(duration >= 2, 'Task records real elapsed time')
   await evaluate('aiFixture.reopen()')
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector} p').textContent`), reasoning)
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').open`), true)
-  await click(`${reasoningSelector} summary`)
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').open`), false, 'Process remains manually collapsible')
-  checks.push('Agent process remains visible after completion and survives payload reload')
+  assert.deepEqual(await evaluate(timelineExpression), timeline, 'Reload preserves interleaving')
+  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').classList.contains('chat-markdown')`), true)
+  await evaluate(`(() => {
+    const message = aiFixture.state.props.messages.at(-1);
+    const fence = String.fromCharCode(96).repeat(3);
+    message.agentTimeline[0].text = ['## 检查计划', '', '**先检查状态**', '', '- 查看内存', '- 查看磁盘', '', fence + 'bash', 'free -h', fence].join('\\n');
+  })()`)
+  await waitFor(`Boolean(document.querySelector('${reasoningSelector} h2'))`)
+  assert.equal(await evaluate(`document.querySelector('${reasoningSelector} strong').textContent`), '先检查状态')
+  assert.equal(await evaluate(`document.querySelectorAll('${reasoningSelector} li').length`), 2)
+  assert.ok(await evaluate(`document.querySelector('${reasoningSelector}').textContent.includes('free -h')`))
+  assert.equal(await evaluate(`Boolean(document.querySelector('${reasoningSelector} .chat-code-run'))`), false)
+  checks.push('Agent thinking renders headings, emphasis, lists and code using the answer renderer')
+  checks.push('Agent thinking and tools remain in turn order after completion and payload reload')
   assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds'), duration)
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-duration").textContent.includes("耗时")'), 'Duration is visible after the panel is remounted from stored payloads')
   checks.push('Agent timer persists through planning, approval, saving, execution and analysis', 'Approval saves before dispatch and applies within the same run', 'A fixed status bar links to the pending command', 'Completed duration survives reopening the conversation')
@@ -306,8 +317,71 @@ try {
   assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).agentSteps[0].startedAt'), undefined, 'Stopped command clocks are cleared')
   checks.push('Timeout decisions keep elapsed time visible and stopping clears active clocks')
 
+  for (const mode of ['auto', 'selection', 'none']) {
+    for (const kind of ['chat', 'agent']) {
+      await evaluate(`aiFixture.beginRuntime('${kind}', {
+        terminalSnapshot: 'FULL_TERMINAL_OUTPUT',
+        commandHistory: [{ command: 'uptime' }],
+        terminalSelection: { terminalId: 'fixture-terminal', text: 'SELECTED_OUTPUT', startLine: 1, endLine: 2 }
+      })`)
+      await click('.chat-terminal-context .composer-select-trigger')
+      await click(`.chat-terminal-context [data-value="${mode}"]`)
+      await waitFor(`document.querySelector('.chat-context-toggle').textContent.includes('${mode === 'auto' ? 35 : mode === 'selection' ? 15 : 0} 字符')`)
+      assert.equal(await evaluate('Boolean(document.querySelector(".chat-selection"))'), mode !== 'none')
+      await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查运行状态'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+      await click('.chat-send')
+      await waitFor('aiFixture.runtime.requests.length === 1')
+      const request = await evaluate('aiFixture.runtime.requests[0].request')
+      assert.equal(request.terminalSnapshot, mode === 'auto' ? 'FULL_TERMINAL_OUTPUT' : '')
+      assert.deepEqual(request.commandHistory, mode === 'auto' ? ['uptime'] : [])
+      assert.equal((request.question ?? request.goal).includes('SELECTED_OUTPUT'), mode !== 'none')
+      assert.equal(await evaluate('document.querySelector(".chat-terminal-context .composer-select-trigger").disabled'), true)
+      await evaluate('aiFixture.runtime.reply("检查完成")')
+      await waitFor('!document.querySelector(".chat-activity")')
+      await evaluate('aiFixture.reopen()')
+      await click('.chat-terminal-context .composer-select-trigger')
+      assert.equal(await evaluate('document.querySelector(".chat-terminal-context [aria-selected=true]").dataset.value'), mode)
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    }
+  }
+  await click('.chat-terminal-context .composer-select-trigger')
+  await click('.chat-terminal-context [data-value="auto"]')
+  checks.push('Terminal context choices filter chat and Agent requests, update counts and survive reopening')
+
+  await evaluate('aiFixture.configure({ theme: "light", width: 360, zoom: 1.25 })')
+  await click('.chat-terminal-context .composer-select-trigger')
+  const contextMenuScreenshot = await screenshot('ai-context-menu.png')
+  const menuBounds = await evaluate(`(() => {
+    const menu = document.querySelector('.composer-select-menu').getBoundingClientRect();
+    const panel = document.querySelector('.assistant-panel').getBoundingClientRect();
+    return { left: menu.left >= panel.left, right: menu.right <= panel.right, top: menu.top >= panel.top };
+  })()`)
+  assert.deepEqual(menuBounds, { left: true, right: true, top: true })
+  await evaluate(`(() => {
+    const config = aiFixture.state.props.config;
+    aiFixture.state.props.configs = [config, { ...config, id: 'backup-config', model: 'alternative-model' }];
+  })()`)
+  await click('.chat-config-select .composer-select-trigger')
+  assert.equal(await evaluate('document.querySelectorAll(".composer-select-menu").length'), 1)
+  const configMenuScreenshot = await screenshot('ai-config-menu.png')
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  assert.equal(await evaluate('document.activeElement.matches(".chat-config-select .composer-select-trigger")'), true)
+  assert.equal(await evaluate('document.querySelectorAll(".composer-select-menu").length'), 0)
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 })
+  await waitFor('document.activeElement.matches(".chat-config-select [role=option]")')
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  await waitFor('aiFixture.state.props.selectedConfigId === "backup-config"')
+  assert.ok(await evaluate('document.querySelector(".chat-config-select .composer-select-trigger").textContent.includes("backup-config")'))
+  checks.push('Composer menus share styling, fit a narrow panel and restore focus on Escape')
+
   assert.deepEqual(exceptions, [], 'Uncaught browser exceptions')
-  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot], nativeBackendTested: false }, null, 2))
+  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot, timelineScreenshot, contextMenuScreenshot, configMenuScreenshot], nativeBackendTested: false }, null, 2))
 } catch (error) {
   console.error('Browser failure screenshot:', await screenshot('failure.png').catch(() => 'unavailable'))
   throw error

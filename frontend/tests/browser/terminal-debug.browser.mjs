@@ -145,6 +145,7 @@ async function showTerminal() {
   await waitFor('document.querySelector("#session-view-terminal")?.getAttribute("aria-selected") === "true"')
 }
 async function showFiles() {
+  if (await evaluate(`innerWidth < 1200 && Boolean(document.querySelector('[aria-label="收起设置中心"]'))`)) await click('[aria-label="收起设置中心"]')
   await click('#session-view-files')
   await waitFor(`document.querySelector(${JSON.stringify(files)})`)
 }
@@ -254,7 +255,7 @@ try {
       (${installSftpFixture.toString()})(); (${installTerminalDebugFixture.toString()})(); (${installBrowserInspection.toString()})();`,
   })
   await send('Page.navigate', { url: appUrl })
-  await waitFor('document.querySelectorAll(".server-card").length === 2 && window.__debugBrowser.read()')
+  await waitFor('window.__debugBrowser.read() && document.querySelector(".app-shell")')
   assert.equal(await evaluate('window.__sftpFixture.nativeBoundaryMocked'), true)
   await check('debug mode defaults off and has a labelled, described accessible switch', async () => {
     assert.equal(await evaluate('window.__debugBrowser.app().appSettings.debugMode'), false)
@@ -370,13 +371,18 @@ try {
     await showTerminal()
     const record = (await diagnostics()).at(-1)
     assertVisible(record, await state())
+    await evaluate('window.__debugBrowser.pane().exposed.executeCommand("(exit 7)", { internal: true, historyCommand: "" })')
+    await settleTerminal()
+    const debugProbe = (await diagnostics()).at(-1)
+    assert.ok(debugProbe.begin.startsWith('AI_TERM_PROBE_BEGIN_'))
+    assert.ok((await state()).snapshot.includes(debugProbe.begin), 'Debug on displays Agent probe diagnostics')
     await screenshot('terminal-debug-enabled-dark.png')
     await openApplicationSettings()
     await screenshot('debug-mode-settings-on-dark.png')
   })
   await check('enabled debug mode survives reload and SFTP still discovers its server', async () => {
     await send('Page.reload')
-    await waitFor('document.querySelectorAll(".server-card").length === 2 && window.__debugBrowser.read()')
+    await waitFor('window.__debugBrowser.read() && document.querySelector(".app-shell")')
     assert.equal(await evaluate('window.__debugBrowser.app().appSettings.debugMode'), true)
     await connectAtlas()
     await showFiles()
@@ -437,7 +443,7 @@ try {
   await check('disabled preference survives reload and plain shells without OSC integration stay usable', async () => {
     await evaluate('sessionStorage.setItem("terminal-debug-fixture-shell-integration", "off")')
     await send('Page.reload')
-    await waitFor('document.querySelectorAll(".server-card").length === 2 && window.__debugBrowser.read()')
+    await waitFor('window.__debugBrowser.read() && document.querySelector(".app-shell")')
     assert.equal(await evaluate('window.__debugBrowser.app().appSettings.debugMode'), false)
     await connectAtlas()
     const before = await state()
@@ -451,6 +457,16 @@ try {
     assert.deepEqual(current.visibleLines, before.visibleLines)
     await userCommand('echo ordinary-output-on-plain-shell')
     assert.ok((await state()).snapshot.includes('ordinary-output-on-plain-shell'))
+    const beforeProbe = await state()
+    const probeMode = await evaluate('window.__debugBrowser.pane().exposed.ensureAgentCapture()')
+    assert.equal(probeMode, 'sentinel')
+    await settleTerminal()
+    const probe = (await diagnostics()).at(-1)
+    assert.ok(probe.begin.startsWith('AI_TERM_PROBE_BEGIN_'))
+    assert.ok(probe.command.includes('AI_TERM_INTERNAL_'))
+    assert.deepEqual((await state()).visibleLines, beforeProbe.visibleLines, 'Agent capability probe must be invisible with debug off')
+    assert.equal((await state()).snapshot.includes(probe.begin), false)
+    checks.push('Agent capability probe completes against raw PTY output while debug-off terminal and context stay clean')
     await openApplicationSettings()
     await click('[aria-label="切换白色主题"]')
     await send('Emulation.setDeviceMetricsOverride', { width: 1120, height: 760, deviceScaleFactor: 1, mobile: false })

@@ -96,6 +96,7 @@ createApp({
       key: state.panelVersion,
       ...state.props,
       onSetSessionMode: (id, mode) => { state.props.workspaceSessions[0].aiMode = mode; events.push({ type: 'mode', mode }) },
+      onSelectConfig: id => { state.props.selectedConfigId = id; state.props.config = state.props.configs?.find(config => config.id === id) ?? state.props.config; events.push({ type: 'config', id }) },
       onAppendMessage: message => state.props.messages.push(message),
       onUpdateMessage: message => { const index = state.props.messages.findIndex(item => item.id === message.id); if (index >= 0) state.props.messages[index] = message },
       onExecuteCommand: value => events.push({ type: 'execute', value })

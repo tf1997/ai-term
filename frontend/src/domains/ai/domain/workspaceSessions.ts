@@ -2,6 +2,7 @@ import type { AiMessage, WorkspaceSession } from './conversation'
 import type { AgentErrorKind, AgentExecutionPhase, AgentStep } from './agent'
 import { normalizeMessageUsage } from './tokenUsage'
 import { normalizeAiDuration } from './aiTiming'
+import { normalizeAgentTimeline } from './agentTimeline'
 
 export const DEFAULT_AI_SESSION_ID = 'ai:default'
 export const COMMAND_HISTORY_SESSION_ID = 'connection-history'
@@ -78,7 +79,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
   try {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
-      'mode' | 'agentSteps' | 'agentStatus' | 'agentReasoning' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
+      'mode' | 'agentSteps' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
     >> & { usage?: unknown; durationSeconds?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
     const durationSeconds = normalizeAiDuration(payload.durationSeconds)
@@ -99,6 +100,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       ...message,
       mode: 'agent',
       agentSteps,
+      agentTimeline: normalizeAgentTimeline(payload.agentTimeline),
       ...(agentReasoning ? { agentReasoning } : {}),
       agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
         ? payload.agentStatus

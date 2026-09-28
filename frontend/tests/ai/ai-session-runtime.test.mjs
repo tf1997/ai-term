@@ -6,6 +6,7 @@ import { useAiChat } from '../../src/domains/ai/application/useAiChat'
 import { useAgentSession } from '../../src/domains/ai/application/useAgentSession'
 import { hydrateAiMessagePayload } from '../../src/domains/ai/domain/workspaceSessions'
 import { aiStreamPartialText } from '../../src/domains/ai/domain/aiStreamError'
+import { agentDisplayTimeline, normalizeAgentTimeline } from '../../src/domains/ai/domain/agentTimeline'
 
 const renderer = createRenderer({
   createElement: () => ({}), createText: () => ({}), createComment: () => ({}),
@@ -70,9 +71,9 @@ function mountRuntime(t, options = {}) {
   const app = renderer.createApp({ setup() {
     answerState = useAiAnswerState()
     const common = {
-      props, emit, answerState,
+      props, emit, answerState, terminalContextMode: () => options.terminalContextMode ?? 'auto',
       conversationContext: {
-        aiCommandHistory: () => [], conversationContextParts: () => ({ unsummarized: [] }),
+        aiCommandHistory: () => options.commandHistory ?? [], conversationContextParts: () => ({ unsummarized: [] }),
         maybeGenerateSessionTitle() {}, maybeCompactConversation: async () => {}
       }
     }
@@ -111,7 +112,7 @@ function mountRuntime(t, options = {}) {
     props, commands, saves, events, modelRequests, cancellations, answerState, chat, agent, assistant,
     advance: seconds => { now += seconds * 1000 },
     stream: event => streamListener(event),
-    runAgent: () => agent.runAgentTurn(assistant, '检查状态', undefined, 'question'),
+    runAgent: () => agent.runAgentTurn(assistant, '检查状态', options.selection, 'question'),
     retryAgent: () => {
       const message = props.messages[0]
       const retryStep = message.agentSteps?.findLast(step => step.status === 'failed')
@@ -123,9 +124,46 @@ function mountRuntime(t, options = {}) {
       emit('updateMessage', pending)
       return agent.runAgentTurn(pending, '检查状态', undefined, 'question', retryStep)
     },
-    runChat: () => chat.runChatTurn(assistant, '检查状态', undefined, 'question')
+    runChat: () => chat.runChatTurn(assistant, '检查状态', options.selection, 'question')
   }
 }
+
+for (const mode of ['auto', 'selection', 'none']) {
+  for (const kind of ['chat', 'agent']) {
+    test(`${kind} 终端上下文 ${mode} 只发送允许的内容`, async t => {
+      let request
+      const fixture = mountRuntime(t, {
+        terminalContextMode: mode,
+        commandHistory: ['uptime'],
+        selection: { terminalId: 'terminal', text: 'SELECTED_OUTPUT', startLine: 1, endLine: 2 },
+        chatResponse: async (_id, value) => { request = value; return { answer: '完成' } }
+      })
+      fixture.props.terminalSnapshot = 'FULL_TERMINAL_OUTPUT'
+      if (kind === 'chat') await fixture.runChat()
+      else { await fixture.runAgent(); request = fixture.modelRequests[0].request }
+      assert.equal(request.terminalSnapshot, mode === 'auto' ? 'FULL_TERMINAL_OUTPUT' : '')
+      assert.deepEqual(request.commandHistory, mode === 'auto' ? ['uptime'] : [])
+      assert.equal((request.question ?? request.goal).includes('SELECTED_OUTPUT'), mode !== 'none')
+    })
+  }
+}
+
+test('仅选区无选中内容时不退回终端快照，Agent 后续轮次保持请求时的选择', async t => {
+  const options = { terminalContextMode: 'selection', commandHistory: ['uptime'], responses: [response(commandCall('first')), response()] }
+  const fixture = mountRuntime(t, options)
+  fixture.props.terminalSnapshot = 'FULL_TERMINAL_OUTPUT'
+  const running = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  options.terminalContextMode = 'auto'
+  fixture.agent.resolveAgentApproval('execute')
+  await running
+  for (const { request } of fixture.modelRequests) {
+    assert.equal(request.terminalSnapshot, '')
+    assert.deepEqual(request.commandHistory, [])
+    assert.equal(request.goal, '检查状态')
+  }
+  assert.equal(JSON.parse(fixture.modelRequests[1].request.turns[1].content).output, 'ok')
+})
 
 test('完成工具后遇到 HTTP 502，响应式消息重试可停止并取消新请求', { timeout: 2000 }, async t => {
   const request = deferred()
@@ -374,11 +412,14 @@ for (const outcome of ['complete', 'error', 'stop']) {
     await until(() => fixture.modelRequests.length === 1)
     fixture.stream({ kind: 'reasoning', delta: '先分析服务状态。' })
     fixture.stream({ kind: 'chunk', delta: '接下来检查服务。' })
+    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking'])
+    assert.match(agentDisplayTimeline(fixture.props.messages[0])[0].text, /先分析服务状态。.*\n\n接下来检查服务。/)
     first.resolve({ ...response(commandCall('inspect')), text: '接下来检查服务。' })
     await until(() => fixture.agent.agentPendingApproval.value)
     fixture.agent.resolveAgentApproval('execute')
     await until(() => fixture.modelRequests.length === 2)
     fixture.stream({ kind: 'reasoning', delta: '再核对执行结果。' })
+    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking', 'tool', 'thinking'])
     assert.ok(!JSON.stringify(fixture.modelRequests[1].request).includes('先分析服务状态。'))
     if (outcome === 'error') second.reject(Error('HTTP 502'))
     else if (outcome === 'stop') fixture.agent.stopAgentRun()
@@ -397,6 +438,8 @@ for (const outcome of ['complete', 'error', 'stop']) {
     assert.ok(!message.agentReasoning.includes('最终总结。'))
     const restored = hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson })
     assert.equal(restored.agentReasoning, message.agentReasoning)
+    assert.deepEqual(agentDisplayTimeline(restored).map(entry => entry.kind), ['thinking', 'tool', 'thinking'])
+    assert.deepEqual(restored.agentTimeline, message.agentTimeline)
   })
 }
 
@@ -418,6 +461,45 @@ test('Agent 无推理事件时保留工具前文字，重试也保留之前的�
   assert.equal(message.agentStatus, 'done')
   assert.equal(message.agentReasoning.trim(), '检查服务状态。')
   assert.equal(hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson }).agentReasoning, message.agentReasoning)
+})
+
+test('Agent 多轮及同轮多工具按发生顺序展示，最终回复不重复', { timeout: 2000 }, async t => {
+  const last = deferred()
+  const fixture = mountRuntime(t, { responses: [
+    { ...response(commandCall('first'), commandCall('second')), text: '先做两项检查。' },
+    { ...response(commandCall('third')), text: '根据结果继续检查。' },
+    () => last.promise
+  ] })
+  const running = fixture.runAgent()
+  for (const id of ['first', 'second', 'third']) {
+    await until(() => fixture.agent.agentPendingApproval.value?.proposal.id === id)
+    fixture.agent.resolveAgentApproval('execute')
+  }
+  await until(() => fixture.modelRequests.length === 3)
+  fixture.stream({ kind: 'reasoning', delta: '核对三项结果。' })
+  fixture.stream({ kind: 'chunk', delta: '全部正常。' })
+  assert.match(agentDisplayTimeline(fixture.props.messages[0]).at(-1).text, /全部正常。/)
+  last.resolve({ ...response(), text: '全部正常。' })
+  await running
+  const message = fixture.props.messages[0]
+  const display = agentDisplayTimeline(message)
+  assert.deepEqual(display.map(entry => entry.kind === 'tool' ? entry.step.id : entry.text), [
+    '先做两项检查。', 'first', 'second', '根据结果继续检查。', 'third', '核对三项结果。'
+  ])
+  assert.equal(message.text, '全部正常。')
+  assert.deepEqual(JSON.parse(JSON.stringify(agentDisplayTimeline(hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson })))), JSON.parse(JSON.stringify(display)))
+})
+
+test('Agent 旧记录不伪造轮次，损坏时间线不影响工具显示', () => {
+  const message = { mode: 'agent', agentReasoning: '旧的合并思考', agentSteps: [{ id: 'first' }, { id: 'second' }] }
+  const display = agentDisplayTimeline(message)
+  assert.equal(display[0].legacy, true)
+  assert.deepEqual(display.map(entry => entry.kind), ['thinking', 'tool', 'tool'])
+  assert.equal(normalizeAgentTimeline(null), undefined)
+  const timeline = normalizeAgentTimeline([null, {}, { kind: 'thinking', id: 'bad', text: 42 },
+    { kind: 'tool', id: 'one', stepId: 'first' }, { kind: 'tool', id: 'one', stepId: 'first' },
+    { kind: 'tool', id: 'missing', stepId: 'missing' }])
+  assert.deepEqual(agentDisplayTimeline({ ...message, agentTimeline: timeline }).map(entry => entry.step.id), ['first', 'second'])
 })
 
 test('Agent 思考过程随 payload 恢复，但不会改写上下文正文', () => {

@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import xterm from '@xterm/xterm'
+import { existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createInternalTerminalOutputFilter } from '../../src/domains/terminal/domain/internalTerminalOutput'
+import { frameInternalProbe, isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../src/domains/terminal/domain/internalTerminalCommand'
+import { createSentinelScanner, wrapCommandWithSentinel } from '../../src/domains/terminal/domain/agentSentinelCapture'
+import { useCommandHistory } from '../../src/domains/terminal/application/useCommandHistory'
 
 const CLEAR_PROMPT = '\r\x1b[2K'
 const prompt = 'root@server:~# '
@@ -12,6 +17,73 @@ const identity = (id = '1789443510475_1m3nzxpct') => {
   return { begin, end, command, frame }
 }
 const feedCharacters = (filter, value) => [...value].map(character => filter.push(character)).join('')
+
+test('Agent probe frames obey debug visibility while the capture consumer receives exit status', () => {
+  const nonce = 'a1b2c3d4'
+  const command = wrapInternalTerminalCommand(frameInternalProbe(wrapCommandWithSentinel('(exit 7)', nonce), nonce), nonce)
+  const body = `\r\nAI_TERM_PROBE_BEGIN_${nonce}\r\n\r\n__AI_TERM_${nonce}B__\r\n\r\n__AI_TERM_${nonce}E__:7\r\n\r\nAI_TERM_PROBE_END_${nonce}\r\n`
+  const stream = command.replaceAll('\n', '\r\n') + '\r\n' + body + prompt
+  for (const debug of [false, true]) {
+    for (let split = 0; split <= stream.length; split++) {
+      const filter = createInternalTerminalOutputFilter()
+      const results = []
+      const scanner = createSentinelScanner({ nonce, maxOutputChars: 256, onFinished: result => results.push(result) })
+      filter.begin(command, { debug })
+      const chunks = [stream.slice(0, split), stream.slice(split)]
+      const visible = chunks.map(chunk => { scanner.push(chunk); return filter.push(chunk) }).join('')
+      assert.equal(visible, debug ? stream : CLEAR_PROMPT + prompt, `debug=${debug} split=${split}`)
+      assert.equal(results.length, 1, `capture debug=${debug} split=${split} tail=${JSON.stringify(stream.slice(split - 25, split + 25))}`)
+      assert.equal(results[0].exitCode, 7)
+    }
+  }
+})
+
+const bash = [process.env.AI_TERM_TEST_BASH, '/bin/bash', 'D:/Program Files/Git/bin/bash.exe', 'C:/Program Files/Git/bin/bash.exe'].find(path => path && existsSync(path))
+for (const historySetup of ["HISTCONTROL=", "HISTCONTROL=ignoredups", "HISTCONTROL=ignorespace", "HISTCONTROL=ignoreboth", "HISTIGNORE='*AI_TERM_INTERNAL*'", 'set +o history']) {
+  test(`Bash internal commands do not enter history or delete user input: ${historySetup}`, { skip: !bash }, () => {
+    const command = wrapInternalTerminalCommand("cat <<'BODY'\nO'Brien $literal\nBODY\n(exit 7)", 'test_unique_1')
+    const script = [
+      'set -o history', 'HISTCONTROL=', 'HISTIGNORE=', 'history -c',
+      'echo USER_COMMAND_KEEP', historySetup, command,
+      "printf 'STATUS=%s\\n' \"$?\"",
+      "printf '\\nHISTORY_BEGIN\\n'; builtin history; printf '\\nHISTORY_END\\n'", 'exit'
+    ].join('\n') + '\n'
+    const result = spawnSync(bash, ['--noprofile', '--norc', '-i'], {
+      input: script, encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, HISTFILE: '/dev/null', HISTSIZE: '1000', HISTTIMEFORMAT: '', PS1: '', PS2: '' }
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.ok(result.stdout.includes("O'Brien $literal"))
+    assert.ok(result.stdout.includes('STATUS=7'))
+    const history = result.stdout.split('\nHISTORY_BEGIN\n')[1].split('\nHISTORY_END\n')[0]
+    assert.ok(history.includes('echo USER_COMMAND_KEEP'), history)
+    assert.ok(!history.includes('AI_TERM_INTERNAL_test_unique_1'), history)
+    assert.ok(!history.includes("O'Brien"), history)
+  })
+}
+
+test('only internal dispatch forms are excluded from application history', () => {
+  assert.equal(isInternalTerminalCommand(wrapInternalTerminalCommand(identity().command, 'history_test')), true)
+  assert.equal(isInternalTerminalCommand(identity().command), true)
+  assert.equal(isInternalTerminalCommand('echo AI_TERM_IDENT_BEGIN_user_text'), false)
+  assert.equal(isInternalTerminalCommand("grep 'AI_TERM_INTERNAL_' debug.log"), false)
+  assert.equal(isInternalTerminalCommand(wrapCommandWithSentinel('df -h', 'a1b2c3d4')), false)
+})
+
+test('application history filters existing probes and never saves new internal commands', async () => {
+  const saved = []
+  const history = useCommandHistory({
+    listCommandHistory: async () => [{ id: 'old-probe', command: identity().command }, { id: 'user', command: 'uptime' }],
+    saveCommandHistoryRecord: async entry => saved.push(entry)
+  })
+  await history.loadCommandHistoryForConnection('server')
+  assert.deepEqual(history.commandHistoryForConnection('server').map(entry => entry.command), ['uptime'])
+  history.recordCommandForConnection('server', { terminalId: 'term', command: wrapInternalTerminalCommand(identity().command, 'save_test') })
+  assert.equal(saved.length, 0)
+  history.recordCommandForConnection('server', { terminalId: 'term', command: 'df -h' })
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].command, 'df -h')
+})
 
 test('unregistered output and user commands containing internal marker words remain byte-for-byte visible', () => {
   const filter = createInternalTerminalOutputFilter()

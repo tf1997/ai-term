@@ -3,11 +3,13 @@ import { useAgentSession } from '../../application/useAgentSession'
 import { useAiChat } from '../../application/useAiChat'
 import { useAiAnswerState } from '../../application/useAiAnswerState'
 import { useAiConversationContext } from '../../application/useAiConversationContext'
+import { useAiTerminalContext } from '../../application/useAiTerminalContext'
 import { MAX_AI_COMMAND_HISTORY, formatSelectedLineRange, createMessage, formatAiError, isSensitiveAgentCommand, formatSessionDisplayTitle } from '../../domain/aiConversation'
 import type { AiPanelProps, AiPanelEvents } from '../../domain/aiPanel'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { AiMessage, WorkspaceSession } from '../../domain/conversation'
+import { agentDisplayTimeline } from '../../domain/agentTimeline'
 import type { AiMessageUsage } from '../../domain/tokenUsage'
 import { formatMessageUsageLabel, formatMessageUsageTitle, mergeMessageUsage } from '../../domain/tokenUsage'
 
@@ -27,6 +29,8 @@ import AiMarkdownMessage from './messages/AiMarkdownMessage.vue'
 import AiErrorNotice from './messages/AiErrorNotice.vue'
 import AgentStepCard from './messages/AgentStepCard.vue'
 import AiMessageItem from './messages/AiMessageItem.vue'
+import AiComposerSelect from './messages/AiComposerSelect.vue'
+import { normalizeTerminalContextMode } from '../../domain/terminalContext'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
 
@@ -36,6 +40,7 @@ const LONG_MESSAGE_LINES = 18
 const props = defineProps<AiPanelProps>()
 
 const emit = defineEmits<AiPanelEvents>()
+const { terminalContextMode, terminalContext } = useAiTerminalContext(props)
 
 // A terminal's unsent context must never become another session's question.
 const composerDrafts = ref<Record<string, string>>({})
@@ -47,7 +52,7 @@ const askText = computed({
 const answerState = useAiAnswerState()
 const { isAsking, currentAssistantMessageId, answerElapsedSeconds, stopAnswerTimer, messageAnswerDuration, formatAnswerDuration } = answerState
 const conversationContext = useAiConversationContext(props, emit)
-const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useAiChat({ props, emit, answerState, conversationContext })
+const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useAiChat({ props, emit, answerState, conversationContext, terminalContextMode: () => terminalContextMode.value })
 const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
 const collapsedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
@@ -66,11 +71,12 @@ const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
 const pendingAgentRiskReview = ref(false)
-const { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   canSendMessage: () => canSendMessage.value,
   composerBusy: () => composerBusy.value,
   selectedTerminalContext: () => selectedTerminalContext.value,
+  terminalContextMode: () => terminalContextMode.value,
   scrollMessagesToLatest, closeAiCommandRiskConfirm
 })
 const aiRiskExplanation = ref('')
@@ -144,18 +150,30 @@ const activeSessionTitle = computed(() => formatSessionDisplayTitle(activeSessio
 const currentConnectionLabel = computed(() => connectionLabel(props.connectionId))
 
 const selectedTerminalContext = computed(() => {
-  const selection = props.terminalSelection
+  const selection = terminalContext.value.selection
   if (!selection?.text.trim()) return undefined
   return selection
 })
 
-const aiModelLabel = computed(() => props.config.model.trim() || props.selectedConfigId || '未选择模型')
+const aiConfigLabel = computed(() => `配置：${props.selectedConfigId || props.config.id || '未选择'}${props.config.model.trim() ? ` · 模型：${props.config.model.trim()}` : ''}`)
 const aiEligibleHistoryCount = computed(() => props.commandHistory.filter((entry) => !isSensitiveCommand(entry.command)).length)
-const aiContextHistoryCount = computed(() => Math.min(aiEligibleHistoryCount.value, MAX_AI_COMMAND_HISTORY))
-const modelOptions = computed(() => props.configs?.length ? props.configs : [props.config])
+const aiContextHistoryCount = computed(() => terminalContextMode.value === 'auto' ? Math.min(aiEligibleHistoryCount.value, MAX_AI_COMMAND_HISTORY) : 0)
+const terminalContextChars = computed(() => terminalContext.value.terminalSnapshot.length + (selectedTerminalContext.value?.text.length ?? 0))
+const terminalContextTitle = computed(() => {
+  if (terminalContextMode.value === 'none') return '终端上下文：不附带'
+  if (terminalContextMode.value === 'selection') return `终端上下文：仅选中内容${selectedTerminalContext.value ? '' : '（未选中内容）'}`
+  return '终端上下文：自动附带'
+})
+const configOptions = computed(() => props.configs?.length ? props.configs : [props.config])
+const composerConfigOptions = computed(() => configOptions.value.map(option => ({ value: option.id, label: option.id, description: option.model })))
+const terminalContextOptions = [
+  { value: 'auto', label: '自动附带', description: '终端内容、命令历史和选中内容' },
+  { value: 'selection', label: '仅选中内容', description: '只发送终端中选中的文字' },
+  { value: 'none', label: '不附带', description: '不发送终端内容或命令历史' }
+]
 const contextSummaryLabel = computed(() => {
   const selected = selectedTerminalContext.value ? ` · 选中 ${formatCharacterCount(selectedTerminalContext.value.text.length)}` : ''
-  return `${currentConnectionLabel.value} · 上下文 ${formatCharacterCount(props.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
+  return `${currentConnectionLabel.value} · 终端内容 ${formatCharacterCount(terminalContext.value.terminalSnapshot.length)} · ${aiContextHistoryCount.value} 条命令${selected}`
 })
 const contextStatusLabel = computed(() => {
   if (!props.contextStatus) return '未压缩'
@@ -502,8 +520,8 @@ async function explainPendingAiCommandRisk() {
       config: props.config,
       apiKey,
       question: buildAiRiskExplanationPrompt(command),
-      terminalSnapshot: props.terminalSnapshot,
-      commandHistory: aiCommandHistory(),
+      terminalSnapshot: terminalContext.value.terminalSnapshot,
+      commandHistory: terminalContextMode.value === 'auto' ? aiCommandHistory() : [],
       conversationMessages: []
     })
     if (aiRiskExplanationRequestId.value !== requestId) return
@@ -872,13 +890,14 @@ watch(
       <div class="chat-context-main">
         <span class="chat-target" :title="executionTargetTitle || currentConnectionLabel"><UiIcon name="terminal" size="13" /><span>{{ executionTargetLabel || currentConnectionLabel }}</span></span>
         <button class="chat-context-toggle" type="button" :title="contextSummaryLabel" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
-          <span>上下文 {{ terminalSnapshot.length.toLocaleString('zh-CN') }} 字符</span>
+          <span>终端上下文 {{ terminalContextChars.toLocaleString('zh-CN') }} 字符</span>
           <UiIcon :name="contextOpen ? 'arrow-up' : 'arrow-down'" size="12" />
         </button>
       </div>
       <p v-if="aiCommandExecutionNotice" class="chat-inline-notice" role="status" :title="aiCommandExecutionNoticeTitle">{{ aiCommandExecutionNotice }}</p>
       <div v-if="contextOpen" class="chat-context-detail">
-        <span><strong>终端</strong>{{ formatCharacterCount(terminalSnapshot.length) }}</span>
+        <p class="chat-context-help">仅控制附带的终端内容；对话历史及 Agent 本次工具结果仍保留。</p>
+        <span><strong>终端</strong>{{ formatCharacterCount(terminalContext.terminalSnapshot.length) }}</span>
         <span><strong>命令历史</strong>{{ aiContextHistoryCount }}/{{ aiEligibleHistoryCount }} 条</span>
         <span><strong>选中内容</strong>{{ selectedTerminalContext ? formatCharacterCount(selectedTerminalContext.text.length) : '未加入' }}</span>
         <span><strong>上下文</strong>{{ contextStatusLabel }}</span>
@@ -892,7 +911,7 @@ watch(
       <div v-if="!hasUsableConfig" class="chat-empty">
         <UiIcon name="settings" size="24" />
         <span>尚未配置模型</span>
-        <button class="chat-button" type="button" @click="emit('configureAi')">配置模型</button>
+        <button class="chat-button" type="button" @click="emit('configureAi')">管理 AI 配置</button>
       </div>
       <div v-else-if="messages.length === 0" class="chat-empty"><UiIcon name="ai" size="24" /><span>新对话</span></div>
       <AiMessageItem
@@ -906,47 +925,42 @@ watch(
             <span class="chat-progress-dot" />
             {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
-          <div v-if="message.mode === 'agent' && message.agentSteps?.length" class="chat-tool-steps">
-            <AgentStepCard
-              v-for="step in message.agentSteps ?? []"
-              :key="step.id"
-              :step="step"
-              :awaiting-approval="isAwaitingApprovalStep(message, step)"
-              :approval-saving="isAwaitingApprovalStep(message, step) && agentApprovalSaving"
-              :awaiting-timeout="isAwaitingTimeoutStep(message, step)"
-              :proposal="agentPendingApproval?.proposal"
-              :timeout-info="agentPendingTimeout?.info"
-              :now-ms="agentNowMs"
-              :high-risk-armed="agentHighRiskArmed"
-              :target-label="messageSourceLabel(message)"
-              :failure-detail="stepOwnsError(message) && step.id === failedAgentStep(message)?.id ? message.text : ''"
-              :can-retry="stepOwnsError(message) && step.id === failedAgentStep(message)?.id && canRetryMessage(message)"
-              :retry-disabled-reason="retryBlockedReason(message)"
-              :observation-stopped="message.agentStatus === 'stopped'"
-              @execute="resolveAgentApproval('execute')"
-              @review-risk="openAgentRiskReview"
-              @execute-and-allow="resolveAgentApproval('execute-and-allow')"
-              @skip="resolveAgentApproval('skip')"
-              @stop="resolveAgentApproval('stop')"
-              @wait="resolveAgentTimeout('wait')"
-              @timeout-stop="resolveAgentTimeout('stop')"
-              @retry="retryMessage(message)"
-              @focus-terminal="emit('focusTerminal')"
-            />
+          <div v-if="message.mode === 'agent'" class="agent-timeline">
+            <template v-for="entry in agentDisplayTimeline(message)" :key="entry.id">
+              <AgentStepCard
+                v-if="entry.kind === 'tool'"
+                :step="entry.step"
+                :awaiting-approval="isAwaitingApprovalStep(message, entry.step)"
+                :approval-saving="isAwaitingApprovalStep(message, entry.step) && agentApprovalSaving"
+                :awaiting-timeout="isAwaitingTimeoutStep(message, entry.step)"
+                :proposal="agentPendingApproval?.proposal"
+                :timeout-info="agentPendingTimeout?.info"
+                :now-ms="agentNowMs"
+                :high-risk-armed="agentHighRiskArmed"
+                :target-label="messageSourceLabel(message)"
+                :failure-detail="stepOwnsError(message) && entry.step.id === failedAgentStep(message)?.id ? message.text : ''"
+                :can-retry="stepOwnsError(message) && entry.step.id === failedAgentStep(message)?.id && canRetryMessage(message)"
+                :retry-disabled-reason="retryBlockedReason(message)"
+                :observation-stopped="message.agentStatus === 'stopped'"
+                @execute="resolveAgentApproval('execute')"
+                @review-risk="openAgentRiskReview"
+                @execute-and-allow="resolveAgentApproval('execute-and-allow')"
+                @skip="resolveAgentApproval('skip')"
+                @stop="resolveAgentApproval('stop')"
+                @wait="resolveAgentTimeout('wait')"
+                @timeout-stop="resolveAgentTimeout('stop')"
+                @retry="retryMessage(message)"
+                @focus-terminal="emit('focusTerminal')"
+              />
+              <AiMarkdownMessage
+                v-else
+                class="agent-reasoning"
+                :content="entry.text"
+                :interactive-commands="false"
+                :title="entry.legacy ? '历史思考记录，旧记录未保存轮次' : undefined"
+              />
+            </template>
           </div>
-          <details
-            v-if="message.mode === 'agent' && (message.agentReasoning || (message.id === agentRunMessageId && agentReasoningText))"
-            class="agent-reasoning"
-            open
-          >
-            <summary>
-              <UiIcon name="ai" size="13" />
-              <span>思考过程</span>
-              <small>随对话保留</small>
-            </summary>
-            <p>{{ message.id === agentRunMessageId ? agentReasoningText : message.agentReasoning }}</p>
-          </details>
-          <p v-if="message.id === agentRunMessageId && agentStreamText && !message.error" class="chat-progress">{{ agentStreamText }}</p>
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>
           <template v-if="aiStreamPartialText(message)">
@@ -1027,10 +1041,13 @@ watch(
           @click="selectPanelMode('agent')"
         >Agent</button>
       </div>
-      <select class="chat-model-select" :value="selectedConfigId" :disabled="composerBusy" :title="aiModelLabel" aria-label="选择模型" @change="emit('selectConfig', ($event.target as HTMLSelectElement).value)">
-        <option v-for="option in modelOptions" :key="option.id" :value="option.id">{{ option.model || option.id }}</option>
-      </select>
-      <button class="chat-icon" type="button" title="配置模型" aria-label="配置模型" @click="emit('configureAi')"><UiIcon name="settings" size="14" /></button>
+      <AiComposerSelect class="chat-config-select" :model-value="selectedConfigId" :options="composerConfigOptions"
+        :disabled="composerBusy" :title="aiConfigLabel" label="选择 AI 配置" @update:model-value="emit('selectConfig', $event)" />
+      <AiComposerSelect class="chat-terminal-context" :model-value="terminalContextMode" :options="terminalContextOptions"
+        :icon="terminalContextMode === 'none' ? 'eye-off' : terminalContextMode === 'selection' ? 'file' : 'terminal'"
+        :disabled="composerBusy" :title="terminalContextTitle" label="附带终端内容"
+        @update:model-value="terminalContextMode = normalizeTerminalContextMode($event)" />
+      <button class="chat-icon" type="button" title="管理 AI 配置" aria-label="管理 AI 配置" @click="emit('configureAi')"><UiIcon name="settings" size="14" /></button>
       <button
         class="chat-icon chat-send"
         type="button"

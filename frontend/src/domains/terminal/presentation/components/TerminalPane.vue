@@ -13,6 +13,7 @@ import { saveConnectionProfile } from '../../../connections/infrastructure/api'
 import type { AuthEndpoint, ConnectionProfile } from '../../../connections/types'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
 import { createInternalTerminalOutputFilter } from '../../domain/internalTerminalOutput'
+import { frameInternalProbe, isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../domain/internalTerminalCommand'
 import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
 import { attachShellIntegration } from '../../domain/shellIntegration'
 import type { AttachedShellIntegration } from '../../domain/shellIntegration'
@@ -954,7 +955,7 @@ async function writeClipboard(text: string) {
 
 function recordCommand(command: string, exitCode?: number) {
   const value = command.trim()
-  if (!value || isSensitiveCommand(value)) return
+  if (!value || isSensitiveCommand(value) || isInternalTerminalCommand(value)) return
   localCommandHistory.value = [...localCommandHistory.value, value].slice(-120)
   emit('commandRecorded', {
     terminalId: props.terminalId,
@@ -2215,7 +2216,7 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
  * 派发一条命令到终端。`historyCommand` 用于哨兵路径:派发的是包装后的长命令,
  * 但命令历史与事件应记录用户/模型看到的干净命令;传空串则不记历史(探针)。
  */
-function executeCommand(command: string, options?: { historyCommand?: string; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) {
+function executeCommand(command: string, options?: { historyCommand?: string; internal?: boolean; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) {
   const value = command.trim()
   if (!value) return false
   if (props.agentControlled && !options?.allowDuringAgentTakeover) return false
@@ -2225,16 +2226,33 @@ function executeCommand(command: string, options?: { historyCommand?: string; on
     if (!terminalLineReadyForAppInput()) return false
     closeCompletion()
     const integrationCaptures = shellIntegrationInputActive()
-    const accepted = writePreparedTerminalInput(value + '\r', {
+    const dispatched = options?.internal
+      ? wrapInternalTerminalCommand(frameInternalProbe(value, `${Date.now()}_${Math.random().toString(36).slice(2)}`))
+      : value
+    if (options?.internal) {
+      internalOutputFilter.begin(dispatched, {
+        debug: props.terminalSettings?.debugMode === true,
+        timeoutMs: 8_000,
+        restorePrefix: internalPromptRestorePrefix()
+      })
+      scheduleInternalOutputFlush(8_010)
+    }
+    const accepted = writePreparedTerminalInput(dispatched + '\r', {
       source: 'command',
       preserveFocus: props.agentControlled && options?.allowDuringAgentTakeover === true,
       // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
       onWritten: () => {
         if (!integrationCaptures) recordCommand(recorded)
       },
-      onWriteFailed: options?.onWriteFailed
+      onWriteFailed: error => {
+        if (options?.internal) finishFileInput(dispatched)
+        options?.onWriteFailed?.(error)
+      }
     })
-    if (!accepted) return false
+    if (!accepted) {
+      if (options?.internal) finishFileInput(dispatched)
+      return false
+    }
     shellCommandAwaitingPrompt = true
     resetTrackedTerminalInput('unknown')
     pendingInputControlSequence = ''
@@ -2329,7 +2347,8 @@ function writeFileInput(data: string): Promise<boolean> {
   closeCompletion()
   return new Promise((resolve, reject) => {
     const fail = (error: unknown) => { finishFileInput(data); reject(error) }
-    if (!enqueueTerminalInput(data, 'direct', [() => resolve(true)], [fail])) {
+    const dispatched = token ? `${wrapInternalTerminalCommand(data)}\n` : data
+    if (!enqueueTerminalInput(dispatched, 'direct', [() => resolve(true)], [fail])) {
       finishFileInput(data)
       resolve(false)
     }
