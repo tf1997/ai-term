@@ -365,6 +365,61 @@ test('旧消息不伪造耗时，异常耗时不会破坏记录恢复', () => {
   }
 })
 
+for (const outcome of ['complete', 'error', 'stop']) {
+  test(`Agent ${outcome} 保留多轮推理和工具前文字，清理运行状态后仍可恢复`, { timeout: 2000 }, async t => {
+    const first = deferred()
+    const second = deferred()
+    const fixture = mountRuntime(t, { responses: [() => first.promise, () => second.promise] })
+    const running = fixture.runAgent()
+    await until(() => fixture.modelRequests.length === 1)
+    fixture.stream({ kind: 'reasoning', delta: '先分析服务状态。' })
+    fixture.stream({ kind: 'chunk', delta: '接下来检查服务。' })
+    first.resolve({ ...response(commandCall('inspect')), text: '接下来检查服务。' })
+    await until(() => fixture.agent.agentPendingApproval.value)
+    fixture.agent.resolveAgentApproval('execute')
+    await until(() => fixture.modelRequests.length === 2)
+    fixture.stream({ kind: 'reasoning', delta: '再核对执行结果。' })
+    assert.ok(!JSON.stringify(fixture.modelRequests[1].request).includes('先分析服务状态。'))
+    if (outcome === 'error') second.reject(Error('HTTP 502'))
+    else if (outcome === 'stop') fixture.agent.stopAgentRun()
+    else second.resolve({ ...response(), text: '最终总结。' })
+    await running
+    if (outcome === 'stop') second.resolve(response())
+    const message = fixture.props.messages[0]
+    assert.equal(message.agentStatus, { complete: 'done', error: 'error', stop: 'stopped' }[outcome])
+    assert.equal(fixture.agent.agentReasoningText.value, '')
+    assert.equal(fixture.agent.agentStreamText.value, '')
+    assert.equal(fixture.agent.agentRunMessageId.value, '')
+    for (const text of ['先分析服务状态。', '接下来检查服务。', '再核对执行结果。']) {
+      assert.ok(message.agentReasoning.includes(text))
+      assert.equal(message.agentReasoning.split(text).length, 2, '过程文字不能重复保存')
+    }
+    assert.ok(!message.agentReasoning.includes('最终总结。'))
+    const restored = hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson })
+    assert.equal(restored.agentReasoning, message.agentReasoning)
+  })
+}
+
+test('Agent 无推理事件时保留工具前文字，重试也保留之前的过程', { timeout: 2000 }, async t => {
+  const fixture = mountRuntime(t, {
+    responses: [
+      { ...response(commandCall('inspect')), text: '检查服务状态。' },
+      () => { throw Error('HTTP 502') },
+      response()
+    ]
+  })
+  const running = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  fixture.agent.resolveAgentApproval('execute')
+  await running
+  assert.equal(fixture.props.messages[0].agentReasoning.trim(), '检查服务状态。')
+  await fixture.retryAgent()
+  const message = fixture.props.messages[0]
+  assert.equal(message.agentStatus, 'done')
+  assert.equal(message.agentReasoning.trim(), '检查服务状态。')
+  assert.equal(hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson }).agentReasoning, message.agentReasoning)
+})
+
 test('Agent 思考过程随 payload 恢复，但不会改写上下文正文', () => {
   const restored = hydrateAiMessagePayload({
     id: 'reasoning',

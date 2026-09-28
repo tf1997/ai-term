@@ -48,7 +48,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   const agentStreamText = ref('')
 
-  /** Provider reasoning deltas are display-only and never enter Agent turns. */
+  /** Saved display transcript; never injected into Agent turns. */
   const agentReasoningText = ref('')
 
   const agentModeNotice = ref('')
@@ -317,7 +317,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     agentRun.value = null
     agentRunMessageId.value = assistantMessage.id
     agentStreamText.value = ''
-    agentReasoningText.value = ''
+    agentReasoningText.value = assistantMessage.agentReasoning ?? ''
     currentAssistantMessageId.value = assistantMessage.id
     startAnswerTimer()
 
@@ -390,7 +390,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
               appendAgentReasoning(event.delta)
             }
           })
-          return await aiAgentTurnStream(requestId, {
+          const response = await aiAgentTurnStream(requestId, {
             config: requestConfig,
             apiKey,
             goal,
@@ -400,6 +400,14 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
             conversationMessages: runSnapshot.conversationMessages,
             conversationSummary: runSnapshot.conversationSummary
           })
+          // Tool-turn commentary used to exist only in agentStreamText, which
+          // is cleared for the next request and at completion. Archive the
+          // complete response (also covers providers without chunk events).
+          // The final answer remains in message.text, without duplication.
+          if (!signal.cancelled && response.toolCalls.length && response.text.trim()) {
+            appendAgentReasoning(`${agentReasoningText.value.trim() ? '\n\n' : ''}${response.text}`)
+          }
+          return response
         } finally {
           window.clearInterval(cancelWatch)
           unlisten?.()

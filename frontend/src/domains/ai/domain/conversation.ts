@@ -42,7 +42,7 @@ export interface AiMessage {
   mode?: 'chat' | 'agent'
   /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */
   agentSteps?: AgentStep[]
-  /** 当前 Agent 轮次的模型推理展示文本；仅用于 UI，不进入上下文。 */
+  /** Agent 推理及工具调用前的过程文字；通过 payloadJson 保存，不额外注入上下文。 */
   agentReasoning?: string
   agentStatus?: 'running' | 'done' | 'stopped' | 'error'
   stopReason?: string

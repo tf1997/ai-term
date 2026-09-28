@@ -937,12 +937,12 @@ watch(
           <details
             v-if="message.mode === 'agent' && (message.agentReasoning || (message.id === agentRunMessageId && agentReasoningText))"
             class="agent-reasoning"
-            :open="message.id === agentRunMessageId"
+            open
           >
             <summary>
               <UiIcon name="ai" size="13" />
               <span>思考过程</span>
-              <small>仅本次运行展示，不参与上下文</small>
+              <small>随对话保留</small>
             </summary>
             <p>{{ message.id === agentRunMessageId ? agentReasoningText : message.agentReasoning }}</p>
           </details>
