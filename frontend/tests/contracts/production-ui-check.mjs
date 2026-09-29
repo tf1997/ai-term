@@ -44,6 +44,7 @@ const quickCommands = read('src/domains/terminal/application/useQuickCommands.ts
 const aiPanelTypes = read('src/domains/ai/domain/aiPanel.ts')
 const aiConversationRules = read('src/domains/ai/domain/aiConversation.ts')
 const aiConversationContext = read('src/domains/ai/application/useAiConversationContext.ts')
+const terminalContextRules = read('src/domains/ai/domain/terminalContext.ts')
 const aiAnswer = read('src/domains/ai/application/useAiAnswerState.ts')
 const agentSession = read('src/domains/ai/application/useAgentSession.ts')
 const scriptPanelTypes = read('src/domains/scripts/domain/scriptPanel.ts')
@@ -160,6 +161,7 @@ const commandHistoryPanel = read('src/domains/terminal/presentation/components/C
 const uiIcon = read('src/shared/ui/UiIcon.vue')
 const contextMenu = read('src/shared/ui/ContextMenu.vue')
 const styles = readStylesheet('src/app/styles/index.css')
+const terminalBodyWrapRules = /\.terminal-body-wrap\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ''
 const indexHtml = read('index.html')
 const tauriConfig = read('../src-tauri/tauri.conf.json')
 const sqlite = read('../src-tauri/src/domain/storage/sqlite.rs')
@@ -1386,7 +1388,9 @@ assert(
     !styles.includes('.terminal-completion-head') &&
     !styles.includes('.terminal-completion-empty') &&
     styles.includes('.terminal-body-wrap {\n  position: relative;') &&
-    styles.includes('display: block;\n  overflow: hidden;') &&
+    terminalBodyWrapRules.includes('display: flex;') &&
+    terminalBodyWrapRules.includes('flex-direction: column;') &&
+    terminalBodyWrapRules.includes('overflow: hidden;') &&
     styles.includes('.terminal-completion {\n  position: absolute;') &&
     styles.includes('max-height: 206px;') &&
     styles.includes('backdrop-filter: none;') &&
@@ -2278,7 +2282,9 @@ assert(
     !aiPanel.includes('selected-context-chip') &&
     !styles.includes('.selected-context-chip') &&
     aiConversationContext.includes('function aiCommandHistory()') &&
-    aiChatState.includes('const commandHistory = aiCommandHistory()') &&
+    aiChatState.includes('const { terminalSnapshot, commandHistory, selection } = resolveTerminalContext(') &&
+    aiChatState.includes("terminalContextMode?.() ?? 'auto', props.terminalSnapshot, aiCommandHistory(), selectedContext") &&
+    terminalContextRules.includes("commandHistory: mode === 'auto' ? commandHistory : []") &&
     aiConversationContext.includes('.filter((command) => !isSensitiveCommand(command))') &&
     aiPanel.includes('contextStatusLabel') &&
     aiPanel.includes('已压缩至') &&
@@ -2744,7 +2750,7 @@ assert(
     commandHistoryState.includes('.slice(-COMMAND_HISTORY_CACHE_LIMIT)') &&
     commandHistoryState.includes('createdAt: nowText()') &&
     appNowTextBlock.includes('return new Date().toISOString()') &&
-    commandHistoryState.includes('if (isSensitiveCommand(event.command)) return') &&
+    commandHistoryState.includes('if (isSensitiveCommand(event.command) || isInternalTerminalCommand(event.command)) return') &&
     !commandHistoryState.includes('createdAt: new Date().toLocaleString()') &&
     sqlite.includes('const COMMAND_HISTORY_RETENTION_LIMIT: i64 = 1000;') &&
     sqlite.includes('prune_command_history') &&
@@ -3265,13 +3271,17 @@ assert(
     aiCopyFeedback.includes('clearTimeout'),
   'Risky commands must enter review before execution, code preview must stay read-only with keyboard focus recovery, and copy feedback timers must be cleaned up.'
 )
+const agentLoop = read('src/domains/ai/application/agent/agentLoop.ts')
 assert(
   agentAutoApprove.includes('suggestedPatterns') &&
     !/suggestedPattern\b(?!s)/.test(agentAutoApprove.replace(/suggestPatternForCommand|suggestFromSegments?/g, '')) &&
-    /for \(const pattern of suggestedPatterns\)/.test(read('src/domains/ai/application/agent/agentLoop.ts')),
-  'Always-allow must cover every uncovered command segment: the classifier reports all needed patterns and the loop persists each one.'
+    agentLoop.includes('deps.onAllowPatterns(suggestedPatterns, step.command)') &&
+    agentLoop.includes('suggestedPatterns.reduce<Promise<void>>(') &&
+    agentLoop.includes('previous.then(() => deps.onAllowPattern(pattern, step.command))') &&
+    agentLoop.includes('await raceWithStop(Promise.resolve(savePatterns))') &&
+    agentLoop.indexOf('await raceWithStop(Promise.resolve(savePatterns))') < agentLoop.indexOf('return executeStep(step, toolCall.id)'),
+  'Always-allow must save all uncovered segments atomically when supported, retain sequential fallback, and await persistence before execution.'
 )
-const agentLoop = read('src/domains/ai/application/agent/agentLoop.ts')
 const agentBackend = readFileSync(resolve(root, '../src-tauri/src/domain/ai/agent.rs'), 'utf8')
 const frontendTurnBudget = Number(/DEFAULT_MAX_TURN_CHARS = ([\d_]+)/.exec(agentLoop)?.[1].replace(/_/g, ''))
 const backendTurnBudget = Number(/MAX_AGENT_TURN_CHARS: usize = ([\d_]+)/.exec(agentBackend)?.[1].replace(/_/g, ''))
