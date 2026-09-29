@@ -28,6 +28,27 @@ test('browser snapshots restore history, path drafts, selection, focus and scrol
   await s.state.goHistory(1);assert.equal(s.state.path.value,'/srv/app')
 })
 
+test('directory search reuses natural sorting and keeps directories first', async t => {
+  const s = setup(t, path => ({ path, entries: ['file10.txt', 'dir10', 'file2.txt', 'dir2'].map(name => entry(name, path)) }))
+  await s.state.load('/srv')
+  assert.deepEqual(s.state.visibleEntries.value.map(item => item.name), ['dir2', 'dir10', 'file2.txt', 'file10.txt'])
+  const original = Array.prototype.sort
+  let sorts = 0
+  t.after(() => { Array.prototype.sort = original })
+  Array.prototype.sort = function (...args) {
+    if (this.some(item => item?.path?.startsWith('/srv/'))) sorts++
+    return original.apply(this, args)
+  }
+  s.state.search.value = ' FILE '
+  assert.deepEqual(s.state.visibleEntries.value.map(item => item.name), ['file2.txt', 'file10.txt'])
+  s.state.search.value = 'dir'
+  assert.deepEqual(s.state.visibleEntries.value.map(item => item.name), ['dir2', 'dir10'])
+  assert.equal(sorts, 0, '只修改查询时不重复排序目录')
+  s.state.descending.value = true
+  assert.deepEqual(s.state.visibleEntries.value.map(item => item.name), ['dir10', 'dir2'])
+  assert.equal(sorts, 1)
+})
+
 test('stale cached listing refreshes in the background without resetting browsing position',async t=>{
   const s=setup(t)
   await s.state.load('/srv');s.state.select(s.state.entries.value[1]);s.state.scroll.value=40;s.state.draft.value='/draft'

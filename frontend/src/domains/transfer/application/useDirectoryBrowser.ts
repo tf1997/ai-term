@@ -23,6 +23,8 @@ export interface BrowserSnapshot {
   descending: boolean
 }
 export const DIRECTORY_CACHE_TTL = 30_000
+const nameCollator = new Intl.Collator(undefined, { numeric: true })
+const tieCollator = new Intl.Collator()
 
 export function useDirectoryBrowser(options: {
   contextKey: () => string
@@ -53,25 +55,29 @@ export function useDirectoryBrowser(options: {
   const cache = new Map<string, { path: string; entries: BrowserEntry[]; at: number }>()
   const inFlight = new Map<string, { version: number; promise: Promise<boolean> }>()
 
-  const visibleEntries = computed(() =>
-    entries.value
-      .filter(
-        (entry) =>
-          (showHidden.value || !entry.name.startsWith('.')) &&
-          entry.name.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()),
-      )
-      .sort((a, b) => {
+  // Search changes should filter an already sorted directory, not sort it again.
+  const sortedEntries = computed(() =>
+    [...entries.value].sort((a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
         const comparison =
           sort.value === 'size'
             ? a.size - b.size
             : sort.value === 'modified'
               ? Number(a.modified) - Number(b.modified)
-              : a.name.localeCompare(b.name, undefined, { numeric: true })
-        return (comparison || a.name.localeCompare(b.name)) * (descending.value ? -1 : 1)
+              : nameCollator.compare(a.name, b.name)
+        return (comparison || tieCollator.compare(a.name, b.name)) * (descending.value ? -1 : 1)
       }),
   )
-  const selectedEntries = computed(() => entries.value.filter((entry) => selected.value.includes(entry.path)))
+  const visibleEntries = computed(() => {
+    const query = search.value.trim().toLocaleLowerCase()
+    return sortedEntries.value.filter(entry =>
+      (showHidden.value || !entry.name.startsWith('.')) && (!query || entry.name.toLocaleLowerCase().includes(query))
+    )
+  })
+  const selectedEntries = computed(() => {
+    const selectedPaths = new Set(selected.value)
+    return entries.value.filter(entry => selectedPaths.has(entry.path))
+  })
   const canBack = computed(() => historyIndex.value > 0)
   const canForward = computed(() => historyIndex.value < history.value.length - 1)
 

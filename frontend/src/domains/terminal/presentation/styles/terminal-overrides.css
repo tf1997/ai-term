@@ -42,6 +42,9 @@
 .app-shell.theme-light .terminal-agent-takeover small {
   color: #47705f;
 }
+.app-shell.theme-light .terminal-wrap,
+.app-shell.theme-light .terminal-frame,
+.app-shell.theme-light .terminal-native-code .xterm-host { background: #ffffff; }
 .terminal-agent-takeover + .xterm-host {
   padding-top: 0;
 }

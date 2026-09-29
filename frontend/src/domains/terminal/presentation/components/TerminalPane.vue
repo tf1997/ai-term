@@ -140,8 +140,12 @@ let resizeObserver: ResizeObserver | undefined
 // cannot clip the glyph rendered in the last PTY column.
 const TERMINAL_SAFE_COLUMN_MARGIN = 1
 let terminalFitFrame = 0
+let terminalScrollFrame = 0
+let scrollAfterParse = false
+let terminalAttributeResetSent = false
 let forcePtyResizeOnNextFit = false
 let dataDisposable: IDisposable | undefined
+let writeParsedDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
@@ -661,7 +665,11 @@ function currentTerminalSize() {
 }
 
 function scrollTerminalToBottom() {
-  window.requestAnimationFrame(() => terminal?.scrollToBottom())
+  if (terminalScrollFrame) return
+  terminalScrollFrame = window.requestAnimationFrame(() => {
+    terminalScrollFrame = 0
+    terminal?.scrollToBottom()
+  })
 }
 
 function terminalIsPinnedToBottom() {
@@ -672,23 +680,29 @@ function terminalIsPinnedToBottom() {
 
 function writeTerminalView(data: string, forceScroll = false) {
   if (!terminal || !data) return
-  const shouldScroll = forceScroll || terminalIsPinnedToBottom()
-  terminal.write(data, () => {
-    if (shouldScroll) scrollTerminalToBottom()
-    updateTerminalInputContextFromOutput()
-    if (shellIntegrationInputActive()) {
-      // 集成模式下输入内容以屏幕回显为准:回显落地后再评估是否弹补全,
-      // Tab 补全、autosuggestion、历史翻找造成的行内容变化都会经过这里
-      if (shellIntegrationCommandLine().trim()) {
-        scheduleCompletionSuggestions()
-      } else if (terminalCompletionOpen.value) {
-        closeCompletion()
-      }
-    } else if (recoverTrackedTerminalInputFromRenderedLine()) {
+  terminalAttributeResetSent = false
+  scrollAfterParse ||= forceScroll || terminalIsPinnedToBottom()
+  terminal.write(data)
+}
+
+// xterm calls onWriteParsed at most once per frame. Keep byte parsing immediate,
+// but avoid re-reading the same screen and scheduling layout for every chunk.
+function afterTerminalWriteParsed() {
+  if (scrollAfterParse) scrollTerminalToBottom()
+  scrollAfterParse = false
+  updateTerminalInputContextFromOutput()
+  if (shellIntegrationInputActive()) {
+    // 集成模式下输入内容以屏幕回显为准:回显落地后再评估是否弹补全,
+    // Tab 补全、autosuggestion、历史翻找造成的行内容变化都会经过这里
+    if (shellIntegrationCommandLine().trim()) {
       scheduleCompletionSuggestions()
+    } else if (terminalCompletionOpen.value) {
+      closeCompletion()
     }
-    if (terminalCompletionOpen.value) scheduleCompletionPosition()
-  })
+  } else if (recoverTrackedTerminalInputFromRenderedLine()) {
+    scheduleCompletionSuggestions()
+  }
+  if (terminalCompletionOpen.value) scheduleCompletionPosition()
 }
 
 function syncTerminalSize(forcePtyResize = false) {
@@ -696,16 +710,15 @@ function syncTerminalSize(forcePtyResize = false) {
   const previous = { cols: terminal.cols, rows: terminal.rows }
   const proposed = fitAddon.proposeDimensions()
   if (proposed) {
-    terminal.resize(
-      Math.max(2, proposed.cols - TERMINAL_SAFE_COLUMN_MARGIN),
-      Math.max(1, proposed.rows)
-    )
+    const cols = Math.max(2, proposed.cols - TERMINAL_SAFE_COLUMN_MARGIN)
+    const rows = Math.max(1, proposed.rows)
+    if (cols !== terminal.cols || rows !== terminal.rows) terminal.resize(cols, rows)
   } else {
     fitAddon.fit()
   }
   const size = { cols: terminal.cols, rows: terminal.rows }
   const changed = size.cols !== previous.cols || size.rows !== previous.rows
-  terminalSize.value = size
+  if (terminalSize.value.cols !== size.cols || terminalSize.value.rows !== size.rows) terminalSize.value = size
   if (sessionId && (changed || forcePtyResize)) {
     void terminalResize(sessionId, size.cols, size.rows)
   }
@@ -1331,7 +1344,7 @@ function recognizedShellPrompt(lastLine: string) {
 // 划线,且 SGR 重置按设计不清除链接状态,必须单独补 \x1b]8;;ST。提示符回归时
 // 若光标前的字符仍带这些属性,向显示层补一个完整重置。
 function clearLeakedTextAttributes() {
-  if (!terminal) return
+  if (!terminal || terminalAttributeResetSent) return
   const buffer = terminal.buffer.active
   if (buffer.type === 'alternate' || buffer.cursorX <= 0) return
   const cell = buffer.getLine(buffer.baseY + buffer.cursorY)?.getCell(buffer.cursorX - 1)
@@ -1344,6 +1357,9 @@ function clearLeakedTextAttributes() {
     cell.isDim() ||
     cell.isItalic()
   ) {
+    // Reset sequences also fire onWriteParsed, but cannot change the attributes
+    // of the preceding cell. Do not keep re-emitting them for that same output.
+    terminalAttributeResetSent = true
     terminal.write('\x1b[0m\x1b]8;;\x1b\\')
   }
 }
@@ -1718,9 +1734,10 @@ function terminalThemeOptions(theme: TerminalTheme) {
   }
   if (theme === 'light') {
     return {
-      background: '#f6f8fb',
+      background: '#ffffff',
       foreground: '#172033',
-      cursor: '#1d4ed8',
+      cursor: '#087f5b',
+      cursorAccent: '#ffffff',
       selectionBackground: '#10b98133',
       selectionInactiveBackground: '#10b98124',
       blue: '#2563eb',
@@ -1743,19 +1760,23 @@ function terminalThemeOptions(theme: TerminalTheme) {
   }
 }
 
+let appliedTerminalTheme: TerminalTheme | undefined
+
 function applyTerminalAppearance() {
   if (!terminal) return
   const settings = resolvedTerminalSettings()
-  terminal.options.fontFamily = settings.terminalFontFamily
-  terminal.options.fontSize = settings.terminalFontSize
-  terminal.options.lineHeight = terminalTypographyOptions.lineHeight
-  terminal.options.letterSpacing = terminalTypographyOptions.letterSpacing
-  terminal.options.fontWeight = terminalTypographyOptions.fontWeight
-  terminal.options.fontWeightBold = terminalTypographyOptions.fontWeightBold
-  terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
-  terminal.refresh(0, terminal.rows - 1)
-  scheduleTerminalSizeSync()
-  scheduleTerminalSizeSyncAfterFonts()
+  const familyChanged = terminal.options.fontFamily !== settings.terminalFontFamily
+  const sizeChanged = terminal.options.fontSize !== settings.terminalFontSize
+  if (familyChanged) terminal.options.fontFamily = settings.terminalFontFamily
+  if (sizeChanged) terminal.options.fontSize = settings.terminalFontSize
+  if (appliedTerminalTheme !== settings.terminalTheme) {
+    terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
+    appliedTerminalTheme = settings.terminalTheme
+  }
+  if (familyChanged || sizeChanged) {
+    scheduleTerminalSizeSync()
+    if (familyChanged) scheduleTerminalSizeSyncAfterFonts()
+  }
 }
 
 onMounted(async () => {
@@ -1769,6 +1790,8 @@ onMounted(async () => {
     ...terminalTypographyOptions,
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
+  appliedTerminalTheme = resolvedTerminalSettings().terminalTheme
+  writeParsedDisposable = terminal.onWriteParsed(afterTerminalWriteParsed)
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   shellIntegrationAttachment = attachShellIntegration(terminal, {
@@ -1831,15 +1854,7 @@ onMounted(async () => {
 
 watch(status, (value) => emitTerminalStatus(value), { immediate: true })
 
-watch(
-  () => props.terminalSettings,
-  () => applyTerminalAppearance()
-)
-
-watch(
-  () => props.appTheme,
-  () => applyTerminalAppearance()
-)
+watch([() => props.terminalSettings, () => props.appTheme], applyTerminalAppearance)
 
 watch(
   () => props.active,
@@ -2452,10 +2467,12 @@ onBeforeUnmount(() => {
   if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
   quickCommandSettingsButton.value?.removeEventListener('pointerdown', handleQuickCommandSettingsPointerDown, true)
   if (terminalFitFrame) window.cancelAnimationFrame(terminalFitFrame)
+  if (terminalScrollFrame) window.cancelAnimationFrame(terminalScrollFrame)
   disconnect(false)
   resizeObserver?.disconnect()
   detachTerminalEvents()
   dataDisposable?.dispose()
+  writeParsedDisposable?.dispose()
   selectionDisposable?.dispose()
   shellIntegrationAttachment?.dispose()
   shellIntegrationAttachment = undefined

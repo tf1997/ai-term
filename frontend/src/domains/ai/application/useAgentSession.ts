@@ -388,8 +388,17 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           kind: 'thinking', id: requestId, reasoning: '', text: ''
         }
         timeline.push(thinking)
-        const syncThinking = () => {
+        let thinkingFlushTimer: number | undefined
+        let thinkingShown = false
+        const flushThinking = () => {
+          thinkingFlushTimer = undefined
           if (!signal.cancelled && agentRun.value) syncAgentRunToMessage(agentRun.value)
+        }
+        const syncThinking = () => {
+          // Show the first delta immediately, then batch bursts to keep Markdown
+          // rendering and transcript copying from competing with terminal input.
+          if (!thinkingShown) { thinkingShown = true; flushThinking(); return }
+          if (thinkingFlushTimer === undefined) thinkingFlushTimer = window.setTimeout(flushThinking, 80)
         }
         // Keep reasoning from earlier model turns visible after a tool result;
         // this field is display-only and is never added to the next request.
@@ -442,6 +451,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           if (!signal.cancelled) thinking.text = ''
           throw error
         } finally {
+          if (thinkingFlushTimer !== undefined) window.clearTimeout(thinkingFlushTimer)
           window.clearInterval(cancelWatch)
           unlisten?.()
         }

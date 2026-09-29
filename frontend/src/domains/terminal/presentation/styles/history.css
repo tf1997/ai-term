@@ -24,10 +24,10 @@
   background: #fff;
 }
 .app-shell.theme-light .terminal-native-code .xterm-host {
-  background: #f7f9fc;
+  background: #ffffff;
 }
 .app-shell.theme-light .terminal-native-code .xterm-host .composition-view {
-  background: #f7f9fc !important;
+  background: #ffffff !important;
   color: var(--light-text) !important;
 }
 .app-shell.theme-light .settings-status-card.warning {

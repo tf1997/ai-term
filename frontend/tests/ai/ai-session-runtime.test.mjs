@@ -412,6 +412,7 @@ for (const outcome of ['complete', 'error', 'stop']) {
     await until(() => fixture.modelRequests.length === 1)
     fixture.stream({ kind: 'reasoning', delta: '先分析服务状态。' })
     fixture.stream({ kind: 'chunk', delta: '接下来检查服务。' })
+    await new Promise(resolve => setTimeout(resolve, 100))
     assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking'])
     assert.match(agentDisplayTimeline(fixture.props.messages[0])[0].text, /先分析服务状态。.*\n\n接下来检查服务。/)
     first.resolve({ ...response(commandCall('inspect')), text: '接下来检查服务。' })
@@ -478,6 +479,7 @@ test('Agent 多轮及同轮多工具按发生顺序展示，最终回复不重�
   await until(() => fixture.modelRequests.length === 3)
   fixture.stream({ kind: 'reasoning', delta: '核对三项结果。' })
   fixture.stream({ kind: 'chunk', delta: '全部正常。' })
+  await new Promise(resolve => setTimeout(resolve, 100))
   assert.match(agentDisplayTimeline(fixture.props.messages[0]).at(-1).text, /全部正常。/)
   last.resolve({ ...response(), text: '全部正常。' })
   await running
@@ -500,6 +502,29 @@ test('Agent 旧记录不伪造轮次，损坏时间线不影响工具显示', ()
     { kind: 'tool', id: 'one', stepId: 'first' }, { kind: 'tool', id: 'one', stepId: 'first' },
     { kind: 'tool', id: 'missing', stepId: 'missing' }])
   assert.deepEqual(agentDisplayTimeline({ ...message, agentTimeline: timeline }).map(entry => entry.step.id), ['first', 'second'])
+})
+
+test('Agent 流式增量合并显示更新，结束时完整保存且定时器不覆盖终态', async t => {
+  const request = deferred()
+  t.after(() => request.resolve(response()))
+  const fixture = mountRuntime(t, { responses: [() => request.promise] })
+  const running = fixture.runAgent()
+  await until(() => fixture.modelRequests.length === 1)
+  const updates = () => fixture.events.filter(([type]) => type === 'updateMessage').length
+  const before = updates()
+  for (let i = 0; i < 1000; i++) fixture.stream({ kind: 'reasoning', delta: 'x' })
+  assert.equal(updates() - before, 1, '首个增量立即显示，其余合并')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(updates() - before, 2)
+  fixture.stream({ kind: 'reasoning', delta: '结束' })
+  request.resolve(response())
+  await running
+  const finalMessage = fixture.props.messages[0]
+  assert.equal(finalMessage.agentReasoning, 'x'.repeat(1000) + '结束')
+  const finishedUpdates = updates()
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(updates(), finishedUpdates)
+  assert.equal(fixture.props.messages[0].agentStatus, 'done')
 })
 
 test('Agent 思考过程随 payload 恢复，但不会改写上下文正文', () => {
