@@ -698,7 +698,7 @@ body.workspace-resizing * {
 .app-shell.theme-light .terminal-stack,
 .app-shell.theme-light .terminal-pane,
 .app-shell.theme-light .terminal-wrap {
-  background: var(--workbench-bg);
+  background: #ffffff;
 }
 
 .app-shell.theme-light .terminal-frame {

@@ -121,7 +121,70 @@ try {
     assert.ok(result.fontChangeMeasure > 0 && result.fontSizeApplied)
     assert.equal(result.attributeResets, 1, 'Attribute recovery must not create a write/parse feedback loop')
   }
-  const report = { phase, backend: 'synthetic IPC; real Vue and xterm', ...result }
+  let motion
+  if (phase === 'after') {
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+    await send('Emulation.setDeviceMetricsOverride', { width: 1120, height: 820, deviceScaleFactor: 1, mobile: false })
+    await waitFor('perfApp.sidebarOverlay === true')
+    motion = await evaluate(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve, 240));
+      const frame = () => new Promise(requestAnimationFrame);
+      perfApp.closeLeftPanel(); await settle();
+      let resizes = 0;
+      const resize = perfTerminal.resize.bind(perfTerminal);
+      perfTerminal.resize = (...args) => { resizes++; return resize(...args); };
+      const terminalInstance = perfTerminal;
+      perfApp.toggleConnectionsPanel(); await frame(); await frame();
+      const panel = document.querySelector('#left-sidebar-panel');
+      const enterProperties = getComputedStyle(panel).transitionProperty;
+      const enterClasses = panel.className;
+      const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      await settle();
+      perfApp.toggleSettingsPanel(); await settle();
+      const switchedSettings = Boolean(document.querySelector('.settings-sidebar'));
+      perfApp.closeLeftPanel(); await frame(); await frame();
+      const leaving = panel.classList.contains('sidebar-motion-leave-active');
+      const inertWhileLeaving = panel.inert;
+      await settle();
+      const closed = getComputedStyle(panel).display === 'none';
+      const backgrounds = ['.terminal-wrap', '.terminal-body-wrap', '.xterm-host', '.quick-command-bar'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor);
+      return { resizes, enterProperties, enterClasses, reducedMotion, switchedSettings, leaving, inertWhileLeaving, closed, sameTerminal: terminalInstance === perfPane.setupState.terminal, backgrounds };
+    })()`)
+    assert.equal(motion.resizes, 0, 'Overlay animation must not resize the terminal')
+    assert.ok(motion.enterProperties.includes('transform') && motion.enterProperties.includes('opacity'), JSON.stringify(motion))
+    assert.ok(!/width|height|all/.test(motion.enterProperties))
+    assert.ok(motion.switchedSettings && motion.leaving && motion.inertWhileLeaving && motion.closed && motion.sameTerminal)
+    assert.ok(motion.backgrounds.every(color => color === 'rgb(255, 255, 255)'))
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await evaluate('perfApp.toggleConnectionsPanel(); true')
+    await waitFor('perfApp.leftDrawerOpen')
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("#left-sidebar-panel")).transitionDuration'), '0s')
+    await send('Emulation.setEmulatedMedia', { features: [] })
+    await evaluate('perfApp.closeLeftPanel(); true')
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+    await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 820, deviceScaleFactor: 1, mobile: false })
+    await waitFor('perfApp.sidebarOverlay === false')
+    const docked = await evaluate(`(async () => {
+      const frame = () => new Promise(requestAnimationFrame);
+      await new Promise(resolve => setTimeout(resolve, 240));
+      const left = document.querySelector('#left-sidebar-panel');
+      const leftWidth = left.getBoundingClientRect().width;
+      perfApp.closeLeftPanel(); await frame(); await frame();
+      const leavingLeftWidth = left.getBoundingClientRect().width;
+      await new Promise(resolve => setTimeout(resolve, 240));
+      const right = document.querySelector('#session-workspace-tools');
+      const rightWidth = right.getBoundingClientRect().width;
+      document.querySelector('.session-tools-toggle').click(); await frame(); await frame();
+      return { leftWidth, leavingLeftWidth, rightWidth, leavingRightWidth: right.getBoundingClientRect().width, rightInert: right.inert };
+    })()`)
+    assert.ok(docked.leftWidth > 0 && docked.rightWidth > 0)
+    assert.equal(docked.leavingLeftWidth, docked.leftWidth)
+    assert.equal(docked.leavingRightWidth, docked.rightWidth)
+    assert.equal(docked.rightInert, true)
+    motion.docked = docked
+    await send('Emulation.setEmulatedMedia', { features: [] })
+  }
+  const report = { phase, backend: 'synthetic IPC; real Vue and xterm', ...result, motion }
   writeFileSync(resolve(output, `${phase}.json`), JSON.stringify(report, null, 2))
   const screenshot = await send('Page.captureScreenshot', { format: 'png' })
   writeFileSync(resolve(output, `${phase}.png`), Buffer.from(screenshot.data, 'base64'))

@@ -36,6 +36,8 @@ export interface AiMessage {
   terminalId: string
   role: 'user' | 'assistant'
   text: string
+  /** Provider reasoning for ordinary chat; display-only and persisted in payloadJson. */
+  reasoning?: string
   command?: string
   error?: boolean
   errorKind?: AgentErrorKind

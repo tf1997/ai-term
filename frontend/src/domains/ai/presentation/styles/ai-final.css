@@ -79,7 +79,7 @@
 .chat-stop-reason, .chat-mode-notice { color: var(--chat-warning); }
 .chat-progress { display: flex; align-items: center; gap: 7px; }
 .chat-progress-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--chat-accent); animation: chat-pulse 1.4s ease-in-out infinite; }
-.agent-reasoning { min-width: 0; margin: 0; padding: 4px 0; }
+.agent-commentary { min-width: 0; margin: 0; padding: 4px 0; }
 .chat-collapse-footer { display: flex; justify-content: flex-start; }
 .chat-text-button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--chat-muted); font-size: 12px; }
 .chat-text-button:hover { color: var(--chat-accent); }

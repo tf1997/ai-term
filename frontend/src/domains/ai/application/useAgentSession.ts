@@ -11,7 +11,7 @@ import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
 import { runAgentTask } from './agent/agentLoop'
 import type { AgentLoopDeps } from './agent/agentLoop'
-import { classifyForAutoExec } from '../domain/agentAutoApprove'
+import { canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { createAgentRunSnapshot } from '../domain/agentRunSnapshot'
@@ -61,6 +61,12 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   const agentHighRiskArmed = ref(false)
   const agentApprovalSaving = ref(false)
+  const sessionCommandGrants = ref(new Map<string, Set<string>>())
+  let activeGrantScope = ''
+  const currentGrantScope = () => JSON.stringify([props.connectionId, props.workspaceSessionId, props.terminalId, props.terminalConnectionGeneration])
+  const agentSessionGrantCount = computed(() => sessionCommandGrants.value.get(currentGrantScope())?.size ?? 0)
+  function revokeSessionCommandGrants() { sessionCommandGrants.value.clear() }
+  watch([() => props.connectionId, () => props.workspaceSessionId, () => props.terminalId, () => props.terminalConnectionGeneration], revokeSessionCommandGrants)
 
   const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
 
@@ -100,11 +106,21 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     return proposal.risks.some((risk) => risk.severity === 'high')
   }
 
-  function resolveAgentApproval(decision: AgentApprovalDecision, riskReviewed = false) {
+  function resolveAgentApproval(decision: AgentApprovalDecision | 'execute-and-allow-exact', riskReviewed = false) {
     const pending = agentPendingApproval.value
     if (!pending) return
     if (agentApprovalSaving.value) {
       if (decision === 'stop') stopAgentRun()
+      return
+    }
+    if (decision === 'execute-and-allow-exact') {
+      if (pending.proposal.sensitive || pending.proposal.risks.length || !canGrantExactCommand(pending.proposal.command) || !activeGrantScope || activeGrantScope !== currentGrantScope()) return
+      const grants = sessionCommandGrants.value.get(activeGrantScope) ?? new Set<string>()
+      grants.add(pending.proposal.command.trim())
+      sessionCommandGrants.value.set(activeGrantScope, grants)
+      agentPendingApproval.value = null
+      agentHighRiskArmed.value = false
+      pending.resolve('execute')
       return
     }
     if (decision === 'execute-and-allow') {
@@ -289,6 +305,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
     const boundTerminalId = assistantMessage.terminalId
     const boundConnectionGeneration = assistantMessage.terminalConnectionGeneration ?? props.terminalConnectionGeneration
+    const grantScope = JSON.stringify([requestConnectionId, requestWorkspaceSessionId, boundTerminalId, boundConnectionGeneration])
+    activeGrantScope = grantScope
     const { summary: conversationSummary, unsummarized } = conversationContextParts(
       requestWorkspaceSessionId,
       historyCutoffMessageId
@@ -467,6 +485,9 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           userPatterns: allowlistPatterns,
           includeBuiltin: builtinReadonlyEnabled
         })
+        if (!sensitive && risks.length === 0 && sessionCommandGrants.value.get(grantScope)?.has(command.trim())) {
+          return { risks, sensitive, autoExec: { ...autoExec, eligible: true, matched: undefined } }
+        }
         // 命中计数只在真正会自动执行时记录(镜像循环的判定顺序:风险/敏感门在前)
         if (autoExec.eligible && autoExec.matched && !sensitive && risks.length === 0) {
           void touchAgentCommandAllowlistEntry(autoExec.matched).catch(() => {})
@@ -623,10 +644,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   onBeforeUnmount(() => {
     cancelAgentPreparation()
+    revokeSessionCommandGrants()
     agentStopHandle?.()
   })
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

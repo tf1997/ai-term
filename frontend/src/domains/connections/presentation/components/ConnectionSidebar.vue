@@ -201,6 +201,7 @@ function connectProfile(profile: ConnectionProfile, event?: MouseEvent) {
       </article>
     </div>
     <teleport to="body">
+      <Transition name="dialog-motion">
       <div v-if="selectedProfile && editorOpen" class="modal-backdrop" role="presentation">
         <form class="modal profile-editor-modal" role="dialog" aria-modal="true" aria-label="连接配置" @submit.prevent>
           <div class="modal-head">
@@ -271,6 +272,7 @@ function connectProfile(profile: ConnectionProfile, event?: MouseEvent) {
           </div>
         </form>
       </div>
+      </Transition>
     </teleport>
   </aside>
 </template>

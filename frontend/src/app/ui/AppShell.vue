@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { captureSurfaceWidth } from '../../shared/ui/surfaceMotion'
 import AboutDialog from './AboutDialog.vue'
 import { useChromeSelection } from '../layout/useChromeSelection'
 import { useTerminalInputRouter } from '../../domains/terminal/index'
@@ -189,6 +190,16 @@ const connectionsPanelButton = ref<HTMLButtonElement>()
 const settingsPanelButton = ref<HTMLButtonElement>()
 const leftDrawerOpen = computed(() => sidebarOverlay.value && leftDrawerVisible.value)
 const leftPanelVisible = computed(() => sidebarOverlay.value ? leftDrawerVisible.value : !leftCollapsed.value)
+
+// Capture before Vue patches the parent grid; measuring in before-leave can
+// already see a collapsed zero-width column on a docked layout.
+watch(leftPanelVisible, visible => {
+  if (!visible && leftSidebarPanel.value) captureSurfaceWidth(leftSidebarPanel.value)
+}, { flush: 'sync' })
+watch(() => rightCollapsed.value || sftpWorkbenchActive.value, collapsed => {
+  const panel = document.getElementById('session-workspace-tools')
+  if (collapsed && panel) captureSurfaceWidth(panel)
+}, { flush: 'sync' })
 
 watch(sidebarOverlay, (overlay) => {
   // Preserve interaction when resizing while keeping the docked preference separate.
@@ -951,11 +962,15 @@ onBeforeUnmount(() => {
         <UiIcon name="info" />
       </button>
     </aside>
-    <div v-if="leftDrawerOpen" class="sidebar-drawer-backdrop" aria-hidden="true" @click="closeLeftPanel" />
+    <Transition name="backdrop-motion">
+      <div v-if="leftDrawerOpen" class="sidebar-drawer-backdrop" aria-hidden="true" @click="closeLeftPanel" />
+    </Transition>
+    <Transition name="sidebar-motion">
     <section
       id="left-sidebar-panel"
       ref="leftSidebarPanel"
       v-show="leftPanelVisible"
+      :inert="!leftPanelVisible"
       class="left-sidebar-panel"
       :role="leftDrawerOpen ? 'dialog' : undefined"
       :aria-label="leftPanelMode === 'connections' ? '连接管理' : '设置中心'"
@@ -966,6 +981,7 @@ onBeforeUnmount(() => {
           <UiIcon name="arrow-left" size="14" />
         </button>
       </div>
+      <Transition name="sidebar-content-motion" mode="out-in">
       <ConnectionSidebar
         v-if="leftPanelMode === 'connections'"
         :profiles="profiles"
@@ -1012,7 +1028,9 @@ onBeforeUnmount(() => {
         @save-ai-config="saveAiConfig"
         @update-settings="updateUserSettings"
       />
+      </Transition>
     </section>
+    </Transition>
     <div class="session-view-bar">
       <nav class="session-view-tabs" role="tablist" aria-label="当前会话视图" @keydown="handleSessionViewKeydown">
         <button
@@ -1182,7 +1200,9 @@ onBeforeUnmount(() => {
       @clear-script-recording="clearScriptRecording"
       @workspace-tab-changed="workspacePanelTab = $event"
     />
+    <Transition name="dialog-motion">
     <AboutDialog v-if="aboutOpen" :app-theme="appTheme" :right-collapsed="rightCollapsed" :workspace-panel-tab="workspacePanelTab" :about-runtime-stats="aboutRuntimeStats" :terminal-count="terminalTabs.length" :profile-count="profiles.length" :session-count="activeWorkspaceSessions.length" @close="closeAboutPage" @toast="showToast" />
+    </Transition>
     <div v-if="toasts.length" class="toast-stack" aria-live="polite" aria-atomic="false">
       <article v-for="toast in toasts" :key="toast.id" class="app-toast" :class="toast.kind">
         <span>

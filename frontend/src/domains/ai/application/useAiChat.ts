@@ -8,6 +8,7 @@ import type { useAiConversationContext } from './useAiConversationContext'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatAiError, extractPrimaryShellCommand } from '../domain/aiConversation'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { addTokenUsage } from '../domain/tokenUsage'
+import { MAX_REASONING_CHARS, withAiReasoning } from '../domain/aiReasoning'
 import * as tauri from '../infrastructure/api'
 import { resolveTerminalContext } from '../domain/terminalContext'
 import type { TerminalContextMode } from '../domain/terminalContext'
@@ -27,6 +28,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
   const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
   let disposed = false
   const currentRequestId = ref('')
+  let currentStream: { requestId: string; snapshot: () => AiMessage } | undefined
 
   const stopRequested = ref(false)
 
@@ -60,6 +62,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     isAsking.value = true
     stopRequested.value = false
     let streamedAnswer = ''
+    let streamedReasoning = ''
     let errorNotified = false
     let unlisten: (() => void) | undefined
 
@@ -72,6 +75,8 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     currentRequestId.value = requestId
     currentAssistantMessageId.value = assistantMessage.id
     startAnswerTimer()
+    const streamSnapshot = () => withAiReasoning({ ...assistantMessage, text: streamedAnswer, command: '', streaming: true }, streamedReasoning)
+    currentStream = { requestId, snapshot: streamSnapshot }
     // Coalesce chunk-driven message updates: emitting per token re-renders the
     // conversation for every delta, and extracting the shell command re-parses
     // the whole growing answer (O(n²)). Flush on a short trailing timer and let
@@ -86,18 +91,14 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     const flushStreamedAnswer = () => {
       streamFlushTimer = undefined
       if (disposed || stopRequested.value || currentRequestId.value !== requestId) return
-      emit('updateMessage', {
-        ...assistantMessage,
-        text: streamedAnswer,
-        command: '',
-        streaming: true
-      })
+      emit('updateMessage', streamSnapshot())
     }
     try {
       unlisten = await onAiChatStream(requestId, (event) => {
         if (disposed || stopRequested.value || currentRequestId.value !== requestId || errorNotified) return
-        if (event.kind === 'chunk') {
-          streamedAnswer += event.delta
+        if (event.kind === 'chunk' || event.kind === 'reasoning') {
+          if (event.kind === 'chunk') streamedAnswer += event.delta
+          else streamedReasoning = `${streamedReasoning}${event.delta}`.slice(-MAX_REASONING_CHARS)
           if (streamFlushTimer === undefined) {
             streamFlushTimer = window.setTimeout(flushStreamedAnswer, 80)
           }
@@ -106,7 +107,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
           if (stopRequested.value) return
           cancelStreamFlush()
           notifyAiError(event.error)
-          emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(assistantMessage, event.error, streamedAnswer)))
+          emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(streamSnapshot(), event.error, streamedAnswer)))
         }
       })
       if (disposed || currentRequestId.value !== requestId) return
@@ -131,7 +132,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
         chars: response.contextChars,
         history: response.historyCount
       })
-      emit('updateMessage', finishAnswerMessage({
+      emit('updateMessage', finishAnswerMessage(withAiReasoning({
         ...assistantMessage,
         text: answer,
         command,
@@ -139,7 +140,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
         streaming: false,
         usage,
         payloadJson: usage ? JSON.stringify({ usage }) : assistantMessage.payloadJson
-      }))
+      }, streamedReasoning)))
       maybeGenerateSessionTitle(
         requestConnectionId,
         requestWorkspaceSessionId,
@@ -156,10 +157,11 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
       cancelStreamFlush()
       const detail = formatAiError(error)
       notifyAiError(detail)
-      emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(assistantMessage, detail, streamedAnswer)))
+      emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(streamSnapshot(), detail, streamedAnswer)))
     } finally {
       cancelStreamFlush()
       unlisten?.()
+      if (currentStream?.requestId === requestId) currentStream = undefined
       if (currentRequestId.value === requestId) {
         finishAnswerTimer(assistantMessage.id)
         currentRequestId.value = ''
@@ -177,7 +179,10 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     void cancelTask(requestId).catch((error) => {
       console.error('failed to cancel AI request', error)
     })
-    const message = props.messages.find((item) => item.id === currentAssistantMessageId.value)
+    const message = currentStream?.requestId === requestId
+      ? currentStream.snapshot()
+      : props.messages.find((item) => item.id === currentAssistantMessageId.value)
+    currentStream = undefined
     if (message) {
       const stoppedText = message.text.trim()
         ? `${message.text.trimEnd()}\n\n[已停止回答]`

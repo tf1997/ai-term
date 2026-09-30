@@ -11,6 +11,7 @@ const socket = new WebSocket(target.webSocketDebuggerUrl)
 const requests = new Map()
 const exceptions = []
 const checks = []
+const reasoningScreenshots = []
 let sequence = 0
 
 function send(method, params = {}) {
@@ -230,7 +231,7 @@ try {
   assert.equal(approval.expandButton, false, 'Complete approval commands do not show a redundant expand button')
   assert.ok(approval.approvalAction, 'Approval command retains its execution action')
   assert.equal(await evaluate('document.querySelector(".tool-step-decision .is-allow").disabled'), true)
-  assert.ok(await evaluate('document.querySelector(".tool-step-allow-reason").textContent.includes("仅支持本次确认")'), 'Unsupported always-allow has a visible explanation')
+  assert.ok(await evaluate('document.querySelector(".tool-step-allow-reason").textContent.includes("完整内容授权")'), 'Compound commands explain the scope of exact session grants')
   await click('.tool-step-decision .is-primary')
   checks.push('Pending approval renders the full command at 360px and 125% zoom')
 
@@ -274,9 +275,9 @@ try {
   await waitFor('aiFixture.runtime.requests.length === 1')
   await evaluate('aiFixture.runtime.reply("检查完成")')
   await waitFor('!document.querySelector(".chat-activity")')
-  const reasoningSelector = '.chat-message-content > :last-child .agent-reasoning'
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').classList.contains('chat-markdown')`), true, 'Thinking uses the same Markdown renderer as the answer')
-  const timelineExpression = `Array.from(document.querySelector('.chat-message-content > :last-child .agent-timeline').children).map(element => element.matches('.agent-reasoning') ? element.textContent : element.dataset.stepId)`
+  const commentarySelector = '.chat-message-content > :last-child .agent-commentary'
+  assert.equal(await evaluate(`document.querySelector('${commentarySelector}').classList.contains('chat-markdown')`), true, 'Tool commentary uses the same Markdown renderer as the answer')
+  const timelineExpression = `Array.from(document.querySelector('.chat-message-content > :last-child .agent-timeline').children).map(element => element.matches('.agent-commentary') ? element.textContent : element.dataset.stepId)`
   const timeline = await evaluate(timelineExpression)
   assert.deepEqual(timeline, ['先检查状态', 'runtime-first', '继续检查', 'runtime-second'], 'Thinking and tools follow actual turn order')
   await evaluate('document.querySelector(".chat-message-content > :last-child").scrollIntoView({ block: "end", behavior: "instant" })')
@@ -285,18 +286,18 @@ try {
   assert.ok(duration >= 2, 'Task records real elapsed time')
   await evaluate('aiFixture.reopen()')
   assert.deepEqual(await evaluate(timelineExpression), timeline, 'Reload preserves interleaving')
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector}').classList.contains('chat-markdown')`), true)
+  assert.equal(await evaluate(`document.querySelector('${commentarySelector}').classList.contains('chat-markdown')`), true)
   await evaluate(`(() => {
     const message = aiFixture.state.props.messages.at(-1);
     const fence = String.fromCharCode(96).repeat(3);
     message.agentTimeline[0].text = ['## 检查计划', '', '**先检查状态**', '', '- 查看内存', '- 查看磁盘', '', fence + 'bash', 'free -h', fence].join('\\n');
   })()`)
-  await waitFor(`Boolean(document.querySelector('${reasoningSelector} h2'))`)
-  assert.equal(await evaluate(`document.querySelector('${reasoningSelector} strong').textContent`), '先检查状态')
-  assert.equal(await evaluate(`document.querySelectorAll('${reasoningSelector} li').length`), 2)
-  assert.ok(await evaluate(`document.querySelector('${reasoningSelector}').textContent.includes('free -h')`))
-  assert.equal(await evaluate(`Boolean(document.querySelector('${reasoningSelector} .chat-code-run'))`), false)
-  checks.push('Agent thinking renders headings, emphasis, lists and code using the answer renderer')
+  await waitFor(`Boolean(document.querySelector('${commentarySelector} h2'))`)
+  assert.equal(await evaluate(`document.querySelector('${commentarySelector} strong').textContent`), '先检查状态')
+  assert.equal(await evaluate(`document.querySelectorAll('${commentarySelector} li').length`), 2)
+  assert.ok(await evaluate(`document.querySelector('${commentarySelector}').textContent.includes('free -h')`))
+  assert.equal(await evaluate(`Boolean(document.querySelector('${commentarySelector} .chat-code-run'))`), false)
+  checks.push('Agent commentary renders headings, emphasis, lists and code using the answer renderer')
   checks.push('Agent thinking and tools remain in turn order after completion and payload reload')
   assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds'), duration)
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-duration").textContent.includes("耗时")'), 'Duration is visible after the panel is remounted from stored payloads')
@@ -316,6 +317,55 @@ try {
   assert.ok(await evaluate('aiFixture.state.props.messages.at(-1).agentStatus === "stopped"'))
   assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).agentSteps[0].startedAt'), undefined, 'Stopped command clocks are cleared')
   checks.push('Timeout decisions keep elapsed time visible and stopping clears active clocks')
+
+  await evaluate('aiFixture.beginRuntime("agent")')
+  await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查复合命令'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await click('.chat-send')
+  await waitFor('aiFixture.runtime.requests.length === 1')
+  await evaluate('aiFixture.runtime.reply("查看日期", [{ id: "exact-first", command: "echo $(date)" }])')
+  await waitFor('Boolean(document.querySelector(".is-allow-exact"))')
+  await click('.is-allow-exact')
+  await waitFor('aiFixture.runtime.commands.length === 1')
+  await evaluate('aiFixture.runtime.finishCommand()')
+  await waitFor('aiFixture.runtime.requests.length === 1')
+  await evaluate('aiFixture.runtime.reply("再次查看", [{ id: "exact-second", command: "echo $(date)" }])')
+  await waitFor('aiFixture.runtime.commands.length === 2')
+  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=exact-second] .tool-step-decision"))'), false)
+  await evaluate('aiFixture.runtime.finishCommand()')
+  await waitFor('aiFixture.runtime.requests.length === 1')
+  await evaluate('aiFixture.runtime.reply("检查完成")')
+  await waitFor('!document.querySelector(".chat-activity")')
+  assert.ok(await evaluate('document.querySelector(".chat-session-grants").textContent.includes("1 条完整命令")'))
+  await click('.chat-session-grants button')
+  await waitFor('!document.querySelector(".chat-session-grants")')
+  checks.push('Exact compound-command grants apply only after confirmation and can be revoked')
+
+  for (const mode of ['chat', 'agent']) {
+    await evaluate(`aiFixture.beginRuntime('${mode}')`)
+    await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查思考与正文分离'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+    await click('.chat-send')
+    await waitFor('aiFixture.runtime.requests.length === 1')
+    await evaluate('aiFixture.runtime.stream("reasoning", "**独立推理内容**")')
+    await evaluate('aiFixture.runtime.stream("chunk", "正常回复：**正文内容**")')
+    const fold = '.chat-message-content > :last-child .chat-reasoning'
+    await waitFor(`Boolean(document.querySelector('${fold}')) && document.querySelector('.chat-message-content > :last-child').innerText.includes('正文内容')`)
+    assert.equal(await evaluate(`document.querySelector('${fold}').open`), false)
+    assert.equal(await evaluate(`Boolean(document.querySelector('${fold} .chat-markdown'))`), false, 'Collapsed reasoning does not parse hidden Markdown')
+    assert.ok(!await evaluate(`document.querySelector('.chat-message-content > :last-child').innerText.includes('独立推理内容')`))
+    await click(`${fold} summary`)
+    await waitFor(`document.querySelector('${fold} strong')?.textContent === '独立推理内容'`)
+    await evaluate('aiFixture.runtime.reply("正常回复：**正文内容**")')
+    await waitFor('!document.querySelector(".chat-activity")')
+    assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).text'), '正常回复：**正文内容**')
+    assert.equal(await evaluate(`document.querySelector('${fold}').open`), true, 'Completing the reply preserves a manual expansion')
+    await evaluate('aiFixture.reopen()')
+    assert.equal(await evaluate(`document.querySelector('${fold}').open`), false, 'Reload defaults to folded reasoning')
+    await evaluate('document.querySelector(".chat-message-content > :last-child").scrollIntoView({ block: "end", behavior: "instant" })')
+    reasoningScreenshots.push(await screenshot(`ai-${mode}-reasoning-folded.png`))
+    await click(`${fold} summary`)
+    await waitFor(`document.querySelector('${fold} strong')?.textContent === '独立推理内容'`)
+  }
+  checks.push('Chat and Agent keep reasoning folded separately from the visible answer, including after reload')
 
   for (const mode of ['auto', 'selection', 'none']) {
     for (const kind of ['chat', 'agent']) {
@@ -381,7 +431,7 @@ try {
   checks.push('Composer menus share styling, fit a narrow panel and restore focus on Escape')
 
   assert.deepEqual(exceptions, [], 'Uncaught browser exceptions')
-  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot, timelineScreenshot, contextMenuScreenshot, configMenuScreenshot], nativeBackendTested: false }, null, 2))
+  console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot, timelineScreenshot, contextMenuScreenshot, configMenuScreenshot, ...reasoningScreenshots], nativeBackendTested: false }, null, 2))
 } catch (error) {
   console.error('Browser failure screenshot:', await screenshot('failure.png').catch(() => 'unavailable'))
   throw error

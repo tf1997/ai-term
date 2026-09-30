@@ -1141,6 +1141,7 @@ function focusScriptComposer() {
       @close="closeScriptEditorMenu"
     />
 
+    <Transition name="dialog-motion">
     <div v-if="renamingScript" class="modal-backdrop" role="presentation" @click.self="closeRenameScriptDialog">
       <form ref="renameDialog" class="modal rename-modal" role="dialog" aria-modal="true" aria-label="编辑脚本名称" @submit.prevent="renameScript" @keydown="handleDialogKeydown($event, closeRenameScriptDialog)">
         <div class="modal-head">
@@ -1160,7 +1161,9 @@ function focusScriptComposer() {
         </div>
       </form>
     </div>
+    </Transition>
 
+    <Transition name="dialog-motion">
     <div v-if="scriptPreviewOpen" class="modal-backdrop script-preview-backdrop" role="presentation" @click.self="closeScriptPreview">
       <section ref="previewDialog" class="modal script-preview-modal" role="dialog" aria-modal="true" aria-label="放大编辑脚本" @keydown="handleDialogKeydown($event, closeScriptPreview)">
         <div class="modal-head">
@@ -1203,7 +1206,9 @@ function focusScriptComposer() {
         </div>
       </section>
     </div>
+    </Transition>
 
+    <Transition name="dialog-motion">
     <div v-if="scriptRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
       <section ref="riskDialog" class="modal script-risk-modal" role="dialog" aria-modal="true" :aria-label="pendingExecutionTitle" @keydown="handleDialogKeydown($event, closeScriptRiskConfirm)">
         <div class="modal-head">
@@ -1280,6 +1285,7 @@ function focusScriptComposer() {
         </div>
       </section>
     </div>
+    </Transition>
     <p v-if="panelError" class="script-feedback error">{{ panelError }}</p>
     <p v-else-if="scriptExecutionNotice" class="script-feedback">{{ scriptExecutionNotice }}</p>
     <p v-else-if="saveState === 'saved' && lastSavedScript" class="script-feedback">已保存「{{ lastSavedScript.name }}」<button class="text-button" type="button" @click="loadSelectedScript(lastSavedScript.id)">查看脚本</button></p>

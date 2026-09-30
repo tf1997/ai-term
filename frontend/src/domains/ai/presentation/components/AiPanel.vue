@@ -26,6 +26,7 @@ import { analyzeScriptRisks, buildScriptRiskPreviewLines, riskLabelsForLine, sum
 import { aiStreamPartialText } from '../../domain/aiStreamError'
 
 import AiMarkdownMessage from './messages/AiMarkdownMessage.vue'
+import AiReasoning from './messages/AiReasoning.vue'
 import AiErrorNotice from './messages/AiErrorNotice.vue'
 import AgentStepCard from './messages/AgentStepCard.vue'
 import AiMessageItem from './messages/AiMessageItem.vue'
@@ -71,7 +72,7 @@ const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
 const pendingAgentRiskReview = ref(false)
-const { agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   canSendMessage: () => canSendMessage.value,
   composerBusy: () => composerBusy.value,
@@ -384,7 +385,8 @@ async function retryMessage(message: AiMessage) {
     streaming: true,
     agentSteps: agentMode ? completedSteps : undefined,
     agentStatus: agentMode ? 'running' : undefined,
-    payloadJson: undefined
+    payloadJson: undefined,
+    reasoning: undefined
   }
   emit('updateMessage', pending)
   scrollMessagesToLatest()
@@ -781,6 +783,7 @@ watch(
         </div>
       </div>
     </div>
+    <Transition name="dialog-motion">
     <div v-if="renamingSession" class="modal-backdrop" role="presentation" @click.self="closeRenameSessionDialog">
       <form class="modal rename-modal" role="dialog" aria-modal="true" aria-label="编辑会话名称" @submit.prevent="submitRenameSession">
         <div class="modal-head">
@@ -800,6 +803,8 @@ watch(
         </div>
       </form>
     </div>
+    </Transition>
+    <Transition name="dialog-motion">
     <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
       <section class="modal script-risk-modal" :class="{ 'agent-risk-modal': agentRiskReviewOpen }" role="dialog" aria-modal="true" :aria-label="pendingAiCommandDialogTitle">
         <div class="modal-head">
@@ -886,6 +891,7 @@ watch(
         </div>
       </section>
     </div>
+    </Transition>
     <div class="chat-context" :class="{ expanded: contextOpen }">
       <div class="chat-context-main">
         <span class="chat-target" :title="executionTargetTitle || currentConnectionLabel"><UiIcon name="terminal" size="13" /><span>{{ executionTargetLabel || currentConnectionLabel }}</span></span>
@@ -945,6 +951,7 @@ watch(
                 @execute="resolveAgentApproval('execute')"
                 @review-risk="openAgentRiskReview"
                 @execute-and-allow="resolveAgentApproval('execute-and-allow')"
+                @execute-and-allow-exact="resolveAgentApproval('execute-and-allow-exact')"
                 @skip="resolveAgentApproval('skip')"
                 @stop="resolveAgentApproval('stop')"
                 @wait="resolveAgentTimeout('wait')"
@@ -952,15 +959,16 @@ watch(
                 @retry="retryMessage(message)"
                 @focus-terminal="emit('focusTerminal')"
               />
+              <AiReasoning v-else-if="entry.kind === 'thinking'" :content="entry.text" :legacy="entry.legacy" />
               <AiMarkdownMessage
                 v-else
-                class="agent-reasoning"
+                class="agent-commentary"
                 :content="entry.text"
                 :interactive-commands="false"
-                :title="entry.legacy ? '历史思考记录，旧记录未保存轮次' : undefined"
               />
             </template>
           </div>
+          <AiReasoning v-if="message.mode !== 'agent' && message.reasoning" :content="message.reasoning" />
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>
           <template v-if="aiStreamPartialText(message)">
@@ -1010,6 +1018,10 @@ watch(
         <button class="chat-icon" type="button" title="移除选中上下文" aria-label="移除选中上下文" @click="emit('clearSelection')"><UiIcon name="close" size="13" /></button>
       </div>
       <div v-if="panelMode === 'agent' && agentModeNotice" class="chat-mode-notice">{{ agentModeNotice }}</div>
+      <div v-if="panelMode === 'agent' && agentSessionGrantCount" class="chat-selection chat-session-grants">
+        <span>本会话已允许 {{ agentSessionGrantCount }} 条完整命令</span>
+        <button type="button" class="chat-text-button" @click="revokeSessionCommandGrants">撤销授权</button>
+      </div>
       <div class="chat-input-shell">
       <textarea
         ref="composerInput"

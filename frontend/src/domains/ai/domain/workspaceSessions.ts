@@ -80,12 +80,13 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
       'mode' | 'agentSteps' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
-    >> & { usage?: unknown; durationSeconds?: unknown }
+    >> & { usage?: unknown; durationSeconds?: unknown; reasoning?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
     const durationSeconds = normalizeAiDuration(payload.durationSeconds)
     const metadata = {
       ...(usage ? { usage } : {}),
-      ...(durationSeconds !== undefined ? { durationSeconds } : {})
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+      ...(typeof payload.reasoning === 'string' && payload.reasoning.trim() ? { reasoning: payload.reasoning } : {})
     }
     if (payload.mode !== 'agent') return Object.keys(metadata).length ? { ...message, ...metadata } : message
     const agentSteps = hydrateAgentSteps(Array.isArray(payload.agentSteps) ? payload.agentSteps : [], message)

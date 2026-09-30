@@ -165,6 +165,50 @@ test('仅选区无选中内容时不退回终端快照，Agent 后续轮次保�
   assert.equal(JSON.parse(fixture.modelRequests[1].request.turns[1].content).output, 'ok')
 })
 
+test('复合命令按整条内容授权，同会话相同命令自动执行，变化后重新确认', { timeout: 2000 }, async t => {
+  const command = String.raw`pw=$(tr -d '\r' < /srv/app/application.properties | grep '^server.datasource.password=' | cut -d= -f2-); mysql -h127.0.0.1 -uapp -p"$pw" app -N -e "SELECT COUNT(*) FROM CLUSTER_NODES; SELECT state, COUNT(*) FROM CLUSTER_NODES GROUP BY state;" 2>&1 | head -10`
+  const fixture = mountRuntime(t, { responses: [response(commandCall('first', command)), response(commandCall('same', command)), response(commandCall('changed', command + ' | head -1')), response(commandCall('reconnected', command))] })
+  const running = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  assert.equal(fixture.agent.agentPendingApproval.value.proposal.suggestedPatterns, undefined)
+  fixture.agent.resolveAgentApproval('execute-and-allow-exact')
+  await until(() => fixture.agent.agentPendingApproval.value?.proposal.id === 'changed')
+  assert.deepEqual(fixture.commands, [command, command])
+  assert.equal(fixture.props.messages[0].agentSteps[1].autoApproved, true)
+  assert.equal(fixture.agent.agentSessionGrantCount.value, 1)
+  assert.deepEqual(fixture.saves, [], '完整命令只在内存授权，不写入前缀允许列表')
+  fixture.agent.stopAgentRun()
+  await running
+  fixture.props.terminalConnectionGeneration++
+  await nextTick()
+  assert.equal(fixture.agent.agentSessionGrantCount.value, 0)
+  fixture.props.terminalConnectionGeneration--
+  await nextTick()
+  assert.equal(fixture.agent.agentSessionGrantCount.value, 0, '返回之前的会话标识也不会恢复旧授权')
+  const reconnected = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value?.proposal.id === 'reconnected')
+  assert.deepEqual(fixture.commands, [command, command])
+  fixture.agent.stopAgentRun()
+  await reconnected
+})
+
+test('撤销会话授权后相同命令需要重新确认', { timeout: 2000 }, async t => {
+  const command = 'echo $(date)'
+  const later = deferred()
+  t.after(() => later.resolve(response()))
+  const fixture = mountRuntime(t, { responses: [response(commandCall('first', command)), () => later.promise] })
+  const running = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  fixture.agent.resolveAgentApproval('execute-and-allow-exact')
+  await until(() => fixture.modelRequests.length === 2)
+  fixture.agent.revokeSessionCommandGrants()
+  later.resolve(response(commandCall('again', command)))
+  await until(() => fixture.agent.agentPendingApproval.value?.proposal.id === 'again')
+  assert.deepEqual(fixture.commands, [command])
+  fixture.agent.stopAgentRun()
+  await running
+})
+
 test('完成工具后遇到 HTTP 502，响应式消息重试可停止并取消新请求', { timeout: 2000 }, async t => {
   const request = deferred()
   const cancelled = deferred()
@@ -336,12 +380,13 @@ test('仅执行本次不新增授权，后续同类命令仍需确认', { timeou
   await running
 })
 
-for (const command of ['sudo uptime', 'rm -rf /tmp/example', 'cat ~/.ssh/id_rsa']) {
+for (const command of ['sudo uptime', 'rm -rf /tmp/example', 'cat ~/.ssh/id_rsa', 'echo !!', 'PATH=/tmp/bin date', 'echo ok > /tmp/file']) {
   test(`不可自动授权的命令不能通过总是允许绕过确认：${command}`, { timeout: 2000 }, async t => {
     const fixture = mountRuntime(t, { responses: [response(commandCall('first', command))] })
     const running = fixture.runAgent()
     await until(() => fixture.agent.agentPendingApproval.value)
     fixture.agent.resolveAgentApproval('execute-and-allow')
+    fixture.agent.resolveAgentApproval('execute-and-allow-exact')
     await nextTick()
     assert.ok(fixture.agent.agentPendingApproval.value)
     assert.deepEqual(fixture.saves, [])
@@ -396,6 +441,45 @@ for (const outcome of ['complete', 'error', 'stop']) {
   })
 }
 
+for (const outcome of ['complete', 'error', 'stop']) {
+  test(`普通对话 ${outcome} 独立保存推理，不混入正文或命令`, async t => {
+    const request = deferred()
+    t.after(() => request.resolve({ answer: '正文' }))
+    let called = false
+    const fixture = mountRuntime(t, { chatResponse: () => { called = true; return request.promise } })
+    const running = fixture.runChat()
+    await until(() => called)
+    fixture.stream({ kind: 'reasoning', delta: '**内部分析**\n```bash\nprintf analysis\n```' })
+    fixture.stream({ kind: 'chunk', delta: '正常回复。' })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(fixture.props.messages[0].text, '正常回复。')
+    assert.ok(fixture.props.messages[0].reasoning.includes('内部分析'))
+    // Cover pending deltas that have not yet reached the throttled render update.
+    fixture.stream({ kind: 'reasoning', delta: '\n最后一段推理' })
+    if (outcome === 'error') request.reject(Error('connection reset'))
+    else {
+      if (outcome === 'stop') fixture.chat.stopCurrentAnswer()
+      request.resolve({ answer: '正常回复。' })
+    }
+    await running
+    const message = fixture.props.messages[0]
+    assert.ok(message.reasoning.endsWith('最后一段推理'))
+    assert.ok(!message.text.includes('内部分析'))
+    assert.equal(message.command || '', '')
+    assert.equal(hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson }).reasoning, message.reasoning)
+    if (outcome === 'error') assert.equal(aiStreamPartialText(message), '正常回复。')
+  })
+}
+
+test('普通对话重新请求时不保留上次推理', async t => {
+  const fixture = mountRuntime(t)
+  fixture.assistant.reasoning = '旧推理'
+  fixture.assistant.payloadJson = JSON.stringify({ reasoning: '旧推理' })
+  await fixture.runChat()
+  assert.equal(fixture.props.messages[0].reasoning, undefined)
+  assert.equal(JSON.parse(fixture.props.messages[0].payloadJson).reasoning, undefined)
+})
+
 test('旧消息不伪造耗时，异常耗时不会破坏记录恢复', () => {
   for (const value of [undefined, -1, '60', null]) {
     const restored = hydrateAiMessagePayload({ id: 'legacy', payloadJson: JSON.stringify({ durationSeconds: value }) })
@@ -413,14 +497,15 @@ for (const outcome of ['complete', 'error', 'stop']) {
     fixture.stream({ kind: 'reasoning', delta: '先分析服务状态。' })
     fixture.stream({ kind: 'chunk', delta: '接下来检查服务。' })
     await new Promise(resolve => setTimeout(resolve, 100))
-    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking'])
-    assert.match(agentDisplayTimeline(fixture.props.messages[0])[0].text, /先分析服务状态。.*\n\n接下来检查服务。/)
+    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking', 'text'])
+    assert.equal(agentDisplayTimeline(fixture.props.messages[0])[0].text, '先分析服务状态。')
+    assert.equal(agentDisplayTimeline(fixture.props.messages[0])[1].text, '接下来检查服务。')
     first.resolve({ ...response(commandCall('inspect')), text: '接下来检查服务。' })
     await until(() => fixture.agent.agentPendingApproval.value)
     fixture.agent.resolveAgentApproval('execute')
     await until(() => fixture.modelRequests.length === 2)
     fixture.stream({ kind: 'reasoning', delta: '再核对执行结果。' })
-    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking', 'tool', 'thinking'])
+    assert.deepEqual(agentDisplayTimeline(fixture.props.messages[0]).map(entry => entry.kind), ['thinking', 'text', 'tool', 'thinking'])
     assert.ok(!JSON.stringify(fixture.modelRequests[1].request).includes('先分析服务状态。'))
     if (outcome === 'error') second.reject(Error('HTTP 502'))
     else if (outcome === 'stop') fixture.agent.stopAgentRun()
@@ -439,7 +524,7 @@ for (const outcome of ['complete', 'error', 'stop']) {
     assert.ok(!message.agentReasoning.includes('最终总结。'))
     const restored = hydrateAiMessagePayload({ ...fixture.assistant, payloadJson: message.payloadJson })
     assert.equal(restored.agentReasoning, message.agentReasoning)
-    assert.deepEqual(agentDisplayTimeline(restored).map(entry => entry.kind), ['thinking', 'tool', 'thinking'])
+    assert.deepEqual(agentDisplayTimeline(restored).map(entry => entry.kind), ['thinking', 'text', 'tool', 'thinking'])
     assert.deepEqual(restored.agentTimeline, message.agentTimeline)
   })
 }

@@ -1,0 +1,45 @@
+/* Animate only composited properties. Docking changes layout once, not per frame. */
+.sidebar-motion-enter-active,
+.workspace-motion-enter-active { transition: transform 180ms cubic-bezier(.2,.8,.2,1), opacity 140ms ease-out; }
+.sidebar-motion-leave-active,
+.workspace-motion-leave-active { transition: transform 140ms cubic-bezier(.4,0,1,1), opacity 120ms ease-in; pointer-events: none; }
+.sidebar-motion-enter-from,
+.sidebar-motion-leave-to { opacity: 0; transform: translateX(-16px); }
+.workspace-motion-enter-from,
+.workspace-motion-leave-to { opacity: 0; transform: translateX(12px); }
+.app-shell > .left-sidebar-panel.sidebar-motion-leave-active { position: fixed; left: var(--rail-width, 48px); top: 46px; bottom: 0; width: var(--surface-leave-width); z-index: 28; }
+.app-shell > .workspace-panel.workspace-motion-leave-active { position: fixed; right: 0; top: 88px; bottom: 0; width: var(--surface-leave-width); z-index: 26; }
+.backdrop-motion-enter-active { transition: opacity 180ms ease-out; }
+.backdrop-motion-leave-active { transition: opacity 140ms ease-in; pointer-events: none; }
+.backdrop-motion-enter-from,
+.backdrop-motion-leave-to { opacity: 0; }
+.sidebar-content-motion-enter-active { transition: transform 140ms ease-out, opacity 140ms ease-out; }
+.sidebar-content-motion-leave-active { transition: opacity 90ms ease-in; pointer-events: none; }
+.sidebar-content-motion-enter-from { transform: translateY(4px); opacity: 0; }
+.sidebar-content-motion-leave-to { opacity: 0; }
+.dialog-motion-enter-active,
+.dialog-motion-leave-active { transition: opacity 160ms ease; }
+.dialog-motion-enter-active > *,
+.dialog-motion-leave-active > * { transition: transform 160ms cubic-bezier(.2,.8,.2,1); }
+.dialog-motion-enter-from,
+.dialog-motion-leave-to { opacity: 0; }
+.dialog-motion-enter-from > *,
+.dialog-motion-leave-to > * { transform: translateY(8px) scale(.99); }
+.dialog-motion-leave-active { pointer-events: none; }
+.modal-backdrop { backdrop-filter: none; }
+@keyframes surface-reveal { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.session-files-view,
+.workspace-panel > .assistant-panel,
+.workspace-panel > .history-panel,
+.workspace-panel > .script-panel { animation: surface-reveal 140ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-motion-enter-active, .sidebar-motion-leave-active,
+  .workspace-motion-enter-active, .workspace-motion-leave-active,
+  .backdrop-motion-enter-active, .backdrop-motion-leave-active,
+  .sidebar-content-motion-enter-active, .sidebar-content-motion-leave-active,
+  .dialog-motion-enter-active, .dialog-motion-leave-active,
+  .dialog-motion-enter-active > *, .dialog-motion-leave-active > * { transition: none; }
+  .session-files-view, .workspace-panel > .assistant-panel,
+  .workspace-panel > .history-panel, .workspace-panel > .script-panel { animation: none; }
+}
+

@@ -165,13 +165,15 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
     })
 }
 
-pub async fn chat_with_provider_stream<F>(
+pub async fn chat_with_provider_stream<F, R>(
     request: AiChatRequest,
     on_delta: F,
+    on_reasoning: R,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<AiChatResponse>
 where
     F: FnMut(String) + Send,
+    R: FnMut(String) + Send,
 {
     validate_chat_request(&request)?;
     let context = build_context_bundle(&request.terminal_snapshot, &request.command_history);
@@ -186,6 +188,7 @@ where
         payload,
         request.config.timeout_seconds,
         on_delta,
+        on_reasoning,
         cancel_token,
     )
     .await?;
@@ -870,16 +873,18 @@ async fn send_openai_compatible_request(
     Ok(raw)
 }
 
-async fn send_openai_compatible_stream_request<F>(
+async fn send_openai_compatible_stream_request<F, R>(
     endpoint: &str,
     api_key: &str,
     payload: Value,
     timeout_seconds: u32,
     mut on_delta: F,
+    mut on_reasoning: R,
     cancel_token: Option<&AiCancelToken>,
 ) -> Result<(String, Option<AiTokenUsage>)>
 where
     F: FnMut(String) + Send,
+    R: FnMut(String) + Send,
 {
     let response =
         match open_stream(endpoint, api_key, payload, timeout_seconds, cancel_token).await? {
@@ -918,7 +923,15 @@ where
         event_buffer.push(&text);
 
         while let Some(event) = event_buffer.next_event() {
-            for delta in parse_sse_event_deltas(&event, &mut usage)? {
+            let deltas = parse_sse_event_deltas(&event, &mut usage)?;
+            saw_sse_delta |= !deltas.reasoning.is_empty();
+            for delta in deltas.reasoning {
+                if is_cancelled(cancel_token) {
+                    return Ok((answer, usage));
+                }
+                on_reasoning(delta);
+            }
+            for delta in deltas.text {
                 if is_cancelled(cancel_token) {
                     return Ok((answer, usage));
                 }
@@ -927,7 +940,7 @@ where
                 on_delta(delta);
             }
             if is_stream_done(&event) {
-                if !saw_sse_delta {
+                if answer.is_empty() {
                     bail!("模型返回为空");
                 }
                 return Ok((answer, usage));
@@ -940,7 +953,15 @@ where
     }
 
     if !event_buffer.remaining().trim().is_empty() {
-        for delta in parse_sse_event_deltas(event_buffer.remaining(), &mut usage)? {
+        let deltas = parse_sse_event_deltas(event_buffer.remaining(), &mut usage)?;
+        saw_sse_delta |= !deltas.reasoning.is_empty();
+        for delta in deltas.reasoning {
+            if is_cancelled(cancel_token) {
+                return Ok((answer, usage));
+            }
+            on_reasoning(delta);
+        }
+        for delta in deltas.text {
             if is_cancelled(cancel_token) {
                 return Ok((answer, usage));
             }
@@ -951,10 +972,18 @@ where
     }
 
     if saw_sse_delta {
+        if answer.is_empty() {
+            bail!("模型仅返回思考过程，未返回正文");
+        }
         return Ok((answer, usage));
     }
 
     reject_html_response(&raw, endpoint)?;
+    if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+        if let Some(reasoning) = extract_reasoning_delta(&payload) {
+            on_reasoning(reasoning);
+        }
+    }
     let answer = extract_chat_answer(&raw)?;
     if !answer.is_empty() {
         on_delta(answer.clone());
@@ -968,10 +997,15 @@ pub(crate) fn is_cancelled(cancel_token: Option<&AiCancelToken>) -> bool {
         .unwrap_or(false)
 }
 
-/// 解析一个 SSE 事件的文本增量;usage 事件(通常是 [DONE] 前 choices 为空的
-/// 一帧)合并进 `usage`,不产生增量。
-fn parse_sse_event_deltas(event: &str, usage: &mut Option<AiTokenUsage>) -> Result<Vec<String>> {
-    let mut deltas = Vec::new();
+#[derive(Default)]
+struct ChatStreamDeltas {
+    text: Vec<String>,
+    reasoning: Vec<String>,
+}
+
+/// Keep provider reasoning separate from answer deltas; usage-only frames emit neither.
+fn parse_sse_event_deltas(event: &str, usage: &mut Option<AiTokenUsage>) -> Result<ChatStreamDeltas> {
+    let mut deltas = ChatStreamDeltas::default();
 
     for data in sse_data_payloads(event) {
         if data == "[DONE]" {
@@ -984,12 +1018,40 @@ fn parse_sse_event_deltas(event: &str, usage: &mut Option<AiTokenUsage>) -> Resu
             bail!("模型流式返回错误：{error}");
         }
         if let Some(delta) = extract_stream_delta(&payload) {
-            deltas.push(delta);
+            deltas.text.push(delta);
+        }
+        if let Some(reasoning) = extract_reasoning_delta(&payload) {
+            deltas.reasoning.push(reasoning);
         }
         merge_usage(usage, &payload);
     }
 
     Ok(deltas)
+}
+
+/// Compatible reasoning field names used by OpenAI-compatible providers.
+/// This stream is display-only and is intentionally excluded from context.
+pub(crate) fn extract_reasoning_delta(payload: &Value) -> Option<String> {
+    for pointer in [
+        "/choices/0/delta/reasoning_content",
+        "/choices/0/delta/reasoning",
+        "/choices/0/delta/analysis",
+        "/choices/0/delta/thinking",
+        "/choices/0/message/reasoning_content",
+        "/choices/0/message/reasoning",
+        "/reasoning_content",
+        "/reasoning",
+    ] {
+        if let Some(content) = payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(content.to_string());
+        }
+    }
+
+    None
 }
 
 pub(crate) fn extract_stream_delta(payload: &Value) -> Option<String> {
@@ -1044,6 +1106,9 @@ pub(crate) fn extract_chat_answer(raw: &str) -> Result<String> {
         }
     }
 
+    if extract_reasoning_delta(&payload).is_some() {
+        bail!("模型仅返回思考过程，未返回正文");
+    }
     Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| trimmed.to_string()))
 }
 
@@ -1364,7 +1429,7 @@ mod tests {
         .join("\n\n");
 
         assert_eq!(
-            parse_sse_event_deltas(&event, &mut None).unwrap(),
+            parse_sse_event_deltas(&event, &mut None).unwrap().text,
             vec!["hello".to_string(), " world".to_string()]
         );
     }
@@ -1373,9 +1438,34 @@ mod tests {
     fn ignores_data_after_stream_done() {
         let event = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late error\"}}";
         assert_eq!(
-            parse_sse_event_deltas(event, &mut None).unwrap(),
+            parse_sse_event_deltas(event, &mut None).unwrap().text,
             vec!["完成"]
         );
+    }
+
+    #[test]
+    fn separates_chat_reasoning_from_answer_and_usage() {
+        let mut usage = None;
+        let event = r#"data: {"choices":[{"delta":{"reasoning_content":"先检查磁盘","content":"磁盘正常"}}],"usage":{"completion_tokens":4}}"#;
+        let deltas = parse_sse_event_deltas(event, &mut usage).unwrap();
+        assert_eq!(deltas.reasoning, vec!["先检查磁盘"]);
+        assert_eq!(deltas.text, vec!["磁盘正常"]);
+        assert_eq!(usage.unwrap().output_tokens, Some(4));
+        for field in ["reasoning", "analysis", "thinking"] {
+            let event = format!("data: {}", json!({"choices":[{"delta":{field:"思考"}}]}));
+            let deltas = parse_sse_event_deltas(&event, &mut None).unwrap();
+            assert_eq!(deltas.reasoning, vec!["思考"]);
+            assert!(deltas.text.is_empty());
+        }
+    }
+
+    #[test]
+    fn non_stream_chat_reasoning_is_not_used_as_the_answer() {
+        let payload = json!({"choices":[{"message":{"reasoning_content":"独立推理", "content":"回复正文"}}]});
+        assert_eq!(extract_reasoning_delta(&payload).as_deref(), Some("独立推理"));
+        assert_eq!(extract_chat_answer(&payload.to_string()).unwrap(), "回复正文");
+        let only_reasoning = json!({"choices":[{"message":{"reasoning_content":"没有正文"}}]});
+        assert!(extract_chat_answer(&only_reasoning.to_string()).is_err());
     }
 
     #[test]
@@ -1388,7 +1478,7 @@ mod tests {
         ];
         let deltas = events
             .iter()
-            .flat_map(|event| parse_sse_event_deltas(event, &mut usage).unwrap())
+            .flat_map(|event| parse_sse_event_deltas(event, &mut usage).unwrap().text)
             .collect::<Vec<_>>();
 
         assert_eq!(deltas, vec!["hi"]);

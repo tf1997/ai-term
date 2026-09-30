@@ -137,6 +137,7 @@ onBeforeUnmount(() => {
   </section>
 
   <Teleport to="body">
+    <Transition name="dialog-motion">
     <div v-if="previewOpen" class="tool-preview-backdrop" :style="previewTheme" @click.self="closePreview">
       <section ref="previewDialog" class="tool-preview-dialog" role="dialog" aria-modal="true" :aria-label="`${label}详情`" @keydown="handleDialogKey">
         <header class="tool-preview-header">
@@ -162,6 +163,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+    </Transition>
   </Teleport>
 </template>
 

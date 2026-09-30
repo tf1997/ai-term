@@ -173,3 +173,13 @@
 .terminal-completion .completion-count {
   color: #59636c;
 }
+
+/* Match the xterm white canvas through its gutter and command toolbar. */
+.app-shell.theme-light .terminal-stack,
+.app-shell.theme-light .terminal-pane,
+.app-shell.theme-light .terminal-wrap,
+.app-shell.theme-light .terminal-frame,
+.app-shell.theme-light .terminal-body-wrap,
+.app-shell.theme-light .xterm-host,
+.app-shell.theme-light .quick-command-bar { background: #ffffff; }
+.app-shell.theme-light .quick-command-bar { border-top-color: #e5e7eb; }

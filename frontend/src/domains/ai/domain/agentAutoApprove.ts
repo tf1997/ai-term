@@ -147,6 +147,7 @@ interface CommandScan {
   redirectVeto: boolean
   /** 存在命令替换 $(、反引号、进程替换 <( )( 或历史展开等注入结构(单引号内除外)。 */
   substitutionVeto: boolean
+  historyExpansionVeto: boolean
   /** 未建模的分组、子 shell 或函数语法，必须人工确认。 */
   ambiguousSyntaxVeto: boolean
   unclosedQuote: boolean
@@ -190,6 +191,7 @@ function scanCommand(command: string): CommandScan {
   let awaitingRedirectTarget = false
   let redirectVeto = false
   let substitutionVeto = false
+  let historyExpansionVeto = false
   let ambiguousSyntaxVeto = false
   let heredoc = false
   /** 最近一个未被实际内容跟随的分隔符;null 表示末尾有内容。 */
@@ -274,7 +276,7 @@ function scanCommand(command: string): CommandScan {
       // 双引号内 $(、反引号、历史展开仍然生效。
       if (ch === '$' && next === '(') { substitutionVeto = true; index += 2; continue }
       if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = 'double'; quote = 'backtick'; index += 1; continue }
-      if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; index += 1; continue }
+      if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; historyExpansionVeto = true; index += 1; continue }
       appendChar(ch, true)
       index += 1
       continue
@@ -293,7 +295,7 @@ function scanCommand(command: string): CommandScan {
     if (ch === '$' && next === "'") { openQuotedWord(); quote = 'ansi'; index += 2; continue }
     if (ch === '$' && next === '(') { substitutionVeto = true; index += 2; continue }
     if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = null; quote = 'backtick'; index += 1; continue }
-    if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; index += 1; continue }
+    if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; historyExpansionVeto = true; index += 1; continue }
     if (ch === '#' && (index === 0 || /[\s;]/.test(text[index - 1] ?? ''))) {
       const newline = text.indexOf('\n', index)
       if (newline < 0) break
@@ -388,6 +390,7 @@ function scanCommand(command: string): CommandScan {
     segments,
     redirectVeto,
     substitutionVeto,
+    historyExpansionVeto,
     ambiguousSyntaxVeto,
     unclosedQuote,
     heredoc,
@@ -398,6 +401,16 @@ function scanCommand(command: string): CommandScan {
 /** Exposes the same quote-aware tokenization to privacy checks. */
 export function commandTokensForPrivacy(command: string) {
   return scanCommand(command).segments.flatMap((segment) => stripWrappers(segment).tokens)
+}
+
+/** Exact session grants can cover substitutions, but retain non-prefix safety gates. */
+export function canGrantExactCommand(command: string) {
+  const scan = scanCommand(command)
+  if (!scan.segments.length || scan.unclosedQuote || scan.heredoc || scan.trailingOperator || scan.redirectVeto || scan.historyExpansionVeto) return false
+  return scan.segments.every(segment => {
+    const { tokens, dangerousEnv } = stripWrappers(segment)
+    return !dangerousEnv && !tokens.includes('sudo')
+  })
 }
 
 /**

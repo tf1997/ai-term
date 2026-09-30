@@ -49,6 +49,15 @@ export function installAiRuntimeFixture(props) {
       ? { text, toolCalls, contextCompressed: false, contextChars: 0 }
       : { answer: text, contextCompressed: false, contextChars: 0, historyCount: 0 })
   }
+  runtime.stream = (kind, delta) => {
+    const requestId = runtime.requests[0]?.requestId
+    if (!requestId) throw Error('No model request is pending')
+    for (const [id, listener] of listeners) {
+      if (listener.event === `ai-chat:stream:${requestId}`) {
+        window[`_${listener.handler}`]?.({ event: listener.event, id, payload: { requestId, kind, delta } })
+      }
+    }
+  }
   runtime.finishSave = () => {
     const save = runtime.pendingSaves.shift()
     if (!save) throw Error('No permission save is pending')

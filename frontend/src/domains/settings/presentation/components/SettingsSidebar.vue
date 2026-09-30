@@ -387,6 +387,7 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
     </div>
 
     <teleport to="body">
+      <Transition name="dialog-motion">
       <div v-if="editorOpen" class="modal-backdrop" role="presentation">
         <section class="modal ai-config-modal" role="dialog" aria-modal="true" aria-label="AI 配置">
           <div class="modal-head">
@@ -408,6 +409,7 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
           />
         </section>
       </div>
+      </Transition>
     </teleport>
   </aside>
 </template>

@@ -343,6 +343,7 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="!previewEntry" class="history-status" role="status" aria-live="polite" aria-atomic="true">{{ copyStatus }}</p>
+  <Transition name="dialog-motion">
   <div v-if="previewEntry" class="modal-backdrop history-preview-backdrop" role="presentation" @click.self="closePreview()">
     <article
       ref="previewModal"
@@ -370,5 +371,6 @@ onBeforeUnmount(() => {
       </div>
     </article>
   </div>
+  </Transition>
   </section>
 </template>

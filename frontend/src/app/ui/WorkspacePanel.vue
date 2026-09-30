@@ -84,7 +84,8 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
 </script>
 
 <template>
-  <aside v-show="!collapsed" class="right-panel workspace-panel">
+  <Transition name="workspace-motion">
+  <aside v-show="!collapsed" :inert="collapsed" class="right-panel workspace-panel">
     <div class="workspace-bar">
       <nav class="workspace-tabs" aria-label="右侧工作区">
         <button
@@ -197,4 +198,5 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       @write-terminal-input="emit('writeTerminalInput', $event)"
     />
   </aside>
+  </Transition>
 </template>

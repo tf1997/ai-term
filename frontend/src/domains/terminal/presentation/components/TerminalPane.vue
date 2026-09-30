@@ -2553,6 +2553,7 @@ defineExpose({
     </section>
 
     <teleport to="body">
+      <Transition name="dialog-motion">
       <div v-if="sshAuthPromptOpen" class="modal-backdrop" role="presentation">
         <section class="modal ssh-auth-modal" role="dialog" aria-modal="true" aria-label="SSH &#35748;&#35777;">
           <div class="modal-head">
@@ -2589,9 +2590,11 @@ defineExpose({
           </div>
         </section>
       </div>
+      </Transition>
     </teleport>
 
     <teleport to="body">
+      <Transition name="dialog-motion">
       <div v-if="sshHostKeyPromptOpen" class="modal-backdrop" role="presentation">
         <section class="modal ssh-host-key-modal" role="dialog" aria-modal="true" aria-label="SSH 主机密钥变更">
           <div class="modal-head">
@@ -2619,9 +2622,11 @@ defineExpose({
           </div>
         </section>
       </div>
+      </Transition>
     </teleport>
 
     <teleport to="body">
+      <Transition name="dialog-motion">
       <div v-if="quickCommandSettingsOpen" class="modal-backdrop quick-command-backdrop" :class="props.appTheme === 'light' ? 'theme-light' : 'theme-dark'" role="presentation">
         <section class="modal quick-command-modal" role="dialog" aria-modal="true" aria-label="固定命令设置">
           <div class="modal-head">
@@ -2715,6 +2720,7 @@ defineExpose({
           </div>
         </section>
       </div>
+      </Transition>
     </teleport>
   </main>
 </template>

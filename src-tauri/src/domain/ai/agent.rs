@@ -12,7 +12,7 @@ use crate::domain::ai::chat::{
     build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
     conversation_context_chars, conversation_context_was_compressed,
     conversation_messages_for_payload, conversation_summary_message, extract_chat_answer,
-    extract_stream_delta, is_cancelled, parse_model_error, reject_html_response,
+    extract_reasoning_delta, extract_stream_delta, is_cancelled, parse_model_error, reject_html_response,
     stream_usage_options, truncate_for_prompt, AiCancelToken, AiConversationRole,
     AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
 };
@@ -529,31 +529,6 @@ fn parse_agent_sse_event(
     }
 
     Ok(deltas)
-}
-
-/// Compatible reasoning field names used by OpenAI-compatible providers.
-/// This stream is display-only and is intentionally excluded from context.
-fn extract_reasoning_delta(payload: &Value) -> Option<String> {
-    for pointer in [
-        "/choices/0/delta/reasoning_content",
-        "/choices/0/delta/reasoning",
-        "/choices/0/delta/analysis",
-        "/choices/0/delta/thinking",
-        "/choices/0/message/reasoning_content",
-        "/choices/0/message/reasoning",
-        "/reasoning_content",
-        "/reasoning",
-    ] {
-        if let Some(content) = payload
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(content.to_string());
-        }
-    }
-
-    None
 }
 
 /// 按 index 累积工具调用增量：id/name/arguments 都兼容分片下发。

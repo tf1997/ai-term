@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { canGrantExactCommand } from '../../../domain/agentAutoApprove'
 import { computed, ref, watch } from 'vue'
 import type { AgentStep, AgentStepProposal, AgentTimeoutInfo } from '../../../domain/agent'
 import { formatAiDuration } from '../../../domain/aiTiming'
@@ -26,6 +27,7 @@ const emit = defineEmits<{
   execute: []
   reviewRisk: []
   executeAndAllow: []
+  executeAndAllowExact: []
   skip: []
   stop: []
   wait: []
@@ -79,10 +81,12 @@ const countdownLabel = computed(() => {
   return remaining <= 0 ? '即将询问' : `${Math.ceil(remaining / 1000)}s 后询问`
 })
 const allowPatterns = computed(() => !hasRisk.value && props.proposal?.id === props.step.id ? props.proposal.suggestedPatterns ?? [] : [])
+const canAllowExact = computed(() => !hasRisk.value && !allowPatterns.value.length && props.proposal?.id === props.step.id && canGrantExactCommand(props.step.command))
 const allowUnavailableReason = computed(() => {
   if (props.step.sensitive) return '涉及敏感信息，需每次确认，不能总是允许。'
   if (hasRisk.value) return '命中风险规则，需每次确认，不能总是允许。'
-  return '此命令无法按前缀自动授权，仅支持本次确认。'
+  if (!canGrantExactCommand(props.step.command)) return '此命令需要每次确认，不能自动授权。'
+  return '复合命令可按完整内容授权；仅当前终端会话有效，命令变化或重连后需重新确认。'
 })
 const failureReason = computed(() => {
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '任务已停止，命令未执行。' : '已停止等待；命令可能仍在终端运行。'
@@ -157,7 +161,8 @@ function toggleDetails() {
       <div v-if="awaitingApproval" class="tool-step-decision">
         <div class="tool-step-actions">
           <button type="button" class="tool-step-action is-primary" :disabled="approvalSaving" :class="{ 'is-risk': hasRisk, 'is-armed': hasHighRisk && highRiskArmed }" :title="hasRisk ? '检查风险后确认执行' : '仅执行本次命令，不改变允许列表'" @click="hasRisk ? emit('reviewRisk') : emit('execute')"><UiIcon :name="hasRisk ? 'shield' : 'play'" size="13" />{{ hasRisk ? '查看风险' : '仅执行本次' }}</button>
-          <button type="button" class="tool-step-action is-allow" :disabled="approvalSaving || !allowPatterns.length" :title="allowPatterns.length ? `执行本次并加入允许列表：${allowPatterns.join('、')}` : allowUnavailableReason" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" />{{ approvalSaving ? '保存授权中…' : '总是允许' }}</button>
+          <button v-if="canAllowExact" type="button" class="tool-step-action is-allow-exact" :disabled="approvalSaving" :title="allowUnavailableReason" @click="emit('executeAndAllowExact')"><UiIcon name="shield" size="13" />本会话允许此命令</button>
+          <button v-else type="button" class="tool-step-action is-allow" :disabled="approvalSaving || !allowPatterns.length" :title="allowPatterns.length ? `执行本次并加入允许列表：${allowPatterns.join('、')}` : allowUnavailableReason" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" />{{ approvalSaving ? '保存授权中…' : '总是允许' }}</button>
           <button type="button" class="tool-step-action" :disabled="approvalSaving" @click="emit('skip')">跳过</button>
           <button type="button" class="tool-step-action" @click="emit('stop')"><UiIcon name="stop" size="12" />停止任务</button>
         </div>

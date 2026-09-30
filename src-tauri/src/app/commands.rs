@@ -513,6 +513,25 @@ pub async fn chat_with_ai_provider_stream(
                 },
             );
         },
+        {
+            let reasoning_request_id = request_id.clone();
+            let reasoning_app = app.clone();
+            let reasoning_event_name = event_name.clone();
+            move |delta| {
+                let _ = reasoning_app.emit_all(
+                    &reasoning_event_name,
+                    AiChatStreamEvent {
+                        request_id: reasoning_request_id.clone(),
+                        kind: AiChatStreamEventKind::Reasoning,
+                        delta,
+                        error: None,
+                        context_compressed: None,
+                        context_chars: None,
+                        history_count: None,
+                    },
+                );
+            }
+        },
         Some(&cancel_token),
     )
     .await;

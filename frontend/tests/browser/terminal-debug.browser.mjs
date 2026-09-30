@@ -163,6 +163,7 @@ async function redetect() {
 }
 async function connectProfile(name) {
   if (!await evaluate('Boolean(document.querySelector(".server-card"))')) await click('[aria-label="打开连接管理"]')
+  await waitFor('document.querySelectorAll(".server-card").length === 2')
   const selector = await evaluate(`(() => { const cards = [...document.querySelectorAll('.server-card')]; const index = cards.findIndex(card => card.textContent.includes(${JSON.stringify(name)})); if (index < 0) throw new Error('Missing synthetic connection profile'); return '.server-card:nth-of-type(' + (index + 1) + ')'; })()`)
   await click(selector, true)
   await waitFor('document.querySelector(".session-tab-strip .tab.active .status-dot.live")')
@@ -171,6 +172,7 @@ async function connectProfile(name) {
 const connectAtlas = () => connectProfile('Atlas')
 async function openApplicationSettings() {
   if (!await evaluate('Boolean(document.querySelector(".settings-sidebar"))')) await click('[aria-label="打开设置中心"]')
+  await waitFor('Boolean(document.querySelector(".settings-sidebar"))')
   await click('.settings-sidebar [role="tab"][aria-label="应用设置"]')
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(debugSwitch)}))`)
 }

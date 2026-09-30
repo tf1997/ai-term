@@ -35,13 +35,16 @@ export function agentDisplayTimeline(message: AiMessage) {
   const steps = new Map((message.agentSteps ?? []).map(step => [step.id, step]))
   return agentTimelineEntries(message).flatMap((entry): Array<
     | { kind: 'thinking'; id: string; text: string; legacy: boolean }
+    | { kind: 'text'; id: string; text: string }
     | { kind: 'tool'; id: string; step: AgentStep }
   > => {
     if (entry.kind === 'tool') {
       const step = steps.get(entry.stepId)
       return step ? [{ kind: 'tool', id: entry.id, step }] : []
     }
-    const text = [entry.reasoning.trim(), entry.text.trim()].filter(Boolean).join('\n\n')
-    return text ? [{ kind: 'thinking', id: entry.id, text, legacy: entry.legacy === true }] : []
+    const parts: Array<{ kind: 'thinking'; id: string; text: string; legacy: boolean } | { kind: 'text'; id: string; text: string }> = []
+    if (entry.reasoning.trim()) parts.push({ kind: 'thinking', id: `${entry.id}:reasoning`, text: entry.reasoning, legacy: entry.legacy === true })
+    if (entry.text.trim()) parts.push({ kind: 'text', id: `${entry.id}:text`, text: entry.text })
+    return parts
   })
 }

@@ -1144,7 +1144,8 @@ onBeforeUnmount(() => {
       :items="currentContextMenu.items.map(item => ({ ...item, id: item.label, group: item.danger ? 'danger' : 'common', action: () => runMenuAction(item.action) }))"
       @close="currentContextMenu = null" />
     <Teleport to="body"
-      ><div v-if="editor.remoteEditor && props.active" class="modal-backdrop remote-file-editor-backdrop">
+      ><Transition name="dialog-motion">
+       <div v-if="editor.remoteEditor && props.active" class="modal-backdrop remote-file-editor-backdrop">
         <section
           class="modal remote-file-editor-modal"
           role="dialog"
@@ -1216,7 +1217,8 @@ onBeforeUnmount(() => {
             </button>
           </footer>
         </section>
-      </div></Teleport
+      </div>
+       </Transition></Teleport
     >
   </section>
 </template>
