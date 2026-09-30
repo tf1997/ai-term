@@ -51,10 +51,10 @@ watch(() => props.detail, () => { detailOpen.value = false })
     </section>
     <AiCodeBlock v-if="suggestedCommand" :content="suggestedCommand" label="本地建议" kind="command" class="chat-error-suggestion">
       <template #actions>
-        <button class="chat-error-action is-suggestion" type="button" title="发送到当前终端执行" @click="emit('executeCommand', suggestedCommand)"><UiIcon name="play" size="12" />执行</button>
+        <button class="chat-error-action is-primary is-suggestion" type="button" title="发送到当前终端执行" @click="emit('executeCommand', suggestedCommand)"><UiIcon name="play" size="12" />执行</button>
       </template>
       <template #preview-actions="{ close }">
-        <button class="chat-error-action is-suggestion" type="button" title="发送到当前终端执行" @click="close(); emit('executeCommand', suggestedCommand)"><UiIcon name="play" size="12" />执行</button>
+        <button class="chat-error-action is-primary is-suggestion" type="button" title="发送到当前终端执行" @click="close(); emit('executeCommand', suggestedCommand)"><UiIcon name="play" size="12" />执行</button>
       </template>
     </AiCodeBlock>
   </div>
@@ -70,7 +70,9 @@ watch(() => props.detail, () => { detailOpen.value = false })
 .chat-error-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; color: var(--chat-muted, var(--workbench-muted)); }
 .chat-error-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .chat-error-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 29px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; color: var(--chat-text, var(--workbench-text)); background: transparent; font-size: 12px; line-height: 1.5; cursor: pointer; }
-.chat-error-action.is-primary { color: #fff; background: var(--chat-button, var(--workbench-accent)); border-color: transparent; }
+.chat-error-action.is-primary { color: var(--workbench-action-text); background: var(--workbench-action-bg); border-color: var(--workbench-action-border); }
+.chat-error-action.is-primary:hover:not(:disabled) { background: var(--workbench-action-hover); filter: none; }
+.chat-error-action.is-primary:active:not(:disabled) { background: var(--workbench-action-active); }
 .chat-error-action.is-icon { width: 29px; flex: 0 0 29px; padding: 0; }
 .chat-error-action.is-quiet { border-color: transparent; color: var(--chat-muted, var(--workbench-muted)); }
 .chat-error-action.is-suggestion { min-height: 26px; padding: 2px 7px; }

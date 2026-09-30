@@ -69,7 +69,7 @@ async function openPreview() {
   if (codeBlock.value) {
     const style = getComputedStyle(codeBlock.value)
     // Teleported dialogs retain the active workbench theme outside the panel.
-    const tokens = ['--chat-text', '--chat-muted', '--chat-surface', '--chat-subtle', '--chat-line', '--chat-accent', '--chat-button', '--workbench-text', '--workbench-muted', '--workbench-panel', '--workbench-panel-strong', '--workbench-line', '--workbench-accent', '--font-mono']
+    const tokens = ['--chat-text', '--chat-muted', '--chat-surface', '--chat-subtle', '--chat-line', '--chat-accent', '--workbench-action-bg', '--workbench-action-hover', '--workbench-action-active', '--workbench-action-text', '--workbench-action-border', '--workbench-text', '--workbench-muted', '--workbench-panel', '--workbench-panel-strong', '--workbench-line', '--workbench-accent', '--font-mono']
     previewTheme.value = Object.fromEntries(tokens.map((token) => [token, style.getPropertyValue(token).trim()]).filter(([, value]) => value))
   }
   previewWrap.value = props.kind === 'command'

@@ -254,8 +254,9 @@
 .assistant-compose.script-compose .icon-button {
   right: calc(var(--composer-pad-x) + 8px);
   bottom: calc(var(--composer-pad-bottom) + 8px);
-  border-color: color-mix(in srgb, var(--workbench-accent) 82%, transparent);
-  background: color-mix(in srgb, var(--workbench-accent) 86%, transparent);
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 @media (max-width: 1280px) {
   .workspace-section-head.script-head,   .script-preview-head,   .script-assistant-head {

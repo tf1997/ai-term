@@ -184,10 +184,10 @@
 .theme-light .section-head .primary {
   height: 29px;
   gap: 5px;
-  border-color: var(--workbench-accent);
+  border-color: var(--workbench-action-border);
   border-radius: 6px;
-  background: var(--workbench-accent);
-  color: #ffffff;
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
   padding-inline: 9px;
   font-size: 12px;
   box-shadow: none;
@@ -195,9 +195,9 @@
 
 .section-head .primary:hover:not(:disabled),
 .theme-light .section-head .primary:hover:not(:disabled) {
-  border-color: var(--workbench-accent-strong);
-  background: var(--workbench-accent-strong);
-  color: #ffffff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 
 .connection-sidebar .connection-create-button {
@@ -789,17 +789,17 @@ body.workspace-resizing * {
   bottom: 14px;
   width: 29px;
   height: 29px;
-  border-color: var(--workbench-accent);
+  border-color: var(--workbench-action-border);
   border-radius: 6px;
-  background: var(--workbench-accent);
-  color: #ffffff;
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
   box-shadow: none;
 }
 
 .assistant-compose.script-compose .icon-button:hover:not(:disabled) {
-  border-color: var(--workbench-accent-strong);
-  background: var(--workbench-accent-strong);
-  color: #ffffff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 
 .history-panel,

@@ -211,9 +211,9 @@
   color: #7b8799;
 }
 .theme-light .primary, .theme-light .text-button.primary-action {
-  border-color: #7dd9b2;
-  background: linear-gradient(135deg, #0f8a63, #16a66a);
-  color: #ffffff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .theme-light .text-button, .theme-light .icon-button {
   border-color: #d2dbea;

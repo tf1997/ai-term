@@ -43,10 +43,10 @@
   bottom: 13px;
   width: 29px;
   height: 29px;
-  border-color: var(--workbench-accent);
+  border-color: var(--workbench-action-border);
   border-radius: 6px;
-  background: var(--workbench-accent);
-  color: #fff;
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
   box-shadow: none;
 }
 
@@ -410,15 +410,15 @@
 }
 
 .app-shell.theme-light .script-editor-tools .script-run-button {
-  border-color: #9bd7bd;
-  background: #e7f6ef;
-  color: #176b4d;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 
 .app-shell.theme-light .script-editor-tools .script-run-button:hover:not(:disabled) {
-  border-color: #73c6a2;
-  background: #dff2e9;
-  color: #105b40;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 
 .app-shell.theme-light .script-editor-tools .script-run-button.medium-risk-run {

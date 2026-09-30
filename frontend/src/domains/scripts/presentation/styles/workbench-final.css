@@ -456,10 +456,10 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  border-color: #2e7e5b;
+  border-color: var(--workbench-action-border);
   border-radius: 5px;
-  background: #153426;
-  color: #c9f2df;
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
   padding: 0 8px;
   font-size: var(--font-xs);
 }
@@ -484,9 +484,9 @@ button.script-readiness-status:hover {
 }
 
 .script-editor-tools .script-run-button:hover:not(:disabled) {
-  border-color: #45a77c;
-  background: #1a432f;
-  color: #ecfdf5;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 
 .script-editor-tools .script-run-button.medium-risk-run {

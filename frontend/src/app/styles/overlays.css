@@ -845,13 +845,14 @@
   padding: 0 18px;
 }
 .profile-save-button {
-  border-color: rgba(45, 212, 191, .56);
-  background: linear-gradient(135deg, #087f5b, #16a66a);
-  color: #fff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .profile-save-button:hover:not(:disabled) {
-  border-color: rgba(94, 234, 212, .78);
-  background: linear-gradient(135deg, #079669, #18b978);
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .editor-title {
   grid-column: 1 / -1;

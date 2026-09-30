@@ -95,7 +95,9 @@ function inferCommandShellLabel(command: string) {
 .chat-code-risk .ui-icon { display: block; width: 12px; height: 12px; flex: 0 0 12px; }
 .chat-code-risk.is-medium { color: var(--chat-warning, #996015); }
 .chat-code-risk.is-high { color: var(--chat-danger, #c24150); }
-.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 3px 7px; background: var(--chat-button, var(--workbench-accent)); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1.5; }
+.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 3px 7px; background: var(--workbench-action-bg); color: var(--workbench-action-text); border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1.5; }
+.chat-code-run:hover:not(:disabled) { background: var(--workbench-action-hover); }
+.chat-code-run:active:not(:disabled) { background: var(--workbench-action-active); }
 .chat-code-run:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
 .chat-code-run:hover { filter: brightness(.94); }
 </style>

@@ -47,9 +47,9 @@
   color: #d8fbe8;
 }
 .script-head .text-button.primary-action {
-  border-color: rgba(16, 185, 129, .58);
-  background: rgba(16, 185, 129, .22);
-  color: #ecfdf5;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .script-head .text-button.danger {
   border-color: rgba(248, 113, 113, .42);
@@ -275,9 +275,9 @@
   color: var(--light-accent-strong);
 }
 .app-shell.theme-light .script-head .text-button.primary-action {
-  border-color: #8adfbc;
-  background: var(--light-accent-strong);
-  color: #ffffff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }.app-shell.theme-light .script-library-search {
   border-bottom-color: var(--light-border);
   background: #fbfcfd;

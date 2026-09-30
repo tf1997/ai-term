@@ -4,6 +4,12 @@
   --workbench-accent: #35b779;
   --workbench-accent-strong: #58d493;
   --workbench-accent-soft: rgba(53, 183, 121, .11);
+  /* Action fills are separate from accent colors used for text and status. */
+  --workbench-action-bg: #233e3b;
+  --workbench-action-hover: #2e4d49;
+  --workbench-action-active: #365b55;
+  --workbench-action-text: #c5eee5;
+  --workbench-action-border: #426c63;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
   /* CJK 兜底排在 Latin 等宽之后、generic monospace 关键字之前。等宽栈里没有一张脸
      带中文字形,不显式兜底就会穿透到 generic 关键字由系统挑:macOS 挑到 PingFang SC
@@ -93,6 +99,11 @@ body {
   --workbench-accent: #0b7f57;
   --workbench-accent-strong: #087f5b;
   --workbench-accent-soft: #e4f5ec;
+  --workbench-action-bg: #e2efec;
+  --workbench-action-hover: #d2e5df;
+  --workbench-action-active: #c3dcd4;
+  --workbench-action-text: #285b50;
+  --workbench-action-border: #b4d1c7;
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -148,6 +159,7 @@ textarea {
   line-height: 1.45;
 }
 button {
+  --action-fill: var(--workbench-action-bg);
   height: var(--control-h);
   border: 1px solid #252d3b;
   border-radius: 6px;
@@ -162,6 +174,12 @@ button {
 button:hover {
   border-color: #46515f;
   background: #252b33;
+}
+button:hover:not(:disabled) {
+  --action-fill: var(--workbench-action-hover);
+}
+button:active:not(:disabled) {
+  --action-fill: var(--workbench-action-active);
 }
 button:disabled {
   cursor: not-allowed;
@@ -222,8 +240,9 @@ code,
   -webkit-user-select: text;
   user-select: text;
 }
-.primary {
-  border-color: rgba(45, 212, 191, .56);
-  background: linear-gradient(135deg, #087f5b, #16a66a);
-  color: white;
+.primary,
+.primary:hover {
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }

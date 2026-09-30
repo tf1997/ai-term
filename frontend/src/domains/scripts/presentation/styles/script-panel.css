@@ -210,8 +210,8 @@
 .script-composer-footer { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 7px 7px; }
 .script-composer-label { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: var(--workbench-accent-strong); font-size: 12px; }
 .script-composer-model { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--workbench-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.script-workspace .script-composer-footer .icon-button { flex-basis: 30px; width: 30px; height: 30px; background: var(--workbench-accent); color: white; }
-.script-workspace .script-composer-footer .icon-button:hover:not(:disabled) { background: var(--workbench-accent-strong); color: white; }
+.script-workspace .script-composer-footer .icon-button { flex-basis: 30px; width: 30px; height: 30px; background: var(--action-fill, var(--workbench-action-bg)); color: var(--workbench-action-text); }
+.script-workspace .script-composer-footer .icon-button:hover:not(:disabled) { background: var(--action-fill, var(--workbench-action-bg)); color: var(--workbench-action-text); }
 
 .script-workspace .script-preview-modal { background: var(--workbench-panel); border-color: var(--workbench-line); }
 .script-workspace .script-preview-modal .modal-head { display: flex; gap: 12px; min-height: 48px; padding: 8px 12px; border-color: var(--workbench-line-soft); background: var(--workbench-panel); }

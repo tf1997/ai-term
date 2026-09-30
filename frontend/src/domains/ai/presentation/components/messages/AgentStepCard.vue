@@ -221,8 +221,10 @@ function toggleDetails() {
 .tool-step-timeout-hint { color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .tool-step-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 29px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; background: var(--chat-surface, var(--workbench-panel-strong)); color: var(--chat-text, var(--workbench-text)); font-size: 12px; line-height: 1.5; cursor: pointer; }
-.tool-step-action.is-primary { background: var(--chat-button, var(--workbench-accent)); color: #fff; border-color: transparent; }
-.tool-step-action.is-primary.is-risk { background: var(--chat-warning-button, #855b18); }
+.tool-step-action.is-primary { background: var(--workbench-action-bg); color: var(--workbench-action-text); border-color: var(--workbench-action-border); }
+.tool-step-action.is-primary:not(.is-risk):hover:not(:disabled) { background: var(--workbench-action-hover); filter: none; }
+.tool-step-action.is-primary:not(.is-risk):active:not(:disabled) { background: var(--workbench-action-active); }
+.tool-step-action.is-primary.is-risk { background: var(--chat-warning-button, #855b18); color: #fff; border-color: transparent; }
 .tool-step-action:hover:not(:disabled) { filter: brightness(.95); }
 .tool-step-action:disabled { opacity: .45; cursor: not-allowed; }
 .tool-step-action:focus-visible, .tool-step-allow:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }

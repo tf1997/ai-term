@@ -92,9 +92,9 @@
   color: #be123c;
 }
 .theme-light .primary:hover:not(:disabled), .theme-light .text-button.primary-action:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--workbench-accent) 72%, transparent);
-  background: var(--workbench-accent-strong);
-  color: #ffffff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 /* Light theme workspace history fixes. */
 .theme-light .history-panel {
@@ -241,14 +241,14 @@
   color: var(--light-accent-strong);
 }
 .theme-light .primary, .theme-light .text-button.primary-action, .theme-light .assistant-compose .icon-button, .theme-light .assistant-compose.script-compose .icon-button {
-  border-color: var(--light-accent-strong);
-  background: linear-gradient(180deg, #15966d, var(--light-accent-strong));
-  color: #fff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .theme-light .primary:hover:not(:disabled), .theme-light .text-button.primary-action:hover:not(:disabled), .theme-light .assistant-compose .icon-button:hover:not(:disabled), .theme-light .assistant-compose.script-compose .icon-button:hover:not(:disabled) {
-  border-color: #066846;
-  background: linear-gradient(180deg, #11845f, #066846);
-  color: #fff;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .theme-light .search-input, .theme-light .settings-search, .theme-light .history-toolbar input, .theme-light .script-library-search, .theme-light .sftp-pathbar input {
   border-color: var(--light-border);

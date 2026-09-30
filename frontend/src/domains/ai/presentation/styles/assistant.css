@@ -241,13 +241,14 @@
   text-align: right;
 }
 .text-button.primary-action {
-  border-color: rgba(86, 230, 163, .46);
-  background: rgba(20, 184, 116, .2);
-  color: #d1fae5;
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
-.text-button.primary-action:hover {
-  border-color: rgba(86, 230, 163, .72);
-  background: rgba(20, 184, 116, .3);
+.text-button.primary-action:hover:not(:disabled) {
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
 }
 .code-block {
   border-color: #263652;
@@ -465,10 +466,10 @@
 .assistant-compose .icon-button {
   right: calc(var(--composer-pad-x) + 8px);
   bottom: calc(var(--composer-pad-bottom) + 8px);
-  border-color: color-mix(in srgb, var(--workbench-accent) 62%, transparent);
-  background: color-mix(in srgb, var(--workbench-accent) 24%, transparent);
-  color: #f6f7ff;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
+  border-color: var(--workbench-action-border);
+  background: var(--action-fill, var(--workbench-action-bg));
+  color: var(--workbench-action-text);
+  box-shadow: none;
 }
 @media (max-width: 1280px) {
   .script-workbench {
