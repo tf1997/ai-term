@@ -1022,7 +1022,7 @@ watch(
         <span>本会话已允许 {{ agentSessionGrantCount }} 条完整命令</span>
         <button type="button" class="chat-text-button" @click="revokeSessionCommandGrants">撤销授权</button>
       </div>
-      <div class="chat-input-shell">
+      <div class="chat-input-shell" :class="{ 'is-running': composerBusy, 'is-awaiting-decision': needsAgentDecision }">
       <textarea
         ref="composerInput"
         v-model="askText"
