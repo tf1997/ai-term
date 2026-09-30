@@ -1736,8 +1736,8 @@ function terminalThemeOptions(theme: TerminalTheme) {
     return {
       background: '#ffffff',
       foreground: '#172033',
-      cursor: '#087f5b',
-      cursorAccent: '#ffffff',
+      cursor: '#18b887',
+      cursorAccent: '#102a23',
       selectionBackground: '#10b98133',
       selectionInactiveBackground: '#10b98124',
       blue: '#2563eb',

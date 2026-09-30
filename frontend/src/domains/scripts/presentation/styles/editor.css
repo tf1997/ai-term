@@ -206,7 +206,7 @@
 .app-shell.theme-light .script-editor-shell textarea {
   color: transparent !important;
   -webkit-text-fill-color: transparent;
-  caret-color: #087f5b;
+  caret-color: #18b887;
 }
 
 .app-shell.theme-light .script-editor-shell textarea::selection {

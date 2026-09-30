@@ -67,15 +67,41 @@
   container-name: settings-sidebar;
 }
 
-.settings-sidebar .settings-new-config {
-  width: 30px;
-  height: 29px;
+.app-shell .settings-sidebar .settings-new-config {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  min-height: 28px;
+  gap: 4px;
   justify-content: center;
-  padding: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
 }
 
-.settings-sidebar .settings-new-config span {
-  display: none;
+.app-shell .settings-sidebar .settings-new-config:hover:not(:disabled) {
+  border-color: var(--workbench-accent);
+  background: var(--workbench-accent-soft);
+  color: var(--workbench-accent-strong);
+}
+
+.app-shell .settings-sidebar .settings-new-config:active:not(:disabled) {
+  background: color-mix(in srgb, var(--workbench-accent) 18%, var(--workbench-panel));
+}
+
+.app-shell .settings-sidebar .settings-new-config:focus-visible {
+  outline: 2px solid var(--workbench-accent);
+  outline-offset: 2px;
+}
+
+.settings-sidebar .settings-new-config .ui-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .settings-sidebar .settings-center {
@@ -118,7 +144,7 @@
 }
 
 .settings-sidebar .settings-tab.active {
-  box-shadow: inset 0 -2px 0 var(--workbench-accent);
+  box-shadow: none;
 }
 
 .settings-sidebar .settings-tab .settings-option-icon {
@@ -204,7 +230,7 @@
   border-color: #dcebe3;
   background: #f0faf5;
   color: #087a55;
-  box-shadow: inset 0 -2px 0 #12895a;
+  box-shadow: none;
 }
 
 @container settings-sidebar (max-width: 280px) {

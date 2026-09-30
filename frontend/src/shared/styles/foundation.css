@@ -91,7 +91,7 @@ body {
 :root[data-theme="light"],
 .theme-light {
   --workbench-accent: #0b7f57;
-  --workbench-accent-strong: #086342;
+  --workbench-accent-strong: #087f5b;
   --workbench-accent-soft: #e4f5ec;
 }
 :root[data-theme="light"] {

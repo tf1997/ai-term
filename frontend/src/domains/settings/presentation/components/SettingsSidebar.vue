@@ -154,9 +154,9 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
   <aside class="sidebar settings-sidebar">
     <div class="section-head">
       <span class="section-title">设置</span>
-      <button class="primary settings-new-config" type="button" title="新建 AI 配置" aria-label="新建 AI 配置" @click="requestCreateAiConfig">
+      <button class="settings-new-config" type="button" title="新建 AI 配置" aria-label="新建 AI 配置" @click="requestCreateAiConfig">
         <UiIcon name="plus" />
-        <span>AI 配置</span>
+        <span>新建</span>
       </button>
     </div>
 

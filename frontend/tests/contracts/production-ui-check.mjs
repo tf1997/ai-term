@@ -713,7 +713,8 @@ assert(
     sidebar.includes('placeholder="搜索连接"') &&
     sidebar.includes('aria-label="搜索名称、主机或用户"') &&
     settingsSidebar.includes('<span class="section-title">设置</span>') &&
-    settingsSidebar.includes('<span>AI 配置</span>') &&
+    settingsSidebar.includes('aria-label="新建 AI 配置"') &&
+    settingsSidebar.includes('<span>新建</span>') &&
     aiConversationRules.includes('normalizeGeneratedSessionTitle') &&
     aiPanel.includes('formatSessionDisplayTitle') &&
     aiConversationRules.includes('return `${title} 命令`') &&
