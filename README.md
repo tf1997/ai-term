@@ -60,6 +60,7 @@ The animation above is captured from the current Vue browser preview and walks t
 ### SSH And Bastions
 
 - Open local shells or remote SSH sessions in tabs.
+- Press Ctrl+R in an exited or failed terminal to reconnect in the same tab. In connected shells, Ctrl+R keeps its usual history search behavior.
 - Connect to direct hosts, bastions, gateway domains, and interactive jump menus.
 - Use password or SSH key authentication with separate gateway and target layers.
 - Find open terminals in the searchable tab list, scroll long tab rows with the wheel or arrow buttons, and switch with Ctrl+Tab / Ctrl+Shift+Tab. Repeated terminal names are numbered.

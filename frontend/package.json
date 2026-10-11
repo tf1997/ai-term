@@ -23,6 +23,7 @@
     "test:sftp-browser": "node tests/browser/sftp-workspace.browser.mjs",
     "test:terminal-debug": "tsx --test tests/terminal/internal-terminal-output.test.mjs tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs",
     "test:terminal-debug-browser": "node tests/browser/terminal-debug.browser.mjs",
+    "test:terminal-reconnect-browser": "node tests/browser/terminal-reconnect.browser.mjs",
     "test:performance-browser": "node tests/browser/performance.browser.mjs"
   },
   "dependencies": {

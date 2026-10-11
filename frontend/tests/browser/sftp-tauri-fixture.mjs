@@ -28,6 +28,8 @@ export function installSftpFixture() {
     calls: [],
     probePlan: { '10.20.0.17': { error: 'network unreachable: fixture first interface' } },
     identityMode: {},
+    connectionErrors: {},
+    connectionDelayMs: 0,
     directoryErrors: {},
     uploads: [],
     savedFiles: [],
@@ -131,10 +133,14 @@ export function installSftpFixture() {
       return { available: true, path: '/home/deploy', message: 'Synthetic SFTP ready' }
     }
     if (cmd === 'connect_local_terminal') {
+      if (f.connectionErrors.local) throw new Error(f.connectionErrors.local)
+      if (f.connectionDelayMs) await new Promise(resolve => nativeSetTimeout(resolve, f.connectionDelayMs))
       sessions.set(args.sessionId, { profileId: 'local' })
       return args.sessionId
     }
     if (cmd === 'connect_profile') {
+      if (f.connectionErrors[args.profileId]) throw new Error(f.connectionErrors[args.profileId])
+      if (f.connectionDelayMs) await new Promise(resolve => nativeSetTimeout(resolve, f.connectionDelayMs))
       const id = `fixture-${args.profileId}-${++sessionSequence}`
       sessions.set(id, { profileId: args.profileId })
       return id

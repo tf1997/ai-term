@@ -1377,7 +1377,7 @@ assert(
     terminalPane.includes(':aria-selected="index === selectedCompletionIndex"') &&
     !terminalPane.includes("event.key === 'Tab'") &&
     !terminalPane.includes('handleTerminalCustomKeyEvent') &&
-    !terminalPane.includes('terminal.attachCustomKeyEventHandler') &&
+    terminalPane.includes('terminal.attachCustomKeyEventHandler(handleTerminalKeyEvent)') &&
     terminalPane.includes('convertEol: false') &&
     !terminalPane.includes("event.code === 'Space'") &&
     !terminalPane.includes('<kbd>Ctrl</kbd><kbd>Space</kbd>') &&

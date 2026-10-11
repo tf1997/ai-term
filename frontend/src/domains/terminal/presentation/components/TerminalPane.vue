@@ -139,6 +139,7 @@ let resizeObserver: ResizeObserver | undefined
 // Leave one cell unused so fractional font metrics and a stable scrollbar gutter
 // cannot clip the glyph rendered in the last PTY column.
 const TERMINAL_SAFE_COLUMN_MARGIN = 1
+const TERMINAL_RECONNECT_HINT = '按 Ctrl+R 重新连接终端。'
 let terminalFitFrame = 0
 let terminalScrollFrame = 0
 let scrollAfterParse = false
@@ -1779,6 +1780,21 @@ function applyTerminalAppearance() {
   }
 }
 
+function handleTerminalKeyEvent(event: KeyboardEvent) {
+  if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing || event.key.toLowerCase() !== 'r') return true
+  if (!props.active || isSftpProfile(props.profile)) return true
+  // Keep Ctrl+R available to the shell while connected. During connection,
+  // consume it so repeated presses cannot queue history search in the new shell.
+  if (status.value !== 'idle' && status.value !== 'error' && status.value !== 'connecting') return true
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.type === 'keydown' && !event.repeat && !props.agentControlled && status.value !== 'connecting') {
+    if (props.profile) void connectRemote()
+    else void connectLocal()
+  }
+  return false
+}
+
 onMounted(async () => {
   if (!terminalHost.value) return
 
@@ -1790,6 +1806,7 @@ onMounted(async () => {
     ...terminalTypographyOptions,
     theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
   })
+  terminal.attachCustomKeyEventHandler(handleTerminalKeyEvent)
   appliedTerminalTheme = resolvedTerminalSettings().terminalTheme
   writeParsedDisposable = terminal.onWriteParsed(afterTerminalWriteParsed)
   fitAddon = new FitAddon()
@@ -1898,7 +1915,7 @@ function handleTerminalSessionClosed(reason: string) {
   status.value = 'idle'
   resetTrackedTerminalInput('unknown')
   closeCompletion()
-  const message = `\r\nShell exited: ${reason}\r\n`
+  const message = `\r\nShell exited: ${reason}\r\n${TERMINAL_RECONNECT_HINT}\r\n`
   ingestTerminalOutput(message, true)
   void disconnectTerminal(closedSessionId)
 }
@@ -1975,7 +1992,7 @@ async function connectRemote() {
     activeSession.value = 'remote'
     activeSessionProfile.value = profile
     const detail = formatError(error)
-    const message = `\r\nSSH connection failed: ${detail}\r\n`
+    const message = `\r\nSSH connection failed: ${detail}\r\n${TERMINAL_RECONNECT_HINT}\r\n`
     ingestTerminalOutput(message, true)
     if (shouldAskForSshHostKeyReset(error)) {
       openSshHostKeyPrompt(detail)
@@ -2066,9 +2083,9 @@ function enterLocalShellErrorMode(error: unknown) {
   terminal?.writeln('\x1b[31mLocal shell failed to start.\x1b[0m')
   terminal?.writeln(detail)
   terminal?.writeln('')
-  terminal?.writeln('Use New Local Shell to retry.')
+  terminal?.writeln(TERMINAL_RECONNECT_HINT)
   scrollTerminalToBottom()
-  appendTerminalOutput(`${message}\nUse New Local Shell to retry.\n`)
+  appendTerminalOutput(`${message}\n${TERMINAL_RECONNECT_HINT}\n`)
 }
 
 function enterPreviewMode() {
