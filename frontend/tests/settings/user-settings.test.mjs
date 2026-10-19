@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   clampAgentCommandTimeoutSec,
-  clampAgentStepLimit,
   createDefaultUserSettings,
   LEGACY_WINDOWS_TERMINAL_FONT_FAMILY,
   normalizeUserSettings,
@@ -40,7 +39,6 @@ test('平台默认值保持字体、字号和 Agent 预算兼容，默认对象�
     terminalTheme: 'midnight',
     defaultShell: 'system',
     agentAutoExecReadonly: true,
-    agentStepLimit: 25,
     agentCommandTimeoutSec: 120
   })
   windows.terminalFontSize = 22
@@ -67,7 +65,6 @@ test('设置校验保留合法偏好和显式关闭，不修改传入草稿', ()
     terminalTheme: 'midnight',
     defaultShell: 'pwsh',
     agentAutoExecReadonly: false,
-    agentStepLimit: 8,
     agentCommandTimeoutSec: 240
   })
   assert.deepEqual(draft, original)
@@ -108,15 +105,20 @@ test('字号保留 11–22 的现有边界和小数行为', () => {
 
 test('Agent 预算统一取整、夹取并处理无效值', () => {
   for (const input of [undefined, null, '', 0, -5, 'invalid', Infinity, NaN]) {
-    assert.equal(clampAgentStepLimit(input), 25)
     assert.equal(clampAgentCommandTimeoutSec(input), 120)
-  }
-  for (const [input, expected] of [[1, 1], [25, 25], [99, 25], [2.6, 3], ['8', 8]]) {
-    assert.equal(clampAgentStepLimit(input), expected)
   }
   for (const [input, expected] of [[1, 15], [15, 15], [600, 600], [900, 600], [20.6, 21], ['240', 240]]) {
     assert.equal(clampAgentCommandTimeoutSec(input), expected)
   }
+})
+
+test('旧版保存的步数上限被忽略,加载和再次保存不会恢复执行限制', () => {
+  const storage = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ agentStepLimit: 1, agentCommandTimeoutSec: 240 }) })
+  const settings = loadUserSettings(false, storage)
+  assert.equal(settings.agentStepLimit, undefined)
+  assert.equal(settings.agentCommandTimeoutSec, 240)
+  persistUserSettings(settings, storage)
+  assert.equal(JSON.parse(storage.getItem(USER_SETTINGS_STORAGE_KEY)).agentStepLimit, undefined)
 })
 
 test('缺失、损坏和旧版设置可正常加载', () => {

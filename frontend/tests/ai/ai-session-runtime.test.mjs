@@ -627,3 +627,33 @@ test('Agent 思考过程随 payload 恢复，但不会改写上下文正文', ()
   assert.equal(restored.agentReasoning, '先检查服务状态，再确认配置。')
   assert.equal(restored.text, '任务已完成')
 })
+
+for (const withTool of [false, true]) {
+  test(`Agent 主动提问后释放终端和输入状态,等待状态可恢复 (${withTool ? '已有步骤' : '首次澄清'})`, async t => {
+    const question = '找到 A 和 B 两个目标，需要处理哪一个？'
+    const ask = response({ id: 'ask', name: 'ask_user', arguments: JSON.stringify({ question }) })
+    const fixture = mountRuntime(t, { responses: withTool ? [response(commandCall('inspect')), ask] : [ask] })
+    const takeover = []
+    fixture.props.agentTakeoverChange = (terminal, active) => takeover.push([terminal, active])
+    const running = fixture.runAgent()
+    if (withTool) {
+      await until(() => fixture.agent.agentPendingApproval.value)
+      fixture.agent.resolveAgentApproval('execute')
+    }
+    await running
+    const message = fixture.props.messages[0]
+    assert.equal(message.agentStatus, 'waiting-input')
+    assert.equal(message.text, question)
+    assert.equal(message.error, false)
+    assert.equal(message.streaming, false)
+    assert.equal(fixture.answerState.isAsking.value, false)
+    assert.equal(fixture.agent.agentRunActive.value, false)
+    assert.equal(fixture.agent.agentTaskPending(), false)
+    assert.equal(fixture.agent.agentRunStatusLabel(message), '等待你的回复')
+    assert.deepEqual(takeover, [['terminal', true], ['terminal', false]])
+    assert.equal(message.agentSteps.length, withTool ? 1 : 0)
+    const restored = hydrateAiMessagePayload({ ...fixture.assistant, text: message.text, payloadJson: message.payloadJson })
+    assert.equal(restored.agentStatus, 'waiting-input')
+    assert.equal(restored.text, question)
+  })
+}

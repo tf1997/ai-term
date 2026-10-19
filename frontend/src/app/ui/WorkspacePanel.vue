@@ -44,7 +44,6 @@ const props = defineProps<{
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
   agentAllowPatterns?: (patterns: string[], sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
-  agentStepLimit?: number
   agentCommandTimeoutMs?: number
 }>()
 
@@ -159,7 +158,6 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :agent-allow-pattern="agentAllowPattern"
       :agent-allow-patterns="agentAllowPatterns"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
-      :agent-step-limit="agentStepLimit"
       :agent-command-timeout-ms="agentCommandTimeoutMs"
       @select-session="emit('selectWorkspaceSession', $event)"
       @select-config="emit('selectAiConfig', $event)"

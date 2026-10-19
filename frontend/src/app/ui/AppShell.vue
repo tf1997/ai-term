@@ -1174,7 +1174,6 @@ onBeforeUnmount(() => {
       :agent-allow-pattern="persistAgentPattern"
       :agent-allow-patterns="persistAgentPatterns"
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
-      :agent-step-limit="appSettings.agentStepLimit"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
       @select-ai-config="selectAiConfig"
       @configure-ai="editAiConfig()"

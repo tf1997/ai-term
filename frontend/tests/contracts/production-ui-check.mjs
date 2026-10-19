@@ -3291,7 +3291,9 @@ assert(
     Number.isFinite(backendTurnBudget) &&
     frontendTurnBudget < backendTurnBudget &&
     Number(/const PROTECTED_RECENT_TURNS = (\d+)/.exec(agentLoop)?.[1]) >= 6 &&
-    Number(/const DEFAULT_STEP_LIMIT = (\d+)/.exec(agentLoop)?.[1]) >= 25 &&
+    !agentLoop.includes('DEFAULT_STEP_LIMIT') &&
+    agentLoop.includes("state.status = 'waiting-input'") &&
+    agentBackend.includes('ask_user_tool_definition()') &&
     agentLoop.includes('COMPRESSED_OUTPUT_TAIL_CHARS') &&
     /agentAutoExecReadonly: true/.test(userSettings) &&
     agentBackend.includes('自主推进'),
@@ -3348,18 +3350,18 @@ assert(
     /setInterval\(sampleOutput, outputSampleIntervalMs\)/.test(agentLoop) &&
     agentLoop.includes('looksLikeInteractivePrompt') &&
     agentLoop.includes('describeTimeoutHint') &&
-    // 任务预算来自设置中心:空 options 会让设置项形同虚设
+    // 命令超时来自设置中心;旧步数限制不再进入循环
     !/runAgentTask\(goal, deps, \{\}\)/.test(aiPanel) &&
-    /stepLimit: props\.agentStepLimit/.test(agentSession) &&
+    !agentSession.includes('props.agentStepLimit') &&
     /commandTimeoutMs: props\.agentCommandTimeoutMs/.test(agentSession) &&
-    workspacePanel.includes(':agent-step-limit="agentStepLimit"') &&
+    !workspacePanel.includes(':agent-step-limit') &&
     // 三处夹取:旧配置/脏数据、输入框、唯一来源兜底
     settingsStorage.includes('normalizeUserSettings(parsed, windowsPlatform)') &&
     settingsSidebar.includes('normalizeUserSettings(draft, windowsPlatform)') &&
     userSettingsState.includes('normalizeUserSettings(settings, windowsPlatform)') &&
-    userSettings.includes('agentStepLimit: clampAgentStepLimit(settings.agentStepLimit)') &&
+    !userSettings.includes('agentStepLimit:') &&
     userSettings.includes('agentCommandTimeoutSec: clampAgentCommandTimeoutSec(settings.agentCommandTimeoutSec)') &&
     styles.includes('.agent-budget-block'),
-  'Agent task budget contract: the loop must derive its timeout hint from sampled peekOutput, and the step limit / command timeout must flow from settings into runAgentTask, clamped at every entry point.'
+  'Agent timeout contract: timeout hints use sampled output and the configured command timeout; no fixed task step limit is reintroduced.'
 )
 console.log('production-ui-check passed')

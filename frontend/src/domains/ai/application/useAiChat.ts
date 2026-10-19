@@ -7,6 +7,7 @@ import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatAiError, extractPrimaryShellCommand } from '../domain/aiConversation'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
+import { conversationMessageContent } from '../domain/conversationContext'
 import { addTokenUsage } from '../domain/tokenUsage'
 import { MAX_REASONING_CHARS, withAiReasoning } from '../domain/aiReasoning'
 import * as tauri from '../infrastructure/api'
@@ -58,7 +59,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     )
     const conversationMessages = unsummarized
       .slice(-MAX_AI_CONVERSATION_MESSAGES)
-      .map((message) => ({ role: message.role, content: message.text }))
+      .map((message) => ({ role: message.role, content: conversationMessageContent(message) }))
     isAsking.value = true
     stopRequested.value = false
     let streamedAnswer = ''

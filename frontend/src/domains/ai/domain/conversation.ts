@@ -52,7 +52,7 @@ export interface AiMessage {
   agentReasoning?: string
   /** Ordered display events, separate from the model's execution context. */
   agentTimeline?: AgentTimelineEntry[]
-  agentStatus?: 'running' | 'done' | 'stopped' | 'error'
+  agentStatus?: 'running' | 'waiting-input' | 'done' | 'stopped' | 'error'
   stopReason?: string
   /** Agent 启动时绑定的终端连接代次；用于阻止重连后误执行旧任务。 */
   terminalConnectionGeneration?: number

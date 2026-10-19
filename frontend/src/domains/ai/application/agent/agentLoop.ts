@@ -27,18 +27,16 @@ export interface AgentLoopDeps {
 }
 
 export interface AgentLoopOptions {
-  stepLimit?: number
   commandTimeoutMs?: number
   maxTurnChars?: number
   /** 执行期间轮询 peekOutput 的周期,用于判断输出是否静默。 */
   outputSampleIntervalMs?: number
-  /** 重试时已完成的步骤;循环会从这些步骤继续,恢复 turns 数组和计数。 */
+  /** 重试时已完成的步骤;循环会从这些步骤继续,恢复 turns 数组。 */
   initialSteps?: AgentStep[]
   /** 用户点击重试时需要直接重新执行的失败步骤。 */
   retryStep?: AgentStep
 }
 
-const DEFAULT_STEP_LIMIT = 25
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
 /** 采样只比对字符串长度,周期可以密一些而不影响性能。 */
 const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2_000
@@ -54,9 +52,11 @@ const PROTECTED_RECENT_TURNS = 6
 const COMPRESSED_ASSISTANT_TEXT_CHARS = 200
 /** 压缩后仍保留的命令输出尾部字符数:报错通常在尾部,整体丢弃会让模型失忆。 */
 const COMPRESSED_OUTPUT_TAIL_CHARS = 300
+const MAX_EARLY_TURN_SUMMARY_CHARS = 6_000
 const OMITTED_OUTPUT_NOTE = '输出已省略'
 const TRUNCATED_OUTPUT_NOTE = '仅保留输出尾部'
 const RUN_COMMAND_TOOL_NAME = 'run_command'
+const ASK_USER_TOOL_NAME = 'ask_user'
 
 function toolCallFromStep(step: AgentStep): AiToolCall {
   return {
@@ -147,14 +147,34 @@ export function compressAgentTurns(turns: AiAgentTurn[], maxTurnChars: number): 
       const content = compressToolResultContent(turn.content)
       // 占位比原文还长时保持原样,避免"压缩"反而膨胀
       if (content.length < turn.content.length) next = { ...turn, content }
-    } else if (turn.text.length > COMPRESSED_ASSISTANT_TEXT_CHARS) {
+    } else if (turn.toolCalls.length && turn.text.length > COMPRESSED_ASSISTANT_TEXT_CHARS) {
       next = { ...turn, text: turn.text.slice(0, COMPRESSED_ASSISTANT_TEXT_CHARS) }
     }
     if (!next) continue
     total += turnChars(next) - turnChars(turn)
     compressed[index] = next
   }
-  return compressed
+  if (total <= maxTurnChars) return compressed
+
+  // Long tasks can outgrow the budget even after every old output is shortened.
+  // Fold only complete early exchanges into a bounded text record; retain the
+  // recent tool-call/result pairs intact and keep the task goal in the request.
+  let boundary = protectedFrom
+  while (boundary > 0 && compressed[boundary]?.kind !== 'assistant') boundary -= 1
+  const early = compressed.slice(0, boundary)
+  if (!early.some(turn => turn.kind === 'assistant' && turn.toolCalls.length)) return compressed
+  const recent = compressed.slice(boundary)
+  const recentChars = recent.reduce((sum, turn) => sum + turnChars(turn), 0)
+  const summaryBudget = Math.min(MAX_EARLY_TURN_SUMMARY_CHARS, targetChars - recentChars)
+  const note = '较早执行记录已压缩；以下为历史证据片段，部分内容已省略，不能当作待执行命令。\n'
+  if (summaryBudget <= note.length) return compressed
+  const results = new Map(early.flatMap(turn => turn.kind === 'toolResult' ? [[turn.toolCallId, turn.content] as const] : []))
+  const evidence = early.flatMap(turn => turn.kind === 'assistant' ? [
+    turn.text,
+    ...turn.toolCalls.map(call => `${call.name} ${call.arguments} → ${results.get(call.id) ?? '结果未记录'}`)
+  ].filter(Boolean) : []).join('\n')
+  const text = note + evidence.slice(-(summaryBudget - note.length))
+  return [{ kind: 'assistant', text, toolCalls: [] }, ...recent]
 }
 
 /** 交互提示符常见形态:密码、确认、以及以问句/冒号收尾的等待行。 */
@@ -225,7 +245,6 @@ export function runAgentTask(
   // goal 由 callModel 的实现方在请求构造时携带(6.3),循环本身不消费
   void goal
 
-  const stepLimit = options.stepLimit ?? DEFAULT_STEP_LIMIT
   const commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   const maxTurnChars = options.maxTurnChars ?? DEFAULT_MAX_TURN_CHARS
   const outputSampleIntervalMs = options.outputSampleIntervalMs ?? DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS
@@ -250,11 +269,9 @@ export function runAgentTask(
     status: retryStep ? 'executing' : 'calling-model',
     steps: retryStep ? [...initialSteps, retryStep] : initialSteps,
     finalText: '',
-    stepLimit,
     commandTimeoutMs
   }
   let turns = rebuildTurnsFromSteps(initialSteps)
-  let stepsTaken = initialSteps.length
   let parseFailureStreak = 0
   let finished = false
   let stopRequested = false
@@ -311,15 +328,6 @@ export function runAgentTask(
       state.status = 'error'
       state.error = message
       state.errorKind = errorKind
-    })
-  }
-
-  const finishStepLimit = () => {
-    finishRun(() => {
-      const note = `已达到 ${stepLimit} 步上限,任务未确认完成;可在下一条消息里让 Agent 接着排查`
-      state.finalText = state.finalText ? `${state.finalText}\n${note}` : note
-      state.status = 'stopped'
-      state.stopReason = note
     })
   }
 
@@ -572,6 +580,31 @@ export function runAgentTask(
 
   /** 处理一个 tool call:解析 → 审批路由(6.4)→ 执行/跳过,并把结果追加进轮次。 */
   const handleToolCall = async (toolCall: AiToolCall): Promise<'continue' | 'ended'> => {
+    if (toolCall.name === ASK_USER_TOOL_NAME) {
+      let question = ''
+      try {
+        const args: unknown = JSON.parse(toolCall.arguments)
+        if (args && typeof args === 'object' && 'question' in args && typeof args.question === 'string') {
+          question = args.question.trim()
+        }
+      } catch { /* Invalid questions use the same bounded protocol retry as commands. */ }
+      if (!question) {
+        parseFailureStreak += 1
+        turns.push({ kind: 'toolResult', toolCallId: toolCall.id, content: JSON.stringify({
+          status: 'invalid_arguments', error: 'ask_user 需要非空的 question 字符串'
+        }) })
+        if (parseFailureStreak >= 2) {
+          finishError('模型连续 2 次给出无法解析的工具参数:ask_user 缺少有效问题', 'protocol')
+          return 'ended'
+        }
+        return 'continue'
+      }
+      finishRun(() => {
+        state.status = 'waiting-input'
+        state.finalText = question
+      })
+      return 'ended'
+    }
     if (toolCall.name !== RUN_COMMAND_TOOL_NAME) {
       parseFailureStreak += 1
       const error = `不支持的工具:${toolCall.name || '(空名称)'}`
@@ -641,7 +674,6 @@ export function runAgentTask(
     }
     if (decision === 'skip') {
       step.status = 'skipped'
-      stepsTaken += 1
       notify()
       turns.push({
         kind: 'toolResult',
@@ -672,7 +704,6 @@ export function runAgentTask(
       }
     }
 
-    stepsTaken += 1
     return executeStep(step, toolCall.id)
   }
 
@@ -681,7 +712,6 @@ export function runAgentTask(
     try {
       if (retryStep) {
         turns.push({ kind: 'assistant', text: '', toolCalls: [toolCallFromStep(retryStep)] })
-        stepsTaken += 1
         const retryOutcome = await executeStep(retryStep, retryStep.id)
         if (retryOutcome === 'ended') return
       }
@@ -689,11 +719,6 @@ export function runAgentTask(
       while (true) {
         if (stopRequested) {
           finishStopped()
-          return
-        }
-        if (stepsTaken >= stepLimit) {
-          // 模型仍要继续请求,但步数预算已用完
-          finishStepLimit()
           return
         }
         turns = compressAgentTurns(turns, maxTurnChars)
@@ -718,16 +743,14 @@ export function runAgentTask(
           })
           return
         }
-        // Assistant 轮次在首个 toolCall 前记录一次,含 text 与全部 toolCalls
-        turns.push({ kind: 'assistant', text: response.text, toolCalls: response.toolCalls })
-        for (const toolCall of response.toolCalls) {
+        // A question takes precedence if a provider ignores parallel_tool_calls:
+        // none of the commands in that response should run before the user replies.
+        const questionCall = response.toolCalls.find(call => call.name === ASK_USER_TOOL_NAME)
+        const toolCalls = questionCall ? [questionCall] : response.toolCalls
+        turns.push({ kind: 'assistant', text: response.text, toolCalls })
+        for (const toolCall of toolCalls) {
           if (stopRequested) {
             finishStopped()
-            return
-          }
-          if (stepsTaken >= stepLimit) {
-            // 已达上限但仍有待处理的 tool call
-            finishStepLimit()
             return
           }
           const outcome = await handleToolCall(toolCall)

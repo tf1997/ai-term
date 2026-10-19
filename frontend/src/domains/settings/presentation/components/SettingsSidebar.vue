@@ -5,7 +5,7 @@ import type { AgentAllowlistEntry } from '../../../ai/types'
 import { BUILTIN_READONLY_COMMANDS, validateAllowlistPattern } from '../../../ai/index'
 import { isWindowsPlatform } from '../../../../shared/platform/platform'
 import type { AppUserSettings } from '../../domain/settings'
-import { createDefaultUserSettings, MAX_AGENT_COMMAND_TIMEOUT_SEC, MAX_AGENT_STEP_LIMIT, MAX_TERMINAL_FONT_SIZE, MIN_AGENT_COMMAND_TIMEOUT_SEC, MIN_AGENT_STEP_LIMIT, MIN_TERMINAL_FONT_SIZE, normalizeUserSettings } from '../../domain/userSettings'
+import { createDefaultUserSettings, MAX_AGENT_COMMAND_TIMEOUT_SEC, MAX_TERMINAL_FONT_SIZE, MIN_AGENT_COMMAND_TIMEOUT_SEC, MIN_TERMINAL_FONT_SIZE, normalizeUserSettings } from '../../domain/userSettings'
 import { AiConfigPanel } from '../../../ai/views'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
@@ -262,21 +262,9 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
         </label>
         <div class="agent-budget-block">
           <div class="settings-section-head">
-            <strong>任务预算</strong>
-            <span>防死循环与长时间挂起</span>
+            <strong>命令等待</strong>
+            <span>长时间运行时询问是否继续等待</span>
           </div>
-          <label class="settings-field inline">
-            <span>每任务步数上限</span>
-            <input
-              v-model.number="draft.agentStepLimit"
-              type="number"
-              :min="MIN_AGENT_STEP_LIMIT"
-              :max="MAX_AGENT_STEP_LIMIT"
-              aria-label="每个 Agent 任务的最大步数"
-              @change="saveSettings"
-            />
-          </label>
-          <small>到达上限任务收尾,可在下一条消息里让 Agent 接着排查。</small>
           <label class="settings-field inline">
             <span>命令超时(秒)</span>
             <input

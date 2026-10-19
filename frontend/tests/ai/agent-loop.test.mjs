@@ -519,21 +519,65 @@ test('callModel 抛异常:状态 error 且 error 为异常信息', async () => {
   assert.equal(state.errorKind, 'model')
 })
 
-test('步数上限:达到后不再调模型,finalText 带说明', async () => {
+test('任务超过 25 步仍继续,由模型确认完成后结束', { timeout: 2000 }, async () => {
   let modelCalls = 0
   const { deps } = makeDeps({
     callModel: async () => {
       modelCalls += 1
+      if (modelCalls === 61) return turnResponse('验证完成')
       return turnResponse(`第${modelCalls}轮`, [toolCall(`c${modelCalls}`, 'echo x')])
     }
   })
-  const state = await runAgentTask('测试', deps, { stepLimit: 2 }).done
+  const state = await runAgentTask('测试', deps).done
 
-  assert.equal(state.status, 'stopped')
-  assert.equal(modelCalls, 2)
-  assert.equal(state.steps.length, 2)
-  assert.ok(state.finalText.includes('已达到 2 步上限'))
-  assert.ok(state.finalText.includes('任务未确认完成'))
+  assert.equal(state.status, 'done')
+  assert.equal(modelCalls, 61)
+  assert.equal(state.steps.length, 60)
+  assert.equal(state.finalText, '验证完成')
+})
+
+test('ask_user 暂停等待回复,保留此前结果并停止后续模型与命令调用', async () => {
+  const { calls, callModel } = scriptedModel([
+    turnResponse('', [toolCall('inspect', 'ls')]),
+    turnResponse('', [{ id: 'question', name: 'ask_user', arguments: JSON.stringify({ question: '已找到两个部署目录，要更新 A 还是 B？' }) }])
+  ])
+  const commands = []
+  const { deps } = makeDeps({ callModel, startCommand: command => { commands.push(command); return makeSimpleHandle({ output: 'A B' }) } })
+  const state = await runAgentTask('更新服务', deps).done
+  assert.equal(state.status, 'waiting-input')
+  assert.equal(state.finalText, '已找到两个部署目录，要更新 A 还是 B？')
+  assert.equal(state.steps.length, 1)
+  assert.equal(state.steps[0].output, 'A B')
+  assert.equal(calls.length, 2)
+  assert.deepEqual(commands, ['ls'])
+})
+
+test('同轮含问题与命令时先等待回复,不执行任何同批命令', async () => {
+  for (const questionFirst of [true, false]) {
+    const question = { id: 'question', name: 'ask_user', arguments: JSON.stringify({ question: '选择哪个目标？' }) }
+    const command = toolCall('change', 'touch target')
+    const { deps } = makeDeps({
+      callModel: async () => turnResponse('', questionFirst ? [question, command] : [command, question]),
+      startCommand: () => { assert.fail('用户回复前不能执行同批命令') }
+    })
+    const state = await runAgentTask('处理目标', deps).done
+    assert.equal(state.status, 'waiting-input')
+    assert.deepEqual(state.steps, [])
+  }
+})
+
+test('无效 ask_user 参数回传协议错误,连续两次错误后停止', async () => {
+  for (const args of ['{bad', '{}', 'null', '{"question":42}', '{"question":"  "}']) {
+    const { calls, callModel } = scriptedModel(Array.from({ length: 2 }, (_, index) => turnResponse('', [
+      { id: `question-${index}`, name: 'ask_user', arguments: args }
+    ])))
+    const { deps } = makeDeps({ callModel })
+    const state = await runAgentTask('澄清', deps).done
+    assert.equal(state.status, 'error')
+    assert.equal(state.errorKind, 'protocol')
+    assert.equal(calls.length, 2)
+    assert.equal(JSON.parse(calls[1].turns[1].content).status, 'invalid_arguments')
+  }
 })
 
 test('超时后选择继续等待:命令完成后任务继续', async () => {
@@ -689,6 +733,30 @@ test('轮次压缩留出余量,后续小增量保持历史前缀不变', () => {
   assert.deepEqual(compressed.slice(-6), recent, '最近的证据保持完整')
   const next = [...compressed, { kind: 'assistant', text: '新进展'.repeat(100), toolCalls: [] }]
   assert.equal(compressAgentTurns(next, 4000), next, '未再次超过触发阈值就不改写历史')
+})
+
+test('长任务持续压缩早期记录,不会累积越过后端预算或留下孤立工具结果', () => {
+  let turns = []
+  let compacted = false
+  for (let index = 0; index < 400; index++) {
+    const pair = [
+      { kind: 'assistant', text: `检查 ${index}`, toolCalls: [toolCall(`c${index}`, `inspect-${index}`)] },
+      { kind: 'toolResult', toolCallId: `c${index}`, content: JSON.stringify({ output: 'log'.repeat(400) + `result-${index}`, exitCode: 0 }) }
+    ]
+    turns = compressAgentTurns([...turns, ...pair], 24_000)
+    assert.deepEqual(turns.slice(-2), pair, '最新命令和结果必须保持完整')
+    const chars = turns.reduce((sum, turn) => sum + (turn.kind === 'toolResult' ? turn.content.length : turn.text.length + turn.toolCalls.reduce((n, call) => n + call.arguments.length, 0)), 0)
+    assert.ok(chars <= 24_000, `第 ${index} 步的上下文超出软预算: ${chars}`)
+    const pending = new Set()
+    for (const turn of turns) {
+      if (turn.kind === 'assistant') turn.toolCalls.forEach(call => pending.add(call.id))
+      else assert.ok(pending.delete(turn.toolCallId), '结果必须有对应工具调用')
+    }
+    assert.equal(pending.size, 0)
+    compacted ||= turns.some(turn => turn.kind === 'assistant' && turn.text.includes('较早执行记录已压缩'))
+  }
+  assert.ok(compacted)
+  assert.ok(JSON.stringify(turns).includes('result-399'))
 })
 
 test('轮次压缩:幂等,完整保留的输出与跳过状态不会被标成"已省略"', () => {

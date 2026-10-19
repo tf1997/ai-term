@@ -143,7 +143,10 @@ const activityStepLabel = computed(() => {
 const composerPlaceholder = computed(() => {
   if (!props.workspaceSessionId) return '正在载入全局 AI 会话...'
   if (!hasUsableConfig.value) return '选择或配置模型'
-  if (panelMode.value === 'agent') return '描述任务目标...'
+  if (panelMode.value === 'agent') {
+    const latest = props.messages.filter(message => message.workspaceSessionId === props.workspaceSessionId).slice(-1)[0]
+    return latest?.agentStatus === 'waiting-input' ? '回复上方问题，继续任务...' : '描述任务目标...'
+  }
   return '输入问题'
 })
 
@@ -462,7 +465,8 @@ function stepOwnsError(message: AiMessage) {
 function taskSummary(message: AiMessage) {
   if (!message.agentStatus || message.agentStatus === 'running') return ''
   if (!message.agentSteps?.length && message.agentStatus === 'done') return ''
-  const label = message.agentStatus === 'done' ? '任务已结束' : message.agentStatus === 'stopped' ? '任务已停止' : '任务中断'
+  const label = message.agentStatus === 'waiting-input' ? '等待你的回复'
+    : message.agentStatus === 'done' ? '任务已结束' : message.agentStatus === 'stopped' ? '任务已停止' : '任务中断'
   return `${label}${message.agentSteps?.length ? ` · ${message.agentSteps.length} 个步骤` : ''}`
 }
 

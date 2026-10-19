@@ -14,7 +14,7 @@ use crate::domain::ai::chat::{
     conversation_messages_for_payload, conversation_summary_message, extract_chat_answer,
     extract_reasoning_delta, extract_stream_delta, is_cancelled, parse_model_error, reject_html_response,
     stream_usage_options, truncate_for_prompt, AiCancelToken, AiConversationRole,
-    AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
+    AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS, SHELL_COMMAND_FORMAT_INSTRUCTION,
 };
 use crate::domain::ai::stream::{
     is_stream_done, open_stream, sse_data_payloads, wait_for_stream, SseEventBuffer, StreamStart,
@@ -201,7 +201,7 @@ fn build_agent_payload(
     let mut payload = json!({
         "model": request.config.model,
         "messages": messages,
-        "tools": [run_command_tool_definition()],
+        "tools": [run_command_tool_definition(), ask_user_tool_definition()],
         "tool_choice": "auto",
         "parallel_tool_calls": false,
         "temperature": 0.2,
@@ -217,11 +217,14 @@ fn build_agent_system_prompt(custom_prompt: &str) -> String {
     [
         custom_prompt.trim(),
         "你是 AI Term 的终端操作 Agent,通过 run_command 工具在用户当前终端执行命令来完成用户任务。",
-        "工作方式:自主推进。先依据已有上下文定位缺口,用有针对性的只读检查验证;只读检查通常自动执行,可连续多次调用,不要因为担心打扰而提前收尾。证据足够即收尾,避免重复查询或与目标无关的全面巡检;证据不足时继续查,不要猜测。",
-        "每轮只调用一次 run_command,根据输出和退出码决定下一步。工具调用的 reason 用一句话说明目的,不再用正文重复计划或历史输出。",
+        "工作方式:在用户要求的范围内自主推进。先判断用户是在提问、排查还是要求修改;有明确且已获授权的下一步就执行,根据结果调整计划,不要把咨询或排查擅自扩大为修改任务。",
+        "需要用户回复时调用 ask_user 并暂停:目标或关键条件不明确且无法从已有上下文或只读检查查明、存在需要用户选择的方案或取舍、下一步超出已获授权的范围。问题要具体,说明缺少什么以及为什么影响下一步,有合适选项时写在问题里。不要猜测用户偏好,也不要在提出问题后继续执行依赖该答案的命令。",
+        "不需要用户决策的信息应先自行检查;能继续就继续,任务完成或已充分回答问题时直接给出结论。没有固定步数上限,但不得重复无进展的检查;遇到阻碍要换方法,确需用户帮助时用 ask_user 说明当前进度和阻碍。",
+        "每轮只调用一个工具。调用 run_command 后根据输出和退出码决定下一步;reason 用一句话说明目的,不再用正文重复计划或历史输出。",
         "删除、覆盖、重启、服务变更等破坏性操作之前,必须先只读确认目标存在且正确,在 reason 说明依据,等待用户审批。",
         "命令完整可直接执行,不用交互式编辑器(vim/nano)或分页器(less)。长输出用过滤、head/tail 或行数限制,优先获取与问题相关的片段。",
-        "结果标注 skipped 时不要原样重发;改用其他方法,或在需要用户决策、授权或补充无法查到的信息时询问。",
+        SHELL_COMMAND_FORMAT_INSTRUCTION,
+        "结果标注 skipped 时不要原样重发;改用其他方法,需要用户决策或补充无法查到的信息时调用 ask_user。",
         "以最新工具结果和终端内容为准;任务完成或确实无法继续时,简洁说明结果、关键证据和遗留问题。",
     ]
     .iter()
@@ -244,6 +247,23 @@ fn run_command_tool_definition() -> Value {
                     "reason": { "type": "string", "description": "为什么执行这条命令(一句话,展示给用户)" }
                 },
                 "required": ["command"]
+            }
+        }
+    })
+}
+
+fn ask_user_tool_definition() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": "向用户提出具体问题并暂停任务,等待下一条回复。用于无法自行查明的必要信息、方案选择或任务范围确认。问题中说明已有进度、所缺信息,可给出简短选项。命令执行审批仍由 run_command 的审批流程处理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "需要用户回答的问题,可包含简短选项及必要背景" }
+                },
+                "required": ["question"]
             }
         }
     })
@@ -775,6 +795,14 @@ mod tests {
             Some("auto")
         );
         assert_eq!(
+            payload.pointer("/tools/1/function/name").and_then(Value::as_str),
+            Some("ask_user")
+        );
+        assert_eq!(
+            payload["tools"][1]["function"]["parameters"]["required"],
+            json!(["question"])
+        );
+        assert_eq!(
             payload
                 .pointer("/parallel_tool_calls")
                 .and_then(Value::as_bool),
@@ -796,6 +824,8 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap();
         assert!(system.contains("终端操作 Agent"));
+        assert!(system.contains("调用 ask_user 并暂停"));
+        assert!(system.contains("不要在提出问题后继续执行依赖该答案的命令"));
         let user = payload
             .pointer("/messages/1/content")
             .and_then(Value::as_str)

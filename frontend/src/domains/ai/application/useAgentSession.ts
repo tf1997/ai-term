@@ -15,6 +15,7 @@ import { canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoAp
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { createAgentRunSnapshot } from '../domain/agentRunSnapshot'
+import { conversationMessageContent } from '../domain/conversationContext'
 import { mergeMessageUsage } from '../domain/tokenUsage'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatSelectedLineRange, formatAiError, createMessage, isSensitiveAgentCommand } from '../domain/aiConversation'
 import * as tauri from '../infrastructure/api'
@@ -95,7 +96,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     agentStopHandle?.()
   }
 
-  function agentStatusFromRun(state: AgentRunState): 'running' | 'done' | 'stopped' | 'error' {
+  function agentStatusFromRun(state: AgentRunState): NonNullable<AiMessage['agentStatus']> {
+    if (state.status === 'waiting-input') return 'waiting-input'
     if (state.status === 'done') return 'done'
     if (state.status === 'stopped') return 'stopped'
     if (state.status === 'error') return 'error'
@@ -154,6 +156,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   const AGENT_RUN_STATUS_LABELS: Record<NonNullable<AiMessage['agentStatus']>, string> = {
     running: '任务执行中',
+    'waiting-input': '等待你的回复',
     done: '任务完成',
     stopped: '任务已停止',
     error: '任务出错'
@@ -313,7 +316,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     )
     const conversationMessages = unsummarized
       .slice(-MAX_AI_CONVERSATION_MESSAGES)
-      .map((message) => ({ role: message.role, content: message.text }))
+      .map((message) => ({ role: message.role, content: conversationMessageContent(message) }))
     const terminalContext = resolveTerminalContext(
       options.terminalContextMode?.() ?? 'auto', props.terminalSnapshot, aiCommandHistory(), selectedContext
     )
@@ -537,7 +540,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       }
     }
 
-    // 步数上限与命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
+    // 命令超时来自设置中心;未配置时沿用 agentLoop 的默认值
     // 重试时传入已完成的步骤,恢复执行上下文
     // The task owns the terminal from this point until every model/approval/
     // command promise has settled. The host uses this signal to block manual
@@ -547,7 +550,6 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     let takeoverAcquired = true
     try {
       const task = runAgentTask(goal, deps, {
-        stepLimit: props.agentStepLimit,
         commandTimeoutMs: props.agentCommandTimeoutMs,
         initialSteps: assistantMessage.agentSteps
           ?.filter(step => step.status === 'completed' || step.status === 'skipped')
@@ -570,7 +572,6 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           requestConfig,
           apiKey
         )
-        void maybeCompactConversation(requestWorkspaceSessionId)
       }
     } catch (error) {
       const detail = `Agent 任务异常:${formatAiError(error)}`
@@ -616,6 +617,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       finishAnswerTimer(assistantMessage.id)
       if (currentAssistantMessageId.value === assistantMessage.id) currentAssistantMessageId.value = ''
       isAsking.value = false
+      void maybeCompactConversation(requestWorkspaceSessionId)
     }
   }
 

@@ -3,6 +3,7 @@ import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
 import type { AiProviderConfig } from '../domain/provider'
 import { MAX_AI_COMMAND_HISTORY, formatSessionDisplayTitle, isAutoSessionName, normalizeGeneratedSessionTitle } from '../domain/aiConversation'
 import { planConversationCompaction } from '../domain/conversationCompaction'
+import { hasAgentExecutionContext } from '../domain/conversationContext'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
 import * as tauri from '../infrastructure/api'
 
@@ -42,7 +43,8 @@ export function useAiConversationContext(props: Readonly<AiPanelProps>, emit: Ai
       summary = ''
     }
     const eligible = sessionMessages.filter(
-      (message, index) => (cutoff < 0 || index < cutoff) && !message.streaming && !message.error && message.text.trim()
+      (message, index) => (cutoff < 0 || index < cutoff) && !message.streaming
+        && (hasAgentExecutionContext(message) || (!message.error && message.text.trim()))
     )
     const boundary = summary && lastId ? eligible.findIndex((message) => message.id === lastId) + 1 : 0
     return { summary, eligibleCount: eligible.length, unsummarized: eligible.slice(boundary) }

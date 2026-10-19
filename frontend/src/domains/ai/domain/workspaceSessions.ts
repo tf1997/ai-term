@@ -103,7 +103,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       agentSteps,
       agentTimeline: normalizeAgentTimeline(payload.agentTimeline),
       ...(agentReasoning ? { agentReasoning } : {}),
-      agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error'
+      agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error' || payload.agentStatus === 'waiting-input'
         ? payload.agentStatus
         : 'done',
       ...(errorKind ? { errorKind } : {}),

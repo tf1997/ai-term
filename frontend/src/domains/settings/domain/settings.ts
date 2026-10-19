@@ -8,6 +8,5 @@ export interface AppUserSettings {
   terminalTheme: TerminalTheme
   defaultShell: string
   agentAutoExecReadonly: boolean
-  agentStepLimit: number
   agentCommandTimeoutSec: number
 }

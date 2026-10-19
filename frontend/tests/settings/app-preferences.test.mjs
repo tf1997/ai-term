@@ -103,7 +103,7 @@ test('设置唯一更新入口再次校验预算，并持久化实际生效的�
   const draft = { ...appSettings.value, terminalFontSize: 99, agentStepLimit: 99, agentCommandTimeoutSec: 1, agentAutoExecReadonly: false }
   assert.equal(updateUserSettings(draft), true)
   assert.equal(appSettings.value.terminalFontSize, 22)
-  assert.equal(appSettings.value.agentStepLimit, 25)
+  assert.equal(appSettings.value.agentStepLimit, undefined)
   assert.equal(appSettings.value.agentCommandTimeoutSec, 15)
   assert.equal(appSettings.value.agentAutoExecReadonly, false)
   assert.equal(appSettings.value.defaultShell, 'pwsh')

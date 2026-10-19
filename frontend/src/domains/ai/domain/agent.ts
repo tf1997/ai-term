@@ -113,6 +113,8 @@ export type AgentRunStatus =
   | 'awaiting-approval'
   | 'executing'
   | 'awaiting-user'
+  /** Model requested a reply; the terminal is released and the composer accepts input. */
+  | 'waiting-input'
   | 'done'
   | 'stopped'
   | 'error'
@@ -121,7 +123,6 @@ export interface AgentRunState {
   status: AgentRunStatus
   steps: AgentStep[]
   finalText: string
-  stepLimit: number
   /** 单条命令等待多久后询问用户(与 deadlineAt 配合显示倒计时)。 */
   commandTimeoutMs: number
   /** 本次运行内所有模型请求的累计用量;网关从未上报时缺省。 */

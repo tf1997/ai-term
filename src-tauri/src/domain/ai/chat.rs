@@ -29,6 +29,7 @@ pub(crate) const MAX_CONVERSATION_SUMMARY_CHARS: usize = 2_000;
 const MAX_COMPACT_SOURCE_MESSAGE_CHARS: usize = 1_500;
 const MAX_COMPACT_SOURCE_TOTAL_CHARS: usize = 12_000;
 const MAX_KEY_LINES: usize = 36;
+pub(crate) const SHELL_COMMAND_FORMAT_INSTRUCTION: &str = "禁止生成或执行 heredoc 命令（包括 <<EOF、<<'EOF'、<<-EOF 等形式），也不要通过 bash -c、sh -c 等包装间接使用 heredoc。需要多行文本时，使用 printf 配合正确的 shell 引号和转义，或使用 python -c 等不依赖 heredoc 的方式。";
 pub(crate) const AI_TERM_CLIENT_NAME: &str = "ai-term";
 pub(crate) const AI_TERM_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AI_TERM_USER_AGENT: &str = concat!("ai-term/", env!("CARGO_PKG_VERSION"));
@@ -553,6 +554,7 @@ fn build_system_prompt(custom_prompt: &str) -> String {
         "必须优先依据【关键上下文摘要】、【当前终端内容】和【历史命令】回答；不要臆造不存在的服务器状态。",
         "当用户需要操作命令时，把可执行命令放在单独的 fenced code block 中，并使用 bash 或 shell 作为语言，例如 ```bash。",
         "代码块里只放命令，不要把解释文字、提示符、Markdown 列表符号混入命令。",
+        SHELL_COMMAND_FORMAT_INSTRUCTION,
         "危险操作先解释风险，再给出更安全的只读检查命令；只有用户明确要求执行破坏性操作时才给危险命令。",
         "回答要短、可执行、面向终端排障；如果上下文不足，先给出用于确认环境的命令。",
     ]

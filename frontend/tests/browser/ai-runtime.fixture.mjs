@@ -49,6 +49,11 @@ export function installAiRuntimeFixture(props) {
       ? { text, toolCalls, contextCompressed: false, contextChars: 0 }
       : { answer: text, contextCompressed: false, contextChars: 0, historyCount: 0 })
   }
+  runtime.askUser = question => {
+    const call = runtime.requests.shift()
+    if (!call || call.cmd !== 'ai_agent_turn_stream') throw Error('No Agent request is pending')
+    accept(call, { text: '', toolCalls: [{ id: 'ask-user', name: 'ask_user', arguments: JSON.stringify({ question }) }], contextCompressed: false, contextChars: 0 })
+  }
   runtime.stream = (kind, delta) => {
     const requestId = runtime.requests[0]?.requestId
     if (!requestId) throw Error('No model request is pending')

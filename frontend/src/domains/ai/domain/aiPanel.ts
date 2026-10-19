@@ -34,7 +34,6 @@ export interface AiPanelProps {
   agentAllowPatterns?: (patterns: string[], sourceCommand: string) => Promise<void>
   agentBuiltinReadonlyEnabled?: boolean
   /** 每个任务的最大步数(设置项);未传时用 agentLoop 的默认值。 */
-  agentStepLimit?: number
   /** 单条命令等待多久后询问用户(设置项);未传时用 agentLoop 的默认值。 */
   agentCommandTimeoutMs?: number
 }
