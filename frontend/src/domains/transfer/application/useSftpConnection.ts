@@ -40,13 +40,19 @@ export function boundedOperation<T>(
   timeout: number,
   signal: AbortSignal,
   onStop: () => void = () => {},
+  options: {
+    timeoutMessage?: string
+    subscribeActivity?: (touch: () => void) => () => void
+  } = {},
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     let settled = false
+    let unsubscribeActivity: (() => void) | undefined
     const finish = (callback: () => void) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      unsubscribeActivity?.()
       signal.removeEventListener('abort', abort)
       callback()
     }
@@ -55,14 +61,19 @@ export function boundedOperation<T>(
         try { onStop() } catch { /* Cleanup must not prevent cancellation. */ }
         reject(new Error('操作已取消'))
       })
-    const timer = setTimeout(
-      () =>
-        finish(() => {
-          try { onStop() } catch { /* The timeout still ends the operation. */ }
-          reject(new Error('连接超时，请重试或手动指定目标。'))
-        }),
-      Math.max(1, timeout),
-    )
+    const expire = () =>
+      finish(() => {
+        try { onStop() } catch { /* The timeout still ends the operation. */ }
+        reject(new Error(options.timeoutMessage ?? '连接超时，请重试或手动指定目标。'))
+      })
+    let timer = setTimeout(expire, Math.max(1, timeout))
+    let deadline = performance.now() + timeout
+    unsubscribeActivity = options.subscribeActivity?.(() => {
+      if (settled || performance.now() >= deadline) return
+      deadline = performance.now() + timeout
+      clearTimeout(timer)
+      timer = setTimeout(expire, Math.max(1, timeout))
+    })
     signal.addEventListener('abort', abort, { once: true })
     if (signal.aborted) {
       abort()

@@ -17,6 +17,10 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
+        Self::start_with_args(&[])
+    }
+
+    fn start_with_args(options: &[&str]) -> Self {
         let python = std::env::var_os("AI_TERM_SFTP_FIXTURE_PYTHON").expect(
             "set AI_TERM_SFTP_FIXTURE_PYTHON to an isolated Python with paramiko installed",
         );
@@ -42,6 +46,7 @@ impl Fixture {
             .arg(&root)
             .arg("--audit")
             .arg(&audit)
+            .args(options)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(File::create(&error_log).unwrap());
@@ -330,6 +335,285 @@ fn native_failed_write_is_not_replayed_on_another_route_or_cli_backend() {
 }
 
 #[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn parallel_folder_upload_preserves_nested_files_and_monotonic_progress() {
+    let fixture = Fixture::start_with_args(&["--write-delay-ms", "5"]);
+    let source = fixture.directory.join("many files");
+    fs::create_dir_all(source.join("nested/empty")).unwrap();
+    for index in 0..64 {
+        fs::write(
+            source.join(format!("nested/file {index}.bin")),
+            vec![index as u8; 32 * 1024],
+        )
+        .unwrap();
+    }
+    let large = vec![0xab; 8 * 1024 * 1024];
+    fs::write(source.join("large.bin"), &large).unwrap();
+    fs::write(source.join("empty.txt"), []).unwrap();
+    let mut updates = Vec::new();
+    let start = Instant::now();
+    let result = with_test_known_hosts(fixture.known_hosts.clone(), || {
+        upload_path_with_progress(
+            &fixture.profile(),
+            source.to_str().unwrap(),
+            "/",
+            &SftpTargetOverride::default(),
+            None,
+            Some(&mut |update| updates.push(update)),
+        )
+    })
+    .unwrap();
+    eprintln!(
+        "folder upload: {} ms, {} connections",
+        start.elapsed().as_millis(),
+        fixture.event_count("connect")
+    );
+    assert!(result.is_dir);
+    assert_eq!(fixture.event_count("connect"), 4);
+    assert_eq!(
+        fixture.event_count("open"),
+        66,
+        "each file is uploaded once"
+    );
+    let uploaded = fixture.root.join("many files");
+    assert!(uploaded.join("nested/empty").is_dir());
+    assert!(fs::read(uploaded.join("empty.txt")).unwrap().is_empty());
+    assert_eq!(fs::read(uploaded.join("large.bin")).unwrap(), large);
+    for index in 0..64 {
+        assert_eq!(
+            fs::read(uploaded.join(format!("nested/file {index}.bin"))).unwrap(),
+            vec![index as u8; 32 * 1024]
+        );
+    }
+    let counts: Vec<_> = updates
+        .iter()
+        .filter_map(|update| update.transferred_bytes)
+        .collect();
+    assert!(counts.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(counts.last(), Some(&(10 * 1024 * 1024)));
+    assert_eq!(updates.last().unwrap().percent, Some(100));
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn folder_upload_degrades_to_one_connection_when_server_limits_sessions() {
+    let fixture = Fixture::start_with_args(&["--max-connections", "1"]);
+    let source = fixture.directory.join("limited");
+    fs::create_dir(&source).unwrap();
+    for index in 0..12 {
+        fs::write(source.join(format!("{index}.txt")), b"payload").unwrap();
+    }
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        upload_path(
+            &fixture.profile(),
+            source.to_str().unwrap(),
+            "/",
+            &SftpTargetOverride::default(),
+        )
+    })
+    .unwrap();
+    assert_eq!(fixture.event_count("connect"), 1);
+    assert_eq!(fixture.event_count("connection-rejected"), 1);
+    for index in 0..12 {
+        assert_eq!(
+            fs::read(fixture.root.join(format!("limited/{index}.txt"))).unwrap(),
+            b"payload"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+async fn idle_timeout_stops_all_parallel_upload_workers() {
+    let fixture = Fixture::start();
+    let source = fixture.directory.join("stalled");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("stall-write.txt"), vec![0; 1024 * 1024]).unwrap();
+    for index in 0..12 {
+        fs::write(source.join(format!("{index}.txt")), b"ok").unwrap();
+    }
+    let profile = fixture.profile();
+    let known_hosts = fixture.known_hosts.clone();
+    let state = crate::app::state::AppState::default();
+    let result = crate::app::sftp_task::run_sftp_transfer_task(
+        &state,
+        None,
+        Duration::from_secs(2),
+        async { Ok(profile) },
+        move |profile, token, activity| {
+            with_test_known_hosts(known_hosts, || {
+                upload_path_with_progress(
+                    &profile,
+                    source.to_str().unwrap(),
+                    "/",
+                    &SftpTargetOverride::default(),
+                    Some(&token),
+                    Some(&mut |_| activity.touch()),
+                )
+            })
+        },
+    )
+    .await;
+    assert!(result.unwrap_err().contains("no progress"));
+    assert_eq!(state.active_task_count(), 0);
+    assert_eq!(fixture.event_count("stall-write"), 1);
+    let count = fixture.event_count("open");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        fixture.event_count("open"),
+        count,
+        "no late uploads after timeout"
+    );
+    assert_eq!(
+        fixture.event_count("disconnect"),
+        fixture.event_count("connect")
+    );
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn upload_close_error_is_reported_instead_of_false_success() {
+    let fixture = Fixture::start();
+    let source = fixture.directory.join("fail-close.txt");
+    fs::write(&source, b"payload").unwrap();
+    let result = with_test_known_hosts(fixture.known_hosts.clone(), || {
+        upload_file(
+            &fixture.profile(),
+            source.to_str().unwrap(),
+            "/",
+            &SftpTargetOverride::default(),
+        )
+    });
+    assert!(format!("{:#}", result.unwrap_err()).contains("failed to close"));
+    assert_eq!(
+        fixture.event_count("open"),
+        1,
+        "a failed upload is never replayed"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+async fn large_upload_with_real_progress_outlives_the_initial_idle_budget() {
+    let fixture = Fixture::start_with_args(&["--write-delay-ms", "20"]);
+    let source = fixture.directory.join("large.bin");
+    let bytes = vec![0xa5; 4 * 1024 * 1024];
+    fs::write(&source, &bytes).unwrap();
+    let profile = fixture.profile();
+    let known_hosts = fixture.known_hosts.clone();
+    let state = crate::app::state::AppState::default();
+    let started = Instant::now();
+    crate::app::sftp_task::run_sftp_transfer_task(
+        &state,
+        None,
+        Duration::from_secs(1),
+        async { Ok(profile) },
+        move |profile, token, activity| {
+            with_test_known_hosts(known_hosts, || {
+                upload_path_with_progress(
+                    &profile,
+                    source.to_str().unwrap(),
+                    "/",
+                    &SftpTargetOverride::default(),
+                    Some(&token),
+                    Some(&mut |_| activity.touch()),
+                )
+            })
+        },
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() > Duration::from_secs(2));
+    assert_eq!(fs::read(fixture.root.join("large.bin")).unwrap(), bytes);
+    assert_eq!(state.active_task_count(), 0);
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn compare_serial_and_parallel_many_file_uploads() {
+    let mut elapsed = Vec::new();
+    for max_connections in ["1", "4"] {
+        let fixture = Fixture::start_with_args(&[
+            "--write-delay-ms",
+            "10",
+            "--max-connections",
+            max_connections,
+        ]);
+        let source = fixture.directory.join("batch");
+        fs::create_dir(&source).unwrap();
+        for index in 0..200 {
+            fs::write(source.join(format!("{index}.bin")), vec![index as u8; 8192]).unwrap();
+        }
+        let started = Instant::now();
+        with_test_known_hosts(fixture.known_hosts.clone(), || {
+            upload_path(
+                &fixture.profile(),
+                source.to_str().unwrap(),
+                "/",
+                &SftpTargetOverride::default(),
+            )
+        })
+        .unwrap();
+        elapsed.push(started.elapsed());
+        assert_eq!(
+            fixture.event_count("connect"),
+            max_connections.parse::<usize>().unwrap()
+        );
+        assert_eq!(fixture.event_count("open"), 200);
+        for index in 0..200 {
+            assert_eq!(
+                fs::read(fixture.root.join(format!("batch/{index}.bin"))).unwrap(),
+                vec![index as u8; 8192]
+            );
+        }
+    }
+    // Report timings, but do not impose machine-load-sensitive speed assertions.
+    eprintln!(
+        "200-file fixture (10 ms/write): serial {:?}, parallel {:?}, speedup {:.2}x",
+        elapsed[0],
+        elapsed[1],
+        elapsed[0].as_secs_f64() / elapsed[1].as_secs_f64()
+    );
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn failed_parallel_upload_stops_peers_without_replaying_files() {
+    let fixture = Fixture::start_with_args(&["--write-delay-ms", "5"]);
+    let source = fixture.directory.join("failure");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("fail-write.txt"), vec![1; 64 * 1024]).unwrap();
+    for index in 0..32 {
+        fs::write(source.join(format!("{index}.txt")), vec![2; 64 * 1024]).unwrap();
+    }
+    let mut completed = false;
+    let result = with_test_known_hosts(fixture.known_hosts.clone(), || {
+        upload_path_with_progress(
+            &fixture.profile(),
+            source.to_str().unwrap(),
+            "/",
+            &SftpTargetOverride::default(),
+            None,
+            Some(&mut |update| {
+                completed |= update.text.starts_with("传输完成");
+            }),
+        )
+    });
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(error.contains(SFTP_ACTION_STARTED));
+    assert!(
+        !error.contains("cancelled"),
+        "preserve the failing worker's original error: {error}"
+    );
+    assert!(!completed);
+    let opens = fixture.event_count("open");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(fixture.event_count("open"), opens);
+    assert_eq!(fixture.event_count("connect"), 4, "no retry connections");
+    assert_eq!(fixture.event_count("disconnect"), 4);
+}
+
+#[test]
 #[ignore = "requires isolated Python/paramiko and OpenSSH sftp loopback fixture"]
 fn system_sftp_protocol_listing_and_cancellation_close_ssh_descendants() {
     let fixture = Fixture::start();
@@ -392,6 +676,35 @@ fn system_sftp_deadline_without_task_id_stops_stalled_child() {
         assert_eq!(fixture.event_count("stall-readdir"), 1);
         wait_event(&fixture.audit, "disconnect");
     });
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko and OpenSSH sftp loopback fixture"]
+fn system_sftp_upload_progress_extends_its_process_watchdog() {
+    let fixture = Fixture::start_with_args(&["--write-delay-ms", "20"]);
+    let source = fixture.directory.join("cli-large.bin");
+    let bytes = vec![0x7b; 4 * 1024 * 1024];
+    fs::write(&source, &bytes).unwrap();
+    let started = Instant::now();
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        run_sftp_launch_plan_with_progress_ref(
+            fixture.cli_plan(),
+            vec![
+                format!(
+                    "put {} /cli-large.bin",
+                    quote_sftp_path(source.to_str().unwrap()).unwrap()
+                ),
+                "bye".into(),
+            ],
+            Duration::from_secs(2),
+            None,
+            &mut None,
+        )
+    })
+    .unwrap();
+    assert!(started.elapsed() > Duration::from_secs(2));
+    assert_eq!(fs::read(fixture.root.join("cli-large.bin")).unwrap(), bytes);
+    wait_event(&fixture.audit, "disconnect");
 }
 
 #[test]

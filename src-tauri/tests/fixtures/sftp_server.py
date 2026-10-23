@@ -19,6 +19,8 @@ import paramiko
 parser = argparse.ArgumentParser()
 parser.add_argument("--root", required=True)
 parser.add_argument("--audit", required=True)
+parser.add_argument("--write-delay-ms", type=int, default=0)
+parser.add_argument("--max-connections", type=int, default=0)
 args = parser.parse_args()
 ROOT = Path(args.root).resolve()
 AUDIT = Path(args.audit)
@@ -67,9 +69,26 @@ class Handle(paramiko.SFTPHandle):
 
     def write(self, offset, data):
         audit("write", path=self.path.name, length=len(data))
+        if self.path.name == "stall-write.txt":
+            audit("stall-write")
+            while self.transport.is_active():
+                time.sleep(0.01)
+            return paramiko.SFTP_FAILURE
+        if args.write_delay_ms:
+            time.sleep(args.write_delay_ms / 1000)
         result = super().write(offset, data)
         if self.path.name == "fail-write.txt":
             self.transport.close()
+        return result
+
+    def close(self):
+        result = super().close()
+        audit("close", path=self.path.name)
+        if self.path.name == "fail-close.txt":
+            # Paramiko ignores SFTPHandle.close's return code. Drop transport
+            # before the close acknowledgement to simulate an unconfirmed close.
+            self.transport.close()
+            return paramiko.SFTP_FAILURE
         return result
 
 
@@ -155,9 +174,14 @@ class Files(paramiko.SFTPServerInterface):
 
 
 KEY = paramiko.RSAKey.generate(2048)
+CONNECTIONS = threading.BoundedSemaphore(args.max_connections) if args.max_connections else None
 
 
 def serve(client):
+    if CONNECTIONS and not CONNECTIONS.acquire(blocking=False):
+        audit("connection-rejected")
+        client.close()
+        return
     transport = paramiko.Transport(client)
     try:
         audit("connect")
@@ -175,6 +199,8 @@ def serve(client):
         transport.close()
         client.close()
         audit("disconnect")
+        if CONNECTIONS:
+            CONNECTIONS.release()
 
 
 listener = socket.socket()

@@ -1219,7 +1219,8 @@ assert(
 assert(
   commands.includes('SFTP_COMMAND_TIMEOUT') &&
     commands.includes('run_sftp_task') &&
-    sftpTaskLifecycle.includes('sleep_until(deadline)') &&
+    sftpTaskLifecycle.includes('TaskDeadline::Total') &&
+    sftpTaskLifecycle.includes('sleep_until(wake)') &&
     sftpTaskLifecycle.includes('token.store(true') &&
     sftpTaskLifecycle.includes('operation.abort()'),
   'SFTP directory listing command must have a Tauri-level hard timeout so the frontend never stays stuck on loading when Windows sftp.exe or PTY hangs.'

@@ -2,7 +2,7 @@ use anyhow::Result;
 use portable_pty::Child;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
+    mpsc, Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -13,6 +13,8 @@ pub(super) struct SftpProcessCancellation {
     stop: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     _tree: Arc<ProcessTree>,
+    deadline: Arc<Mutex<Instant>>,
+    idle_timeout: Option<Duration>,
 }
 
 impl SftpProcessCancellation {
@@ -20,36 +22,55 @@ impl SftpProcessCancellation {
         child: &dyn Child,
         token: Option<&Arc<AtomicBool>>,
         timeout: Duration,
+        idle: bool,
     ) -> Result<Self> {
         let tree = Arc::new(ProcessTree::new(child)?);
         let watched_tree = tree.clone();
         let mut killer = child.clone_killer();
         let token = token.cloned();
         let (send, receive) = mpsc::channel();
-        let worker = thread::spawn(move || {
-            let started = Instant::now();
-            loop {
-                if token
-                    .as_ref()
-                    .is_some_and(|token| token.load(Ordering::SeqCst))
-                    || started.elapsed() >= timeout
-                {
-                    watched_tree.terminate();
-                    let _ = killer.kill();
-                    break;
-                }
-                let remaining = timeout.saturating_sub(started.elapsed());
-                match receive.recv_timeout(remaining.min(Duration::from_millis(20))) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    _ => break,
-                }
+        let deadline = Arc::new(Mutex::new(Instant::now() + timeout));
+        let watched_deadline = deadline.clone();
+        let worker = thread::spawn(move || loop {
+            if token
+                .as_ref()
+                .is_some_and(|token| token.load(Ordering::SeqCst))
+                || Instant::now() >= *watched_deadline.lock().unwrap()
+            {
+                watched_tree.terminate();
+                let _ = killer.kill();
+                break;
+            }
+            let remaining = watched_deadline
+                .lock()
+                .unwrap()
+                .saturating_duration_since(Instant::now());
+            match receive.recv_timeout(remaining.min(Duration::from_millis(20))) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                _ => break,
             }
         });
         Ok(Self {
             stop: Some(send),
             worker: Some(worker),
             _tree: tree,
+            deadline,
+            idle_timeout: idle.then_some(timeout),
         })
+    }
+
+    pub(super) fn touch(&self) {
+        if let Some(timeout) = self.idle_timeout {
+            let mut deadline = self.deadline.lock().unwrap();
+            let now = Instant::now();
+            if now < *deadline {
+                *deadline = now + timeout;
+            }
+        }
+    }
+
+    pub(super) fn timed_out(&self) -> bool {
+        Instant::now() >= *self.deadline.lock().unwrap()
     }
 }
 

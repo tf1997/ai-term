@@ -100,6 +100,9 @@ export function formatRemoteModified(value: string) {
 
 export function formatError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err)
+  if (message.includes('SFTP transfer timed out: no progress')) {
+    return '传输超时：长时间无进展，已停止。请检查网络和远端磁盘后重试。'
+  }
   if (message.includes('SFTP_TARGET_CHANGED')) {
     return '原连接配置的地址、端口或跳转方式已变化，已停止操作。请按新配置打开会话后重试。'
   }

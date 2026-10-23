@@ -125,3 +125,51 @@ test('a failing event-listener cleanup does not strand task completion or the ne
   assert.equal((await second.completed).status,'done')
   assert.equal(manager.activeCount.value,0)
 })
+
+test('ongoing transfer progress renews the idle budget, then a stall releases the next job',async()=>{
+  let report, finish
+  const cancelled=[]
+  const manager=createTransferTaskManager({cancel:async id=>{cancelled.push(id);return true},listen:async(_,fn)=>{report=fn;return()=>{}}},{subscription:100,transfer:80})
+  const ticket=manager.enqueue({binding:binding('a'),direction:'upload',itemName:'folder',itemKind:'folder',sourcePath:'folder',targetPath:'/folder',execute:()=>new Promise(resolve=>finish=resolve)})
+  await waitUntil(()=>finish)
+  for(let i=1;i<=8;i++){
+    await new Promise(resolve=>setTimeout(resolve,20))
+    report({taskId:ticket.id,transferredBytes:i*1024,text:'上传中'})
+  }
+  assert.equal(manager.jobs.value[0].status,'running','An active transfer outlives its initial timeout')
+  const next=manager.enqueue({binding:binding('a'),direction:'upload',itemName:'next',sourcePath:'next',targetPath:'/next',execute:async()=>({message:'done'})})
+  const result=await ticket.completed
+  assert.equal(result.status,'error')
+  assert.match(result.progressText,/传输超时.*无进展/)
+  assert.doesNotMatch(result.progressText,/连接超时/)
+  assert.deepEqual(cancelled,[ticket.id])
+  assert.equal((await next.completed).status,'done')
+  finish({message:'late success'})
+  await Promise.resolve()
+  assert.equal(manager.jobs.value[0].status,'error')
+})
+
+test('a progressing long transfer can finish normally and is never cancelled afterwards',async()=>{
+  let report, finish
+  const cancelled=[]
+  const manager=createTransferTaskManager({cancel:async id=>{cancelled.push(id);return true},listen:async(_,fn)=>{report=fn;return()=>{}}},{subscription:100,transfer:80})
+  const ticket=manager.enqueue({binding:binding('a'),direction:'upload',itemName:'large',sourcePath:'large',targetPath:'/large',execute:()=>new Promise(resolve=>finish=resolve)})
+  await waitUntil(()=>finish)
+  for(let i=0;i<8;i++){
+    await new Promise(resolve=>setTimeout(resolve,20))
+    report({taskId:ticket.id,transferredBytes:i+1})
+  }
+  finish({message:'done'})
+  assert.equal((await ticket.completed).status,'done')
+  await new Promise(resolve=>setTimeout(resolve,100))
+  assert.deepEqual(cancelled,[])
+})
+
+test('backend idle errors identify a stalled transfer instead of a failed connection',async()=>{
+  const manager=createTransferTaskManager({cancel:async()=>true,listen:async()=>()=>{}})
+  const ticket=manager.enqueue({binding:binding('a'),direction:'upload',itemName:'folder',sourcePath:'folder',targetPath:'/folder',execute:async()=>{throw Error('SFTP transfer timed out: no progress; check the network and remote disk before retrying')}})
+  const result=await ticket.completed
+  assert.equal(result.status,'error')
+  assert.match(result.progressText,/传输超时.*无进展/)
+  assert.doesNotMatch(result.progressText,/连接超时/)
+})

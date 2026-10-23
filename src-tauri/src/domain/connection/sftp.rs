@@ -28,7 +28,7 @@ use crate::domain::terminal::ssh::{
 use portable_pty::Child;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 const SFTP_CHILD_EXIT_GRACE: Duration = Duration::from_millis(500);
 const SFTP_READY_GRACE: Duration = Duration::from_millis(1500);
@@ -43,6 +43,9 @@ pub const REMOTE_TEXT_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const REMOTE_FILE_CHANGED_PREFIX: &str = "REMOTE_FILE_CHANGED:";
 
 pub type SftpCancelToken = Arc<AtomicBool>;
+
+#[path = "sftp_upload.rs"]
+mod upload;
 
 #[cfg(test)]
 #[path = "sftp_protocol_tests.rs"]
@@ -1108,6 +1111,7 @@ fn try_native_upload_file(
         target_override,
         cancel_token,
         |connection, _route| {
+            let _timeout = NativeTransferTimeout::new(connection);
             let total = fs::metadata(local_path)
                 .map(|metadata| metadata.len())
                 .unwrap_or(0);
@@ -1151,12 +1155,30 @@ fn try_native_upload_path(
         profile,
         target_override,
         cancel_token,
-        |connection, _route| {
-            let total = local_transfer_size(Path::new(local_path), cancel_token)?;
+        |connection, route| {
+            if is_dir {
+                upload::upload_directory(
+                    connection,
+                    route,
+                    Path::new(local_path),
+                    remote_path,
+                    cancel_token,
+                    progress,
+                )?;
+                return Ok(transfer_response(
+                    format!("uploaded {local_path} to {remote_path}"),
+                    Some(local_path.to_string()),
+                    Some(remote_path.to_string()),
+                    Some(remote_path.to_string()),
+                    true,
+                ));
+            }
+            let _timeout = NativeTransferTimeout::new(connection);
+            let total = fs::metadata(local_path)?.len();
             let mut transferred = 0;
             let started = Instant::now();
             let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
-            upload_path_native_to(
+            upload_file_native_to(
                 &connection.sftp,
                 Path::new(local_path),
                 remote_path,
@@ -1192,6 +1214,7 @@ fn try_native_download_file(
         target_override,
         cancel_token,
         |connection, _route| {
+            let _timeout = NativeTransferTimeout::new(connection);
             let stat = connection
                 .sftp
                 .stat(Path::new(remote_path))
@@ -1238,7 +1261,15 @@ fn try_native_download_path(
         target_override,
         cancel_token,
         |connection, _route| {
-            let total = remote_transfer_size(&connection.sftp, remote_path, is_dir, cancel_token)?;
+            let _timeout = NativeTransferTimeout::new(connection);
+            let total = remote_transfer_size(
+                &connection.sftp,
+                remote_path,
+                is_dir,
+                cancel_token,
+                progress,
+                &mut None,
+            )?;
             let mut transferred = 0;
             let started = Instant::now();
             let mut copy_buffer = vec![0u8; NATIVE_SFTP_COPY_BUFFER_SIZE];
@@ -1316,6 +1347,25 @@ fn should_try_next_native_sftp_route(error: &anyhow::Error) -> bool {
 struct NativeSftpConnection {
     sftp: ssh2::Sftp,
     _ssh: RoutedSshSession,
+}
+
+/// Authentication keeps its short deadline; only active transfers use the
+/// longer per-I/O budget. Restore it before returning a connection to the pool.
+struct NativeTransferTimeout<'a>(&'a ssh2::Session, u32);
+
+impl<'a> NativeTransferTimeout<'a> {
+    fn new(connection: &'a NativeSftpConnection) -> Self {
+        let session = connection._ssh.session();
+        let guard = Self(session, session.timeout());
+        session.set_timeout(TRANSFER_TIMEOUT.as_millis() as u32);
+        guard
+    }
+}
+
+impl Drop for NativeTransferTimeout<'_> {
+    fn drop(&mut self) {
+        self.0.set_timeout(self.1);
+    }
 }
 
 struct NativeSftpPoolEntry {
@@ -1699,54 +1749,6 @@ fn format_unix_mode(mode: u32) -> String {
     }
     value
 }
-fn upload_path_native_to(
-    sftp: &ssh2::Sftp,
-    local_path: &Path,
-    remote_path: &str,
-    copy_buffer: &mut [u8],
-    cancel_token: Option<&SftpCancelToken>,
-    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
-    total: u64,
-    transferred: &mut u64,
-    started: &Instant,
-) -> Result<()> {
-    ensure_not_cancelled(cancel_token)?;
-    if local_path.is_dir() {
-        native_ensure_dir(sftp, remote_path)?;
-        for entry in fs::read_dir(local_path)
-            .with_context(|| format!("failed to read local directory {}", local_path.display()))?
-        {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let child_remote = join_remote_path(remote_path, &name);
-            upload_path_native_to(
-                sftp,
-                &entry.path(),
-                &child_remote,
-                copy_buffer,
-                cancel_token,
-                progress,
-                total,
-                transferred,
-                started,
-            )?;
-        }
-        return Ok(());
-    }
-
-    upload_file_native_to(
-        sftp,
-        local_path,
-        remote_path,
-        copy_buffer,
-        cancel_token,
-        progress,
-        total,
-        transferred,
-        started,
-    )
-}
-
 fn upload_file_native_to(
     sftp: &ssh2::Sftp,
     local_path: &Path,
@@ -1779,7 +1781,12 @@ fn upload_file_native_to(
         total,
         transferred,
         started,
-    )
+    )?;
+    ensure_not_cancelled(cancel_token)?;
+    remote
+        .close()
+        .with_context(|| format!("failed to close uploaded SFTP file {remote_path}"))?;
+    Ok(())
 }
 
 fn download_dir_native_to(
@@ -1796,6 +1803,7 @@ fn download_dir_native_to(
     ensure_not_cancelled(cancel_token)?;
     fs::create_dir_all(local_path)
         .with_context(|| format!("failed to create local directory {}", local_path.display()))?;
+    emit_native_transfer_progress(progress, total, *transferred, started);
     for (entry_path, stat) in sftp
         .readdir(Path::new(remote_path))
         .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?
@@ -1899,13 +1907,15 @@ fn copy_with_native_progress<R: Read, W: Write>(
                 bail!("SFTP stream closed while writing");
             }
             remaining = &remaining[written..];
+            ensure_not_cancelled(cancel_token)?;
+            *transferred = transferred.saturating_add(written as u64);
+            emit_native_transfer_progress(progress, total, *transferred, started);
         }
         ensure_not_cancelled(cancel_token)?;
-        *transferred = transferred.saturating_add(count as u64);
-        emit_native_transfer_progress(progress, total, *transferred, started);
     }
     ensure_not_cancelled(cancel_token)?;
     writer.flush()?;
+    emit_native_transfer_progress(progress, total, *transferred, started);
     Ok(())
 }
 
@@ -1927,30 +1937,13 @@ fn native_path_is_dir(sftp: &ssh2::Sftp, remote_path: &str) -> bool {
         .is_some_and(|stat| native_file_is_dir(&stat))
 }
 
-fn local_transfer_size(path: &Path, cancel_token: Option<&SftpCancelToken>) -> Result<u64> {
-    ensure_not_cancelled(cancel_token)?;
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("failed to stat local path {}", path.display()))?;
-    if metadata.is_file() {
-        return Ok(metadata.len());
-    }
-    if !metadata.is_dir() {
-        return Ok(0);
-    }
-    let mut total = 0u64;
-    for entry in fs::read_dir(path)
-        .with_context(|| format!("failed to read local directory {}", path.display()))?
-    {
-        total = total.saturating_add(local_transfer_size(&entry?.path(), cancel_token)?);
-    }
-    Ok(total)
-}
-
 fn remote_transfer_size(
     sftp: &ssh2::Sftp,
     remote_path: &str,
     is_dir: bool,
     cancel_token: Option<&SftpCancelToken>,
+    progress: &mut Option<&mut dyn FnMut(SftpProgressUpdate)>,
+    last_report: &mut Option<Instant>,
 ) -> Result<u64> {
     ensure_not_cancelled(cancel_token)?;
     if !is_dir {
@@ -1962,10 +1955,19 @@ fn remote_transfer_size(
     }
 
     let mut total = 0u64;
-    for (entry_path, stat) in sftp
+    let entries = sftp
         .readdir(Path::new(remote_path))
-        .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?
-    {
+        .with_context(|| format!("failed to read native SFTP directory {remote_path}"))?;
+    if last_report.map_or(true, |last| last.elapsed() >= Duration::from_millis(100)) {
+        *last_report = Some(Instant::now());
+        if let Some(callback) = progress.as_deref_mut() {
+            callback(plain_progress_update(
+                None,
+                format!("正在扫描远端目录 · {remote_path}"),
+            ));
+        }
+    }
+    for (entry_path, stat) in entries {
         ensure_not_cancelled(cancel_token)?;
         let name = native_entry_name(&entry_path);
         if name.is_empty() || name == "." || name == ".." {
@@ -1977,6 +1979,8 @@ fn remote_transfer_size(
                 &native_entry_path(remote_path, &entry_path, &name),
                 true,
                 cancel_token,
+                progress,
+                last_report,
             )?);
         } else {
             total = total.saturating_add(stat.size.unwrap_or(0));
@@ -2011,9 +2015,10 @@ fn emit_native_transfer_progress(
         return;
     };
     let percent = if total == 0 {
-        100
+        0
     } else {
-        ((transferred.saturating_mul(100) / total).min(100)) as u8
+        // Only the final successful close/completion may report 100%.
+        ((transferred.saturating_mul(100) / total).min(99)) as u8
     };
     let stats = transfer_progress_stats(total, transferred, started);
     callback(SftpProgressUpdate {
@@ -2305,7 +2310,32 @@ fn run_sftp_launch_plan_with_progress_ref(
         process.child.as_ref(),
         cancel_token,
         timeout.saturating_sub(started.elapsed()),
+        commands
+            .iter()
+            .any(|command| matches!(command.split_whitespace().next(), Some("put" | "get"))),
     )?;
+    let mut last_progress = None;
+    let mut tracked_progress = |update: SftpProgressUpdate| {
+        // Ignore unchanged redraws (speed/ETA can change while bytes are stuck).
+        // The prefix includes the filename, so a new small/empty file advances.
+        let key = (
+            update
+                .text
+                .split('%')
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            update.transferred_bytes,
+        );
+        if last_progress.as_ref() != Some(&key) {
+            _process_cancel.touch();
+            last_progress = Some(key);
+            if let Some(callback) = progress.as_deref_mut() {
+                callback(update);
+            }
+        }
+    };
+    let mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)> = Some(&mut tracked_progress);
     let writer = process.writer.clone();
     let output_rx = spawn_reader_channel(process.reader);
     let line_ending = sftp_line_ending();
@@ -2331,7 +2361,7 @@ fn run_sftp_launch_plan_with_progress_ref(
                         &mut output,
                         &mut prompt_window,
                         &mut last_output_at,
-                        progress,
+                        &mut progress,
                     );
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -2340,7 +2370,7 @@ fn run_sftp_launch_plan_with_progress_ref(
 
             while let Ok(chunk) = output_rx.try_recv() {
                 ensure_not_cancelled(cancel_token)?;
-                if started.elapsed() >= timeout {
+                if _process_cancel.timed_out() {
                     bail!("SFTP command timed out");
                 }
                 collect_sftp_chunk(
@@ -2348,13 +2378,13 @@ fn run_sftp_launch_plan_with_progress_ref(
                     &mut output,
                     &mut prompt_window,
                     &mut last_output_at,
-                    progress,
+                    &mut progress,
                 );
             }
 
             // Output may arrive at the deadline. Do not answer a prompt or
             // dispatch another command after the budget has expired.
-            if started.elapsed() >= timeout {
+            if _process_cancel.timed_out() {
                 bail!("SFTP command timed out");
             }
 
@@ -2435,7 +2465,7 @@ fn run_sftp_launch_plan_with_progress_ref(
                     &mut output,
                     &mut prompt_window,
                     &mut last_output_at,
-                    progress,
+                    &mut progress,
                     SFTP_CHILD_EXIT_GRACE,
                 );
                 let text = String::from_utf8_lossy(&output).into_owned();
@@ -2446,7 +2476,7 @@ fn run_sftp_launch_plan_with_progress_ref(
                 return Ok(text);
             }
 
-            if started.elapsed() > timeout {
+            if _process_cancel.timed_out() {
                 terminate_sftp_process(&mut process.session, process.child.as_mut());
                 let text = String::from_utf8_lossy(&output).into_owned();
                 bail!("SFTP command timed out\n{}", clean_sftp_output(&text));
@@ -2454,7 +2484,7 @@ fn run_sftp_launch_plan_with_progress_ref(
         }
     })();
     ensure_not_cancelled(cancel_token)?;
-    let result = if started.elapsed() >= timeout {
+    let result = if _process_cancel.timed_out() {
         Err(anyhow::anyhow!("SFTP command timed out"))
     } else {
         result
@@ -2480,6 +2510,46 @@ fn sftp_command_changes_files(command: &str) -> bool {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[test]
+    fn progress_parser_retains_byte_counts_from_wide_and_split_pty_lines() {
+        let mut updates = Vec::new();
+        let mut callback = |update| updates.push(update);
+        let mut progress: Option<&mut dyn FnMut(SftpProgressUpdate)> = Some(&mut callback);
+        let mut output = Vec::new();
+        let mut prompt = String::new();
+        let mut last_output = Instant::now();
+        let prefix = format!("\r{:<205} 27%", "large file.bin");
+        collect_sftp_chunk(
+            prefix.as_bytes(),
+            &mut output,
+            &mut prompt,
+            &mut last_output,
+            &mut progress,
+        );
+        collect_sftp_chunk(
+            b" 112",
+            &mut output,
+            &mut prompt,
+            &mut last_output,
+            &mut progress,
+        );
+        collect_sftp_chunk(
+            b"0KB 1.1MB/s 00:02 ETA",
+            &mut output,
+            &mut prompt,
+            &mut last_output,
+            &mut progress,
+        );
+        // Several redraws in one read must use the last line's own percentage.
+        collect_sftp_chunk(b"\rlarge file.bin 28% 1150KB 1.1MB/s 00:02 ETA\rlarge file.bin 30% 1200KB 1.1MB/s 00:02 ETA",
+            &mut output, &mut prompt, &mut last_output, &mut progress);
+        assert_eq!(updates.len(), 2, "an incomplete redraw is not progress");
+        assert_eq!(updates[0].percent, Some(27));
+        assert_eq!(updates[0].transferred_bytes, Some(1120 * 1024));
+        assert_eq!(updates[1].percent, Some(30));
+        assert_eq!(updates[1].transferred_bytes, Some(1200 * 1024));
+    }
 
     #[test]
     fn cancellation_during_read_prevents_any_following_write() {
@@ -2585,7 +2655,8 @@ fn collect_sftp_chunk(
     output.extend_from_slice(chunk);
     append_limited_lossy(prompt_window, chunk, 2048);
     *last_output_at = Instant::now();
-    emit_sftp_progress(chunk, progress);
+    // A progress line can span multiple PTY reads.
+    emit_sftp_progress(prompt_window.as_bytes(), progress);
 }
 
 fn drain_sftp_output(
@@ -2623,11 +2694,25 @@ fn emit_sftp_progress(chunk: &[u8], progress: &mut Option<&mut dyn FnMut(SftpPro
         return;
     };
     let text = String::from_utf8_lossy(chunk);
-    let Some(percent) = extract_sftp_progress_percent(&text) else {
+    let line = last_sftp_progress_line(&text);
+    let Some(percent) = extract_sftp_progress_percent(&line) else {
         return;
     };
-    let line = last_sftp_progress_line(&text);
-    callback(system_sftp_progress_update(percent, line));
+    // A second token establishes that the byte-count token is complete. A
+    // split in the middle of "1120KB" must not briefly report "112" bytes.
+    if line
+        .split_once('%')
+        .map_or(true, |(_, suffix)| suffix.split_whitespace().count() < 2)
+    {
+        return;
+    }
+    let update = system_sftp_progress_update(percent, line);
+    // Wait for the byte count when a PTY read splits a redraw after '%'.
+    // Incomplete and complete copies of a stalled line must not alternate as
+    // distinct progress updates and renew the idle watchdog forever.
+    if update.transferred_bytes.is_some() {
+        callback(update);
+    }
 }
 
 fn system_sftp_progress_update(percent: u8, text: String) -> SftpProgressUpdate {
@@ -2760,11 +2845,13 @@ fn last_sftp_progress_line(text: &str) -> String {
         .lines()
         .rev()
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .find(|line| extract_sftp_progress_percent(line).is_some())
         .unwrap_or("")
-        .chars()
-        .take(160)
-        .collect()
+        // OpenSSH pads filenames to PTY width. Truncating at 160 characters
+        // discarded the byte count on a 240-column terminal.
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 fn terminate_sftp_process(session: &mut PtySession, child: &mut dyn Child) {
     session.kill();

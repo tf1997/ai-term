@@ -8,7 +8,9 @@ use crate::app::events::{
     terminal_data_event_name, AiChatStreamEvent, AiChatStreamEventKind, SftpTransferEvent,
     TerminalClosedEvent, TerminalDataEvent,
 };
-use crate::app::sftp_task::{requested_timeout, run_sftp_task};
+use crate::app::sftp_task::{
+    requested_timeout, run_sftp_task, run_sftp_transfer_task, TransferActivity,
+};
 use crate::app::state::AppState;
 use crate::domain::ai::agent::{
     agent_turn_with_provider_stream, AiAgentTurnRequest, AiAgentTurnResponse,
@@ -47,7 +49,7 @@ use crate::domain::workspace::{
 
 const SFTP_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 const SFTP_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
-const SFTP_TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+const SFTP_TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
@@ -1004,13 +1006,13 @@ pub async fn sftp_upload_file(
         username: target_username,
     };
     let progress_task_id = task_id.clone();
-    run_sftp_task(
+    run_sftp_transfer_task(
         &state,
         task_id,
-        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        requested_timeout(timeout_ms, SFTP_TRANSFER_IDLE_TIMEOUT),
         sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
-        move |profile, token| {
-            with_sftp_progress(app, progress_task_id, |progress| {
+        move |profile, token, activity| {
+            with_sftp_progress(app, progress_task_id, activity, |progress| {
                 upload_file_with_progress(
                     &profile,
                     &local_path,
@@ -1043,13 +1045,13 @@ pub async fn sftp_upload_path(
         username: target_username,
     };
     let progress_task_id = task_id.clone();
-    run_sftp_task(
+    run_sftp_transfer_task(
         &state,
         task_id,
-        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        requested_timeout(timeout_ms, SFTP_TRANSFER_IDLE_TIMEOUT),
         sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
-        move |profile, token| {
-            with_sftp_progress(app, progress_task_id, |progress| {
+        move |profile, token, activity| {
+            with_sftp_progress(app, progress_task_id, activity, |progress| {
                 upload_path_with_progress(
                     &profile,
                     &local_path,
@@ -1082,13 +1084,13 @@ pub async fn sftp_download_file(
         username: target_username,
     };
     let progress_task_id = task_id.clone();
-    run_sftp_task(
+    run_sftp_transfer_task(
         &state,
         task_id,
-        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        requested_timeout(timeout_ms, SFTP_TRANSFER_IDLE_TIMEOUT),
         sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
-        move |profile, token| {
-            with_sftp_progress(app, progress_task_id, |progress| {
+        move |profile, token, activity| {
+            with_sftp_progress(app, progress_task_id, activity, |progress| {
                 download_file_with_progress(
                     &profile,
                     &remote_path,
@@ -1122,13 +1124,13 @@ pub async fn sftp_download_path(
         username: target_username,
     };
     let progress_task_id = task_id.clone();
-    run_sftp_task(
+    run_sftp_transfer_task(
         &state,
         task_id,
-        requested_timeout(timeout_ms, SFTP_TRANSFER_TIMEOUT),
+        requested_timeout(timeout_ms, SFTP_TRANSFER_IDLE_TIMEOUT),
         sftp_profile_for_route(&connection_id, &state, profile_route.as_deref()),
-        move |profile, token| {
-            with_sftp_progress(app, progress_task_id, |progress| {
+        move |profile, token, activity| {
+            with_sftp_progress(app, progress_task_id, activity, |progress| {
                 download_path_with_progress(
                     &profile,
                     &remote_path,
@@ -1229,6 +1231,7 @@ pub async fn probe_bastion_servers(
 fn with_sftp_progress<T, F>(
     app: tauri::AppHandle,
     task_id: Option<String>,
+    activity: TransferActivity,
     action: F,
 ) -> anyhow::Result<T>
 where
@@ -1255,6 +1258,7 @@ where
             );
         };
         let mut callback = |update: SftpProgressUpdate| {
+            activity.touch();
             if let Some(update) = throttle.push(update, Instant::now()) {
                 emit(update);
             }
@@ -1266,7 +1270,7 @@ where
         }
         result
     } else {
-        action(None)
+        action(Some(&mut |_| activity.touch()))
     }
 }
 async fn sftp_profile_for_route(

@@ -33,13 +33,15 @@ export interface TransferJobRequest {
 
 export function createTransferTaskManager(
   source = { cancel: cancelTask, listen: onSftpTransferProgress },
-  timeouts = { subscription: 5_000, transfer: 600_000 },
+  // Allow the backend's 120 s idle watchdog to report its error first.
+  timeouts = { subscription: 5_000, transfer: 150_000 },
 ) {
   const jobs = ref<TransferJob[]>([])
   const executors = new Map<string, TransferJobRequest['execute']>()
   const controllers = new Map<string, AbortController>()
   const cancellations = new Map<string, Promise<void>>()
   const completions = new Map<string, (job: TransferJob) => void>()
+  const activity = new Map<string, () => void>()
   const activeCount = computed(
     () => jobs.value.filter((job) => job.status === 'queued' || job.status === 'running').length,
   )
@@ -47,6 +49,10 @@ export function createTransferTaskManager(
   function update(id: string, event: SftpTransferEvent) {
     const job = jobs.value.find((job) => job.id === id)
     if (!job || event.taskId !== id || job.status !== 'running' || job.cancelling) return
+    // Backend events represent completed I/O or filesystem work, not a timer.
+    if (event.text || Number.isFinite(event.percent) || Number.isFinite(event.transferredBytes)) {
+      activity.get(id)?.()
+    }
     Object.assign(job, {
       progressPercent:
         typeof event.percent === 'number' && Number.isFinite(event.percent)
@@ -105,7 +111,7 @@ export function createTransferTaskManager(
       const execute = executors.get(job.id)!
       const response = await boundedOperation(
         () => execute(job.id, controller.signal, (event) => update(job.id, event)),
-        timeouts.transfer,
+        job.mode === 'sftp' ? timeouts.transfer : 600_000,
         controller.signal,
         () => {
           if (!controller.signal.aborted) {
@@ -113,6 +119,13 @@ export function createTransferTaskManager(
             controller.abort()
           }
           void cancelBackend(job)
+        },
+        {
+          timeoutMessage: '传输超时：长时间无进展，已停止。请检查网络和远端磁盘后重试。',
+          subscribeActivity: job.mode === 'sftp' ? (touch) => {
+            activity.set(job.id, touch)
+            return () => { activity.delete(job.id) }
+          } : undefined,
         },
       )
       if (controller.signal.aborted) throw new Error('任务已取消')
@@ -125,7 +138,7 @@ export function createTransferTaskManager(
       job.status =
         (controller.signal.aborted && !timedOut) || /cancelled|canceled|取消/i.test(message)
           ? 'cancelled' : 'error'
-      job.progressText = message.includes('SFTP_TARGET_CHANGED') ? formatError(reason) : message
+      job.progressText = formatError(reason)
     } finally {
       acceptingListener = false
       try { unlisten?.() } catch { /* Listener cleanup must not strand completed jobs. */ }
