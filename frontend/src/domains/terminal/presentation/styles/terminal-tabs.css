@@ -65,6 +65,7 @@
 }
 
 .session-tabs .tab {
+  position: relative;
   display: flex;
   align-items: center;
   flex: 0 0 auto;
@@ -92,6 +93,18 @@
   color: var(--workbench-text-strong);
   box-shadow: none;
   font-weight: 600;
+}
+
+.session-tabs .tab.active::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: -1px;
+  left: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--workbench-accent);
+  pointer-events: none;
 }
 
 .session-tabs .tab.target {

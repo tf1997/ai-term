@@ -5,7 +5,7 @@ import { useQuickCommands } from '../../application/useQuickCommands'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import type { IDisposable } from '@xterm/xterm'
+import type { IDisposable, ITheme } from '@xterm/xterm'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/api/clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { connectProfile, connectLocalTerminal, forgetAiTermKnownHost, disconnectTerminal, terminalResize, terminalSessionActive, terminalWrite } from '../../infrastructure/api'
@@ -27,8 +27,8 @@ import { SYSTEM_TERMINAL_CJK_FALLBACK, WINDOWS_TERMINAL_CJK_FALLBACK, withCjkFal
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
 const terminalTypographyOptions = isWindowsPlatform()
-  ? { lineHeight: 1.12, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
-  : { lineHeight: 1, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
+  ? { lineHeight: 1.18, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
+  : { lineHeight: 1.15, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
 
 // 终端正文的 CJK 兜底见 lib/terminalFont.ts —— xterm 用 JS 传字体族,吃不到 CSS 变量上的兜底。
 const TERMINAL_CJK_FALLBACK = isWindowsPlatform()
@@ -1714,46 +1714,82 @@ function resolvedTerminalSettings() {
   }
 }
 
-function terminalThemeOptions(theme: TerminalTheme) {
+function terminalThemeOptions(theme: TerminalTheme): ITheme {
   if (theme === 'matrix') {
     return {
       background: '#050807',
       foreground: '#d8ffe7',
-      cursor: '#7cffb2',
-      selectionBackground: '#68d39138',
-      selectionInactiveBackground: '#68d39124',
-      blue: '#8cc8ff',
-      cyan: '#5ff1d2',
+      cursor: '#b8dfcb',
+      cursorAccent: '#050807',
+      selectionBackground: '#789b893d',
+      selectionInactiveBackground: '#7b8c8129',
+      black: '#15251d',
+      red: '#ff7d7d',
       green: '#63ff91',
       yellow: '#f2ff86',
-      red: '#ff7d7d'
+      blue: '#8cc8ff',
+      magenta: '#d5a6ed',
+      cyan: '#5ff1d2',
+      white: '#c1ddcc',
+      brightBlack: '#7b9b87',
+      brightRed: '#ffaaaa',
+      brightGreen: '#a0ffbb',
+      brightYellow: '#f6ffb1',
+      brightBlue: '#b3dbff',
+      brightMagenta: '#e7c8f5',
+      brightCyan: '#9af5e1',
+      brightWhite: '#e4ffef'
     }
   }
   if (theme === 'light') {
     return {
       background: '#ffffff',
       foreground: '#172033',
-      cursor: '#18b887',
-      cursorAccent: '#102a23',
-      selectionBackground: '#10b98133',
-      selectionInactiveBackground: '#10b98124',
-      blue: '#2563eb',
-      cyan: '#0891b2',
+      cursor: '#334155',
+      cursorAccent: '#ffffff',
+      selectionBackground: '#5b7b9b2e',
+      selectionInactiveBackground: '#64748b1f',
+      black: '#172033',
+      red: '#dc2626',
       green: '#047857',
       yellow: '#a16207',
-      red: '#dc2626'
+      blue: '#2563eb',
+      magenta: '#a21caf',
+      cyan: '#087c91',
+      white: '#647083',
+      brightBlack: '#64748b',
+      brightRed: '#b91c1c',
+      brightGreen: '#087f5b',
+      brightYellow: '#936500',
+      brightBlue: '#1d4ed8',
+      brightMagenta: '#9333ea',
+      brightCyan: '#0e7490',
+      brightWhite: '#374151'
     }
   }
   return {
     background: '#0b0d0e',
     foreground: '#d5dde5',
-    cursor: '#d8f3ff',
-    selectionBackground: '#e2e8f042',
-    selectionInactiveBackground: '#e2e8f02e',
-    blue: '#88b7ff',
-    cyan: '#60d8e8',
+    cursor: '#cbd5e1',
+    cursorAccent: '#0b0d0e',
+    selectionBackground: '#829bb83d',
+    selectionInactiveBackground: '#8b9aab29',
+    black: '#20272e',
+    red: '#f08080',
     green: '#7ee094',
-    yellow: '#ffc95e'
+    yellow: '#ffc95e',
+    blue: '#88b7ff',
+    magenta: '#c8a0e8',
+    cyan: '#60d8e8',
+    white: '#c4cdd5',
+    brightBlack: '#7d8b99',
+    brightRed: '#ffa0a0',
+    brightGreen: '#a1edb2',
+    brightYellow: '#ffdc91',
+    brightBlue: '#b0ceff',
+    brightMagenta: '#dfbdf5',
+    brightCyan: '#91e8f2',
+    brightWhite: '#edf2f7'
   }
 }
 
@@ -1796,6 +1832,9 @@ onMounted(async () => {
 
   terminal = new Terminal({
     cursorBlink: true,
+    cursorStyle: 'bar',
+    cursorWidth: 2,
+    cursorInactiveStyle: 'bar',
     convertEol: false,
     fontFamily: resolvedTerminalSettings().terminalFontFamily,
     fontSize: resolvedTerminalSettings().terminalFontSize,
@@ -1854,6 +1893,10 @@ onMounted(async () => {
 
   resizeObserver = new ResizeObserver(() => scheduleTerminalSizeSync())
   resizeObserver.observe(terminalHost.value)
+  // Display scale and font loading can change rendered cell dimensions while
+  // the host stays the same size. Refit after xterm updates its actual grid.
+  const terminalScreen = terminalHost.value.querySelector('.xterm-screen')
+  if (terminalScreen) resizeObserver.observe(terminalScreen)
   scheduleTerminalSizeSyncAfterFonts()
 
   if (isSftpProfile(props.profile)) {

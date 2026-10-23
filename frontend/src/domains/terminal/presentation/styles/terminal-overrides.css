@@ -11,7 +11,7 @@
   overflow: hidden;
   box-sizing: border-box;
   background: #03070c;
-  padding: 8px;
+  padding: 12px 14px 10px;
 }
 .terminal-agent-takeover {
   position: relative;
@@ -55,7 +55,7 @@
   min-height: 0;
   height: auto;
   flex: 1 1 auto;
-  background: linear-gradient(180deg, rgba(5, 12, 13, .98), rgba(3, 8, 10, .98));
+  background: var(--workbench-terminal);
 }
 .xterm-host .xterm-rows {
   font-variant-ligatures: none;
@@ -76,11 +76,9 @@
   color: transparent !important;
   background: transparent !important;
 }
-.xterm-host .xterm-cursor-layer .xterm-cursor {
-  box-shadow: 0 0 0 1px rgba(167, 243, 208, .28), 0 0 14px rgba(16, 185, 129, .24);
-}
 .xterm-host .xterm-selection div {
-  border-radius: 2px;
+  /* xterm splits a multiline selection into rectangles; keep their joins flush. */
+  border-radius: 0;
 }
 .terminal-completion {
   position: absolute;

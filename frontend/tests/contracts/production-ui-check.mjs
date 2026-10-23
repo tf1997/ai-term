@@ -235,14 +235,14 @@ assert(
     !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
     main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
-    terminalPane.includes('lineHeight: 1.12') &&
+    terminalPane.includes('lineHeight: 1.18') &&
     userSettings.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
     settingsSidebar.includes('createDefaultUserSettings(windowsPlatform)') &&
     settingsStorage.includes('WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY') &&
     settingsStorage.includes('settings.terminalFontSize === 15') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
-  'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, compact terminal metrics, and real bundled terminal weights.'
+  'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, balanced terminal line spacing, and real bundled terminal weights.'
 )
 
 assert(
@@ -741,8 +741,8 @@ assert(
     !styles.includes('z-index: 4 !important;') &&
     !styles.includes('ai-term-selection-overlay') &&
     !styles.includes('ai-term-selection-line') &&
-    terminalPane.includes("selectionBackground: '#e2e8f042'") &&
-    terminalPane.includes("selectionBackground: '#10b98133'") &&
+    terminalPane.includes("selectionBackground: '#829bb83d'") &&
+    terminalPane.includes("selectionBackground: '#5b7b9b2e'") &&
     terminalPane.includes('selectionInactiveBackground') &&
     styles.includes('background: rgba(104, 211, 145, .09);') &&
     styles.includes('.terminal-completion button:hover::before') &&
@@ -1409,7 +1409,7 @@ assert(
     styles.includes('.xterm-host {\n  width: 100%;') &&
     styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
     styles.includes('.xterm-host .xterm {\n  width: 100%;\n  min-width: 0;') &&
-    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 8px;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 12px 14px 10px;') &&
     terminalPane.includes("import { FitAddon } from '@xterm/addon-fit'") &&
     terminalPane.includes('terminal.loadAddon(fitAddon)') &&
     terminalPane.includes('fitAddon.fit()') &&
@@ -2037,9 +2037,9 @@ assertLastCssDeclarations(
 assertLastCssDeclarations(
   '.terminal-body-wrap',
   {
-    'padding': '8px',
+    'padding': '12px 14px 10px',
   },
-  'The terminal command surface must use compact, equal inset spacing on all four sides.'
+  'The terminal command surface must leave breathing room around the text and scrollbar.'
 )
 
 assert(
@@ -2927,7 +2927,7 @@ assert(
     styles.includes('--workspace-width: clamp(300px, 34vw, 360px);') &&
     styles.includes('.xterm-host {\n  width: 100%;') &&
     styles.includes('display: grid;\n  overflow: hidden;\n  box-sizing: border-box;\n  padding: 0;') &&
-    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 8px;') &&
+    styles.includes('box-sizing: border-box;\n  background: #03070c;\n  padding: 12px 14px 10px;') &&
     !styles.includes('width: min(380px, calc(100vw - 56px));') &&
     !styles.includes('.app-shell:not(.right-collapsed) .right-panel {\n    display: none;'),
   'Frontend layout must keep the right workspace as a proportional grid column at the 1280 default and 980 minimum window widths without terminal overlap or workspace shrinkage.'

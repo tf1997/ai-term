@@ -227,6 +227,32 @@ try {
     assert.equal(await evaluate('window.__selectionBrowser.copied.length'), before)
   })
 
+  await check('Changing display scale refits the last row and column without a host resize', async () => {
+    for (const deviceScaleFactor of [1.25, 1.5, 2, 1]) {
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 820, deviceScaleFactor, mobile: false })
+      await frame()
+      await waitFor(`(() => {
+        const terminal = window.__selectionBrowser.terminal();
+        const screen = terminal.element.querySelector('.xterm-screen').getBoundingClientRect();
+        const host = terminal.element.parentElement.getBoundingClientRect();
+        return devicePixelRatio === ${deviceScaleFactor} && screen.bottom <= host.bottom && screen.right <= host.right;
+      })()`)
+      await evaluate(`new Promise(resolve => {
+        const t = window.__selectionBrowser.terminal();
+        t.scrollToBottom();
+        t.write('\\x1b[' + t.rows + ';1Hlast visible row', resolve);
+      })`)
+      await frame()
+      const metrics = await state()
+      const lastRow = await evaluate(`(() => {
+        const t = window.__selectionBrowser.terminal();
+        return t.buffer.active.getLine(t.buffer.active.baseY + t.rows - 1).translateToString(true);
+      })()`)
+      assert.ok(lastRow.startsWith('last visible row'), 'The prompt must remain on the fitted last row')
+      assert.ok(metrics.rows > 1 && metrics.cols > 1)
+    }
+  })
+
   assert.deepEqual(exceptions, [], 'No uncaught browser exceptions')
 } finally {
   await fetch(`${debuggerUrl}/json/close/${target.id}`).catch(() => {})

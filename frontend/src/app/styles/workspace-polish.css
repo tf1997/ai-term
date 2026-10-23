@@ -532,33 +532,33 @@
 
 .quick-command-bar,
 .theme-light .quick-command-bar {
-  min-height: 33px;
+  min-height: 36px;
   gap: 4px;
   border: 0;
   border-top: 1px solid var(--workbench-line-soft);
   border-radius: 0;
   background: var(--workbench-terminal);
   margin: 0;
-  padding: 3px 5px 3px 10px;
+  padding: 3px 8px 3px 14px;
 }
 
 .quick-command-bar span:first-child,
 .theme-light .quick-command-bar span:first-child {
   color: var(--workbench-quiet);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
 }
 
 .quick-command-bar > button:not(.icon-button),
 .theme-light .quick-command-bar > button:not(.icon-button) {
-  height: 24px;
+  height: 28px;
   border-color: transparent;
   border-radius: 5px;
   background: transparent;
   color: var(--workbench-muted);
   padding-inline: 7px;
-  font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 12px var(--font-mono);
 }
 
 .quick-command-bar > button:not(.icon-button):hover,

@@ -114,6 +114,19 @@
 .xterm-host .xterm-viewport, .xterm-host .xterm-screen {
   border-radius: 0;
 }
+.xterm-host .xterm-viewport {
+  /* The renderer owns the theme; the unused fraction of a row must match it. */
+  background-color: transparent;
+}
+.xterm-host .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  /* xterm 6 draws its own scrollbar. Keep the 14px drag target, paint a 6px thumb.
+     Specificity also preserves the inset when xterm applies hover/active themes. */
+  box-sizing: border-box;
+  border: solid transparent;
+  border-width: 0 4px;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
 .terminal-body,
 .xterm-host .xterm-viewport {
   scrollbar-color: rgba(113, 128, 150, .58) transparent;
