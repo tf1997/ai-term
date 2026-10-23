@@ -239,9 +239,30 @@ try {
   await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查运行状态'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await click('.chat-send')
   await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在规划任务")')
+  const borderStyle = `(() => {
+    const shell = document.querySelector('.chat-input-shell');
+    const style = getComputedStyle(shell, '::after');
+    return { background: style.backgroundImage, state: style.animationPlayState, animation: style.animationName, pointerEvents: style.pointerEvents, overflow: getComputedStyle(shell).overflow };
+  })()`
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  const flowingBorder = await evaluate(borderStyle)
+  assert.equal(flowingBorder.state, 'running')
+  assert.ok(flowingBorder.background.includes('conic-gradient'), 'The border flows around the perimeter')
+  assert.equal(flowingBorder.pointerEvents, 'none')
+  assert.equal(flowingBorder.overflow, 'visible', 'Composer menus remain outside the border mask')
+  await new Promise(resolve => setTimeout(resolve, 180))
+  assert.notEqual((await evaluate(borderStyle)).background, flowingBorder.background, 'Painted border colors change while the Agent runs')
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+  assert.equal((await evaluate(borderStyle)).animation, 'none', 'Reduced motion keeps a static border')
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
   await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
   await waitFor('Boolean(document.querySelector("[data-step-id=runtime-first] .tool-step-decision"))')
+  const pausedBorder = await evaluate(borderStyle)
+  assert.equal(pausedBorder.state, 'paused', 'Border pauses while waiting for a decision')
+  await new Promise(resolve => setTimeout(resolve, 180))
+  assert.equal((await evaluate(borderStyle)).background, pausedBorder.background)
+  checks.push('The colorful border flows around the composer while running, pauses for decisions and respects reduced motion')
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-progress").textContent.includes("等待确认命令")'), 'Agent progress remains visible after tool steps appear')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), false, 'Always allow is an enabled button for an eligible command')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-allow").textContent.includes("所有会话")'), 'Approval explains the scope of saved permission')

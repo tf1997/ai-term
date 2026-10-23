@@ -840,18 +840,14 @@ function internalPromptRestorePrefix() {
   return `\r${move}\x1b[J`
 }
 
-function activeBufferLine(y: number) {
-  if (!terminal) return y
-  if (y > terminal.rows) return y
-  return terminal.buffer.active.viewportY + y
-}
-
 function selectedLineRange(text: string) {
   const selectionPosition = terminal?.getSelectionPosition()
   if (selectionPosition) {
+    // getSelectionPosition uses zero-based buffer coordinates, independent of
+    // viewport scrolling. The end cell is exclusive, including at column zero.
     return {
-      startLine: Math.max(1, activeBufferLine(selectionPosition.start.y)),
-      endLine: Math.max(1, activeBufferLine(selectionPosition.end.y))
+      startLine: selectionPosition.start.y + 1,
+      endLine: Math.max(selectionPosition.start.y + 1, selectionPosition.end.y + (selectionPosition.end.x > 0 ? 1 : 0))
     }
   }
   const lineCount = Math.max(1, text.split(/\r?\n/).length)
@@ -1843,8 +1839,8 @@ onMounted(async () => {
       emitTerminalSelection('')
       return
     }
-    // xterm fires this continuously while dragging; a trailing debounce
-    // collapses the drag into a single clipboard IPC + selection emit.
+    // xterm reports completed mouse selections and programmatic changes.
+    // Debounce these notifications into a single clipboard IPC + selection emit.
     if (selectionCopyTimer !== undefined) window.clearTimeout(selectionCopyTimer)
     selectionCopyTimer = window.setTimeout(() => {
       selectionCopyTimer = undefined
@@ -2420,6 +2416,12 @@ function requestTerminalPaste(event: MouseEvent | PointerEvent) {
 }
 
 function handleTerminalPointerDown(event: PointerEvent) {
+  if (event.button === 0 && selectionCopyTimer !== undefined) {
+    // A previous selection's delayed normalization calls terminal.select(),
+    // which would detach xterm's listeners in the middle of this new drag.
+    window.clearTimeout(selectionCopyTimer)
+    selectionCopyTimer = undefined
+  }
   if (event.button !== 2) return
   requestTerminalPaste(event)
 }

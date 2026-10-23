@@ -96,6 +96,11 @@
 .chat-activity.needs-decision .chat-progress-dot { background: var(--chat-warning); animation: none; }
 .chat-input-shell { position: relative; border: 1px solid var(--chat-line); border-radius: 10px; background: var(--chat-input-surface); overflow: visible; }
 .chat-input-shell:focus-within { border-color: var(--chat-input-accent); }
+@property --chat-border-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
 /* A masked overlay colors only the border; menus remain free to overflow. */
 .chat-input-shell.is-running::after {
   content: '';
@@ -104,16 +109,15 @@
   border-radius: inherit;
   padding: 1.5px;
   pointer-events: none;
-  background: linear-gradient(110deg, #22b8a0, #4b9de8, #a78bdf, #e99bbe, #22b8a0, #4b9de8, #a78bdf);
-  background-size: 300% 100%;
+  background: conic-gradient(from var(--chat-border-angle), #22b8a0, #4b9de8, #a78bdf, #e99bbe, #22b8a0);
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  animation: chat-border-flow 4s ease-in-out infinite alternate;
+  animation: chat-border-flow 3s linear infinite;
 }
 .chat-input-shell.is-awaiting-decision::after { animation-play-state: paused; }
-@keyframes chat-border-flow { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+@keyframes chat-border-flow { to { --chat-border-angle: 360deg; } }
 @media (prefers-reduced-motion: reduce) { .chat-input-shell.is-running::after { animation: none; } }
 .ai-chat-panel .chat-input-shell textarea:focus { box-shadow: none; outline: none; }
 .chat-input-shell textarea { display: block; width: 100%; min-width: 0; min-height: 56px; max-height: 144px; box-sizing: border-box; margin: 0; resize: none; border: 0; border-radius: 0; padding: 10px 12px 6px; background: transparent; color: var(--chat-text); font-size: var(--font-md); line-height: 1.6; outline: none; box-shadow: none; }
