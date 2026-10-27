@@ -42,9 +42,6 @@
 .app-shell.theme-light .terminal-agent-takeover small {
   color: #47705f;
 }
-.app-shell.theme-light .terminal-wrap,
-.app-shell.theme-light .terminal-frame,
-.app-shell.theme-light .terminal-native-code .xterm-host { background: #ffffff; }
 .terminal-agent-takeover + .xterm-host {
   padding-top: 0;
 }
@@ -172,12 +169,14 @@
   color: #59636c;
 }
 
-/* Match the xterm white canvas through its gutter and command toolbar. */
-.app-shell.theme-light .terminal-stack,
-.app-shell.theme-light .terminal-pane,
-.app-shell.theme-light .terminal-wrap,
-.app-shell.theme-light .terminal-frame,
-.app-shell.theme-light .terminal-body-wrap,
-.app-shell.theme-light .xterm-host,
-.app-shell.theme-light .quick-command-bar { background: #ffffff; }
+/* Use the same resolved background through the viewport, unused row and toolbar.
+   Keep specificity above xterm's default black viewport, regardless of CSS order. */
+.app-shell:is(.theme-light, .theme-dark) .terminal-pane,
+.app-shell:is(.theme-light, .theme-dark) .terminal-pane :is(.terminal-wrap, .terminal-frame, .terminal-body-wrap, .xterm-host, .xterm, .xterm-viewport, .quick-command-bar) {
+  background: var(--terminal-background, var(--workbench-terminal));
+}
+.app-shell .terminal-pane .xterm .composition-view {
+  background: var(--terminal-background, var(--workbench-terminal));
+  color: var(--terminal-foreground, var(--workbench-text));
+}
 .app-shell.theme-light .quick-command-bar { border-top-color: #e5e7eb; }

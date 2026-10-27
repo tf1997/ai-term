@@ -14,11 +14,10 @@ export function useWorkspaceResize(options: WorkspaceResizeOptions) {
   const preferredWidth = ref(loadWorkspaceWidth(options.storage))
   const viewportWidth = ref(window.innerWidth)
   const workspaceResizing = ref(false)
-  const layout = computed(() => getWorkspaceLayout(viewportWidth.value, preferredWidth.value, options.leftCollapsed.value, options.rightCollapsed.value || options.sftpWorkbenchActive.value))
+  const layout = computed(() => getWorkspaceLayout(viewportWidth.value, preferredWidth.value, options.leftCollapsed.value))
   const workspaceWidth = computed(() => layout.value.width)
   const workspaceMinWidth = computed(() => layout.value.minWidth)
   const workspaceMaxWidth = computed(() => layout.value.maxWidth)
-  const sidebarOverlay = computed(() => layout.value.sidebarOverlay)
   const workspaceLayoutStyle = computed(() => ({
     '--sidebar-width': layout.value.sidebarWidth + 'px',
     '--workspace-width': workspaceWidth.value + 'px'
@@ -68,7 +67,7 @@ export function useWorkspaceResize(options: WorkspaceResizeOptions) {
     window.removeEventListener('resize', updateViewportWidth)
   })
 
-  return { workspaceWidth, workspaceMinWidth, workspaceMaxWidth, sidebarOverlay,
+  return { workspaceWidth, workspaceMinWidth, workspaceMaxWidth,
     workspaceResizing: readonly(workspaceResizing), workspaceLayoutStyle,
     beginWorkspaceResize, handleWorkspaceResizeKeydown }
 }

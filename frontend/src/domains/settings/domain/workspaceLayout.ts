@@ -39,16 +39,18 @@ export function parseWorkspaceWidth(value: string | null): number {
 
 // One geometry calculation serves rendering, resizing and ARIA ranges.
 // Keep the saved preference intact when a smaller viewport constrains it.
-export function getWorkspaceLayout(viewportWidth: number, preferredWidth: number, leftCollapsed: boolean, rightCollapsed = false) {
+export function getWorkspaceLayout(viewportWidth: number, preferredWidth: number, leftCollapsed: boolean) {
   const sidebarWidth = viewportWidth <= 1280 ? 224 : 248
   const requestedWidth = clampWorkspaceWidth(preferredWidth)
-  const sidebarOverlay = viewportWidth - RAIL_WIDTH - sidebarWidth - (rightCollapsed ? 0 : requestedWidth) < MIN_TERMINAL_WIDTH
-  const leftWidth = RAIL_WIDTH + (leftCollapsed || sidebarOverlay ? 0 : sidebarWidth)
-  const maxWidth = Math.max(0, Math.min(MAX_WORKSPACE_WIDTH, viewportWidth - leftWidth - MIN_TERMINAL_WIDTH))
+  const leftWidth = RAIL_WIDTH + (leftCollapsed ? 0 : sidebarWidth)
+  const availableWidth = Math.max(0, viewportWidth - leftWidth)
+  // Keep both sidebars docked and usable in narrow windows. The terminal yields
+  // some width before the auxiliary tools shrink below their normal minimum.
+  const terminalMinWidth = Math.min(MIN_TERMINAL_WIDTH, Math.max(320, availableWidth - MIN_WORKSPACE_WIDTH))
+  const maxWidth = Math.max(0, Math.min(MAX_WORKSPACE_WIDTH, availableWidth - terminalMinWidth))
   const minWidth = Math.min(MIN_WORKSPACE_WIDTH, maxWidth)
   return {
     sidebarWidth,
-    sidebarOverlay,
     minWidth,
     maxWidth,
     width: clampWorkspaceWidth(requestedWidth, minWidth, maxWidth)

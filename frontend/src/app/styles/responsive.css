@@ -1,4 +1,4 @@
-/* Widths come from useWorkspaceResize, including breakpoint and terminal budget. */
+/* Connection and settings panels remain docked at every window width. */
 .left-sidebar-panel {
   position: relative;
   grid-column: 2;
@@ -44,26 +44,6 @@
 .sidebar-layout-controls .sidebar-drawer-close:focus-visible {
   outline: 2px solid var(--workbench-accent);
   outline-offset: -2px;
-}
-
-.sidebar-drawer-backdrop {
-  position: fixed;
-  inset: 46px 0 0 48px;
-  z-index: 27;
-  background: rgba(0, 0, 0, .22);
-}
-.theme-light .sidebar-drawer-backdrop {
-  background: rgba(0, 0, 0, .12);
-}
-
-.left-sidebar-overlay .left-sidebar-panel {
-  position: fixed;
-  top: 46px;
-  bottom: 0;
-  left: 48px;
-  z-index: 28;
-  width: min(320px, calc(100vw - 64px));
-  box-shadow: 8px 0 24px rgba(0, 0, 0, .16);
 }
 
 @media (max-width: 1280px) {

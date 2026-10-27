@@ -400,27 +400,26 @@ async function screenshot(name) {
 
 async function assertResponsiveLayout() {
   const measurements = []
-  for (const width of [1280, 1100, 1040, 980]) {
+  for (const width of [1440, 1280, 1100, 1040, 980]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: 760, deviceScaleFactor: 1, mobile: false })
-    await waitFor(`innerWidth === ${width} && document.querySelector('.terminal-stack').getBoundingClientRect().width >= 559`)
+    await waitFor(`innerWidth === ${width} && document.querySelector('.terminal-stack').getBoundingClientRect().width >= 387`)
+    await waitFor('!document.querySelector(".workspace-motion-enter-active, .workspace-motion-leave-active, .sidebar-motion-enter-active, .sidebar-motion-leave-active")')
     measurements.push(await evaluate(`({ viewport: innerWidth, terminal: document.querySelector('.terminal-stack').getBoundingClientRect().width, tools: document.querySelector('.right-panel').getBoundingClientRect().width })`))
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true)
     for (const index of [0, 1]) {
       const trigger = `.app-rail button[aria-controls="left-sidebar-panel"]:nth-child(${index + 1})`
       if (await evaluate(`document.querySelector(${JSON.stringify(trigger)}).getAttribute('aria-expanded') !== 'true'`)) await click(trigger)
       await waitFor(`document.querySelector('#left-sidebar-panel').getBoundingClientRect().width > 0`)
-      if (await evaluate('document.querySelector(".app-shell").classList.contains("left-sidebar-overlay")')) {
-        assert.equal(await evaluate('document.querySelector("#left-sidebar-panel").getAttribute("role")'), 'dialog')
-        await evaluate(`(() => {
-          const items = Array.from(document.querySelectorAll('#left-sidebar-panel button:not(:disabled), #left-sidebar-panel input:not(:disabled), #left-sidebar-panel select:not(:disabled), #left-sidebar-panel [tabindex="0"]')).filter(element => element.getClientRects().length > 0);
-          items.at(-1).focus();
-        })()`)
-        await press('Tab')
-        assert.equal(await evaluate('document.activeElement === document.querySelector(".sidebar-drawer-close")'), true)
-        await press('Escape')
-      } else {
-        await click('.sidebar-drawer-close')
-      }
+      await waitFor(`document.querySelector('#left-sidebar-panel').getBoundingClientRect().left === 48`)
+      assert.equal(await evaluate(`(() => {
+        const panel = document.querySelector('#left-sidebar-panel');
+        const terminal = document.querySelector('.terminal-stack');
+        return getComputedStyle(panel).position === 'relative'
+          && panel.getAttribute('role') !== 'dialog'
+          && panel.getBoundingClientRect().right <= terminal.getBoundingClientRect().left
+          && !document.querySelector('.sidebar-drawer-backdrop');
+      })()`), true, 'Connections and settings must stay beside the terminal without an overlay')
+      await click('.sidebar-drawer-close')
       await waitFor('document.querySelector("#left-sidebar-panel").getBoundingClientRect().width === 0')
       assert.equal(await evaluate(`document.activeElement === document.querySelectorAll('.app-rail button[aria-controls="left-sidebar-panel"]')[${index}]`), true)
     }
@@ -465,6 +464,20 @@ try {
   assert.equal(await evaluate('Boolean(window.__TAURI_IPC__)'), false, 'Run this smoke test against browser preview, not a native workspace.')
   if (await evaluate('document.querySelector(".session-tools-toggle").getAttribute("aria-expanded") === "false"')) await click('.session-tools-toggle')
   await evaluate('window.__firstTerminalPane = document.querySelector(".terminal-stack").firstElementChild; window.__firstXterm = document.querySelector(".terminal-stack .xterm")')
+  if (process.argv.includes('--layout-only')) {
+    const responsive = await assertResponsiveLayout()
+    for (const theme of ['light', 'dark']) {
+      await new Promise(resolve => setTimeout(resolve, 180))
+      if (!await evaluate(`document.querySelector('.app-shell').classList.contains('theme-${theme}')`)) await click('.theme-toggle-button')
+      await waitFor(`(() => {
+        const pane = document.querySelector('.terminal-pane');
+        const background = getComputedStyle(pane.querySelector('.xterm-scrollable-element')).backgroundColor;
+        return [...pane.querySelectorAll('.terminal-wrap, .terminal-frame, .terminal-body-wrap, .xterm-host, .xterm, .xterm-viewport, .quick-command-bar')].every(element => getComputedStyle(element).backgroundColor === background);
+      })()`)
+    }
+    assert.deepEqual(exceptions, [])
+    console.log(JSON.stringify({ result: 'passed', checks: ['docked connections and settings at 980–1440px', 'no overlay or terminal overlap', 'collapse and restart preferences', 'terminal backgrounds match in both themes'], responsive }, null, 2))
+  } else {
   await assertLastTerminalGuard()
   await assertAuxiliaryState()
   await assertSessionViews()
@@ -696,6 +709,7 @@ try {
     ],
     screenshots: [darkScreenshot, darkMenuScreenshot, lightScreenshot, lightMenuScreenshot, syncScreenshot, sessionScreenshot, responsive.narrowScreenshot]
   }, null, 2))
+  }
 } catch (error) {
   console.error('Browser failure screenshot:', await screenshot('failure.png').catch(() => 'unavailable'))
   throw error

@@ -177,19 +177,16 @@ const {
   workspaceWidth,
   workspaceMinWidth,
   workspaceMaxWidth,
-  sidebarOverlay,
   workspaceResizing,
   workspaceLayoutStyle,
   beginWorkspaceResize,
   handleWorkspaceResizeKeydown
 } = useWorkspaceResize({ leftCollapsed, rightCollapsed, sftpWorkbenchActive })
 
-const leftDrawerVisible = ref(false)
 const leftSidebarPanel = ref<HTMLElement>()
 const connectionsPanelButton = ref<HTMLButtonElement>()
 const settingsPanelButton = ref<HTMLButtonElement>()
-const leftDrawerOpen = computed(() => sidebarOverlay.value && leftDrawerVisible.value)
-const leftPanelVisible = computed(() => sidebarOverlay.value ? leftDrawerVisible.value : !leftCollapsed.value)
+const leftPanelVisible = computed(() => !leftCollapsed.value)
 
 // Capture before Vue patches the parent grid; measuring in before-leave can
 // already see a collapsed zero-width column on a docked layout.
@@ -201,51 +198,13 @@ watch(() => rightCollapsed.value || sftpWorkbenchActive.value, collapsed => {
   if (collapsed && panel) captureSurfaceWidth(panel)
 }, { flush: 'sync' })
 
-watch(sidebarOverlay, (overlay) => {
-  // Preserve interaction when resizing while keeping the docked preference separate.
-  leftDrawerVisible.value = overlay && Boolean(leftSidebarPanel.value?.contains(document.activeElement))
-})
-watch([leftDrawerOpen, leftPanelMode], async ([open]) => {
-  if (open) {
-    await nextTick()
-    if (leftDrawerOpen.value) leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus()
-  }
-})
-
 function leftPanelTrigger() {
   return leftPanelMode.value === 'connections' ? connectionsPanelButton.value : settingsPanelButton.value
 }
 
 function closeLeftPanel() {
-  if (sidebarOverlay.value) leftDrawerVisible.value = false
-  else leftCollapsed.value = true
+  leftCollapsed.value = true
   void nextTick(() => leftPanelTrigger()?.focus())
-}
-
-function handleLeftDrawerKeydown(event: KeyboardEvent) {
-  if (!leftDrawerOpen.value || event.defaultPrevented || contextMenu.value) return
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    event.stopPropagation()
-    if (connectionEditorOpen.value) {
-      closeConnectionEditor()
-      void nextTick(() => leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus())
-    }
-    else if (aiConfigEditorOpen.value) {
-      closeAiConfigEditor()
-      void nextTick(() => leftSidebarPanel.value?.querySelector<HTMLButtonElement>('.sidebar-drawer-close')?.focus())
-    }
-    else closeLeftPanel()
-    return
-  }
-  if (event.key !== 'Tab') return
-  const panel = leftSidebarPanel.value
-  const scope = panel?.querySelector<HTMLElement>('.modal') ?? panel
-  const focusable = [...(scope?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]') ?? [])].filter(element => element.getClientRects().length > 0)
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
 }
 
 async function connectProfileFromSidebar(profileId: string) {
@@ -261,10 +220,6 @@ async function connectProfileFromSidebar(profileId: string) {
     await ensureActiveAiSession(profile.id)
     createTerminalTab(profile)
     await nextTick()
-    if (leftDrawerOpen.value) {
-      leftDrawerVisible.value = false
-      focusActiveTerminalFromWorkspace()
-    }
     profiles.value = await listConnectionProfiles()
     selectedProfileId.value = profile.id
   } catch (error) {
@@ -288,14 +243,12 @@ function openLocalTerminal() {
 
 function openConnectionsPanel() {
   leftPanelMode.value = 'connections'
-  if (sidebarOverlay.value) leftDrawerVisible.value = true
-  else leftCollapsed.value = false
+  leftCollapsed.value = false
 }
 
 function openSettingsPanel() {
   leftPanelMode.value = 'settings'
-  if (sidebarOverlay.value) leftDrawerVisible.value = true
-  else leftCollapsed.value = false
+  leftCollapsed.value = false
 }
 
 function toggleConnectionsPanel() {
@@ -856,10 +809,6 @@ async function refreshConnectionProfilesAfterTerminalAuth(profileId: string) {
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     if (aboutOpen.value) closeAboutPage()
-    else if (!event.defaultPrevented && !contextMenu.value && leftDrawerOpen.value) {
-      event.preventDefault()
-      closeLeftPanel()
-    }
   }
 }
 
@@ -890,7 +839,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed || sidebarOverlay, 'left-sidebar-overlay': sidebarOverlay, 'left-drawer-open': leftDrawerOpen, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
+  <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
     <header class="titlebar">
       <div class="brand">
         <img class="brand-mark" src="/icon.svg" alt="" aria-hidden="true" />
@@ -962,9 +911,6 @@ onBeforeUnmount(() => {
         <UiIcon name="info" />
       </button>
     </aside>
-    <Transition name="backdrop-motion">
-      <div v-if="leftDrawerOpen" class="sidebar-drawer-backdrop" aria-hidden="true" @click="closeLeftPanel" />
-    </Transition>
     <Transition name="sidebar-motion">
     <section
       id="left-sidebar-panel"
@@ -972,12 +918,10 @@ onBeforeUnmount(() => {
       v-show="leftPanelVisible"
       :inert="!leftPanelVisible"
       class="left-sidebar-panel"
-      :role="leftDrawerOpen ? 'dialog' : undefined"
       :aria-label="leftPanelMode === 'connections' ? '连接管理' : '设置中心'"
-      @keydown="handleLeftDrawerKeydown"
     >
       <div class="sidebar-layout-controls">
-        <button class="icon-button sidebar-drawer-close" type="button" :title="leftDrawerOpen ? '关闭侧栏' : '收起侧栏'" :aria-label="leftDrawerOpen ? '关闭侧栏' : '收起侧栏'" @click="closeLeftPanel">
+        <button class="icon-button sidebar-drawer-close" type="button" title="收起侧栏" aria-label="收起侧栏" @click="closeLeftPanel">
           <UiIcon name="arrow-left" size="14" />
         </button>
       </div>

@@ -125,7 +125,7 @@ try {
   if (phase === 'after') {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     await send('Emulation.setDeviceMetricsOverride', { width: 1120, height: 820, deviceScaleFactor: 1, mobile: false })
-    await waitFor('perfApp.sidebarOverlay === true')
+    await waitFor('innerWidth === 1120')
     motion = await evaluate(`(async () => {
       const settle = () => new Promise(resolve => setTimeout(resolve, 240));
       const frame = () => new Promise(requestAnimationFrame);
@@ -150,20 +150,21 @@ try {
       const backgrounds = ['.terminal-wrap', '.terminal-body-wrap', '.xterm-host', '.quick-command-bar'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor);
       return { resizes, enterProperties, enterClasses, reducedMotion, switchedSettings, leaving, inertWhileLeaving, closed, sameTerminal: terminalInstance === perfPane.setupState.terminal, backgrounds };
     })()`)
-    assert.equal(motion.resizes, 0, 'Overlay animation must not resize the terminal')
+    assert.ok(motion.resizes > 0 && motion.resizes <= 4, 'Docked panels resize the terminal at layout changes, not on every animation frame')
     assert.ok(motion.enterProperties.includes('transform') && motion.enterProperties.includes('opacity'), JSON.stringify(motion))
     assert.ok(!/width|height|all/.test(motion.enterProperties))
     assert.ok(motion.switchedSettings && motion.leaving && motion.inertWhileLeaving && motion.closed && motion.sameTerminal)
     assert.ok(motion.backgrounds.every(color => color === 'rgb(255, 255, 255)'))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     await evaluate('perfApp.toggleConnectionsPanel(); true')
-    await waitFor('perfApp.leftDrawerOpen')
+    await waitFor('perfApp.leftPanelVisible')
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#left-sidebar-panel")).transitionDuration'), '0s')
     await send('Emulation.setEmulatedMedia', { features: [] })
     await evaluate('perfApp.closeLeftPanel(); true')
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 820, deviceScaleFactor: 1, mobile: false })
-    await waitFor('perfApp.sidebarOverlay === false')
+    await waitFor('innerWidth === 1600')
+    await evaluate('perfApp.openConnectionsPanel(); true')
     const docked = await evaluate(`(async () => {
       const frame = () => new Promise(requestAnimationFrame);
       await new Promise(resolve => setTimeout(resolve, 240));

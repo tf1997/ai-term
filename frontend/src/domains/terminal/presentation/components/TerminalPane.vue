@@ -2,7 +2,7 @@
 import { useTerminalCapture } from '../../application/useTerminalCapture'
 import { useTerminalEvents } from '../../application/useTerminalEvents'
 import { useQuickCommands } from '../../application/useQuickCommands'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { IDisposable, ITheme } from '@xterm/xterm'
@@ -1795,6 +1795,12 @@ function terminalThemeOptions(theme: TerminalTheme): ITheme {
 
 let appliedTerminalTheme: TerminalTheme | undefined
 
+// Share xterm's resolved palette with the host and the fractional row below it.
+const terminalSurfaceStyle = computed(() => {
+  const theme = terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
+  return { '--terminal-background': theme.background, '--terminal-foreground': theme.foreground }
+})
+
 function applyTerminalAppearance() {
   if (!terminal) return
   const settings = resolvedTerminalSettings()
@@ -2565,7 +2571,7 @@ defineExpose({
 </script>
 
 <template>
-  <main class="terminal-pane" :class="{ 'agent-controlled': props.agentControlled }">
+  <main class="terminal-pane" :class="{ 'agent-controlled': props.agentControlled }" :style="terminalSurfaceStyle">
     <section class="terminal-wrap">
       <div class="terminal-frame terminal-native-code">
         <div ref="terminalBodyWrap" class="terminal-body-wrap">

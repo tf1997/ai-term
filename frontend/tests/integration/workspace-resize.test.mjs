@@ -89,7 +89,7 @@ test('指针算法保留左右栏与终端占用、窄窗口下限和像素取�
   assert.equal(getWorkspaceWidthForPointer(1300, 100, false), 444)
   assert.equal(getWorkspaceWidthForPointer(1300, 100, true), 560)
   assert.equal(getWorkspaceWidthForPointer(1000, 100, true), 392)
-  assert.equal(getWorkspaceWidthForPointer(800, 100, false), 192)
+  assert.equal(getWorkspaceWidthForPointer(800, 100, false), 208)
 })
 
 test('键盘算法保留 20px 步长，并接受统一的有效范围', () => {
@@ -251,36 +251,35 @@ test('存储不可用时键盘和指针缩放仍可操作并正常结束', conte
 })
 
 
-test('1280、1100、1040 和 980 窗口保留终端最小宽度，窄窗口使用左侧抽屉', () => {
+test('窄窗口保留固定侧栏与可用工具宽度，终端随剩余空间缩放', () => {
   for (const viewport of [1440, 1280, 1100, 1040, 980]) {
     const layout = getWorkspaceLayout(viewport, 360, false)
-    const dockedSidebar = layout.sidebarOverlay ? 0 : layout.sidebarWidth
-    assert.ok(viewport - 48 - dockedSidebar - layout.width >= 560)
-    assert.equal(layout.sidebarOverlay, viewport < 1192)
+    assert.ok(viewport - 48 - layout.sidebarWidth - layout.width >= 388)
     assert.ok(layout.width >= 320)
   }
   assert.equal(getWorkspaceLayout(1280, 360, false).sidebarWidth, 224)
-  assert.equal(getWorkspaceLayout(980, 360, false, true).sidebarOverlay, false)
+  assert.equal(getWorkspaceLayout(980, 560, false).width, 320)
+  assert.equal(getWorkspaceLayout(980, 560, true).width, 372)
 })
 
 test('窗口缩小保留偏好，恢复宽窗口还原宽度；键盘从可见宽度开始', context => {
   const storage = createStorage({ [WORKSPACE_WIDTH_STORAGE_KEY]: '560' })
   const { state, viewport } = mountResize(context, { innerWidth: 1280, storage })
-  assert.equal(state.workspaceWidth.value, 560)
+  assert.equal(state.workspaceWidth.value, 448)
   viewport.innerWidth = 980
   viewport.dispatchEvent(new Event('resize'))
-  assert.equal(state.workspaceWidth.value, 372)
-  assert.equal(state.workspaceMaxWidth.value, 372)
-  assert.equal(state.workspaceLayoutStyle.value['--workspace-width'], '372px')
+  assert.equal(state.workspaceWidth.value, 320)
+  assert.equal(state.workspaceMaxWidth.value, 320)
+  assert.equal(state.workspaceLayoutStyle.value['--workspace-width'], '320px')
   assert.equal(storage.writes.length, 0)
   viewport.innerWidth = 1280
   viewport.dispatchEvent(new Event('resize'))
-  assert.equal(state.workspaceWidth.value, 560)
+  assert.equal(state.workspaceWidth.value, 448)
   viewport.innerWidth = 980
   viewport.dispatchEvent(new Event('resize'))
   state.handleWorkspaceResizeKeydown(keyEvent('ArrowRight'))
-  assert.equal(state.workspaceWidth.value, 352)
-  assert.equal(storage.getItem(WORKSPACE_WIDTH_STORAGE_KEY), '352')
+  assert.equal(state.workspaceWidth.value, 320)
+  assert.equal(storage.getItem(WORKSPACE_WIDTH_STORAGE_KEY), '320')
 })
 
 test('鼠标和键盘共享范围，CSS 反映实际宽度', context => {
