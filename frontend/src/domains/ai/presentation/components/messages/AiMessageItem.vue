@@ -107,7 +107,7 @@ onBeforeUnmount(() => {
 .chat-turn { min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; overflow-anchor: none; }
 .chat-turn-user { align-self: flex-end; width: fit-content; max-width: 85%; border-radius: 8px; background: var(--chat-user); padding: 9px 12px; }
 .chat-turn-head { position: relative; display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 5px; min-width: 0; }
-.chat-copy-feedback { color: var(--chat-muted); font-size: 11px; flex: none; }
+.chat-copy-feedback { color: var(--chat-muted); font-size: 12px; flex: none; }
 .chat-identity { display: inline-flex; align-items: center; gap: 6px; color: var(--chat-text); font-size: 12px; flex: none; }
 .chat-identity .ui-icon { color: var(--chat-accent); }
 .chat-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-muted); font-size: 12px; }
@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
 .chat-copy { margin-left: auto; opacity: 0; }
 .chat-duration ~ .chat-copy, .chat-usage ~ .chat-copy { margin-left: 0; }
 .chat-turn:hover .chat-copy, .chat-turn:focus-within .chat-copy { opacity: 1; }
-.chat-turn-body { display: grid; min-width: 0; gap: 12px; overflow-wrap: anywhere; font-size: var(--font-md); line-height: 1.6; }
+.chat-turn-body { display: grid; min-width: 0; gap: 10px; overflow-wrap: anywhere; font-size: var(--font-lg); line-height: 22px; }
 .chat-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; flex: none; border: 0; border-radius: 5px; background: transparent; color: var(--chat-muted); }
 .chat-icon:hover { background: var(--chat-hover); color: var(--chat-text); }
 .chat-icon:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: 1px; }
@@ -129,6 +129,6 @@ onBeforeUnmount(() => {
 .chat-usage-list { display: grid; grid-template-columns: 1fr auto; gap: 5px 16px; margin: 9px 0 0; font-size: 12px; line-height: 1.45; }
 .chat-usage-list dt { color: var(--chat-muted); }
 .chat-usage-list dd { margin: 0; color: var(--chat-text); font-variant-numeric: tabular-nums; text-align: right; }
-.chat-usage-note { margin: 9px 0 0; color: var(--chat-muted); font-size: 11px; line-height: 1.4; }
+.chat-usage-note { margin: 9px 0 0; color: var(--chat-muted); font-size: 12px; line-height: 18px; }
 @media (hover: none) { .chat-copy { opacity: 1; } }
 </style>

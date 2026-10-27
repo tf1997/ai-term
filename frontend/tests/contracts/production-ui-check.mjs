@@ -235,11 +235,9 @@ assert(
     !/font-size:\s*(?:9(?:\.5)?|10\.5|11\.5|12\.5)px;/.test(styles) &&
     main.includes("import('@fontsource-variable/noto-sans-sc')") &&
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
-    terminalPane.includes('lineHeight: 1.18') &&
+    terminalPane.includes('lineHeight: 1.25') &&
     userSettings.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
     settingsSidebar.includes('createDefaultUserSettings(windowsPlatform)') &&
-    settingsStorage.includes('WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY') &&
-    settingsStorage.includes('settings.terminalFontSize === 15') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
   'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, balanced terminal line spacing, and real bundled terminal weights.'
@@ -923,7 +921,7 @@ assertLastCssDeclarations(
   { afterMarker: '/* Command history preview modal. */', beforeMarker: '/* Light theme shell structure parity contract. */' }
 )
 assert(
-  /\.theme-light \.ai-chat-panel\s*\{[^}]*--chat-surface:\s*#ffffff;[^}]*--chat-text:\s*#22272d;/.test(aiPanelStyles) &&
+  /\.theme-light \.ai-chat-panel\s*\{[^}]*--chat-surface:\s*#ffffff;[^}]*--chat-text:\s*var\(--workbench-text\);/.test(aiPanelStyles) &&
     aiMessageItem.includes('var(--chat-text)') &&
     aiCodeBlock.includes('var(--chat-surface,'),
   'Light theme AI panel and tool surfaces must use the shared light chat tokens.'

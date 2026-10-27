@@ -20,12 +20,12 @@ const expanded = ref(false)
 
 <style scoped>
 .chat-reasoning { min-width: 0; color: var(--chat-muted, var(--workbench-muted)); }
-summary { display: flex; align-items: center; gap: 5px; min-height: 28px; font-size: 12px; cursor: pointer; list-style: none; }
+summary { display: flex; align-items: center; gap: 5px; min-height: 24px; font-size: 12px; line-height: 18px; cursor: pointer; list-style: none; }
 summary::-webkit-details-marker { display: none; }
 summary .ui-icon { flex: none; }
 [open] > summary .ui-icon { transform: rotate(90deg); }
 summary:hover { color: var(--chat-text, var(--workbench-text)); }
 summary:focus-visible { outline: 2px solid var(--chat-muted); outline-offset: 2px; border-radius: 3px; }
-summary small { font-size: 11px; }
+summary small { font-size: 12px; }
 .chat-markdown { padding-block: 6px; }
 </style>

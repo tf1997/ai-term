@@ -931,7 +931,7 @@ watch(
         :source="messageSourceLabel(message)"
         :duration="messageAnswerDuration(message) ? formatAnswerDuration(messageAnswerDuration(message)) : ''"
       >
-          <div v-if="message.streaming" class="chat-progress">
+          <div v-if="message.streaming" class="chat-progress" :class="{ 'needs-decision': message.id === currentAssistantMessageId && needsAgentDecision }">
             <span class="chat-progress-dot" />
             {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>

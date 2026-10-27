@@ -100,13 +100,29 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1120, deviceScaleFactor: 1, mobile: false })
   await send('Page.navigate', { url: fixtureUrl })
   await waitFor('window.aiFixtureReady === true && document.querySelectorAll(".assistant-panel .chat-turn-assistant").length >= 8')
+  await evaluate(`(async () => {
+    document.documentElement.dataset.platform = 'windows';
+    await Promise.all([import('/node_modules/@fontsource-variable/noto-sans-sc/index.css'), import('/node_modules/@fontsource/jetbrains-mono/400.css'), import('/node_modules/@fontsource/jetbrains-mono/600.css')]);
+    await document.fonts.ready;
+    aiFixture.state.props.messages.find(message => message.id === 'completed').agentSteps[0].autoApproved = true;
+  })()`)
+  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=completed-step] .tool-step-exit"))'), false, 'Completed summaries omit successful exit metadata')
+  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=completed-step] .tool-step-auto"))'), false)
+  await click('[data-step-id="completed-step"] .tool-step-toggle')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=completed-step] .tool-step-exit").textContent'), 'exit 0', 'Expanding restores the exact exit code')
+  assert.ok(await evaluate('document.querySelector("[data-step-id=completed-step] .tool-step-auto").textContent.includes("自动执行")'))
+  await click('[data-step-id="completed-step"] .tool-step-toggle')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=nonzero-step] .tool-step-exit").textContent'), 'exit 1', 'Nonzero exits stay prominent')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=pending-step]").classList.contains("is-awaiting-decision")'), false, 'Historical pending steps are not live approval requests')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=pending-step] .tool-step-status").textContent'), '待执行')
+  checks.push('Compact summaries retain all execution details on expansion and distinguish historical pending steps from live approvals')
   await click('[data-message-id="long-output"] .tool-step-toggle')
   await waitFor('Boolean(document.querySelector("[data-message-id=long-output] .tool-code-output"))')
 
   const geometry = []
   for (const theme of ['light', 'dark']) {
-    for (const zoom of [1, 1.25]) {
-      for (const width of [360, 420, 430, 554, 560]) {
+    for (const zoom of [1, 1.25, 1.5]) {
+      for (const width of [320, 360, 420, 430, 554, 560]) {
         await evaluate(`aiFixture.configure(${JSON.stringify({ theme, zoom, width })})`)
         const metrics = await evaluate(`(() => {
           const panel = document.querySelector('.assistant-panel');
@@ -157,7 +173,7 @@ try {
       }
     }
   }
-  checks.push('20 panel width/theme/125% CSS zoom combinations keep message and body edges aligned', 'No panel horizontal overflow or composer overlap')
+  checks.push('36 panel width/theme/100–150% CSS zoom combinations keep message and body edges aligned', 'No panel horizontal overflow or composer overlap')
   checks.push('Long Chinese step titles wrap without metadata overlap', 'Collapsed steps omit repeated targets', 'Command previews avoid nested scrolling while multiline output preserves columns')
 
   await evaluate('aiFixture.configure({ theme: "light", zoom: 1, width: 554 })')
@@ -239,30 +255,41 @@ try {
   await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查运行状态'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await click('.chat-send')
   await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在规划任务")')
-  const borderStyle = `(() => {
+  const activityAppearance = `(() => {
     const shell = document.querySelector('.chat-input-shell');
-    const style = getComputedStyle(shell, '::after');
-    return { background: style.backgroundImage, state: style.animationPlayState, animation: style.animationName, pointerEvents: style.pointerEvents, overflow: getComputedStyle(shell).overflow };
+    const dot = document.querySelector('.chat-activity .chat-progress-dot');
+    const card = document.querySelector('[data-step-id=runtime-first]');
+    return {
+      borderImage: getComputedStyle(shell, '::after').backgroundImage,
+      overflow: getComputedStyle(shell).overflow,
+      animation: getComputedStyle(dot).animationName,
+      waiting: shell.classList.contains('is-awaiting-decision'),
+      cardWaiting: card?.classList.contains('is-awaiting-decision'),
+      statusColor: getComputedStyle(document.querySelector('.chat-activity-stage')).color,
+      cardColor: card && getComputedStyle(card.querySelector('.tool-step-status')).color
+    };
   })()`
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
-  const flowingBorder = await evaluate(borderStyle)
-  assert.equal(flowingBorder.state, 'running')
-  assert.ok(flowingBorder.background.includes('conic-gradient'), 'The border flows around the perimeter')
-  assert.equal(flowingBorder.pointerEvents, 'none')
-  assert.equal(flowingBorder.overflow, 'visible', 'Composer menus remain outside the border mask')
-  await new Promise(resolve => setTimeout(resolve, 180))
-  assert.notEqual((await evaluate(borderStyle)).background, flowingBorder.background, 'Painted border colors change while the Agent runs')
+  const activeAppearance = await evaluate(activityAppearance)
+  assert.equal(activeAppearance.borderImage, 'none', 'Activity uses the status indicator instead of a decorative border')
+  assert.equal(activeAppearance.overflow, 'visible', 'Composer menus remain outside the input shell')
+  assert.notEqual(activeAppearance.animation, 'none', 'An active task has a live status indicator')
+  assert.equal(activeAppearance.waiting, false)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
-  assert.equal((await evaluate(borderStyle)).animation, 'none', 'Reduced motion keeps a static border')
+  assert.equal((await evaluate(activityAppearance)).animation, 'none', 'Reduced motion stops the status pulse')
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
   await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
   await waitFor('Boolean(document.querySelector("[data-step-id=runtime-first] .tool-step-decision"))')
-  const pausedBorder = await evaluate(borderStyle)
-  assert.equal(pausedBorder.state, 'paused', 'Border pauses while waiting for a decision')
-  await new Promise(resolve => setTimeout(resolve, 180))
-  assert.equal((await evaluate(borderStyle)).background, pausedBorder.background)
-  checks.push('The colorful border flows around the composer while running, pauses for decisions and respects reduced motion')
+  const waitingAppearance = await evaluate(activityAppearance)
+  assert.equal(waitingAppearance.waiting, true)
+  assert.equal(waitingAppearance.cardWaiting, true)
+  assert.equal(waitingAppearance.animation, 'none', 'Approval waiting is static')
+  assert.equal(waitingAppearance.statusColor, waitingAppearance.cardColor, 'Card and sticky status use the same waiting color')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision")).color'), waitingAppearance.statusColor, 'Inline progress agrees with the approval state')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision .chat-progress-dot")).animationName'), 'none')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-status").textContent'), '等待确认')
+  checks.push('Task activity stays visible, approval states agree across surfaces, and reduced motion stops activity animation')
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-progress").textContent.includes("等待确认命令")'), 'Agent progress remains visible after tool steps appear')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), false, 'Always allow is an enabled button for an eligible command')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-allow").textContent.includes("所有会话")'), 'Approval explains the scope of saved permission')
@@ -283,6 +310,11 @@ try {
   assert.equal(await evaluate('aiFixture.runtime.commands.length'), 0, 'Saving permission must complete before dispatch')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), 'Saving cannot be submitted twice')
   assert.ok(await evaluate('document.querySelector(".chat-activity-stage").textContent.includes("正在保存授权")'))
+  const savingAppearance = await evaluate(activityAppearance)
+  assert.equal(savingAppearance.waiting, false)
+  assert.equal(savingAppearance.cardWaiting, false)
+  assert.notEqual(savingAppearance.animation, 'none', 'Saving authorization resumes activity feedback')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-status").textContent'), '正在保存授权')
   await evaluate('aiFixture.runtime.finishSave()')
   await waitFor('aiFixture.runtime.commands.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在执行命令")')
   await waitFor('!document.querySelector("[data-step-id=runtime-first] .tool-step-duration").textContent.includes("0 秒")')
@@ -353,6 +385,9 @@ try {
   await waitFor('Boolean(document.querySelector("[data-step-id=runtime-timeout] .tool-step-decision"))')
   await click('[data-step-id="runtime-timeout"] .is-primary')
   await waitFor('document.querySelector(".chat-activity-stage").textContent.includes("等待超时处理")')
+  assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-timeout]").classList.contains("is-awaiting-decision")'), true)
+  assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-timeout] .tool-step-status").textContent'), '等待超时处理')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("[data-step-id=runtime-timeout] .tool-step-state-icon")).animationName'), 'none', 'Waiting for a timeout decision stops the execution spinner')
   assert.equal(await evaluate('document.querySelector(".chat-activity-time").getAttribute("aria-live")'), 'off')
   await click('.chat-send')
   await waitFor('!document.querySelector(".chat-activity")')

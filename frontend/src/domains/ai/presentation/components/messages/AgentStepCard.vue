@@ -44,21 +44,27 @@ const isFailed = computed(() => props.step.status === 'failed' || (props.step.st
 const didNotStart = computed(() => props.step.executionPhase === 'not-started')
 const stoppedWhileWaiting = computed(() => props.observationStopped && (props.step.status === 'running' || props.step.status === 'timeout' || props.step.status === 'pending'))
 const resultUnknown = computed(() => props.step.status === 'failed' && !didNotStart.value && props.step.executionPhase !== 'finished' && props.step.exitCode === undefined)
+const needsDecision = computed(() => (props.awaitingApproval || props.awaitingTimeout) && !props.approvalSaving && !props.observationStopped)
+const isBusy = computed(() => (props.step.status === 'running' || props.approvalSaving) && !needsDecision.value && !props.observationStopped)
 const canCollapse = computed(() => !props.awaitingApproval && !props.awaitingTimeout && (stoppedWhileWaiting.value || (props.step.status !== 'running' && props.step.status !== 'pending')))
 const collapsed = computed(() => canCollapse.value && (explicitlyExpanded.value === null
   ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)
   : !explicitlyExpanded.value))
+const compactSummary = computed(() => collapsed.value && (props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)))
 const statusLabel = computed(() => {
   if (props.approvalSaving) return '正在保存授权'
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '未执行' : '已停止等待'
-  if (props.awaitingTimeout) return '等待确认'
+  if (props.awaitingTimeout) return '等待超时处理'
+  if (props.awaitingApproval) return '等待确认'
   if (props.step.status === 'failed' && didNotStart.value) return '未执行'
   if (resultUnknown.value) return '结果未知'
   if (isFailed.value) return '执行异常'
-  return { pending: '待审批', running: '执行中', completed: '已完成', skipped: '已跳过', timeout: '等待已停止', failed: '执行异常' }[props.step.status]
+  return { pending: '待执行', running: '执行中', completed: '已完成', skipped: '已跳过', timeout: '等待已停止', failed: '执行异常' }[props.step.status]
 })
 const statusIcon = computed(() => {
   if (stoppedWhileWaiting.value) return 'history'
+  if (props.approvalSaving) return 'refresh'
+  if (needsDecision.value) return 'history'
   if (isFailed.value) return 'alert'
   if (props.step.status === 'running') return 'refresh'
   if (props.step.status === 'timeout') return 'history'
@@ -117,7 +123,7 @@ function toggleDetails() {
 </script>
 
 <template>
-  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': step.status === 'running' && !observationStopped, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
@@ -130,8 +136,8 @@ function toggleDetails() {
       </div>
       <div class="tool-step-meta">
         <span class="tool-step-status">{{ statusLabel }}</span>
-        <span v-if="step.autoApproved" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
-        <span v-if="step.exitCode !== undefined" class="tool-step-exit" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
+        <span v-if="step.autoApproved && !compactSummary" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
+        <span v-if="step.exitCode !== undefined && !compactSummary" class="tool-step-exit" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
         <span v-if="durationLabel" class="tool-step-duration">{{ durationLabel }}</span>
         <span v-if="countdownLabel">{{ countdownLabel }}</span>
       </div>
@@ -187,12 +193,12 @@ function toggleDetails() {
 
 <style scoped>
 .tool-step { width: 100%; min-width: 0; flex: none; box-sizing: border-box; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 8px; overflow: hidden; color: var(--chat-text, var(--workbench-text)); background: var(--chat-surface, var(--workbench-panel-strong)); letter-spacing: 0; overflow-anchor: none; }
-.tool-step-header { min-width: 0; padding: 12px; }
+.tool-step-header { min-width: 0; padding: 8px 12px; }
 .tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: start; gap: 8px; width: 100%; min-width: 0; height: auto; color: inherit; text-align: left; white-space: normal; }
 .tool-step-toggle { border: 0; padding: 0; background: transparent; cursor: pointer; }
 .tool-step-toggle:hover .tool-step-chevron { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step-toggle:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 5px; border-radius: 2px; }
-.tool-step-title { min-width: 0; font-size: 13px; font-weight: 550; line-height: 1.65; white-space: normal; overflow-wrap: anywhere; }
+.tool-step-title { min-width: 0; font-size: 14px; font-weight: 500; line-height: 22px; white-space: normal; overflow-wrap: anywhere; }
 .tool-step-state-icon, .tool-step-chevron { color: var(--chat-muted, var(--workbench-muted)); margin-top: 4px; }
 .tool-step-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; font-weight: 400; white-space: nowrap; }
 .tool-step-status::before { content: ''; width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; }
@@ -200,15 +206,18 @@ function toggleDetails() {
 .tool-step.is-error .tool-step-state-icon, .tool-step.is-error .tool-step-status, .tool-step-exit-error { color: var(--chat-danger, #c24150); }
 .tool-step.is-running .tool-step-status, .tool-step.is-running .tool-step-state-icon { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step.is-running .tool-step-state-icon { animation: tool-step-spin 1.6s linear infinite; }
-.tool-step-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 18px; margin-top: 6px; padding-left: 24px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.5; }
+.tool-step.is-awaiting-decision { border-color: var(--chat-warning-line, var(--workbench-warning-line)); }
+.tool-step.is-awaiting-decision .tool-step-header { background: var(--chat-warning-soft, var(--workbench-warning-soft)); }
+.tool-step.is-awaiting-decision .tool-step-status, .tool-step.is-awaiting-decision .tool-step-state-icon { color: var(--chat-warning, var(--workbench-warning)); }
+.tool-step-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 18px; margin-top: 4px; padding-left: 24px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 18px; }
 .tool-step-exit { padding-left: 10px; border-left: 1px solid var(--chat-line, var(--workbench-line)); }
 .tool-step-exit, .tool-step-duration { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tool-step-duration { margin-left: auto; }
-.tool-step-target { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--chat-line, var(--workbench-line)); color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.5; }
-.tool-step-target .ui-icon { flex: none; }
-.tool-step-target span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-step-target { display: flex; align-items: start; gap: 6px; min-width: 0; padding: 8px 12px 4px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 18px; }
+.tool-step-target .ui-icon { flex: none; margin-top: 2px; }
+.tool-step-target span { min-width: 0; overflow-wrap: anywhere; }
 .tool-step-body { border-top: 1px solid var(--chat-line, var(--workbench-line)); transform-origin: top center; animation: tool-step-reveal 150ms ease-out; }
-.tool-step-risk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 12px 0; background: var(--chat-subtle, var(--workbench-panel)); font-size: 11px; line-height: 1.6; }
+.tool-step-risk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 4px 12px; font-size: 12px; line-height: 18px; }
 .tool-step-auto { color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-risk { display: inline-flex; align-items: center; gap: 4px; color: var(--chat-warning, #996015); line-height: 1.4; }
 .tool-step-risk .ui-icon { display: block; flex: 0 0 auto; margin-top: 1px; }
@@ -220,17 +229,17 @@ function toggleDetails() {
 .tool-step.is-error .tool-step-failure-reason { color: var(--chat-danger, #c24150); }
 .tool-step-timeout-hint { color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.tool-step-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 29px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; background: var(--chat-surface, var(--workbench-panel-strong)); color: var(--chat-text, var(--workbench-text)); font-size: 12px; line-height: 1.5; cursor: pointer; }
+.tool-step-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; background: var(--chat-surface, var(--workbench-panel-strong)); color: var(--chat-text, var(--workbench-text)); font-size: 12px; line-height: 18px; cursor: pointer; }
 .tool-step-action.is-primary { background: var(--workbench-action-bg); color: var(--workbench-action-text); border-color: var(--workbench-action-border); }
 .tool-step-action.is-primary:not(.is-risk):hover:not(:disabled) { background: var(--workbench-action-hover); filter: none; }
 .tool-step-action.is-primary:not(.is-risk):active:not(:disabled) { background: var(--workbench-action-active); }
 .tool-step-action.is-primary.is-risk { background: var(--chat-warning-button, #855b18); color: #fff; border-color: transparent; }
 .tool-step-action:hover:not(:disabled) { filter: brightness(.95); }
-.tool-step-action:disabled { opacity: .45; cursor: not-allowed; }
+.tool-step .tool-step-action:disabled { opacity: 1; cursor: not-allowed; color: var(--chat-disabled, var(--workbench-disabled)); background: var(--chat-elevated, var(--workbench-panel-strong)); border-color: var(--chat-line, var(--workbench-line)); }
 .tool-step-action:focus-visible, .tool-step-allow:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
-.tool-step-action.is-icon { width: 29px; padding: 0; flex: 0 0 29px; }
-.tool-step-copy-feedback { color: var(--chat-muted, var(--workbench-muted)); font-size: 11px; }
-.tool-step-error-detail { margin: 10px 0 0; max-height: 180px; padding: 0 12px 12px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--font-mono, 'JetBrains Mono', Consolas, monospace); color: var(--chat-muted, var(--workbench-muted)); }
+.tool-step-action.is-icon { width: 32px; padding: 0; flex: 0 0 32px; }
+.tool-step-copy-feedback { color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; }
+.tool-step-error-detail { margin: 10px 0 0; max-height: 180px; padding: 0 12px 12px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/20px var(--font-mono, 'JetBrains Mono', Consolas, monospace); color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
 .tool-step-error-detail::-webkit-scrollbar-track { background: transparent; }
 .tool-step-error-detail::-webkit-scrollbar-thumb { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }

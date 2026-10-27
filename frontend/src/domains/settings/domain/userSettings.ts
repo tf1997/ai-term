@@ -4,6 +4,7 @@ export const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo,
 export const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
 export const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, monospace'
 export const DEFAULT_TERMINAL_FONT_SIZE = 13
+export const WINDOWS_DEFAULT_TERMINAL_FONT_SIZE = 14
 export const MIN_TERMINAL_FONT_SIZE = 11
 export const MAX_TERMINAL_FONT_SIZE = 22
 export const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
@@ -14,7 +15,7 @@ export function createDefaultUserSettings(windowsPlatform: boolean): AppUserSett
   return {
     debugMode: false,
     terminalFontFamily: windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY,
-    terminalFontSize: DEFAULT_TERMINAL_FONT_SIZE,
+    terminalFontSize: windowsPlatform ? WINDOWS_DEFAULT_TERMINAL_FONT_SIZE : DEFAULT_TERMINAL_FONT_SIZE,
     terminalTheme: 'midnight',
     defaultShell: 'system',
     agentAutoExecReadonly: true,
@@ -41,7 +42,7 @@ export function normalizeUserSettings(value: unknown, windowsPlatform: boolean):
   if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
   const settings = value as Record<string, unknown>
   const terminalFontFamily = typeof settings.terminalFontFamily === 'string' ? settings.terminalFontFamily.trim() : ''
-  const terminalFontSize = parseNumericSetting(settings.terminalFontSize) || DEFAULT_TERMINAL_FONT_SIZE
+  const terminalFontSize = parseNumericSetting(settings.terminalFontSize) || defaults.terminalFontSize
   const defaultShell = typeof settings.defaultShell === 'string' ? settings.defaultShell.trim() : ''
 
   return {

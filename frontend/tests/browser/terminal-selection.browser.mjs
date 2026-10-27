@@ -101,6 +101,13 @@ try {
   })
   await send('Page.enable')
   await send('Runtime.enable')
+  if (process.env.AI_TERM_DEBUG_PLATFORM === 'windows') {
+    const { userAgent } = await send('Browser.getVersion')
+    await send('Emulation.setUserAgentOverride', {
+      userAgent: userAgent.replace(/\([^)]*\)/, '(Windows NT 10.0; Win64; x64)'),
+      platform: 'Win32',
+    })
+  }
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 820, deviceScaleFactor: 1, mobile: false })
   await send('Page.addScriptToEvaluateOnNewDocument', {
@@ -111,6 +118,19 @@ try {
   await evaluate('document.querySelector("#session-view-terminal").click()')
   await evaluate('document.fonts.ready.then(() => true)')
   await delay(300)
+  if (process.env.AI_TERM_DEBUG_PLATFORM === 'windows') {
+    await check('Windows startup applies the new default and loads the CJK fallback', async () => {
+      const typography = await evaluate(`(() => {
+        const terminal = window.__selectionBrowser.terminal();
+        return { platform: document.documentElement.dataset.platform, size: terminal.options.fontSize, lineHeight: terminal.options.lineHeight, family: terminal.options.fontFamily, fonts: document.fonts.status };
+      })()`)
+      assert.equal(typography.platform, 'windows')
+      assert.equal(typography.size, 14)
+      assert.equal(typography.lineHeight, 1.25)
+      assert.ok(typography.family.includes('Noto Sans SC Variable'))
+      assert.equal(typography.fonts, 'loaded')
+    })
+  }
   await evaluate(`new Promise(resolve => {
     const terminal = window.__selectionBrowser.terminal();
     terminal.reset();
@@ -177,7 +197,7 @@ try {
       const released = await state()
       assert.ok(released.text.includes(`row-${String(100 + anchorRow).padStart(3, '0')}`), 'Final text includes the anchor row')
       assert.ok(released.highlights.length > 0)
-      assert.equal(await evaluate('window.__selectionBrowser.copied.at(-1)'), released.text)
+      assert.equal(await evaluate('window.__selectionBrowser.copied.at(-1)'), released.text.replace(/\r\n/g, '\n'), 'Clipboard preserves selection content with normalized line endings')
       await delay(150)
       assert.equal((await state()).viewport, released.viewport, 'Autoscroll stops after release')
     }

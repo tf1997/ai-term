@@ -1,66 +1,29 @@
-/* Long command/output lines keep their width and expose a bottom scrollbar. */
-
-/* DOM-backed scrollbar stays visible even when the OS uses overlay scrollbars. */
-
-/* Windows glyph and icon alignment pass.
-
-   Three native differences drive the artifacts macOS never shows:
-   1. Cascadia/Consolas have no CJK coverage, so Chinese inside mono surfaces
-      falls back to a proportional face at a different cap height and baseline.
-   2. Segoe UI / Noto Sans SC sit lower in their em box than SF Pro, so an
-      `align-items: center` icon next to text reads one pixel high.
-   3. Windows rounds fractional stroke widths up, making 2px strokes on small
-      icons look heavier than the surrounding text.
-
-   Everything here stays scoped to :root[data-platform="windows"]. */
-
+/* Windows-specific optical adjustments; shared UI size tokens stay platform-neutral. */
 :root[data-platform="windows"] {
   --win-icon-stroke: 1.7;
 }
 
-/* Mixed CJK + ASCII inside mono blocks: let the CJK fallback do the CJK and
-   keep the Latin metrics from Cascadia, then normalize the seam. */
-
-/* Latin-only run inside a mono surface keeps mono; a mixed run should not
-   half-fall-back mid-string. Applies to the failure detail and step output. */
-
-/* Icons: trim the stroke so 13–14px glyphs match the text weight beside them. */
 :root[data-platform="windows"] .ui-icon {
   stroke-width: var(--win-icon-stroke);
   shape-rendering: geometricPrecision;
 }
 
-/* The context chip: database icon, label, and caret on one optical baseline.
-   Segoe's lower baseline needs the icons nudged down, not the text up. */
-
-/* Failure-notice actions: 重试 / 复制详情 / 查看详情.
-
-   Only 重试 and 查看详情 wrap their label in a <span>; 复制详情 is a bare text
-   node, so any label rule has to live on the button itself or it silently
-   skips one of the three. The button keeps a CJK-friendly line-height rather
-   than a tight one — YaHei and Noto Sans SC need the vertical room, and 11px
-   is below where DirectWrite hints Chinese cleanly, so these lift to 12px. */
-
-/* The rest of the 11px CJK surfaces, same reason as the action row above:
-   DirectWrite stops hinting Chinese cleanly below 12px, so these read muddy
-   next to Latin that looks fine at the same size. Latin-only 11px labels
-   (.script-line-rail line numbers, .script-editor-statusbar's "Shell · UTF-8
-   · LF", HTTP status codes) are left alone — they hint fine and moving them
-   would shift layout that is already correct. */
 :root[data-platform="windows"] .settings-option-copy strong,
 :root[data-platform="windows"] .settings-sidebar .settings-tab .settings-option-copy strong,
 :root[data-platform="windows"] .script-conversation .message-title strong {
   font-size: var(--font-sm);
 }
 
-/* .ai-error-code carries either a CJK word (配置 / 超时 / 网络 / 空响应) or an
-   ASCII "HTTP 429" from aiErrorPresentation, so it cannot be split by content. */
-
-/* Mixed CJK + Latin per line: "行 12，列 4" and "1,781 字符" sit beside the
-   Latin-only cell, so raise the whole bar to keep one baseline across it. */
 :root[data-platform="windows"] .script-editor-statusbar {
   font-size: var(--font-sm);
 }
 
-/* Same span/bare-text asymmetry as the failure row: this label is wrapped,
-   but keep the metric on the button so it holds either way. */
+:root[data-platform="windows"] .session-view-tabs button,
+:root[data-platform="windows"] .workspace-tabs button,
+:root[data-platform="windows"] .session-tabs .tab {
+  font-size: var(--font-md);
+}
+
+:root[data-platform="windows"] .session-tools-toggle {
+  font-size: var(--font-sm);
+}

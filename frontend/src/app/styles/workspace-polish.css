@@ -23,6 +23,7 @@
   --workbench-text: #e4e8ed;
   --workbench-text-strong: #f4f6f8;
   --workbench-muted: #8c96a3;
+  --workbench-disabled: #74808d;
   --workbench-quiet: #626d79;
   --workbench-hover: #171c22;
   --workbench-blue: var(--workbench-accent-strong);
@@ -30,6 +31,9 @@
   --workbench-danger-strong: #f28b94;
   --workbench-danger-soft: rgba(223, 116, 124, .1);
   --workbench-danger-line: rgba(223, 116, 124, .38);
+  --workbench-warning: #efc47e;
+  --workbench-warning-soft: #2b2418;
+  --workbench-warning-line: #795c2b;
 }
 
 /* Shared workbench geometry: panel shells stay square, content cards and
@@ -51,9 +55,10 @@
   --workbench-terminal: #f8fafb;
   --workbench-line: #cbd5dc;
   --workbench-line-soft: #e2e8ec;
-  --workbench-text: #1f2b36;
+  --workbench-text: #1f2937;
   --workbench-text-strong: #111923;
-  --workbench-muted: #596b7a;
+  --workbench-muted: #5f6b7a;
+  --workbench-disabled: #7b8794;
   --workbench-quiet: #71808d;
   --workbench-hover: #eef5f2;
   --workbench-blue: var(--workbench-accent-strong);
@@ -61,6 +66,9 @@
   --workbench-danger-strong: #a61f2d;
   --workbench-danger-soft: #fff1f2;
   --workbench-danger-line: #e9a3aa;
+  --workbench-warning: #8a5a12;
+  --workbench-warning-soft: #fff5df;
+  --workbench-warning-line: #e5c58b;
 }
 
 .titlebar,
@@ -545,7 +553,7 @@
 .quick-command-bar span:first-child,
 .theme-light .quick-command-bar span:first-child {
   color: var(--workbench-quiet);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -561,8 +569,8 @@
   font: 12px var(--font-mono);
 }
 
-.quick-command-bar > button:not(.icon-button):hover,
-.theme-light .quick-command-bar > button:not(.icon-button):hover {
+.quick-command-bar > button:not(.icon-button):hover:not(:disabled),
+.theme-light .quick-command-bar > button:not(.icon-button):hover:not(:disabled) {
   border-color: transparent;
   background: var(--workbench-hover);
   color: var(--workbench-text);
@@ -576,6 +584,13 @@
   border-color: transparent;
   background: transparent;
   color: var(--workbench-muted);
+}
+
+.app-shell .quick-command-bar > button:disabled {
+  opacity: 1;
+  color: var(--workbench-disabled);
+  background: transparent;
+  border-color: transparent;
 }
 
 .workspace-resizer {

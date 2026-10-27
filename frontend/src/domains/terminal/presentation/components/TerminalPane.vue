@@ -10,6 +10,7 @@ import { readText as readClipboardText, writeText as writeClipboardText } from '
 import '@xterm/xterm/css/xterm.css'
 import { connectProfile, connectLocalTerminal, forgetAiTermKnownHost, disconnectTerminal, terminalResize, terminalSessionActive, terminalWrite } from '../../infrastructure/api'
 import { saveConnectionProfile } from '../../../connections/infrastructure/api'
+import { createDefaultUserSettings } from '../../../settings/index'
 import type { AuthEndpoint, ConnectionProfile } from '../../../connections/types'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
 import { createInternalTerminalOutputFilter } from '../../domain/internalTerminalOutput'
@@ -26,8 +27,9 @@ import { isWindowsPlatform } from '../../../../shared/platform/platform'
 import { SYSTEM_TERMINAL_CJK_FALLBACK, WINDOWS_TERMINAL_CJK_FALLBACK, withCjkFallback } from '../../domain/terminalFont'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
+const defaultTerminalSettings = createDefaultUserSettings(isWindowsPlatform())
 const terminalTypographyOptions = isWindowsPlatform()
-  ? { lineHeight: 1.18, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
+  ? { lineHeight: 1.25, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
   : { lineHeight: 1.15, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
 
 // 终端正文的 CJK 兜底见 lib/terminalFont.ts —— xterm 用 JS 传字体族,吃不到 CSS 变量上的兜底。
@@ -1706,10 +1708,10 @@ function skipInputControlSequence(char: string) {
 function resolvedTerminalSettings() {
   return {
     terminalFontFamily: withCjkFallback(
-      props.terminalSettings?.terminalFontFamily || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      props.terminalSettings?.terminalFontFamily || defaultTerminalSettings.terminalFontFamily,
       TERMINAL_CJK_FALLBACK
     ),
-    terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || 13)),
+    terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || defaultTerminalSettings.terminalFontSize)),
     terminalTheme: props.appTheme === 'light' ? 'light' : props.terminalSettings?.terminalTheme || 'midnight'
   }
 }

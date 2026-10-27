@@ -10,14 +10,16 @@ import {
 } from "../../src/domains/settings/domain/userSettings"
 import {
   APP_THEME_STORAGE_KEY,
-  LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY,
   loadAppTheme,
   loadUserSettings,
   persistAppTheme,
   persistUserSettings,
-  USER_SETTINGS_STORAGE_KEY,
-  WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY
+  USER_SETTINGS_STORAGE_KEY
 } from "../../src/domains/settings/infrastructure/storage/settingsStorage"
+
+// Keys persisted by historical releases; loading preferences must ignore them.
+const LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-density:v1'
+const WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY = 'ai-term:windows-terminal-size-correction:v1'
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial))
@@ -42,7 +44,7 @@ test('平台默认值保持字体、字号和 Agent 预算兼容，默认对象�
     agentCommandTimeoutSec: 120
   })
   windows.terminalFontSize = 22
-  assert.equal(createDefaultUserSettings(true).terminalFontSize, 13)
+  assert.equal(createDefaultUserSettings(true).terminalFontSize, 14)
 })
 
 test('设置校验保留合法偏好和显式关闭，不修改传入草稿', () => {
@@ -143,59 +145,47 @@ test('托管字体仅在加载时随平台迁移，用户主动选择和自定�
   }
 })
 
-test('Windows 旧版 15px 校正只执行一次，且保留其他用户偏好', () => {
-  const saved = { ...createDefaultUserSettings(true), terminalFontSize: 15, defaultShell: 'pwsh', agentAutoExecReadonly: false }
-  const storage = createStorage({
-    [USER_SETTINGS_STORAGE_KEY]: JSON.stringify(saved),
-    [LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY]: '1'
-  })
-  const migrated = loadUserSettings(true, storage)
-  assert.deepEqual(migrated, { ...saved, terminalFontSize: 13 })
-  assert.deepEqual(JSON.parse(storage.getItem(USER_SETTINGS_STORAGE_KEY)), migrated)
-  assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), '1')
-  persistUserSettings(saved, storage)
-  assert.equal(loadUserSettings(true, storage).terminalFontSize, 15)
-})
-
-test('Windows 校正不覆盖自定义字号，不影响其他平台和无旧标记的用户', () => {
-  for (const terminalFontSize of [14, 16, 22]) {
-    const storage = createStorage({
-      [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontSize }),
-      [LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY]: '1'
-    })
-    assert.equal(loadUserSettings(true, storage).terminalFontSize, terminalFontSize)
+test('Windows 新安装和缺失字号采用 14px，其他平台采用 13px', () => {
+  for (const windowsPlatform of [true, false]) {
+    const expected = windowsPlatform ? 14 : 13
+    for (const raw of [null, '', '{broken', 'null', '[]', '{}', '{"terminalFontSize":"invalid"}']) {
+      const storage = createStorage(raw === null ? {} : { [USER_SETTINGS_STORAGE_KEY]: raw })
+      assert.equal(loadUserSettings(windowsPlatform, storage).terminalFontSize, expected)
+    }
+    assert.equal(normalizeUserSettings({ terminalFontSize: 0 }, windowsPlatform).terminalFontSize, expected)
   }
-  const storage = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontSize: 15 }) })
-  assert.equal(loadUserSettings(true, storage).terminalFontSize, 15)
-  storage.setItem(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY, '1')
-  assert.equal(loadUserSettings(false, storage).terminalFontSize, 15)
-  assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), null)
 })
 
-test('旧迁移标记存在但设置缺失时，后续手动选用 15px 不会被再次校正', () => {
+test('所有已保存字号在旧密度标记存在时仍保持原值，读取不会重写设置', () => {
+  for (const windowsPlatform of [true, false]) {
+    for (const terminalFontSize of [11, 13, 13.5, 14, 15, 16, 22]) {
+      for (const correction of [null, '1']) {
+        const saved = { ...createDefaultUserSettings(windowsPlatform), terminalFontSize, defaultShell: 'pwsh', agentAutoExecReadonly: false }
+        const raw = JSON.stringify(saved)
+        const storage = createStorage({
+          [USER_SETTINGS_STORAGE_KEY]: raw,
+          [LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY]: '1',
+          ...(correction ? { [WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY]: correction } : {})
+        })
+        let writes = 0
+        const readOnlyStorage = { ...storage, setItem() { writes++; throw new Error('read should not write') } }
+        assert.deepEqual(loadUserSettings(windowsPlatform, readOnlyStorage), saved)
+        assert.equal(writes, 0)
+        assert.equal(storage.getItem(USER_SETTINGS_STORAGE_KEY), raw)
+        assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), correction)
+      }
+    }
+  }
+})
+
+test('缺失设置时忽略旧迁移标记，主动保存和恢复默认都能保留新选择', () => {
   const storage = createStorage({ [LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY]: '1' })
-  assert.equal(loadUserSettings(true, storage).terminalFontSize, 13)
-  assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), '1')
+  assert.equal(loadUserSettings(true, storage).terminalFontSize, 14)
   persistUserSettings({ ...createDefaultUserSettings(true), terminalFontSize: 15 }, storage)
   assert.equal(loadUserSettings(true, storage).terminalFontSize, 15)
-})
-
-test('迁移写入失败仍保留有效设置，且不误标记迁移成功', () => {
-  const storage = createStorage({
-    [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontSize: 15, defaultShell: 'pwsh', agentAutoExecReadonly: false }),
-    [LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY]: '1'
-  })
-  const failingStorage = { ...storage, setItem(key, value) {
-    if (key === USER_SETTINGS_STORAGE_KEY) throw new Error('quota exceeded')
-    storage.setItem(key, value)
-  } }
-  const settings = loadUserSettings(true, failingStorage)
-  assert.equal(settings.terminalFontSize, 13)
-  assert.equal(settings.defaultShell, 'pwsh')
-  assert.equal(settings.agentAutoExecReadonly, false)
+  persistUserSettings(createDefaultUserSettings(true), storage)
+  assert.equal(loadUserSettings(true, storage).terminalFontSize, 14)
   assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), null)
-  loadUserSettings(true, storage)
-  assert.equal(storage.getItem(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY), '1')
 })
 
 test('本地存储读写异常有明确回退，主题与设置互不覆盖', () => {

@@ -194,9 +194,9 @@ onBeforeUnmount(() => {
 .tool-code-icon:disabled { opacity: .4; cursor: default; }
 .tool-code-icon:focus-visible, .tool-code-more:focus-visible, .tool-code-content:focus-visible, .tool-preview-content:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: -2px; }
 .tool-code-content:focus-visible, .tool-preview-content:focus-visible { outline-offset: 2px; }
-.tool-code-feedback { position: absolute; bottom: -22px; right: 0; z-index: 1; padding: 1px 6px; border-radius: 3px; background: var(--chat-text, var(--workbench-text)); color: var(--chat-surface, var(--workbench-panel-strong)); font-size: 11px; line-height: 18px; white-space: nowrap; pointer-events: none; }
+.tool-code-feedback { position: absolute; bottom: -22px; right: 0; z-index: 1; padding: 1px 6px; border-radius: 3px; background: var(--chat-text, var(--workbench-text)); color: var(--chat-surface, var(--workbench-panel-strong)); font-size: 12px; line-height: 18px; white-space: nowrap; pointer-events: none; }
 .tool-code-feedback:empty { display: none; }
-.tool-code-content, .tool-preview-content { margin: 0; padding: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; tab-size: 4; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); font-size: 12px; font-weight: 400; line-height: 1.7; white-space: pre; letter-spacing: 0; }
+.tool-code-content, .tool-preview-content { margin: 0; padding: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; tab-size: 4; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); font-size: 13px; font-weight: 400; line-height: 20px; white-space: pre; letter-spacing: 0; }
 .tool-step-error-detail { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; }
 .tool-code-content::-webkit-scrollbar, .tool-preview-content::-webkit-scrollbar, .tool-step-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
 .tool-code-content::-webkit-scrollbar-track, .tool-preview-content::-webkit-scrollbar-track, .tool-step-error-detail::-webkit-scrollbar-track { background: transparent; }

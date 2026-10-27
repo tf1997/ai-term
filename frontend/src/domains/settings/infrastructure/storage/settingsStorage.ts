@@ -1,5 +1,5 @@
 import type { AppTheme, AppUserSettings } from '../../domain/settings'
-import { createDefaultUserSettings, DEFAULT_TERMINAL_FONT_SIZE, LEGACY_WINDOWS_TERMINAL_FONT_FAMILY, normalizeUserSettings, SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from '../../domain/userSettings'
+import { createDefaultUserSettings, LEGACY_WINDOWS_TERMINAL_FONT_FAMILY, normalizeUserSettings, SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from '../../domain/userSettings'
 import { DEFAULT_WORKSPACE_WIDTH, parseWorkspaceWidth, parseWorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
 import type { WorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
 
@@ -9,8 +9,6 @@ export interface SettingsStorage {
 }
 
 export const USER_SETTINGS_STORAGE_KEY = 'ai-term:user-settings:v1'
-export const LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY = 'ai-term:windows-density:v1'
-export const WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY = 'ai-term:windows-terminal-size-correction:v1'
 export const APP_THEME_STORAGE_KEY = 'ai-term:app-theme:v1'
 export const WORKSPACE_WIDTH_STORAGE_KEY = 'ai-term:workspace-width:v1'
 export const WORKSPACE_LAYOUT_STORAGE_KEY = 'ai-term:workspace-layout:v1'
@@ -36,12 +34,7 @@ function writeStoredValue(key: string, value: string, storage?: SettingsStorage)
 export function loadUserSettings(windowsPlatform: boolean, storage?: SettingsStorage): AppUserSettings {
   const defaults = createDefaultUserSettings(windowsPlatform)
   const raw = readStoredValue(USER_SETTINGS_STORAGE_KEY, storage)
-  if (!raw) {
-    if (windowsPlatform && readStoredValue(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY, storage)) {
-      writeStoredValue(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1', storage)
-    }
-    return defaults
-  }
+  if (!raw) return defaults
 
   let parsed: unknown
   try {
@@ -54,20 +47,7 @@ export function loadUserSettings(windowsPlatform: boolean, storage?: SettingsSto
     settings.terminalFontFamily = defaults.terminalFontFamily
   }
 
-  if (
-    windowsPlatform
-    && readStoredValue(LEGACY_WINDOWS_DENSITY_MIGRATION_STORAGE_KEY, storage)
-    && !readStoredValue(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, storage)
-  ) {
-    let correctionPersisted = true
-    if (settings.terminalFontSize === 15) {
-      settings.terminalFontSize = DEFAULT_TERMINAL_FONT_SIZE
-      correctionPersisted = persistUserSettings(settings, storage)
-    }
-    if (correctionPersisted) {
-      writeStoredValue(WINDOWS_TERMINAL_SIZE_CORRECTION_STORAGE_KEY, '1', storage)
-    }
-  }
+  // Saved sizes are preferences, including values left by older density migrations.
   return settings
 }
 

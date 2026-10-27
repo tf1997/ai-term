@@ -115,7 +115,7 @@ try {
     assert.equal(result.theme.resize, 0)
     assert.equal(result.output.writeCallbacks, 0)
     assert.equal(result.light.background, '#ffffff')
-    assert.equal(result.light.cursor, '#087f5b')
+    assert.equal(result.light.cursor, '#334155')
     assert.equal(result.viewportAfterTheme, result.viewportBeforeTheme)
     assert.equal(result.nonVisualSettingsMeasure, 0)
     assert.ok(result.fontChangeMeasure > 0 && result.fontSizeApplied)

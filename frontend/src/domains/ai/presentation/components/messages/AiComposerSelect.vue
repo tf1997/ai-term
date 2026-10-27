@@ -88,7 +88,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside, true)
 .composer-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-select-trigger .ui-icon { flex: none; }
 .composer-select-trigger:hover:not(:disabled), .composer-select-trigger.is-open { background: var(--chat-hover); color: var(--chat-text); }
-.composer-select-trigger:disabled { opacity: .45; cursor: default; }
+.composer-select-trigger:disabled { opacity: 1; color: var(--chat-disabled, var(--workbench-disabled)); cursor: default; }
 .composer-select-trigger:focus-visible { outline: 2px solid var(--chat-muted); outline-offset: -2px; }
 .select-chevron { transform: rotate(90deg); }
 .is-open .select-chevron { transform: rotate(-90deg); }
@@ -96,11 +96,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside, true)
 .icon-only .composer-select-trigger { padding: 0; }
 .composer-select-menu { position: absolute; z-index: 20; bottom: calc(100% + 8px); left: 0; width: 256px; max-width: calc(100cqw - 32px); max-height: min(320px, 50vh); overflow: auto; padding: 5px; border: 1px solid var(--chat-line); border-radius: 9px; background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 6px 24px #00000024; }
 .icon-only .composer-select-menu { left: auto; right: 0; }
-.composer-select-heading { padding: 6px 8px 7px; font-size: 11px; color: var(--chat-muted); }
+.composer-select-heading { padding: 6px 8px 7px; font-size: 12px; color: var(--chat-muted); }
 .composer-select-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: var(--chat-text); text-align: left; cursor: pointer; }
 .composer-select-option:hover, .composer-select-option:focus-visible { background: var(--chat-hover); outline: none; }
 .composer-select-option[aria-selected="true"] { background: var(--chat-accent-soft); }
 .composer-select-option > .ui-icon { flex: none; color: var(--chat-accent); }
 .composer-select-copy { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
-.composer-select-copy small { color: var(--chat-muted); font-size: 11px; line-height: 1.5; }
+.composer-select-copy small { color: var(--chat-muted); font-size: 12px; line-height: 1.5; }
 </style>
