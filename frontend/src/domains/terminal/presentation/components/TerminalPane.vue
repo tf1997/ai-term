@@ -150,6 +150,7 @@ let forcePtyResizeOnNextFit = false
 let dataDisposable: IDisposable | undefined
 let writeParsedDisposable: IDisposable | undefined
 let selectionDisposable: IDisposable | undefined
+let selectionRenderDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
 const internalOutputFilter = createInternalTerminalOutputFilter()
@@ -840,6 +841,17 @@ function internalPromptRestorePrefix() {
   while (row > buffer.baseY && buffer.getLine(row)?.isWrapped) row--
   const move = cursorRow > row ? `\x1b[${cursorRow - row}A` : ''
   return `\r${move}\x1b[J`
+}
+
+function syncTerminalSelectionVisibility() {
+  if (!terminal?.element) return
+  const selection = terminal.getSelectionPosition()
+  const viewportTop = terminal.buffer.active.viewportY
+  // xterm 5.5 clamps offscreen selections to row zero. Hide only the overlay;
+  // preserve the selected buffer cells so scrolling back restores the highlight.
+  const lastSelectedRow = selection ? selection.end.y - (selection.end.x === 0 ? 1 : 0) : 0
+  const offscreen = Boolean(selection && (lastSelectedRow < viewportTop || selection.start.y >= viewportTop + terminal.rows))
+  terminal.element.classList.toggle('terminal-selection-offscreen', offscreen)
 }
 
 function selectedLineRange(text: string) {
@@ -1879,6 +1891,7 @@ onMounted(async () => {
     bufferPreReadyTerminalInput(data)
   })
   selectionDisposable = terminal.onSelectionChange(() => {
+    syncTerminalSelectionVisibility()
     if (terminalSelectionNormalizing) return
     const activeTerminal = terminal
     if (activeTerminal?.hasSelection() && !normalizedTerminalSelectionText(activeTerminal.getSelection()).trim()) {
@@ -1894,6 +1907,7 @@ onMounted(async () => {
       void copySelectionToClipboard()
     }, SELECTION_COPY_DEBOUNCE)
   })
+  selectionRenderDisposable = terminal.onRender(syncTerminalSelectionVisibility)
   terminalHost.value.addEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value.addEventListener('contextmenu', handleTerminalContextMenu, true)
   document.addEventListener('pointerdown', handleDocumentPointerDown, true)
@@ -2544,6 +2558,7 @@ onBeforeUnmount(() => {
   dataDisposable?.dispose()
   writeParsedDisposable?.dispose()
   selectionDisposable?.dispose()
+  selectionRenderDisposable?.dispose()
   shellIntegrationAttachment?.dispose()
   shellIntegrationAttachment = undefined
   terminal?.dispose()

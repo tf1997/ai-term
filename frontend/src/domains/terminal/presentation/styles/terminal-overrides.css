@@ -73,6 +73,10 @@
   color: transparent !important;
   background: transparent !important;
 }
+.xterm-host .terminal-selection-offscreen .xterm-selection {
+  display: none;
+}
+
 .xterm-host .xterm-selection div {
   /* xterm splits a multiline selection into rectangles; keep their joins flush. */
   border-radius: 0;
