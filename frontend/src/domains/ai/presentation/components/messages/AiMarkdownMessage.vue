@@ -81,12 +81,18 @@ function inferCommandShellLabel(command: string) {
 .chat-markdown > .markdown-content { min-width: 0; margin: 0; font-size: var(--font-lg); line-height: 22px; overflow-wrap: anywhere; }
 .chat-markdown :deep(.markdown-content > :first-child) { margin-top: 0; }
 .chat-markdown :deep(.markdown-content > :last-child) { margin-bottom: 0; }
-.chat-markdown :deep(.markdown-content table) { display: block; width: 100%; max-width: 100%; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; }
-.chat-markdown :deep(.markdown-content table::-webkit-scrollbar) { width: 10px; height: 10px; }
-.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-track) { background: transparent; }
-.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-thumb) { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
-.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-thumb:hover) { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
-.chat-markdown :deep(.markdown-content table::-webkit-scrollbar-corner) { background: transparent; }
+/* Let the table size its columns; only its wrapper owns horizontal scrolling. */
+.chat-markdown :deep(.markdown-table-wrap) { overflow-x: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; }
+.chat-markdown :deep(.markdown-table) { width: 100%; table-layout: auto; }
+.chat-markdown :deep(.markdown-table th),
+.chat-markdown :deep(.markdown-table td) { min-width: 5em; word-break: normal; }
+.chat-markdown :deep(.markdown-table th),
+.chat-markdown :deep(.markdown-table th code) { white-space: nowrap; }
+.chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar) { width: 10px; height: 10px; }
+.chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-track) { background: transparent; }
+.chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-thumb) { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
+.chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-thumb:hover) { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
+.chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-corner) { background: transparent; }
 .chat-markdown :deep(.markdown-content h1) { font-size: var(--font-xl); font-weight: 600; line-height: 1.5; }
 .chat-markdown :deep(.markdown-content h2),
 .chat-markdown :deep(.markdown-content h3),

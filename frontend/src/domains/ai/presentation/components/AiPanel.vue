@@ -122,6 +122,19 @@ const panelMode = computed<AiPanelMode>(() => (activeSession.value?.aiMode === '
 const composerBusy = computed(() => agentPreparing.value || isAsking.value || agentRunActive.value)
 const activeAnswer = computed(() => props.messages.find(message => message.id === currentAssistantMessageId.value))
 const needsAgentDecision = computed(() => Boolean(agentPendingApproval.value || agentPendingTimeout.value) && !agentApprovalSaving.value)
+const composerFlow = computed(() => {
+  if (!composerBusy.value) return 'idle'
+  if (needsAgentDecision.value) return 'waiting'
+  if (agentRunActive.value && agentRun.value?.status === 'executing') {
+    // Reuse the command card's risk classification; motion never classifies commands.
+    const step = agentRun.value.steps.find(step => step.status === 'running')
+    if (step?.sensitive || step?.risks.some(risk => risk.severity === 'high')) return 'danger'
+    if (step?.risks.length) return 'warning'
+    return 'executing'
+  }
+  if (!agentPreparing.value && !agentRunActive.value && activeAnswer.value?.text) return 'responding'
+  return 'thinking'
+})
 const activityLabel = computed(() => {
   if (agentPreparing.value) return '正在检查终端'
   if (agentApprovalSaving.value) return '正在保存授权'
@@ -1026,7 +1039,11 @@ watch(
         <span>本会话已允许 {{ agentSessionGrantCount }} 条完整命令</span>
         <button type="button" class="chat-text-button" @click="revokeSessionCommandGrants">撤销授权</button>
       </div>
-      <div class="chat-input-shell" :class="{ 'is-running': composerBusy, 'is-awaiting-decision': needsAgentDecision }">
+      <div class="chat-input-shell" :class="{ 'is-running': composerBusy, 'is-awaiting-decision': needsAgentDecision }" :data-flow="composerFlow">
+      <div class="chat-input-aura" aria-hidden="true">
+        <span class="chat-input-aura-wash" />
+        <span class="chat-input-aura-edge" />
+      </div>
       <textarea
         ref="composerInput"
         v-model="askText"

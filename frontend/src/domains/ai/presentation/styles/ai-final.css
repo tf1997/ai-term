@@ -98,10 +98,132 @@
 .chat-activity.needs-decision .chat-activity-stage, .chat-activity-jump { color: var(--chat-warning); }
 .chat-activity.needs-decision .chat-progress-dot, .chat-progress.needs-decision .chat-progress-dot { background: var(--chat-warning); animation: none; }
 .chat-input-shell { position: relative; border: 1px solid var(--chat-line); border-radius: 10px; background: var(--chat-input-surface); overflow: visible; }
-.chat-input-shell:focus-within { border-color: var(--chat-input-accent); outline: 2px solid var(--chat-accent-soft); outline-offset: 1px; }
+.chat-input-shell:focus-within { border-color: var(--chat-input-accent); outline: none; box-shadow: none; }
 .chat-input-shell.is-running { border-color: var(--chat-input-accent); }
 .chat-input-shell.is-awaiting-decision { border-color: var(--chat-warning-line); }
-.chat-input-shell.is-awaiting-decision:focus-within { outline-color: var(--chat-warning-soft); }
+
+/* A fine orbit and a quiet wash keep motion at the edges of the working surface. */
+.chat-input-shell {
+  --flow-primary: var(--chat-input-accent);
+  --flow-secondary: #54bce8;
+  --flow-tertiary: #b39aee;
+  --flow-orbit-duration: 8.4s;
+  --flow-wash-duration: 10s;
+  --flow-wash-opacity: .12;
+  isolation: isolate;
+}
+.theme-light .chat-input-shell { --flow-wash-opacity: .065; }
+.chat-input-shell[data-flow="responding"] {
+  --flow-secondary: #42b9d0;
+  --flow-tertiary: #9aadeb;
+  --flow-orbit-duration: 6.4s;
+  --flow-wash-duration: 8s;
+}
+.chat-input-shell[data-flow="executing"] {
+  --flow-secondary: #5acaf0;
+  --flow-tertiary: #92dfb5;
+  --flow-orbit-duration: 5.6s;
+  --flow-wash-duration: 7s;
+}
+.chat-input-shell[data-flow="warning"],
+.chat-input-shell[data-flow="waiting"] {
+  --flow-primary: var(--chat-warning);
+  --flow-secondary: #eebc67;
+  --flow-tertiary: #e99979;
+  --flow-orbit-duration: 7.2s;
+}
+.chat-input-shell[data-flow="danger"] {
+  --flow-primary: var(--chat-danger);
+  --flow-secondary: #f3a080;
+  --flow-tertiary: #e78faa;
+}
+.chat-input-shell[data-flow="warning"],
+.chat-input-shell[data-flow="danger"] { border-color: var(--flow-primary); }
+.chat-input-aura {
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+.chat-input-shell.is-running .chat-input-aura { opacity: 1; }
+.chat-input-aura-wash,
+.chat-input-aura-edge {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.chat-input-aura-wash {
+  inset: 1px;
+  border-radius: 9px;
+  opacity: var(--flow-wash-opacity);
+}
+.chat-input-aura-wash::before {
+  content: '';
+  position: absolute;
+  inset: -65% -30%;
+  background:
+    radial-gradient(ellipse at 20% 85%, var(--flow-primary), transparent 48%),
+    radial-gradient(ellipse at 80% 15%, var(--flow-secondary), transparent 45%),
+    radial-gradient(ellipse at 65% 100%, var(--flow-tertiary), transparent 42%);
+  transform: translate3d(-8%, 3%, 0) scale(1.04);
+}
+.chat-input-aura-edge {
+  padding: 2px;
+  /* Mask the stationary frame, so rotating the color field never clips the controls. */
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.chat-input-aura-edge::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(140%, 320px);
+  aspect-ratio: 1;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    var(--flow-tertiary) 12%,
+    var(--flow-secondary) 22%,
+    var(--flow-primary) 30%,
+    transparent 42% 50%,
+    var(--flow-secondary) 62%,
+    var(--flow-tertiary) 72%,
+    var(--flow-primary) 80%,
+    transparent 92% 100%
+  );
+  transform: translate(-50%, -50%) rotate(-35deg);
+}
+/* Only mounted, active tasks animate; no JS frame loop or permanent compositor hints. */
+.chat-input-shell.is-running .chat-input-aura-edge::before {
+  animation: chat-aura-orbit var(--flow-orbit-duration) linear infinite;
+}
+.chat-input-shell.is-running .chat-input-aura-wash::before {
+  animation: chat-aura-drift var(--flow-wash-duration) ease-in-out infinite alternate;
+}
+.chat-input-shell.is-awaiting-decision .chat-input-aura { opacity: .65; }
+.chat-input-shell.is-awaiting-decision .chat-input-aura-edge::before,
+.chat-input-shell.is-awaiting-decision .chat-input-aura-wash::before { animation-play-state: paused; }
+@keyframes chat-aura-orbit {
+  from { transform: translate(-50%, -50%) rotate(-35deg); }
+  to { transform: translate(-50%, -50%) rotate(325deg); }
+}
+@keyframes chat-aura-drift {
+  from { transform: translate3d(-8%, 3%, 0) scale(1.04); }
+  to { transform: translate3d(8%, -3%, 0) scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-input-aura { transition: none; }
+  .chat-input-shell.is-running .chat-input-aura-edge::before,
+  .chat-input-shell.is-running .chat-input-aura-wash::before { animation: none; }
+}
+
 .ai-chat-panel .chat-input-shell textarea:focus { box-shadow: none; outline: none; }
 .chat-input-shell textarea { display: block; width: 100%; min-width: 0; min-height: 56px; max-height: 144px; box-sizing: border-box; margin: 0; resize: none; border: 0; border-radius: 0; padding: 10px 12px 6px; background: transparent; color: var(--chat-text); font-size: var(--font-md); line-height: 1.6; outline: none; box-shadow: none; }
 .chat-input-shell textarea::placeholder { color: var(--chat-muted); opacity: 1; }

@@ -257,10 +257,13 @@ try {
   await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在规划任务")')
   const activityAppearance = `(() => {
     const shell = document.querySelector('.chat-input-shell');
+    const edge = getComputedStyle(shell.querySelector('.chat-input-aura-edge'), '::before');
     const dot = document.querySelector('.chat-activity .chat-progress-dot');
     const card = document.querySelector('[data-step-id=runtime-first]');
     return {
-      borderImage: getComputedStyle(shell, '::after').backgroundImage,
+      borderImage: edge.backgroundImage,
+      borderAnimation: edge.animationName,
+      borderMotion: edge.animationPlayState,
       overflow: getComputedStyle(shell).overflow,
       animation: getComputedStyle(dot).animationName,
       waiting: shell.classList.contains('is-awaiting-decision'),
@@ -271,12 +274,14 @@ try {
   })()`
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   const activeAppearance = await evaluate(activityAppearance)
-  assert.equal(activeAppearance.borderImage, 'none', 'Activity uses the status indicator instead of a decorative border')
+  assert.match(activeAppearance.borderImage, /^conic-gradient/, 'Activity has a flowing color border')
+  assert.notEqual(activeAppearance.borderAnimation, 'none', 'The input border animates while the task runs')
   assert.equal(activeAppearance.overflow, 'visible', 'Composer menus remain outside the input shell')
   assert.notEqual(activeAppearance.animation, 'none', 'An active task has a live status indicator')
   assert.equal(activeAppearance.waiting, false)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
   assert.equal((await evaluate(activityAppearance)).animation, 'none', 'Reduced motion stops the status pulse')
+  assert.equal((await evaluate(activityAppearance)).borderAnimation, 'none', 'Reduced motion keeps the input border static')
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
   await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
@@ -285,6 +290,7 @@ try {
   assert.equal(waitingAppearance.waiting, true)
   assert.equal(waitingAppearance.cardWaiting, true)
   assert.equal(waitingAppearance.animation, 'none', 'Approval waiting is static')
+  assert.equal(waitingAppearance.borderMotion, 'paused', 'The input border pauses while a decision is needed')
   assert.equal(waitingAppearance.statusColor, waitingAppearance.cardColor, 'Card and sticky status use the same waiting color')
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision")).color'), waitingAppearance.statusColor, 'Inline progress agrees with the approval state')
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision .chat-progress-dot")).animationName'), 'none')
