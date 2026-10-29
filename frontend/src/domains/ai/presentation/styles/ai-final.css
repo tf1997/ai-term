@@ -220,7 +220,8 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-input-aura { transition: none; }
-  .chat-input-shell.is-running .chat-input-aura-edge::before,
+  /* Keep task progress in the thin border; reduce motion by slowing it and stopping the wash. */
+  .chat-input-shell.is-running .chat-input-aura-edge::before { animation-duration: 12s; }
   .chat-input-shell.is-running .chat-input-aura-wash::before { animation: none; }
 }
 

@@ -263,7 +263,10 @@ try {
     return {
       borderImage: edge.backgroundImage,
       borderAnimation: edge.animationName,
+      borderDuration: parseFloat(edge.animationDuration),
+      borderTransform: edge.transform,
       borderMotion: edge.animationPlayState,
+      washAnimation: getComputedStyle(shell.querySelector('.chat-input-aura-wash'), '::before').animationName,
       overflow: getComputedStyle(shell).overflow,
       animation: getComputedStyle(dot).animationName,
       waiting: shell.classList.contains('is-awaiting-decision'),
@@ -279,10 +282,14 @@ try {
   assert.equal(activeAppearance.overflow, 'visible', 'Composer menus remain outside the input shell')
   assert.notEqual(activeAppearance.animation, 'none', 'An active task has a live status indicator')
   assert.equal(activeAppearance.waiting, false)
+  await waitFor(`(${activityAppearance}).borderTransform !== ${JSON.stringify(activeAppearance.borderTransform)}`)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
-  assert.equal((await evaluate(activityAppearance)).animation, 'none', 'Reduced motion stops the status pulse')
-  assert.equal((await evaluate(activityAppearance)).borderAnimation, 'none', 'Reduced motion keeps the input border static')
-  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  const reducedAppearance = await evaluate(activityAppearance)
+  assert.equal(reducedAppearance.animation, 'none', 'Reduced motion stops the status pulse')
+  assert.equal(reducedAppearance.washAnimation, 'none', 'Reduced motion stops the background drift')
+  assert.notEqual(reducedAppearance.borderAnimation, 'none', 'Reduced motion retains localized task progress')
+  assert.ok(reducedAppearance.borderDuration > activeAppearance.borderDuration, 'Reduced motion slows the border')
+  await waitFor(`(${activityAppearance}).borderTransform !== ${JSON.stringify(reducedAppearance.borderTransform)}`)
   await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
   await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
   await waitFor('Boolean(document.querySelector("[data-step-id=runtime-first] .tool-step-decision"))')
@@ -295,7 +302,7 @@ try {
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision")).color'), waitingAppearance.statusColor, 'Inline progress agrees with the approval state')
   assert.equal(await evaluate('getComputedStyle(document.querySelector(".chat-progress.needs-decision .chat-progress-dot")).animationName'), 'none')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-status").textContent'), '等待确认')
-  checks.push('Task activity stays visible, approval states agree across surfaces, and reduced motion stops activity animation')
+  checks.push('Task activity stays visible, approval states agree across surfaces, and reduced motion retains a slower flowing border without background drift')
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-progress").textContent.includes("等待确认命令")'), 'Agent progress remains visible after tool steps appear')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), false, 'Always allow is an enabled button for an eligible command')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-allow").textContent.includes("所有会话")'), 'Approval explains the scope of saved permission')
@@ -319,7 +326,10 @@ try {
   const savingAppearance = await evaluate(activityAppearance)
   assert.equal(savingAppearance.waiting, false)
   assert.equal(savingAppearance.cardWaiting, false)
-  assert.notEqual(savingAppearance.animation, 'none', 'Saving authorization resumes activity feedback')
+  assert.equal(savingAppearance.borderMotion, 'running', 'Saving authorization resumes the border with reduced motion')
+  await waitFor(`(${activityAppearance}).borderTransform !== ${JSON.stringify(savingAppearance.borderTransform)}`)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  assert.notEqual((await evaluate(activityAppearance)).animation, 'none', 'Normal motion resumes the status pulse')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-status").textContent'), '正在保存授权')
   await evaluate('aiFixture.runtime.finishSave()')
   await waitFor('aiFixture.runtime.commands.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在执行命令")')
