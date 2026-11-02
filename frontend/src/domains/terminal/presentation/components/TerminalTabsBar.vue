@@ -291,7 +291,7 @@ onBeforeUnmount(() => {
             <span class="status-dot" :class="terminalStatusClass(tab.status)" aria-hidden="true" />
             <span class="tab-title">{{ tab.title }}</span>
             <span v-if="titleOrdinals.has(tab.id)" class="tab-ordinal">{{ titleOrdinals.get(tab.id) }}</span>
-            <UiIcon v-if="agentControlledIds.has(tab.id)" class="tab-agent-icon" name="shield" size="12" />
+            <span v-if="agentControlledIds.has(tab.id)" class="terminal-agent-badge"><UiIcon name="shield" size="11" /><span>Agent 接管中</span></span>
             <UiIcon v-if="syncing && targetIds.has(tab.id)" class="tab-sync-icon" :name="pausedIds.has(tab.id) ? 'alert' : 'network'" size="12" />
           </button>
           <button v-if="terminalTabs.length > 1" type="button" class="tab-close" :disabled="agentControlledIds.has(tab.id)" :tabindex="tab.id === activeTerminalId ? 0 : -1" :title="agentControlledIds.has(tab.id) ? 'Agent 任务运行期间不能关闭此终端' : `关闭 ${displayTitle(tab)}`" :aria-label="agentControlledIds.has(tab.id) ? `${displayTitle(tab)}（Agent 使用中，不能关闭）` : `关闭 ${displayTitle(tab)}`" @click.stop="closeTab(tab.id, $event)">
@@ -332,10 +332,11 @@ onBeforeUnmount(() => {
         <input ref="searchInput" v-model="terminalSearch" class="terminal-tab-search" type="search" placeholder="搜索终端、主机或连接…" aria-label="搜索终端" autocomplete="off" spellcheck="false" />
       </div>
       <ul ref="terminalList" class="terminal-switcher-list">
-        <li v-for="tab in filteredTabs" :key="tab.id" class="terminal-switcher-row" tabindex="-1" :data-terminal-id="tab.id" :class="{ active: tab.id === activeTerminalId, selected: popoverMode === 'sync' && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id) }" @contextmenu.prevent.stop="openTabMenu($event, tab)" @keydown="openKeyboardMenu($event, tab)">
+        <li v-for="tab in filteredTabs" :key="tab.id" class="terminal-switcher-row" tabindex="-1" :data-terminal-id="tab.id" :class="{ active: tab.id === activeTerminalId, selected: popoverMode === 'sync' && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id), 'agent-controlled': agentControlledIds.has(tab.id) }" @contextmenu.prevent.stop="openTabMenu($event, tab)" @keydown="openKeyboardMenu($event, tab)">
           <label v-if="popoverMode === 'sync'" class="terminal-sync-option" :title="tab.id === activeTerminalId ? '当前终端始终接收输入' : tabTitle(tab)">
             <input type="checkbox" :checked="targetIds.has(tab.id)" :disabled="tab.id === activeTerminalId" :aria-label="`${displayTitle(tab)}${tab.id === activeTerminalId ? '（当前终端，始终接收输入）' : '，同步输入'}`" @change="emit('toggleTarget', tab.id)" />
             <span class="terminal-entry-copy"><strong>{{ displayTitle(tab) }}</strong><small>{{ tabDescription(tab) }}</small></span>
+            <span v-if="agentControlledIds.has(tab.id)" class="terminal-agent-badge">Agent 接管中</span>
             <span v-if="tab.id === activeTerminalId" class="terminal-entry-badge">当前 · 必选</span>
             <span v-else-if="pausedIds.has(tab.id)" class="terminal-entry-badge paused">同步暂停</span>
           </label>
@@ -343,6 +344,7 @@ onBeforeUnmount(() => {
             <button type="button" class="terminal-switcher-select" :title="tabTitle(tab)" :aria-current="tab.id === activeTerminalId ? 'true' : undefined" @click="selectTab(tab.id)">
               <span class="status-dot" :class="terminalStatusClass(tab.status)" aria-hidden="true" />
               <span class="terminal-entry-copy"><strong>{{ displayTitle(tab) }}</strong><small>{{ tabDescription(tab) }}</small></span>
+              <span v-if="agentControlledIds.has(tab.id)" class="terminal-agent-badge">Agent 接管中</span>
               <span v-if="tab.id === activeTerminalId" class="terminal-entry-badge">当前</span>
               <span v-else-if="syncing && targetIds.has(tab.id)" class="terminal-entry-badge" :class="{ paused: pausedIds.has(tab.id) }">{{ pausedIds.has(tab.id) ? '同步暂停' : '同步' }}</span>
             </button>

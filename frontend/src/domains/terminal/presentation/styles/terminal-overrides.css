@@ -13,6 +13,16 @@
   background: #03070c;
   padding: 12px 14px 10px;
 }
+.app-shell {
+  --terminal-agent-accent: var(--workbench-accent-strong);
+  --terminal-agent-surface: color-mix(in srgb, var(--workbench-accent) 7%, var(--workbench-panel));
+  --terminal-agent-line: color-mix(in srgb, var(--workbench-accent) 30%, var(--workbench-line));
+  --terminal-agent-badge: color-mix(in srgb, var(--workbench-accent) 62%, var(--workbench-panel));
+  --terminal-agent-on-badge: #ffffff;
+}
+.app-shell.theme-light {
+  --terminal-agent-badge: var(--workbench-accent);
+}
 .terminal-agent-takeover {
   position: relative;
   z-index: 6;
@@ -20,30 +30,36 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 7px;
-  min-height: 28px;
-  border: 1px solid color-mix(in srgb, var(--workbench-accent-strong) 48%, var(--workbench-line));
+  gap: 6px 10px;
+  min-height: 54px;
+  border: 1px solid var(--terminal-agent-line);
+  border-left: 3px solid var(--terminal-agent-accent);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--workbench-accent) 11%, var(--workbench-terminal));
+  background: var(--terminal-agent-surface);
   color: var(--workbench-text-strong);
-  padding: 4px 10px;
-  margin-bottom: 6px;
-  font-size: var(--font-sm);
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
   line-height: 18px;
   pointer-events: none;
 }
+.terminal-agent-emblem {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--terminal-agent-badge);
+  color: var(--terminal-agent-on-badge);
+}
+.terminal-agent-copy { display: grid; gap: 1px; min-width: 0; flex: 1 1 220px; }
+.terminal-agent-copy strong { font-size: 13px; font-weight: 600; color: var(--terminal-agent-accent); }
+.terminal-agent-copy > span { overflow-wrap: anywhere; }
 .terminal-agent-takeover small {
   color: var(--workbench-muted);
   margin-left: auto;
   font: inherit;
-}
-.app-shell.theme-light .terminal-agent-takeover {
-  border-color: #bfe5d1;
-  background: #effaf4;
-  color: #075e41;
-}
-.app-shell.theme-light .terminal-agent-takeover small {
-  color: #47705f;
 }
 .terminal-agent-takeover + .xterm-host {
   padding-top: 0;

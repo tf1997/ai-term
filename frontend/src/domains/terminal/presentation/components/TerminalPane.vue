@@ -2593,9 +2593,12 @@ defineExpose({
       <div class="terminal-frame terminal-native-code">
         <div ref="terminalBodyWrap" class="terminal-body-wrap">
           <div v-if="props.agentControlled" class="terminal-agent-takeover" role="status">
-            <UiIcon name="shield" size="13" />
-            <span>Agent 正在接管此终端，任务结束后恢复输入</span>
-            <small>可切换到其他终端操作</small>
+            <span class="terminal-agent-emblem" aria-hidden="true"><UiIcon name="shield" size="18" /></span>
+            <div class="terminal-agent-copy">
+              <strong>Agent 接管中</strong>
+              <span>此终端暂不可输入，任务结束后自动恢复</span>
+            </div>
+            <small>可切换其他终端继续操作</small>
           </div>
           <div ref="terminalHost" class="xterm-host" aria-label="终端直接输入" />
           <div

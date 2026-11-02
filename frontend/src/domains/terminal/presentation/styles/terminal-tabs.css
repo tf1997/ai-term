@@ -199,10 +199,34 @@
   background: var(--workbench-danger-soft);
   color: var(--workbench-danger);
 }
-.session-tabs .tab.agent-controlled .tab-agent-icon {
-  flex: 0 0 auto;
-  color: #93c5fd;
+.session-tabs .tab.agent-controlled {
+  max-width: 288px;
+  border-color: var(--terminal-agent-line);
+  background: var(--terminal-agent-surface);
+  color: var(--workbench-text-strong);
 }
+.session-tabs .tab.agent-controlled:hover {
+  background: color-mix(in srgb, var(--terminal-agent-accent) 9%, var(--terminal-agent-surface));
+}
+.session-tabs .tab.agent-controlled.active { border-color: var(--terminal-agent-accent); }
+.session-tabs .tab.agent-controlled.active::after { height: 3px; background: var(--terminal-agent-accent); }
+.terminal-agent-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 4px;
+  min-height: 20px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--terminal-agent-badge);
+  color: var(--terminal-agent-on-badge);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.terminal-agent-badge .ui-icon { flex: none; }
 .session-tabs .tab-close:disabled,
 .session-tabs .terminal-entry-close:disabled {
   cursor: not-allowed;
@@ -443,6 +467,11 @@
   background: var(--workbench-accent-soft);
 }
 
+.terminal-switcher-row.agent-controlled {
+  border-color: var(--terminal-agent-line);
+  background: var(--terminal-agent-surface);
+}
+
 .session-tabs .terminal-switcher-select,
 .terminal-sync-option {
   display: flex;
@@ -560,5 +589,6 @@
 @media (max-width: 1120px) {
   .session-tabs { gap: 4px; }
   .session-tabs .tab { max-width: 204px; }
+  .session-tabs .tab.agent-controlled { max-width: 260px; }
   .session-tab-actions { gap: 1px; }
 }

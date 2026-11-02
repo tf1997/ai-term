@@ -649,7 +649,7 @@ impl SqliteConfigStore {
                 SELECT id
                 FROM ai_conversation_messages
                 WHERE workspace_session_id = ?1
-                ORDER BY created_at DESC, id DESC
+                ORDER BY COALESCE(julianday(created_at), 0.0) DESC, rowid DESC, id DESC
                 LIMIT ?2
               )
             "#,
@@ -663,17 +663,22 @@ impl SqliteConfigStore {
         workspace_session_id: &str,
     ) -> Result<Vec<AiConversationMessage>> {
         let connection = self.connection()?;
+        // A question and its answer placeholder can share a millisecond. IDs
+        // contain random suffixes, so ties must follow the serialized insert
+        // order. ON CONFLICT updates preserve rowid when an answer is retried.
         let mut statement = connection.prepare(
             r#"
             SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, payload_json, created_at
             FROM (
-              SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, payload_json, created_at
+              SELECT id, connection_id, workspace_session_id, terminal_id, role, text, command, error, payload_json, created_at,
+                COALESCE(julianday(created_at), 0.0) AS created_sort,
+                rowid AS message_rowid
               FROM ai_conversation_messages
               WHERE workspace_session_id = ?1
-              ORDER BY created_at DESC, id DESC
+              ORDER BY created_sort DESC, message_rowid DESC, id DESC
               LIMIT 300
             )
-            ORDER BY created_at ASC, id ASC
+            ORDER BY created_sort ASC, message_rowid ASC, id ASC
             "#,
         )?;
 

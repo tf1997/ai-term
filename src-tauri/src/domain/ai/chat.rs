@@ -1006,7 +1006,10 @@ struct ChatStreamDeltas {
 }
 
 /// Keep provider reasoning separate from answer deltas; usage-only frames emit neither.
-fn parse_sse_event_deltas(event: &str, usage: &mut Option<AiTokenUsage>) -> Result<ChatStreamDeltas> {
+fn parse_sse_event_deltas(
+    event: &str,
+    usage: &mut Option<AiTokenUsage>,
+) -> Result<ChatStreamDeltas> {
     let mut deltas = ChatStreamDeltas::default();
 
     for data in sse_data_payloads(event) {
@@ -1463,9 +1466,16 @@ mod tests {
 
     #[test]
     fn non_stream_chat_reasoning_is_not_used_as_the_answer() {
-        let payload = json!({"choices":[{"message":{"reasoning_content":"独立推理", "content":"回复正文"}}]});
-        assert_eq!(extract_reasoning_delta(&payload).as_deref(), Some("独立推理"));
-        assert_eq!(extract_chat_answer(&payload.to_string()).unwrap(), "回复正文");
+        let payload =
+            json!({"choices":[{"message":{"reasoning_content":"独立推理", "content":"回复正文"}}]});
+        assert_eq!(
+            extract_reasoning_delta(&payload).as_deref(),
+            Some("独立推理")
+        );
+        assert_eq!(
+            extract_chat_answer(&payload.to_string()).unwrap(),
+            "回复正文"
+        );
         let only_reasoning = json!({"choices":[{"message":{"reasoning_content":"没有正文"}}]});
         assert!(extract_chat_answer(&only_reasoning.to_string()).is_err());
     }

@@ -394,6 +394,143 @@ fn sqlite_store_lists_ai_messages_by_conversation_across_source_connections() {
 }
 
 #[test]
+fn ai_messages_restore_turn_order_after_reopen_when_timestamps_match() {
+    let database_path = temp_db_path("ai-message-order-reopen");
+    let store = SqliteConfigStore::new(database_path.clone());
+    let created_at = "2026-11-02T08:00:00.123Z";
+    // IDs have random suffixes, not chronological order. Sorting by role would
+    // also break these two exchanges created at the same instant.
+    let mut messages = vec![
+        ai_message(
+            "z-question",
+            "prod-1",
+            "ordered",
+            "terminal-1",
+            AiMessageRole::User,
+            "服务器有攻击风险吗",
+            created_at,
+        ),
+        ai_message(
+            "a-answer",
+            "prod-1",
+            "ordered",
+            "terminal-1",
+            AiMessageRole::Assistant,
+            "第一次回复",
+            created_at,
+        ),
+        ai_message(
+            "y-question",
+            "prod-2",
+            "ordered",
+            "terminal-2",
+            AiMessageRole::User,
+            "继续检查",
+            created_at,
+        ),
+        ai_message(
+            "b-answer",
+            "prod-2",
+            "ordered",
+            "terminal-2",
+            AiMessageRole::Assistant,
+            "第二次回复",
+            created_at,
+        ),
+    ];
+    for message in &messages {
+        store.save_ai_conversation_message(message).unwrap();
+    }
+    // Updating/retrying an earlier answer must keep its original position.
+    messages[1].text = "第一次回复（重试后）".into();
+    messages[1].payload_json = r#"{"mode":"agent","agentStatus":"done"}"#.into();
+    store.save_ai_conversation_message(&messages[1]).unwrap();
+    drop(store);
+
+    let reopened = SqliteConfigStore::new(database_path);
+    assert_eq!(
+        reopened.list_ai_conversation_messages("ordered").unwrap(),
+        messages
+    );
+}
+
+#[test]
+fn ai_messages_sort_by_time_then_insertion_order_across_timestamp_formats() {
+    let store = SqliteConfigStore::new(temp_db_path("ai-message-order-time"));
+    let make_message = |id: &str, created_at: &str| {
+        ai_message(
+            id,
+            "prod-1",
+            "ordered",
+            "terminal-1",
+            AiMessageRole::Assistant,
+            id,
+            created_at,
+        )
+    };
+    let newest = make_message("newest", "2026-11-02T08:01:00.000Z");
+    let first_at_eight = make_message("z-first", "2026-11-02T08:00:00.000Z");
+    let second_at_eight = make_message("a-second", "2026-11-02 08:00:00");
+    let oldest = make_message("oldest", "2026-11-02T07:59:00.000Z");
+    for message in [&newest, &first_at_eight, &second_at_eight, &oldest] {
+        store.save_ai_conversation_message(message).unwrap();
+    }
+    assert_eq!(
+        store.list_ai_conversation_messages("ordered").unwrap(),
+        vec![oldest, first_at_eight, second_at_eight, newest]
+    );
+}
+
+#[test]
+fn ai_message_limits_keep_the_newest_turns_in_insertion_order_for_equal_times() {
+    let database_path = temp_db_path("ai-message-order-limits");
+    let store = SqliteConfigStore::new(database_path.clone());
+    let mut expected = Vec::new();
+    // Reverse-sorted IDs expose mistakes both in the 1,000-message retention
+    // query and in the newest-300 subquery used when opening a conversation.
+    for index in 0..1002 {
+        let message = ai_message(
+            &format!("message-{:04}", 1002 - index),
+            "prod-1",
+            "ordered",
+            "terminal-1",
+            if index % 2 == 0 {
+                AiMessageRole::User
+            } else {
+                AiMessageRole::Assistant
+            },
+            &format!("message {index}"),
+            "2026-11-02T08:00:00.123Z",
+        );
+        store.save_ai_conversation_message(&message).unwrap();
+        expected.push(message);
+    }
+    drop(store);
+
+    let reopened = SqliteConfigStore::new(database_path.clone());
+    assert_eq!(
+        reopened.list_ai_conversation_messages("ordered").unwrap(),
+        expected[702..]
+    );
+    let connection = rusqlite::Connection::open(database_path).unwrap();
+    let mut statement = connection.prepare(
+        "SELECT id FROM ai_conversation_messages WHERE workspace_session_id = 'ordered' ORDER BY rowid"
+    ).unwrap();
+    let retained = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        retained,
+        expected[2..]
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn deleting_workspace_session_keeps_command_history_and_deletes_ai_messages() {
     let store = SqliteConfigStore::new(temp_db_path("delete-workspace-session"));
     let workspace_session = session(

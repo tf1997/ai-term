@@ -12,9 +12,10 @@ use crate::domain::ai::chat::{
     build_context_bundle, build_user_context_prompt, chat_completions_endpoint,
     conversation_context_chars, conversation_context_was_compressed,
     conversation_messages_for_payload, conversation_summary_message, extract_chat_answer,
-    extract_reasoning_delta, extract_stream_delta, is_cancelled, parse_model_error, reject_html_response,
-    stream_usage_options, truncate_for_prompt, AiCancelToken, AiConversationRole,
-    AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS, SHELL_COMMAND_FORMAT_INSTRUCTION,
+    extract_reasoning_delta, extract_stream_delta, is_cancelled, parse_model_error,
+    reject_html_response, stream_usage_options, truncate_for_prompt, AiCancelToken,
+    AiConversationRole, AiConversationTurn, ContextBundle, MAX_CONVERSATION_SUMMARY_CHARS,
+    SHELL_COMMAND_FORMAT_INSTRUCTION,
 };
 use crate::domain::ai::stream::{
     is_stream_done, open_stream, sse_data_payloads, wait_for_stream, SseEventBuffer, StreamStart,
@@ -803,7 +804,9 @@ mod tests {
             Some("string")
         );
         assert_eq!(
-            payload.pointer("/tools/1/function/name").and_then(Value::as_str),
+            payload
+                .pointer("/tools/1/function/name")
+                .and_then(Value::as_str),
             Some("ask_user")
         );
         assert_eq!(
