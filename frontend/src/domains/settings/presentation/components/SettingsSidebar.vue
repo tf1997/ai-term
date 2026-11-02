@@ -165,7 +165,7 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
         <button
           v-for="group in settingsGroups"
           :key="group.key"
-          class="settings-option settings-tab"
+          class="settings-tab"
           :class="{ active: activeSection === group.key }"
           type="button"
           role="tab"
