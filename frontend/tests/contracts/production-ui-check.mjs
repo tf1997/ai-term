@@ -140,6 +140,7 @@ const aiPanelStyles = read('src/domains/ai/presentation/styles/ai-final.css')
 const aiMessageItem = read('src/domains/ai/presentation/components/messages/AiMessageItem.vue')
 const aiCodeBlock = read('src/domains/ai/presentation/components/messages/AiCodeBlock.vue')
 const agentStepCard = read('src/domains/ai/presentation/components/messages/AgentStepCard.vue')
+const agentStepDetails = read('src/domains/ai/presentation/components/messages/AgentStepDetails.vue')
 const aiCopyFeedback = read('src/domains/ai/presentation/components/messages/useCopyFeedback.ts')
 const aiMarkdownMessage = read('src/domains/ai/presentation/components/messages/AiMarkdownMessage.vue')
 const aiMarkdown = read('src/shared/content/aiMarkdown.ts')
@@ -3239,11 +3240,13 @@ assert(
     aiCodeBlock.includes('<pre v-if="content" class="tool-code-content"') &&
     aiCodeBlock.includes('<AiCodeText :content="content" :line-numbers="kind !== \'output\'"') &&
     /\.tool-code\s*\{[^}]*min-width:\s*0;[^}]*width:\s*100%;/.test(aiCodeBlock) &&
-    agentStepCard.includes('label="输出" kind="output"') &&
+    agentStepCard.includes('<AgentStepDetails') &&
+    agentStepDetails.includes('white-space: pre;') &&
+    agentStepDetails.includes('aria-modal="true"') &&
     agentStepCard.includes('class="tool-step-meta"') &&
     agentStepCard.includes("!didNotStart.value &&") &&
     agentStepCard.includes('durationLabel'),
-  'Agent step output must keep raw column alignment (white-space: pre + own scroll container, never wrapped), and step cards must separate exit code/duration metadata from status chips.'
+  'Agent output details must preserve raw columns by default in a modal, and step cards must separate exit code/duration metadata from status chips.'
 )
 assert(
   /\.tool-step-allow code\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/.test(agentStepCard) &&
@@ -3336,7 +3339,7 @@ assert(
     // 超时块要给出依据与已捕获的部分输出,而不是一句固定文案
     agentStepCard.includes('timeoutInfo?.hint') &&
     agentStepCard.includes('props.timeoutInfo?.partialOutput') &&
-    agentStepCard.includes(':content="outputContent"') &&
+    agentStepCard.includes(':output="showOutput ? outputContent : undefined"') &&
     agentStepCard.includes('v-if="countdownLabel"') &&
     // deadlineAt 是运行态字段:结算即清除,且 payload 只在终态写入,历史消息不会残留倒计时
     /step\.deadlineAt = undefined/.test(agentLoop) &&

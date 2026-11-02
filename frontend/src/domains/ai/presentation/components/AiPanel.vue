@@ -9,7 +9,6 @@ import type { AiPanelProps, AiPanelEvents } from '../../domain/aiPanel'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import type { AiMessage, WorkspaceSession } from '../../domain/conversation'
-import { agentDisplayTimeline } from '../../domain/agentTimeline'
 import type { AiMessageUsage } from '../../domain/tokenUsage'
 import { formatMessageUsageLabel, formatMessageUsageTitle, mergeMessageUsage } from '../../domain/tokenUsage'
 
@@ -29,6 +28,7 @@ import AiMarkdownMessage from './messages/AiMarkdownMessage.vue'
 import AiReasoning from './messages/AiReasoning.vue'
 import AiErrorNotice from './messages/AiErrorNotice.vue'
 import AgentStepCard from './messages/AgentStepCard.vue'
+import AgentTimeline from './messages/AgentTimeline.vue'
 import AiMessageItem from './messages/AiMessageItem.vue'
 import AiComposerSelect from './messages/AiComposerSelect.vue'
 import { normalizeTerminalContextMode } from '../../domain/terminalContext'
@@ -911,9 +911,9 @@ watch(
     </Transition>
     <div class="chat-context" :class="{ expanded: contextOpen }">
       <div class="chat-context-main">
-        <span class="chat-target" :title="executionTargetTitle || currentConnectionLabel"><UiIcon name="terminal" size="13" /><span>{{ executionTargetLabel || currentConnectionLabel }}</span></span>
+        <span class="chat-target" :title="executionTargetTitle || currentConnectionLabel"><UiIcon name="terminal" size="13" /><span>当前目标 · {{ (executionTargetLabel || currentConnectionLabel).replace(/^当前\s+/, '') }}</span></span>
         <button class="chat-context-toggle" type="button" :title="contextSummaryLabel" :aria-expanded="contextOpen" @click="contextOpen = !contextOpen">
-          <span>终端上下文 {{ terminalContextChars.toLocaleString('zh-CN') }} 字符</span>
+          <span>终端内容 · {{ terminalContextChars.toLocaleString('zh-CN') }} 字符</span>
           <UiIcon :name="contextOpen ? 'arrow-up' : 'arrow-down'" size="12" />
         </button>
       </div>
@@ -948,8 +948,12 @@ watch(
             <span class="chat-progress-dot" />
             {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
-          <div v-if="message.mode === 'agent'" class="agent-timeline">
-            <template v-for="entry in agentDisplayTimeline(message)" :key="entry.id">
+          <template v-if="message.mode === 'agent' && message.text && !message.error && !message.streaming">
+            <p v-if="isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
+            <AiMarkdownMessage v-else :content="message.text" :interactive-commands="false" />
+          </template>
+          <AgentTimeline v-if="message.mode === 'agent'" :message="message">
+            <template #default="{ entry }">
               <AgentStepCard
                 v-if="entry.kind === 'tool'"
                 :step="entry.step"
@@ -984,7 +988,7 @@ watch(
                 :interactive-commands="false"
               />
             </template>
-          </div>
+          </AgentTimeline>
           <AiReasoning v-if="message.mode !== 'agent' && message.reasoning" :content="message.reasoning" />
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>
@@ -1003,9 +1007,9 @@ watch(
             @retry="retryMessage(message)"
             @execute-command="executeGeneratedCommand($event, message)"
           />
-          <p v-if="message.text && !message.error && isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
+          <p v-if="message.text && !message.error && (message.mode !== 'agent' || message.streaming) && isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
           <AiMarkdownMessage
-            v-else-if="message.text && !message.error"
+            v-else-if="message.text && !message.error && (message.mode !== 'agent' || message.streaming)"
             :content="message.text"
             :interactive-commands="message.role === 'assistant' && message.mode !== 'agent'"
             @execute-command="executeGeneratedCommand($event, message)"
@@ -1020,7 +1024,7 @@ watch(
       </AiMessageItem>
     </div>
     </div>
-    <button v-if="!followingLatest" class="chat-latest chat-icon" type="button" :title="hasNewContent ? '有新内容，回到最新' : '回到最新'" aria-label="回到最新" @click="scrollMessagesToLatest"><UiIcon name="arrow-down" size="16" /></button>
+    <button v-if="!followingLatest" class="chat-latest" type="button" :title="hasNewContent ? '有新内容，回到最新' : '回到最新'" aria-label="回到最新" @click="scrollMessagesToLatest"><UiIcon name="arrow-down" size="13" /><span>{{ hasNewContent ? '有新内容' : '回到最新' }}</span></button>
     </div>
     <div class="chat-composer">
       <div v-if="composerBusy" class="chat-activity" :class="{ 'needs-decision': needsAgentDecision }">

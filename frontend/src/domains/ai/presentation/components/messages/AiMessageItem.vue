@@ -53,8 +53,8 @@ onBeforeUnmount(() => {
 <template>
   <article class="chat-turn" :class="message.role === 'user' ? 'chat-turn-user' : 'chat-turn-assistant'" :data-message-id="message.id">
     <header v-if="message.role === 'assistant'" class="chat-turn-head">
-      <span class="chat-identity"><UiIcon name="ai" size="15" /><strong>AI</strong></span>
-      <span class="chat-source" :title="`生成上下文：${source}`">{{ source }}</span>
+      <span class="chat-identity"><UiIcon name="ai" size="15" /><strong>{{ message.mode === 'agent' ? 'Agent' : 'AI' }}</strong></span>
+      <span class="chat-source" :title="`生成上下文：${source}`">来源 · {{ source }}</span>
       <span v-if="duration && !message.streaming" class="chat-duration" :title="message.mode === 'agent' ? '任务总耗时，包含执行命令与等待确认' : '回答耗时'">耗时 {{ duration }}</span>
       <button
         v-if="message.usage"
@@ -105,12 +105,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .chat-turn { min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; overflow-anchor: none; }
-.chat-turn-user { align-self: flex-end; width: fit-content; max-width: 85%; border-radius: 8px; background: var(--chat-user); padding: 9px 12px; }
-.chat-turn-head { position: relative; display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 5px; min-width: 0; }
+.chat-turn-user { align-self: flex-end; width: fit-content; max-width: 91%; border-radius: 9px 9px 3px 9px; background: var(--chat-user); padding: 10px 12px; }
+.chat-turn-head { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 9px; min-width: 0; }
 .chat-copy-feedback { color: var(--chat-muted); font-size: 12px; flex: none; }
 .chat-identity { display: inline-flex; align-items: center; gap: 6px; color: var(--chat-text); font-size: 12px; flex: none; }
 .chat-identity .ui-icon { color: var(--chat-accent); }
-.chat-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-muted); font-size: 12px; }
+.chat-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--chat-muted); font-size: 11px; }
 .chat-duration { margin-left: auto; flex: none; color: var(--chat-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .chat-copy { margin-left: auto; opacity: 0; }
 .chat-duration ~ .chat-copy, .chat-usage ~ .chat-copy { margin-left: 0; }

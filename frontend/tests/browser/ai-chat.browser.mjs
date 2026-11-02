@@ -115,9 +115,12 @@ try {
   assert.equal(await evaluate('document.querySelector("[data-step-id=nonzero-step] .tool-step-exit").textContent'), 'exit 1', 'Nonzero exits stay prominent')
   assert.equal(await evaluate('document.querySelector("[data-step-id=pending-step]").classList.contains("is-awaiting-decision")'), false, 'Historical pending steps are not live approval requests')
   assert.equal(await evaluate('document.querySelector("[data-step-id=pending-step] .tool-step-status").textContent'), '待执行')
+  await evaluate(`aiFixture.update('pending', { agentSteps: [{ ...aiFixture.state.props.messages.find(message => message.id === 'pending').agentSteps[0], status: 'skipped' }] })`)
+  assert.equal(await evaluate('document.querySelector("[data-step-id=pending-step] .tool-step-status").textContent'), '已跳过', 'Skipped steps retain a visible status instead of appearing completed')
+  await evaluate(`aiFixture.update('pending', { agentSteps: [{ ...aiFixture.state.props.messages.find(message => message.id === 'pending').agentSteps[0], status: 'pending' }] })`)
   checks.push('Compact summaries retain all execution details on expansion and distinguish historical pending steps from live approvals')
   await click('[data-message-id="long-output"] .tool-step-toggle')
-  await waitFor('Boolean(document.querySelector("[data-message-id=long-output] .tool-code-output"))')
+  await waitFor('Boolean(document.querySelector("[data-message-id=long-output] .tool-step-details"))')
 
   const geometry = []
   for (const theme of ['light', 'dark']) {
@@ -135,12 +138,11 @@ try {
             const title = element.querySelector('.tool-step-title');
             const meta = element.querySelector('.tool-step-meta');
             const status = element.querySelector('.tool-step-status');
-            return { header: rect(element.querySelector('.tool-step-header')), title: rect(title), titleOverflow: title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1, meta: meta ? rect(meta) : null, status: rect(status), collapsed: element.classList.contains('is-collapsed'), targetVisible: [...element.querySelectorAll('.tool-step-target')].some(target => target.getBoundingClientRect().height > 0) };
+            return { header: rect(element.querySelector('.tool-step-header')), title: rect(title), titleOverflow: title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1, meta: meta ? rect(meta) : null, status: status ? rect(status) : null, collapsed: element.classList.contains('is-collapsed'), targetVisible: [...element.querySelectorAll('.tool-step-target')].some(target => target.getBoundingClientRect().height > 0) };
           });
-          const command = panel.querySelector('[data-message-id="long-output"] .tool-code-command .tool-code-content');
-          const output = panel.querySelector('[data-message-id="long-output"] .tool-code-output .tool-code-content');
+          const inlineCode = panel.querySelector('[data-message-id="long-output"] .tool-code-content');
           const longTitle = panel.querySelector('[data-message-id="long-output"] .tool-step-title');
-          return { panel: { ...rect(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth }, list: { ...rect(list), clientWidth: list.clientWidth, scrollWidth: list.scrollWidth }, turns, steps, command: { overflowY: getComputedStyle(command).overflowY, clientHeight: command.clientHeight, scrollHeight: command.scrollHeight }, output: { whiteSpace: getComputedStyle(output).whiteSpace, clientHeight: output.clientHeight, scrollHeight: output.scrollHeight, lines: output.textContent.split('\\n').length }, longTitle: { height: longTitle.offsetHeight, lineHeight: parseFloat(getComputedStyle(longTitle).lineHeight) }, composer: rect(composer), input: rect(input), clippedButtons: [...composer.querySelectorAll('button')].filter(b => { const r = b.getBoundingClientRect(), c = composer.getBoundingClientRect(); return r.width && (r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1); }).map(b => b.title || b.textContent.trim()) };
+          return { panel: { ...rect(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth }, list: { ...rect(list), clientWidth: list.clientWidth, scrollWidth: list.scrollWidth }, turns, steps, inlineCode: Boolean(inlineCode), longTitle: { height: longTitle.offsetHeight, lineHeight: parseFloat(getComputedStyle(longTitle).lineHeight) }, composer: rect(composer), input: rect(input), clippedButtons: [...composer.querySelectorAll('button')].filter(b => { const r = b.getBoundingClientRect(), c = composer.getBoundingClientRect(); return r.width && (r.left < c.left - 1 || r.right > c.right + 1 || r.bottom > c.bottom + 1); }).map(b => b.title || b.textContent.trim()) };
         })()`)
         const label = `${theme}, ${width}px, ${zoom * 100}%`
         assert.ok(metrics.panel.scrollWidth <= metrics.panel.clientWidth + 1, `Panel horizontal overflow (${label})`)
@@ -161,20 +163,17 @@ try {
         for (const step of metrics.steps) {
           assert.ok(!step.titleOverflow, `Agent step title clips (${label})`)
           if (step.meta) assert.ok(step.meta.top >= step.title.bottom - 1 && step.meta.bottom <= step.header.bottom + 1, `Agent step header/meta overlap (${label})`)
-          assert.ok(step.status.top >= step.title.bottom - 1 && step.status.right <= step.header.right + 1, `Step status overlaps the title or clips (${label})`)
-          assert.equal(step.targetVisible, !step.collapsed, `Collapsed step repeats target metadata (${label})`)
+          if (step.status) assert.ok(step.status.top >= step.title.bottom - 1 && step.status.right <= step.header.right + 1, `Step status overlaps the title or clips (${label})`)
+          assert.equal(step.targetVisible, false, `Historical source metadata belongs in the details (${label})`)
         }
         assert.ok(metrics.longTitle.height > metrics.longTitle.lineHeight * 1.5, `Long title must wrap (${label})`)
-        assert.ok(metrics.command.scrollHeight > metrics.command.clientHeight + 1, `Long command fixture must exceed preview height (${label})`)
-        assert.equal(metrics.command.overflowY, 'auto', `Command preview uses the shared scroll container (${label})`)
-        assert.equal(metrics.output.whiteSpace, 'pre', `Output preserves terminal columns (${label})`)
-        assert.ok(metrics.output.scrollHeight > metrics.output.clientHeight + 1 && metrics.output.lines >= 48, `Output fixture keeps a bounded scroll region (${label})`)
+        assert.equal(metrics.inlineCode, false, `Completed execution details must not add nested scrolling to the conversation (${label})`)
         geometry.push({ theme, zoom, width, turnWidth: metrics.turns[0].width, bodyWidth: metrics.turns[0].body.width })
       }
     }
   }
   checks.push('36 panel width/theme/100–150% CSS zoom combinations keep message and body edges aligned', 'No panel horizontal overflow or composer overlap')
-  checks.push('Long Chinese step titles wrap without metadata overlap', 'Collapsed steps omit repeated targets', 'Command previews avoid nested scrolling while multiline output preserves columns')
+  checks.push('Long Chinese step titles wrap without metadata overlap', 'Historical sources stay in execution details', 'Completed commands and output stay out of the main scroll area')
 
   await evaluate('aiFixture.configure({ theme: "light", zoom: 1, width: 554 })')
   const firstScreenshot = await screenshot('ai-chat-light-554.png')
@@ -197,8 +196,11 @@ try {
   const dispatchTurn = '[data-message-id="dispatch-failed"]'
   assert.equal(await evaluate(`Boolean(document.querySelector('${dispatchTurn} .tool-code-output'))`), false, 'A command that never started must not show an output block')
   assert.ok(await evaluate(`document.querySelector('${dispatchTurn}').textContent.includes('命令未执行')`), 'Dispatch failure explains that the command never ran')
-  await click(`${dispatchTurn} .tool-step-actions button[aria-expanded]`)
-  await waitFor(`document.querySelector('${dispatchTurn} .tool-step-error-detail')?.textContent.includes('Shell')`)
+  await click(`${dispatchTurn} .tool-step-details`)
+  await waitFor(`document.querySelector('.agent-detail-section[data-kind="error"]')?.textContent.includes('Shell')`)
+  assert.equal(await evaluate('Boolean(document.querySelector(".agent-detail-section[data-kind=output]"))'), false, 'A dispatch failure must not fabricate output in its dialog')
+  await click('.agent-detail-dialog button[aria-label="关闭"]')
+  await waitFor('!document.querySelector(".agent-detail-dialog")')
   assert.equal(await evaluate(`Boolean(document.querySelector('${dispatchTurn} .chat-error'))`), false, 'A tool error should not repeat a model-error notice')
 
   const initialExpanded = await evaluate(`document.querySelector('${completedTurn} .tool-step-toggle').getAttribute('aria-expanded')`)
@@ -207,21 +209,21 @@ try {
   await click(`${completedTurn} .tool-step-toggle`)
   await waitFor(`document.querySelector('${completedTurn} .tool-step-toggle').getAttribute('aria-expanded') === '${initialExpanded}'`)
   if (await evaluate(`document.querySelector('${longTurn} .tool-step-toggle').getAttribute('aria-expanded') === 'false'`)) await click(`${longTurn} .tool-step-toggle`)
-  await waitFor(`Boolean(document.querySelector('${longTurn} button[aria-label="复制命令"]'))`)
-  await click(`${longTurn} button[aria-label="复制命令"]`)
+  await click(`${longTurn} .tool-step-details`)
+  await waitFor('Boolean(document.querySelector(".agent-detail-dialog"))')
+  await click('.agent-detail-dialog button[aria-label="复制命令"]')
   assert.equal(await evaluate('aiFixture.copied.at(-1)'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].command'), 'Copy command preserves complete text')
-  await click(`${longTurn} .tool-code-command .tool-code-more`)
-  await waitFor('Boolean(document.querySelector(".tool-preview-dialog[role=dialog]"))')
-  assert.equal(await evaluate('document.querySelector(".tool-preview-content code").textContent'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].command'), 'Command preview opens the complete original command')
-  await click('.tool-preview-dialog button[aria-label="关闭"]')
-  await waitFor('!document.querySelector(".tool-preview-dialog")')
-  await click(`${longTurn} button[aria-label="复制输出"]`)
+  assert.equal(await evaluate('document.querySelector(".agent-detail-section[data-kind=command] code").textContent'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].command'), 'Details contain the complete original command')
+  await click('.agent-detail-dialog button[aria-label="复制输出"]')
   assert.equal(await evaluate('aiFixture.copied.at(-1)'), await evaluate('aiFixture.state.props.messages.find(m => m.id === "long-output").agentSteps[0].output'), 'Copy output preserves content beyond preview')
-  await click(`${longTurn} button[aria-label="展开输出"]`)
-  await waitFor('Boolean(document.querySelector(".tool-preview-dialog[role=dialog]"))')
-  assert.ok(await evaluate('document.querySelector(".tool-preview-dialog").textContent.includes("Long diagnostic output")'), 'Expanded output contains exact diagnostic content')
-  await click('.tool-preview-dialog button[aria-label="关闭"]')
-  await waitFor('!document.querySelector(".tool-preview-dialog")')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".agent-detail-section[data-kind=output] pre")).whiteSpace'), 'pre', 'Output initially preserves terminal columns')
+  assert.ok(await evaluate('(() => { const body = document.querySelector(".agent-detail-body"); return body.scrollHeight > body.clientHeight && body.scrollWidth > body.clientWidth; })()'), 'One dialog body owns scrolling of long output')
+  await click('.agent-detail-options input')
+  assert.equal(await evaluate('getComputedStyle(document.querySelector(".agent-detail-section[data-kind=output] pre")).whiteSpace'), 'pre-wrap')
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await waitFor('!document.querySelector(".agent-detail-dialog")')
+  assert.equal(await evaluate(`document.activeElement === document.querySelector('${longTurn} .tool-step-details')`), true, 'Closing details restores the original trigger focus')
   await click('[data-message-id="hello"] button[aria-label="复制回复"]')
   assert.equal(await evaluate('aiFixture.copied.at(-1)'), 'Hello.')
   checks.push('Tool details collapse and reopen', 'Command, output and response copying preserves exact text', 'Full output dialog opens and closes', 'Dispatch failures show one cause and no fabricated output')
@@ -346,9 +348,12 @@ try {
   await waitFor('!document.querySelector(".chat-activity")')
   const commentarySelector = '.chat-message-content > :last-child .agent-commentary'
   assert.equal(await evaluate(`document.querySelector('${commentarySelector}').classList.contains('chat-markdown')`), true, 'Tool commentary uses the same Markdown renderer as the answer')
-  const timelineExpression = `Array.from(document.querySelector('.chat-message-content > :last-child .agent-timeline').children).map(element => element.matches('.agent-commentary') ? element.textContent : element.dataset.stepId)`
+  const timelineExpression = `Array.from(document.querySelectorAll('.chat-message-content > :last-child .agent-timeline .agent-commentary, .chat-message-content > :last-child .agent-timeline .tool-step')).map(element => element.matches('.agent-commentary') ? element.textContent : element.dataset.stepId)`
   const timeline = await evaluate(timelineExpression)
   assert.deepEqual(timeline, ['先检查状态', 'runtime-first', '继续检查', 'runtime-second'], 'Thinking and tools follow actual turn order')
+  assert.equal(await evaluate('document.querySelector(".chat-message-content > :last-child .agent-completed-group").open'), false, 'Completed steps are collected in a closed group')
+  assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .agent-completed-group summary").textContent.includes("已完成 2 个步骤")'))
+  await click('.chat-message-content > :last-child .agent-completed-group summary')
   await evaluate('document.querySelector(".chat-message-content > :last-child").scrollIntoView({ block: "end", behavior: "instant" })')
   const timelineScreenshot = await screenshot('ai-agent-ordered-timeline.png')
   const duration = await evaluate('aiFixture.state.props.messages.at(-1).durationSeconds')

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 工作区 · 布局交互示例</title>
+  <style>
+    :root { color-scheme: light; --ink:#24312e; --muted:#78837f; --line:#e4e9e6; --soft:#f6f8f7; --green:#087f64; --green-soft:#eaf5ef; --red:#b13f4b; --red-soft:#fcf4f4; --mono:ui-monospace,"SFMono-Regular",Consolas,"PingFang SC",monospace; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#edf0ed; color:var(--ink); font:13px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif; -webkit-font-smoothing:antialiased; }
+    button,textarea,select { font:inherit; color:inherit; }
+    button { cursor:pointer; }
+    button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:30px; border:0; border-radius:5px; padding:4px 9px; background:transparent; }
+    button:hover:not(:disabled) { background:#edf1ee; }
+    button:disabled { color:#a6aeaa; cursor:default; }
+    button:focus-visible,summary:focus-visible,a:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
+    [hidden] { display:none !important; }
+    .icon { display:block; width:16px; height:16px; flex:0 0 16px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+    .icon-button { width:30px; height:30px; padding:0; flex:0 0 30px; color:var(--muted); }
+    .demo-bar { min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:20px; max-width:1060px; margin:auto; padding:16px 28px; }
+    .demo-brand { font-size:13px; font-weight:600; letter-spacing:.02em; }
+    .demo-brand span { margin-left:12px; color:var(--muted); font-size:12px; font-weight:400; letter-spacing:0; }
+    .demo-widths { display:flex; align-items:center; gap:3px; color:#7a827d; font-size:12px; }
+    .demo-widths > span { margin-right:7px; }
+    .demo-widths button { min-height:26px; padding:2px 9px; font-size:12px; }
+    .demo-widths button[aria-pressed="true"] { background:#fff; color:var(--ink); box-shadow:0 1px 3px #25332d0c; }
+    .stage { display:flex; justify-content:center; align-items:flex-start; gap:64px; padding:14px 24px 44px; }
+    .workspace { width:440px; max-width:100%; height:860px; max-height:calc(100dvh - 108px); min-height:550px; flex-shrink:0; display:flex; flex-direction:column; background:#fff; border:1px solid #dbe2dc; border-radius:9px; box-shadow:0 14px 45px #273b2910,0 2px 6px #273b2905; overflow:hidden; }
+    .workspace-tabs { display:flex; height:38px; flex:0 0 38px; border-bottom:1px solid var(--line); padding:0 8px; }
+    .workspace-tab { flex:1; gap:7px; min-width:0; border-radius:0; color:var(--muted); font-size:12px; position:relative; }
+    .workspace-tab:hover:not(:disabled) { background:var(--soft); }
+    .workspace-tab[aria-selected="true"] { color:var(--green); background:#eff7f2; font-weight:500; }
+    .workspace-tab[aria-selected="true"]::after { content:""; position:absolute; bottom:-1px; left:25%; right:25%; height:2px; background:var(--green); }
+    .workspace-tab .icon { width:14px; height:14px; flex-basis:14px; }
+    .ai-view { display:flex; flex:1; min-height:0; flex-direction:column; }
+    .session-head { display:flex; align-items:center; gap:8px; padding:8px 13px 2px 16px; flex:0 0 43px; min-width:0; }
+    .session-title { min-width:0; flex:1; font-size:14px; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .session-actions { display:flex; gap:1px; }
+    .connection-row { display:flex; align-items:center; gap:8px; flex:0 0 34px; padding:0 16px 8px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
+    .connection { display:flex; align-items:center; gap:5px; min-width:0; }
+    .connection .icon { width:12px; height:12px; flex-basis:12px; }
+    .connection span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .context-button { margin-left:auto; padding:0; font-size:11px; min-height:23px; flex-shrink:0; }
+    .context-button .icon { width:12px; height:12px; flex-basis:12px; }
+    .viewport { flex:1; min-height:0; position:relative; isolation:isolate; }
+    .messages { position:relative; z-index:0; height:100%; overflow:auto; padding:20px 16px 28px; scroll-padding-block:10px 56px; scrollbar-width:thin; scrollbar-color:#d8dfda transparent; overscroll-behavior:contain; }
+    .user-message { margin:0 0 25px auto; padding:10px 12px; max-width:91%; width:fit-content; background:#f0f4f1; border:1px solid #eaf0eb; border-radius:9px 9px 3px 9px; line-height:21px; font-size:13px; }
+    .agent-head { display:flex; align-items:center; gap:7px; margin-bottom:13px; color:#596c62; font-size:12px; }
+    .agent-head .icon { color:var(--green); }
+    .agent-head strong { font-weight:600; }
+    .agent-head time { margin-left:auto; color:#95a098; font-size:11px; }
+    .agent-title { margin:0 0 8px; font-size:15px; font-weight:600; line-height:24px; letter-spacing:-.1px; }
+    .agent-text { margin:0 0 15px; color:#56655d; font-size:13px; line-height:23px; }
+    .agent-text strong { font-weight:500; color:var(--ink); }
+    details > summary { list-style:none; cursor:pointer; }
+    details > summary::-webkit-details-marker { display:none; }
+    .checks { margin:0 0 16px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .checks > summary { display:flex; align-items:center; gap:8px; min-height:41px; color:#5c6b62; font-size:12px; }
+    .checks > summary > .icon:first-child { color:var(--green); width:14px; height:14px; flex-basis:14px; }
+    .checks-duration { margin-left:auto; color:#99a29b; font-size:11px; font-variant-numeric:tabular-nums; }
+    .chevron { width:13px; height:13px; flex-basis:13px; color:#8b968f; transition:transform 140ms; }
+    details[open] > summary > .chevron { transform:rotate(180deg); }
+    .check-list { list-style:none; margin:0 0 10px; padding:0 0 0 22px; }
+    .check-list li { display:flex; justify-content:space-between; gap:12px; padding:5px 0; color:#6c7971; font-size:12px; }
+    .check-list li span:last-child { color:var(--ink); text-align:right; }
+    .process-link { font-size:11px; color:var(--muted); margin:0 0 8px 14px; min-height:24px; }
+    .result-card { border:1px solid #eacfd3; border-radius:8px; overflow:hidden; background:#fff; margin-bottom:16px; }
+    .result-head { display:flex; align-items:center; gap:8px; padding:11px 12px 9px; background:var(--red-soft); }
+    .result-head > .icon { color:var(--red); width:15px; height:15px; flex-basis:15px; }
+    .result-head strong { min-width:0; font-size:13px; font-weight:600; }
+    .result-badge { margin-left:auto; font:10px/20px var(--mono); padding:0 5px; color:var(--red); border:1px solid #eddadd; border-radius:4px; white-space:nowrap; }
+    .result-body { padding:11px 12px 12px; }
+    .result-description { font-size:13px; line-height:22px; margin:0 0 8px; }
+    .error-excerpt { margin:0; font:11px/18px var(--mono); color:#91636a; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .result-actions { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+    .result-actions button { min-height:29px; font-size:12px; }
+    .result-actions .icon { width:13px; height:13px; flex-basis:13px; }
+    .button-primary { background:#edf4ef; color:#267051; border:1px solid #dbe8df; }
+    .button-primary:hover:not(:disabled) { background:#e0eee5; }
+    .button-secondary { background:#fff; border:1px solid #e1e7e2; color:#606d65; }
+    .result-details { width:100%; display:flex; justify-content:flex-start; min-height:34px; padding:6px 12px; border-top:1px solid #eee3e5; border-radius:0; color:#7b8580; font-size:11px; }
+    .result-details .icon { width:13px; height:13px; flex-basis:13px; }
+    .result-details .detail-duration { margin-left:auto; color:#9da59f; font-size:10px; font-variant-numeric:tabular-nums; }
+    .result-card.is-running { border-color:#d6e5db; }
+    .result-card.is-running .result-head,.result-card.is-success .result-head { background:#f1f7f3; }
+    .result-card.is-running .result-head > .icon,.result-card.is-success .result-head > .icon { color:var(--green); }
+    .result-card.is-running .result-badge,.result-card.is-success .result-badge { color:var(--green); border-color:#d9e9df; font-family:inherit; }
+    .result-card.is-success { border-color:#d5e4d9; }
+    .next-step { margin:0; color:#536159; font-size:13px; line-height:23px; }
+    .next-action { justify-content:flex-start; margin:5px 0 0 -7px; padding-inline:7px; font-size:12px; color:var(--green); }
+    .next-action .icon { width:13px; height:13px; flex-basis:13px; }
+    .thoughts { color:#8c978f; margin-top:16px; font-size:11px; }
+    .thoughts summary { display:inline-flex; align-items:center; gap:4px; min-height:24px; }
+    .thoughts p { padding-left:17px; margin:5px 0 0; line-height:20px; }
+    .latest { position:absolute; z-index:5; bottom:12px; left:50%; transform:translateX(-50%); min-height:29px; background:#fff; box-shadow:0 2px 10px #21362d1c; border:1px solid var(--line); border-radius:16px; font-size:11px; color:#5a7062; }
+    .latest .icon { width:12px; height:12px; flex-basis:12px; }
+    .composer { padding:11px 12px 12px; border-top:1px solid var(--line); background:#fff; flex-shrink:0; }
+    .input-shell { padding:1px; border:1px solid #dce4dd; border-radius:9px; background:#fff; }
+    .input-shell:focus-within { border-color:#91b5a1; box-shadow:0 0 0 2px #087f6407; }
+    textarea { display:block; width:100%; height:54px; min-height:54px; max-height:114px; border:0; outline:0; background:transparent; resize:none; padding:10px 11px 3px; font-size:13px; line-height:21px; }
+    textarea::placeholder { color:#9aa39c; }
+    .composer-toolbar { display:flex; align-items:center; gap:5px; min-height:37px; padding:0 7px 6px; }
+    .mode-switch { display:flex; padding:2px; border-radius:5px; background:#f1f4f1; }
+    .mode-switch button { min-height:23px; font-size:11px; padding:2px 6px; }
+    .mode-switch button[aria-pressed="true"] { background:#e2efe7; color:var(--green); }
+    .model-select { min-width:0; max-width:112px; border:0; outline-offset:2px; background:transparent; color:#6e7c72; font-size:11px; padding:3px; }
+    .composer-settings { margin-left:auto; }
+    .send { width:29px; height:29px; min-height:29px; padding:0; background:var(--green); color:#fff; border-radius:6px; }
+    .send:hover:not(:disabled) { background:#096b56; }
+    .send:disabled { background:#eef2ee; color:#9ca8a0; }
+    .other-view { min-height:0; overflow:auto; flex:1; padding:22px 16px; }
+    .other-view h2 { font-size:15px; margin:0 0 5px; }
+    .other-view p { margin:0 0 20px; font-size:12px; color:var(--muted); }
+    .record { display:flex; width:100%; text-align:left; justify-content:flex-start; padding:13px 0; border-bottom:1px solid var(--line); border-radius:0; gap:12px; }
+    .record .record-copy { display:grid; gap:2px; min-width:0; }
+    .record strong { font-size:12px; font-weight:500; }
+    .record small { font-size:11px; color:var(--muted); }
+    .review-notes { width:258px; padding-top:31px; flex-shrink:0; }
+    .review-kicker { color:#819086; font-size:10px; letter-spacing:1.5px; }
+    .review-notes h1 { font-size:25px; font-weight:600; letter-spacing:-.7px; line-height:1.5; margin:11px 0 14px; color:#33473a; }
+    .review-intro { font-size:12px; color:#7b897f; line-height:22px; margin:0; }
+    .review-item { display:grid; grid-template-columns:21px 1fr; gap:11px; margin-top:27px; }
+    .review-index { font:10px/21px var(--mono); color:#98a198; }
+    .review-item strong { font-weight:500; color:#526959; font-size:12px; }
+    .review-item p { margin:5px 0 0; color:#8b948c; font-size:11px; line-height:21px; }
+    .state-picker { margin-top:39px; padding-top:20px; border-top:1px solid #dce3dc; }
+    .state-picker > span { display:block; color:#819086; font-size:11px; margin-bottom:9px; }
+    .state-buttons { display:flex; gap:4px; }
+    .state-buttons button { font-size:11px; min-height:28px; padding:3px 9px; color:#7b887e; }
+    .state-buttons button[aria-pressed="true"] { background:#fff; color:#354f3f; box-shadow:0 1px 3px #22342408; }
+    .demo-footnote { font-size:10px; line-height:19px; color:#9aa39b; margin:16px 0 0; }
+    dialog { width:min(700px,calc(100vw - 32px)); max-height:calc(100dvh - 56px); padding:0; color:var(--ink); border:1px solid #dbe3dd; border-radius:10px; box-shadow:0 20px 80px #20372826; background:#fff; }
+    dialog::backdrop { background:#1e332942; backdrop-filter:blur(2px); }
+    .dialog-head { display:flex; align-items:center; justify-content:space-between; padding:13px 17px; border-bottom:1px solid var(--line); }
+    .dialog-head strong { font-size:14px; font-weight:600; }
+    .dialog-subtitle { color:var(--muted); font-size:11px; margin-top:3px; }
+    .dialog-content { max-height:calc(100dvh - 155px); overflow:auto; padding:18px; scrollbar-width:thin; }
+    .code-label { display:flex; align-items:center; justify-content:space-between; color:#718078; font-size:11px; margin-bottom:6px; }
+    .dialog-content pre { margin:0 0 20px; padding:13px; background:#f5f7f5; border:1px solid #e8ece8; border-radius:6px; font:12px/21px var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .context-setting { display:flex; justify-content:space-between; gap:12px; padding:11px 0; border-bottom:1px solid var(--line); font-size:12px; }
+    .context-setting span { color:var(--muted); }
+    .context-setting select { max-width:170px; padding:4px; border:1px solid var(--line); border-radius:4px; background:white; font-size:12px; }
+    .context-explanation { color:var(--muted); font-size:12px; line-height:22px; margin:15px 0 0; }
+    .dialog-footer { display:flex; justify-content:flex-end; padding:14px 0 0; }
+    .toast { position:fixed; bottom:25px; left:50%; transform:translateX(-50%); z-index:30; padding:9px 15px; max-width:calc(100vw - 32px); border:1px solid #d5e1d8; background:#fff; color:#4c6b57; border-radius:7px; box-shadow:0 6px 22px #20372812; font-size:12px; }
+    @media(max-width:790px) { .review-notes { display:none; } .stage { padding:10px 14px 24px; } .demo-bar { padding:12px 16px; min-height:58px; } .workspace { max-height:calc(100dvh - 86px); } }
+    @media(max-width:470px) { .demo-brand span,.demo-widths > span { display:none; } .demo-bar { padding:10px 12px; } .stage { padding:0; } .workspace { width:100% !important; border-radius:0; border-inline:0; max-height:none; height:calc(100dvh - 58px); min-height:0; } .messages { padding-inline:13px; } }
+    @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; transition:none !important; } }
+  </style>
+</head>
+<body>
+  <svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true"><defs>
+    <symbol id="i-ai" viewBox="0 0 24 24"><path d="m12 3 2.1 6.9L21 12l-6.9 2.1L12 21l-2.1-6.9L3 12l6.9-2.1Z"/><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6Z"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 3v6h6M12 7v5l3 2"/></symbol>
+    <symbol id="i-script" viewBox="0 0 24 24"><path d="M14 2H6v20h12V6Zm0 0v5h5M9 12l-2 2 2 2m4-4 2 2-2 2"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6m10 0h6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-latest" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2ZM12 9v5m0 3h.01"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  </defs></svg>
+  <header class="demo-bar">
+    <div class="demo-brand">AI 工作区<span>布局交互示例</span></div>
+    <div class="demo-widths" role="group" aria-label="预览面板宽度"><span>面板宽度</span><button data-width="360" aria-pressed="false">360</button><button data-width="440" aria-pressed="true">440</button><button data-width="560" aria-pressed="false">560</button></div>
+  </header>
+  <main class="stage">
+    <aside class="workspace" aria-label="AI 工作区示例">
+      <nav class="workspace-tabs" role="tablist" aria-label="工作区">
+        <button id="tab-history" class="workspace-tab" role="tab" aria-selected="false" aria-controls="view-history" tabindex="-1" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>历史</button>
+        <button id="tab-ai" class="workspace-tab" role="tab" aria-selected="true" aria-controls="view-ai" data-tab="ai"><svg class="icon"><use href="#i-ai"/></svg>AI</button>
+        <button id="tab-scripts" class="workspace-tab" role="tab" aria-selected="false" aria-controls="view-scripts" tabindex="-1" data-tab="scripts"><svg class="icon"><use href="#i-script"/></svg>脚本</button>
+      </nav>
+      <section class="ai-view" id="view-ai" role="tabpanel" aria-labelledby="tab-ai">
+        <header class="session-head"><strong class="session-title" title="查看本机 Python 版本，必要时放宽 Dockerfile 的版本限制。">检查 Python 与构建版本</strong><div class="session-actions"><button class="icon-button" data-action="sessions" title="会话列表" aria-label="会话列表"><svg class="icon"><use href="#i-history"/></svg></button><button class="icon-button" data-action="new" title="新建会话" aria-label="新建会话"><svg class="icon"><use href="#i-plus"/></svg></button></div></header>
+        <div class="connection-row"><div class="connection" title="当前执行目标：dev@build-server"><svg class="icon"><use href="#i-terminal"/></svg><span>当前目标 · dev@build-server</span></div><button class="context-button" data-action="context" title="查看附带的终端内容"><span id="context-label">终端内容 · 0 字符</span><svg class="icon"><use href="#i-down"/></svg></button></div>
+        <div class="viewport">
+          <div class="messages" tabindex="0" aria-label="对话记录">
+            <div class="sample-conversation">
+              <p class="user-message">查看本机 Python 版本，必要时放宽 Dockerfile 的版本限制。</p>
+              <div class="agent-head"><svg class="icon"><use href="#i-ai"/></svg><strong>Agent</strong><time>刚刚</time></div>
+              <h2 class="agent-title">环境已核对，1 项检查需要处理</h2>
+              <p class="agent-text">本机使用 <strong>Python 3.11.9</strong>。项目目录已确认，读取 Dockerfile 时遇到文件路径问题。</p>
+              <details class="checks"><summary><svg class="icon"><use href="#i-check"/></svg><span>已完成 3 项检查</span><span class="checks-duration">0.8s</span><svg class="icon chevron"><use href="#i-down"/></svg></summary><ul class="check-list"><li><span>Python 版本</span><span>3.11.9</span></li><li><span>当前工作目录</span><span>/srv/app/ui</span></li><li><span>项目文件列表</span><span>已读取</span></li></ul><button class="process-link" data-action="process">查看执行记录<svg class="icon chevron"><use href="#i-arrow"/></svg></button></details>
+              <article class="result-card" aria-label="执行结果">
+                <header class="result-head"><svg class="icon"><use id="result-icon" href="#i-alert"/></svg><strong id="result-title">读取 Dockerfile 失败</strong><span class="result-badge">exit 2</span></header>
+                <div class="result-body"><p class="result-description">当前目录下未找到 Dockerfile。需要先确认文件位置，再继续检查版本限制。</p><pre class="error-excerpt">sed: can't read Dockerfile: No such file or directory</pre><div class="result-actions"><button class="button-primary" data-action="terminal"><svg class="icon"><use href="#i-terminal"/></svg>查看终端</button><button class="button-secondary" data-action="retry"><svg class="icon"><use href="#i-refresh"/></svg><span>重试</span></button></div></div>
+                <button class="result-details" data-action="details"><svg class="icon"><use href="#i-terminal"/></svg><span>查看命令与完整输出</span><span class="detail-duration">195ms</span><svg class="icon chevron"><use href="#i-right"/></svg></button>
+              </article>
+              <p class="next-step">下一步先定位 Dockerfile，确认路径后继续核对构建配置。</p>
+              <button class="next-action" data-action="continue">继续定位文件<svg class="icon"><use href="#i-arrow"/></svg></button>
+              <details class="thoughts"><summary><svg class="icon chevron"><use href="#i-down"/></svg>思考过程</summary><p>版本检查已完成。本次命令返回文件不存在，需要先确认 Dockerfile 是否位于项目上级目录，再继续核对 Python 镜像版本。</p></details>
+            </div>
+            <div class="new-conversation" hidden><div class="agent-head"><svg class="icon"><use href="#i-ai"/></svg><strong>新会话</strong></div><h2 class="agent-title">从一个任务开始</h2><p class="agent-text">描述需要检查的内容，Agent 会在当前终端中推进任务。</p><button class="button-primary" data-action="restore">返回布局示例</button></div>
+          </div>
+          <button class="latest" hidden aria-label="回到最新消息"><svg class="icon"><use href="#i-latest"/></svg>回到最新</button>
+        </div>
+        <form class="composer"><div class="input-shell"><textarea rows="2" placeholder="描述任务，或补充下一步要求…" aria-label="任务内容"></textarea><div class="composer-toolbar"><div class="mode-switch" role="group" aria-label="AI 模式"><button type="button" data-mode="chat" aria-pressed="false">对话</button><button type="button" data-mode="agent" aria-pressed="true">Agent</button></div><select class="model-select" aria-label="AI 配置"><option>默认配置</option><option>备用配置</option></select><button type="button" class="icon-button composer-settings" data-action="context" aria-label="上下文设置" title="上下文设置"><svg class="icon"><use href="#i-settings"/></svg></button><button type="submit" class="send" disabled title="发送 · Ctrl / ⌘ + Enter" aria-label="发送"><svg class="icon"><use href="#i-up"/></svg></button></div></div></form>
+      </section>
+      <section id="view-history" class="other-view" role="tabpanel" aria-labelledby="tab-history" hidden><h2>命令历史</h2><p>当前连接 · dev@build-server</p><button class="record" data-action="process"><svg class="icon"><use href="#i-check"/></svg><span class="record-copy"><strong>python3 --version</strong><small>已完成 · Python 3.11.9</small></span></button><button class="record" data-action="process"><svg class="icon"><use href="#i-check"/></svg><span class="record-copy"><strong>pwd</strong><small>已完成 · /srv/app/ui</small></span></button><button class="record" data-action="details"><svg class="icon"><use href="#i-alert"/></svg><span class="record-copy"><strong>sed -n '1,180p' Dockerfile</strong><small>执行失败 · exit 2</small></span></button></section>
+      <section id="view-scripts" class="other-view" role="tabpanel" aria-labelledby="tab-scripts" hidden><h2>脚本</h2><p>常用检查步骤</p><button class="record" data-action="process"><svg class="icon"><use href="#i-script"/></svg><span class="record-copy"><strong>Python 环境检查</strong><small>查看版本、工作目录与项目文件</small></span><svg class="icon chevron" style="margin-left:auto"><use href="#i-right"/></svg></button></section>
+    </aside>
+    <section class="review-notes" aria-label="设计说明"><span class="review-kicker">AI TERM / WORKSPACE</span><h1>让结果更靠前，<br>让过程有收纳。</h1><p class="review-intro">同样的任务与信息，重新安排阅读顺序。<br>左侧为可操作的面板示例。</p><div class="review-item"><span class="review-index">01</span><div><strong>错误原因和操作，一眼可见</strong><p>失败摘要、关键报错、处理按钮放在一起，<br>不用先翻过整段命令。</p></div></div><div class="review-item"><span class="review-index">02</span><div><strong>成功步骤，压缩成一行</strong><p>点开“已完成 3 项检查”查看结果。<br>完整执行记录与思考过程按需展开。</p></div></div><div class="review-item"><span class="review-index">03</span><div><strong>完整代码，独立阅读</strong><p>对话保持一条主滚动轴。<br>点击“查看命令与完整输出”打开详情。</p></div></div><div class="state-picker"><span>试试不同执行状态</span><div class="state-buttons"><button data-state="error" aria-pressed="true">异常</button><button data-state="running" aria-pressed="false">执行中</button><button data-state="success" aria-pressed="false">已完成</button></div></div><p class="demo-footnote">示例数据 · 所有操作均在本页演示<br>顶部可切换 360 / 440 / 560px 面板宽度</p></section>
+  </main>
+  <dialog id="detail-dialog" aria-labelledby="dialog-title"><header class="dialog-head"><div><strong id="dialog-title">命令与输出</strong><div class="dialog-subtitle">此步骤执行于 · dev@build-server</div></div><button class="icon-button" data-close-dialog aria-label="关闭详情"><svg class="icon"><use href="#i-close"/></svg></button></header><div class="dialog-content"></div></dialog>
+  <div class="toast" role="status" hidden></div>
+  <script>
+    const $ = selector => document.querySelector(selector);
+    const $$ = selector => [...document.querySelectorAll(selector)];
+    const icon = name => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+    const escapeHtml = text => text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+    const command = "sed -n '1,180p' Dockerfile";
+    const errorOutput = "sed: can't read Dockerfile: No such file or directory";
+    const successOutput = 'FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt';
+    let state = 'error', retryTimer, toastTimer, returnFocus, freshSession = false;
+    const dialog = $('#detail-dialog');
+    function toast(text) { clearTimeout(toastTimer); $('.toast').textContent = text; $('.toast').hidden = false; toastTimer = setTimeout(() => $('.toast').hidden = true, 2300); }
+    function updateLatest() { const el = $('.messages'); $('.latest').hidden = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }
+    function latest() { $('.messages').scrollTo({top:$('.messages').scrollHeight,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'}); }
+    function setState(next) {
+      clearTimeout(retryTimer); state = next;
+      $('.result-card').className = 'result-card' + (state === 'error' ? '' : ` is-${state}`);
+      $('#result-icon').setAttribute('href', '#i-' + ({error:'alert',running:'refresh',success:'check'}[state]));
+      $('#result-title').textContent = {error:'读取 Dockerfile 失败',running:'正在定位并读取 Dockerfile',success:'已读取 Dockerfile'}[state];
+      $('.result-badge').textContent = {error:'exit 2',running:'执行中',success:'已完成'}[state];
+      $('.result-description').textContent = {error:'当前目录下未找到 Dockerfile。需要先确认文件位置，再继续检查版本限制。',running:'正在上级目录中查找 Dockerfile，随后核对 Python 镜像与版本限制。',success:'Dockerfile 位于项目根目录，使用 Python 3.11 镜像，与本机版本一致。'}[state];
+      $('.error-excerpt').textContent = state === 'error' ? errorOutput : '';
+      $('.error-excerpt').hidden = state !== 'error';
+      $('.result-actions').hidden = state === 'running';
+      $('[data-action="retry"]').hidden = state === 'success';
+      $('.result-details').disabled = state === 'running';
+      $('.detail-duration').textContent = state === 'running' ? '正在执行' : state === 'success' ? '0.6s' : '195ms';
+      $('.agent-title').textContent = {error:'环境已核对，1 项检查需要处理',running:'环境已核对，继续检查构建配置',success:'检查完成，Python 版本一致'}[state];
+      $('.agent-text').innerHTML = state === 'success' ? '本机与 Dockerfile 均使用 <strong>Python 3.11</strong>，目前无需调整版本限制。' : '本机使用 <strong>Python 3.11.9</strong>。项目目录已确认，' + (state === 'running' ? '正在进一步检查构建文件。' : '读取 Dockerfile 时遇到文件路径问题。');
+      $('.next-step').textContent = {error:'下一步先定位 Dockerfile，确认路径后继续核对构建配置。',running:'检查过程中可以查看上方已完成的步骤。',success:'已完成版本核对，文件保持原样。可以继续检查依赖兼容性。'}[state];
+      $('.next-action').hidden = state === 'running';
+      $('.next-action').innerHTML = (state === 'success' ? '继续检查依赖兼容性' : '继续定位文件') + icon('arrow');
+      $('.thoughts p').textContent = state === 'success' ? '已在项目根目录找到 Dockerfile。镜像版本与本机环境一致，因此没有修改版本约束。' : '版本检查已完成。本次命令返回文件不存在，需要先确认 Dockerfile 是否位于项目上级目录，再继续核对 Python 镜像版本。';
+      $$('.state-buttons button').forEach(button => button.setAttribute('aria-pressed',button.dataset.state === state));
+      requestAnimationFrame(updateLatest);
+    }
+    function selectTab(name, focus = false) { $$('.workspace-tab').forEach(button => { const active = button.dataset.tab === name; button.setAttribute('aria-selected',active); button.tabIndex = active?0:-1; $('#view-'+button.dataset.tab).hidden = !active; if(active && focus) button.focus(); }); requestAnimationFrame(updateLatest); }
+    function showDialog(title, content, subtitle = '此步骤执行于 · dev@build-server') { returnFocus = document.activeElement; $('#dialog-title').textContent = title; $('.dialog-subtitle').textContent = subtitle; $('.dialog-content').innerHTML = content; dialog.showModal(); }
+    function closeDialog() { dialog.close(); }
+    function codeSection(label, text) { return `<div class="code-label"><span>${label}</span><button class="icon-button" data-copy="${escapeHtml(text)}" title="复制${label}" aria-label="复制${label}">${icon('copy')}</button></div><pre>${escapeHtml(text)}</pre>`; }
+    function openDetails() { showDialog('命令与完整输出', codeSection('命令', state === 'success' ? "sed -n '1,180p' ../Dockerfile" : command) + codeSection('输出 · '+(state === 'success'?'exit 0':'exit 2'), state === 'success'?successOutput:errorOutput)); }
+    function syncInput() { const input = $('textarea'); input.style.height = '54px'; input.style.height = Math.min(114,Math.max(54,input.scrollHeight))+'px'; $('.send').disabled = !input.value.trim(); }
+    function restore() { freshSession = false; $('.sample-conversation').hidden = false; $('.new-conversation').hidden = true; $('.session-title').textContent = '检查 Python 与构建版本'; $$('.submitted-message').forEach(el=>el.remove()); setState('error'); $('.messages').scrollTop = 0; }
+    const actions = {
+      details: openDetails,
+      terminal: () => showDialog('终端',codeSection('当前目录 · /srv/app/ui',`dev@build-server:/srv/app/ui$ ${command}\n${errorOutput}\ndev@build-server:/srv/app/ui$`),'示例终端输出'),
+      process: () => showDialog('已完成的检查',codeSection('Python 版本','python3 --version\nPython 3.11.9')+codeSection('工作目录','pwd\n/srv/app/ui')+codeSection('项目文件','ls\npackage.json  requirements.txt  src/')),
+      retry: () => { setState('running'); retryTimer = setTimeout(()=>{setState('error');toast('示例：当前路径仍未找到 Dockerfile');},1000); },
+      continue: () => { $('textarea').value = state === 'success' ? '继续检查依赖与 Python 3.11 的兼容性。' : '先定位 Dockerfile，再检查 Python 版本限制。'; syncInput(); $('textarea').focus(); },
+      context: () => showDialog('上下文设置','<div class="context-setting"><span>当前执行目标</span><strong>dev@build-server</strong></div><label class="context-setting"><span>附带终端内容</span><select id="context-mode"><option value="none">不附带</option><option value="screen">当前终端屏幕</option></select></label><p class="context-explanation">这里仅控制附带的终端内容。对话历史和本次 Agent 执行结果会继续保留。</p><div class="dialog-footer"><button class="button-primary" data-action="save-context">完成</button></div>','当前会话'),
+      'save-context': () => { $('#context-label').textContent = $('#context-mode').value === 'screen' ? '终端内容 · 124 字符' : '终端内容 · 0 字符'; closeDialog(); },
+      sessions: () => showDialog('会话列表','<button class="record" data-action="open-sample"><span class="record-copy"><strong>检查 Python 与构建版本</strong><small>刚刚 · dev@build-server</small></span></button>','当前连接'),
+      'open-sample': () => { closeDialog(); restore(); },
+      new: () => { clearTimeout(retryTimer); freshSession = true; $('.sample-conversation').hidden = true; $('.new-conversation').hidden = false; $$('.submitted-message').forEach(el=>el.remove()); $('.session-title').textContent = '新会话'; $('textarea').value = ''; syncInput(); $('textarea').focus(); updateLatest(); },
+      restore,
+    };
+    document.addEventListener('click', async event => {
+      const action = event.target.closest('[data-action]'); if(action) actions[action.dataset.action]?.();
+      const copy = event.target.closest('[data-copy]'); if(copy) { try { await navigator.clipboard.writeText(copy.dataset.copy); copy.title = '已复制'; copy.innerHTML = icon('check'); setTimeout(()=>{copy.innerHTML=icon('copy');copy.title='复制';},1600); } catch { toast('请选中文本后复制'); } }
+      if(event.target.closest('[data-close-dialog]')) closeDialog();
+    });
+    $$('.workspace-tab').forEach(button=>{button.addEventListener('click',()=>selectTab(button.dataset.tab));button.addEventListener('keydown',event=>{const tabs=$$('.workspace-tab');const i=tabs.indexOf(button);const indices={ArrowRight:(i+1)%3,ArrowLeft:(i+2)%3,Home:0,End:2};if(event.key in indices){event.preventDefault();selectTab(tabs[indices[event.key]].dataset.tab,true);}});});
+    $$('[data-width]').forEach(button=>button.addEventListener('click',()=>{$('.workspace').style.width=button.dataset.width+'px';$$('[data-width]').forEach(item=>item.setAttribute('aria-pressed',item===button));requestAnimationFrame(updateLatest);}));
+    $$('[data-state]').forEach(button=>button.addEventListener('click',()=>{selectTab('ai');if(freshSession) restore();setState(button.dataset.state);}));
+    $$('[data-mode]').forEach(button=>button.addEventListener('click',()=>{$$('[data-mode]').forEach(item=>item.setAttribute('aria-pressed',item===button));$('textarea').placeholder=button.dataset.mode==='agent'?'描述任务，或补充下一步要求…':'询问 AI…';}));
+    $('.latest').addEventListener('click',latest);
+    $('.messages').addEventListener('scroll',updateLatest);
+    $('.checks').addEventListener('toggle',()=>requestAnimationFrame(updateLatest));
+    $('.thoughts').addEventListener('toggle',()=>requestAnimationFrame(updateLatest));
+    $('textarea').addEventListener('input',syncInput);
+    $('textarea').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();$('.composer').requestSubmit();}});
+    $('.composer').addEventListener('submit',event=>{event.preventDefault();const input=$('textarea');if(!input.value.trim())return;const message=document.createElement('p');message.className='user-message submitted-message';message.style.marginTop='22px';message.textContent=input.value.trim();$('.messages').append(message);input.value='';syncInput();if(!freshSession){setState('running');retryTimer=setTimeout(()=>{setState('success');latest();},1300);}else{const response=document.createElement('p');response.className='agent-text submitted-message';response.textContent='已收到。这是布局交互示例，你可以返回示例会话查看完整的执行状态。';$('.messages').append(response);}latest();});
+    dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeDialog();}});
+    dialog.addEventListener('close',()=>{if(returnFocus?.isConnected)returnFocus.focus({preventScroll:true});});
+    new ResizeObserver(updateLatest).observe($('.viewport'));
+    window.addEventListener('resize',updateLatest);
+    document.fonts.ready.then(updateLatest);
+  </script>
+</body>
+</html>

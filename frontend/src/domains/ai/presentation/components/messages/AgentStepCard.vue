@@ -5,6 +5,7 @@ import type { AgentStep, AgentStepProposal, AgentTimeoutInfo } from '../../../do
 import { formatAiDuration } from '../../../domain/aiTiming'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 import AiCodeBlock from './AiCodeBlock.vue'
+import AgentStepDetails from './AgentStepDetails.vue'
 import { useCopyFeedback } from './useCopyFeedback'
 
 const props = withDefaults(defineProps<{
@@ -38,7 +39,6 @@ const emit = defineEmits<{
 
 const { copyFeedback, copyText } = useCopyFeedback()
 const explicitlyExpanded = ref<boolean | null>(null)
-const failureDetailsOpen = ref(false)
 const nonzeroExit = computed(() => props.step.exitCode !== undefined && props.step.exitCode !== 0)
 const isFailed = computed(() => props.step.status === 'failed' || (props.step.status === 'completed' && nonzeroExit.value))
 const didNotStart = computed(() => props.step.executionPhase === 'not-started')
@@ -51,6 +51,7 @@ const collapsed = computed(() => canCollapse.value && (explicitlyExpanded.value 
   ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)
   : !explicitlyExpanded.value))
 const compactSummary = computed(() => collapsed.value && (props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)))
+const compactRow = computed(() => compactSummary.value && props.step.status !== 'skipped')
 const statusLabel = computed(() => {
   if (props.approvalSaving) return '正在保存授权'
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '未执行' : '已停止等待'
@@ -68,6 +69,7 @@ const statusIcon = computed(() => {
   if (isFailed.value) return 'alert'
   if (props.step.status === 'running') return 'refresh'
   if (props.step.status === 'timeout') return 'history'
+  if (props.step.status === 'completed' && !nonzeroExit.value) return 'check'
   return 'terminal'
 })
 const riskLabels = computed(() => [...new Set(props.step.risks.map((risk) => risk.label))])
@@ -108,13 +110,14 @@ const failureReason = computed(() => {
   return props.step.failureReason || props.failureDetail
 })
 const failureDetailText = computed(() => props.step.failureReason || props.failureDetail)
-const showFailureDetail = computed(() => failureDetailText.value && failureDetailText.value !== failureReason.value)
 const outputContent = computed(() => props.step.output || (props.awaitingTimeout ? props.timeoutInfo?.partialOutput : '') || '')
 const showOutput = computed(() => !didNotStart.value && (Boolean(outputContent.value) || props.step.status === 'completed'))
+const outputExcerpt = computed(() => isFailed.value && showOutput.value
+  ? outputContent.value.trim().split(/\r?\n/).filter(line => line.trim()).slice(-3).join('\n')
+  : '')
 
 watch(() => props.step.id, () => {
   explicitlyExpanded.value = null
-  failureDetailsOpen.value = false
 })
 
 function toggleDetails() {
@@ -125,16 +128,17 @@ function toggleDetails() {
 <template>
   <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
-      <button v-if="canCollapse" type="button" class="tool-step-toggle" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" @click="toggleDetails">
+      <button v-if="canCollapse" type="button" class="tool-step-toggle" :class="{ 'is-compact': compactRow }" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" :title="`${step.reason || '终端命令'} · ${statusLabel}`" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
         <span class="tool-step-title">{{ step.reason || '终端命令' }}</span>
+        <span v-if="compactRow" class="tool-step-compact-duration">{{ durationLabel }}</span>
         <UiIcon :name="collapsed ? 'arrow-down' : 'arrow-up'" size="13" class="tool-step-chevron" />
       </button>
       <div v-else class="tool-step-heading">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
         <span class="tool-step-title">{{ step.reason || '终端命令' }}</span>
       </div>
-      <div class="tool-step-meta">
+      <div v-if="!compactRow" class="tool-step-meta">
         <span class="tool-step-status">{{ statusLabel }}</span>
         <span v-if="step.autoApproved && !compactSummary" class="tool-step-auto" title="通过只读判定或允许列表">自动执行</span>
         <span v-if="step.exitCode !== undefined && !compactSummary" class="tool-step-exit" :class="{ 'tool-step-exit-error': nonzeroExit }">exit {{ step.exitCode }}</span>
@@ -144,26 +148,23 @@ function toggleDetails() {
     </header>
 
     <div v-if="!collapsed" class="tool-step-body">
-      <div v-if="targetLabel" class="tool-step-target" :title="targetLabel"><UiIcon name="terminal" size="13" /><span>{{ targetLabel }}</span></div>
+      <div v-if="targetLabel && (awaitingApproval || awaitingTimeout)" class="tool-step-target" :title="targetLabel"><UiIcon name="terminal" size="13" /><span>执行目标 · {{ targetLabel }}</span></div>
       <div v-if="riskLabels.length || step.sensitive" class="tool-step-risk-row">
         <span v-for="label in riskLabels" :key="label" class="tool-step-risk" :class="{ 'is-high': hasHighRisk }"><UiIcon name="shield" size="12" />{{ label }}</span>
         <span v-if="step.sensitive" class="tool-step-risk is-high">敏感命令</span>
       </div>
-      <AiCodeBlock :content="step.command" label="命令" kind="command" flat :full="awaitingApproval" />
-      <AiCodeBlock v-if="showOutput" :content="outputContent" label="输出" kind="output" flat empty-text="命令已结束，没有输出。" class="tool-step-output" />
-
       <div v-if="isFailed || step.status === 'timeout' || stoppedWhileWaiting" class="tool-step-recovery">
         <p v-if="failureReason" class="tool-step-failure-reason">{{ failureReason }}</p>
+        <pre v-if="outputExcerpt" class="tool-step-output-excerpt" aria-label="输出摘录">{{ outputExcerpt }}</pre>
         <div class="tool-step-actions">
-          <button v-if="isFailed" type="button" class="tool-step-action is-primary" :disabled="!canRetry" :title="canRetry ? '重新执行此命令' : retryDisabledReason || '当前无法重试'" @click="emit('retry')"><UiIcon name="refresh" size="13" />重试命令</button>
-          <button type="button" class="tool-step-action" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
+          <button type="button" class="tool-step-action is-primary" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
+          <button v-if="isFailed" type="button" class="tool-step-action" :disabled="!canRetry" :title="canRetry ? '重新执行此命令' : retryDisabledReason || '当前无法重试'" @click="emit('retry')"><UiIcon name="refresh" size="13" />重试命令</button>
           <button v-if="failureDetailText" type="button" class="tool-step-action is-icon" :title="copyFeedback || '复制错误详情'" :aria-label="copyFeedback || '复制错误详情'" @click="copyText(failureDetailText)"><UiIcon name="copy" size="14" /></button>
-          <button v-if="showFailureDetail" type="button" class="tool-step-action" :aria-expanded="failureDetailsOpen" @click="failureDetailsOpen = !failureDetailsOpen">详情<UiIcon :name="failureDetailsOpen ? 'arrow-up' : 'arrow-down'" size="12" /></button>
           <span class="tool-step-copy-feedback" role="status">{{ copyFeedback }}</span>
         </div>
-        <pre v-if="showFailureDetail && failureDetailsOpen" class="tool-step-error-detail">{{ failureDetailText }}</pre>
       </div>
 
+      <AiCodeBlock v-if="awaitingApproval" :content="step.command" label="命令" kind="command" flat full />
       <div v-if="awaitingApproval" class="tool-step-decision">
         <div class="tool-step-actions">
           <button type="button" class="tool-step-action is-primary" :disabled="approvalSaving" :class="{ 'is-risk': hasRisk, 'is-armed': hasHighRisk && highRiskArmed }" :title="hasRisk ? '检查风险后确认执行' : '仅执行本次命令，不改变允许列表'" @click="hasRisk ? emit('reviewRisk') : emit('execute')"><UiIcon :name="hasRisk ? 'shield' : 'play'" size="13" />{{ hasRisk ? '查看风险' : '仅执行本次' }}</button>
@@ -187,6 +188,14 @@ function toggleDetails() {
           <button type="button" class="tool-step-action" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
         </div>
       </div>
+      <AgentStepDetails
+        :command="step.command"
+        :output="showOutput ? outputContent : undefined"
+        :failure-detail="failureDetailText"
+        :target-label="targetLabel"
+        :exit-code="step.exitCode"
+        :duration="durationLabel"
+      />
     </div>
   </article>
 </template>
@@ -194,8 +203,17 @@ function toggleDetails() {
 <style scoped>
 .tool-step { width: 100%; min-width: 0; flex: none; box-sizing: border-box; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 8px; overflow: hidden; color: var(--chat-text, var(--workbench-text)); background: var(--chat-surface, var(--workbench-panel-strong)); letter-spacing: 0; overflow-anchor: none; }
 .tool-step-header { min-width: 0; padding: 8px 12px; }
+.tool-step.is-error { border-color: color-mix(in srgb, var(--chat-danger) 28%, var(--chat-line)); }
+.tool-step.is-error .tool-step-header { background: var(--chat-danger-soft); }
+.tool-step.is-collapsed.is-success { border-inline: 0; border-top: 0; border-radius: 0; }
+.tool-step.is-collapsed.is-success .tool-step-header { padding: 9px 0; }
 .tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: start; gap: 8px; width: 100%; min-width: 0; height: auto; color: inherit; text-align: left; white-space: normal; }
 .tool-step-toggle { border: 0; padding: 0; background: transparent; cursor: pointer; }
+.tool-step-toggle:hover:not(:disabled) { background: transparent; color: inherit; }
+.tool-step-toggle.is-compact { grid-template-columns: 16px minmax(0, 1fr) auto 13px; align-items: center; }
+.tool-step-toggle.is-compact .tool-step-title { font-size: 12px; font-weight: 400; color: var(--chat-muted); }
+.tool-step-compact-duration { color: var(--chat-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tool-step.is-success .tool-step-state-icon { color: var(--chat-accent); }
 .tool-step-toggle:hover .tool-step-chevron { color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step-toggle:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 5px; border-radius: 2px; }
 .tool-step-title { min-width: 0; font-size: 14px; font-weight: 500; line-height: 22px; white-space: normal; overflow-wrap: anywhere; }
@@ -216,20 +234,20 @@ function toggleDetails() {
 .tool-step-target { display: flex; align-items: start; gap: 6px; min-width: 0; padding: 8px 12px 4px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 18px; }
 .tool-step-target .ui-icon { flex: none; margin-top: 2px; }
 .tool-step-target span { min-width: 0; overflow-wrap: anywhere; }
-.tool-step-body { border-top: 1px solid var(--chat-line, var(--workbench-line)); transform-origin: top center; animation: tool-step-reveal 150ms ease-out; }
+.tool-step-body { transform-origin: top center; animation: tool-step-reveal 150ms ease-out; }
 .tool-step-risk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 4px 12px; font-size: 12px; line-height: 18px; }
 .tool-step-auto { color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-risk { display: inline-flex; align-items: center; gap: 4px; color: var(--chat-warning, #996015); line-height: 1.4; }
 .tool-step-risk .ui-icon { display: block; flex: 0 0 auto; margin-top: 1px; }
 .tool-step-risk.is-high { color: var(--chat-danger, #c24150); }
-.tool-step-output { border-top: 1px solid var(--chat-line, var(--workbench-line)); }
-.tool-step-recovery, .tool-step-decision { padding: 10px 12px 12px; border-top: 1px solid var(--chat-line, var(--workbench-line)); }
+.tool-step-recovery, .tool-step-decision { padding: 11px 12px 12px; }
 .tool-step-failure-reason, .tool-step-timeout-hint { margin: 0 0 10px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .tool-step-failure-reason { color: var(--chat-muted, var(--workbench-muted)); }
-.tool-step.is-error .tool-step-failure-reason { color: var(--chat-danger, #c24150); }
+.tool-step.is-error .tool-step-failure-reason { color: var(--chat-text, var(--workbench-text)); font-size: 13px; line-height: 22px; }
+.tool-step-output-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: 0 0 12px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--chat-danger); font: 12px/20px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-step-timeout-hint { color: var(--chat-muted, var(--workbench-muted)); }
 .tool-step-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.tool-step-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; background: var(--chat-surface, var(--workbench-panel-strong)); color: var(--chat-text, var(--workbench-text)); font-size: 12px; line-height: 18px; cursor: pointer; }
+.tool-step-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 5px; background: var(--chat-surface, var(--workbench-panel-strong)); color: var(--chat-text, var(--workbench-text)); font-size: 12px; line-height: 18px; cursor: pointer; }
 .tool-step-action.is-primary { background: var(--workbench-action-bg); color: var(--workbench-action-text); border-color: var(--workbench-action-border); }
 .tool-step-action.is-primary:not(.is-risk):hover:not(:disabled) { background: var(--workbench-action-hover); filter: none; }
 .tool-step-action.is-primary:not(.is-risk):active:not(:disabled) { background: var(--workbench-action-active); }
@@ -239,12 +257,6 @@ function toggleDetails() {
 .tool-step-action:focus-visible, .tool-step-allow:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
 .tool-step-action.is-icon { width: 32px; padding: 0; flex: 0 0 32px; }
 .tool-step-copy-feedback { color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; }
-.tool-step-error-detail { margin: 10px 0 0; max-height: 180px; padding: 0 12px 12px 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/20px var(--font-mono, 'JetBrains Mono', Consolas, monospace); color: var(--chat-muted, var(--workbench-muted)); }
-.tool-step-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
-.tool-step-error-detail::-webkit-scrollbar-track { background: transparent; }
-.tool-step-error-detail::-webkit-scrollbar-thumb { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
-.tool-step-error-detail::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
-.tool-step-error-detail::-webkit-scrollbar-corner { background: transparent; }
 .tool-step-action.is-allow:not(:disabled) { color: var(--chat-accent, var(--workbench-accent)); border-color: var(--chat-accent, var(--workbench-accent)); }
 .tool-step-allow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; max-width: 100%; margin-top: 10px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 1.7; }
 .tool-step-allow code { min-width: 0; overflow-wrap: anywhere; padding: 0 5px; border: 1px solid var(--chat-line, var(--workbench-line)); border-radius: 4px; color: var(--chat-text, var(--workbench-text)); font: inherit; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); }

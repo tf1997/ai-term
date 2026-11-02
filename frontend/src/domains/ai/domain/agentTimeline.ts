@@ -48,3 +48,42 @@ export function agentDisplayTimeline(message: AiMessage) {
     return parts
   })
 }
+
+export type AgentDisplayEntry = ReturnType<typeof agentDisplayTimeline>[number]
+export type AgentPresentationEntry = AgentDisplayEntry | {
+  kind: 'completed-group'
+  id: string
+  entries: AgentDisplayEntry[]
+  steps: AgentStep[]
+}
+
+/** Keep each tool's preceding explanation with it, without hiding unfinished work. */
+export function agentPresentationTimeline(message: AiMessage): AgentPresentationEntry[] {
+  const result: AgentPresentationEntry[] = []
+  let completed: AgentDisplayEntry[] = []
+  let steps: AgentStep[] = []
+  let explanation: AgentDisplayEntry[] = []
+  function flushCompleted() {
+    if (steps.length > 1) result.push({ kind: 'completed-group', id: `completed:${steps[0].id}`, entries: completed, steps })
+    else result.push(...completed)
+    completed = []
+    steps = []
+  }
+  for (const entry of agentDisplayTimeline(message)) {
+    if (entry.kind !== 'tool') {
+      explanation.push(entry)
+      continue
+    }
+    if (entry.step.status === 'completed' && (entry.step.exitCode === undefined || entry.step.exitCode === 0)) {
+      completed.push(...explanation, entry)
+      steps.push(entry.step)
+    } else {
+      flushCompleted()
+      result.push(...explanation, entry)
+    }
+    explanation = []
+  }
+  flushCompleted()
+  result.push(...explanation)
+  return result
+}
