@@ -1,5 +1,6 @@
 import type { AgentErrorKind, AgentStep } from './agent'
 import type { AiMessageUsage } from './tokenUsage'
+import type { AgentFileChange } from './agentFileSnapshots'
 
 
 export interface WorkspaceSession {
@@ -48,6 +49,8 @@ export interface AiMessage {
   mode?: 'chat' | 'agent'
   /** Agent 任务步骤时间线(运行时字段,持久化走 payloadJson)。 */
   agentSteps?: AgentStep[]
+  /** Task before/after file snapshots; display-only, never model context. */
+  agentFileChanges?: AgentFileChange[]
   /** Agent 推理及工具调用前的过程文字；通过 payloadJson 保存，不额外注入上下文。 */
   agentReasoning?: string
   /** Ordered display events, separate from the model's execution context. */

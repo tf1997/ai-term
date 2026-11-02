@@ -74,6 +74,6 @@ const numberWidth = computed(() => ({
 }
 .ai-code-line-text {
   min-width: 0;
-  min-height: 1.7em;
+  min-height: 1.5em;
 }
 </style>

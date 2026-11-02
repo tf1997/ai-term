@@ -196,7 +196,7 @@ onBeforeUnmount(() => {
 .tool-code-content:focus-visible, .tool-preview-content:focus-visible { outline-offset: 2px; }
 .tool-code-feedback { position: absolute; bottom: -22px; right: 0; z-index: 1; padding: 1px 6px; border-radius: 3px; background: var(--chat-text, var(--workbench-text)); color: var(--chat-surface, var(--workbench-panel-strong)); font-size: 12px; line-height: 18px; white-space: nowrap; pointer-events: none; }
 .tool-code-feedback:empty { display: none; }
-.tool-code-content, .tool-preview-content { margin: 0; padding: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; tab-size: 4; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); font-size: 13px; font-weight: 400; line-height: 20px; white-space: pre; letter-spacing: 0; }
+.tool-code-content, .tool-preview-content { margin: 0; padding: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; tab-size: 4; font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace); font-size: 12px; font-weight: 400; line-height: 18px; white-space: pre; letter-spacing: 0; }
 .tool-step-error-detail { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent) transparent; scrollbar-gutter: stable; }
 .tool-code-content::-webkit-scrollbar, .tool-preview-content::-webkit-scrollbar, .tool-step-error-detail::-webkit-scrollbar { width: 10px; height: 10px; }
 .tool-code-content::-webkit-scrollbar-track, .tool-preview-content::-webkit-scrollbar-track, .tool-step-error-detail::-webkit-scrollbar-track { background: transparent; }
@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
 .tool-code-content { max-height: 216px; }
 .tool-code-command .tool-code-content, .tool-code-output { background: var(--chat-surface, var(--workbench-panel-strong)); }
 /* Spacing stays outside the scroll viewport, preserving four complete preview lines. */
-.tool-code-command .tool-code-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(1.7em * 4); }
+.tool-code-command .tool-code-content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: calc(1.5em * 4); }
 .tool-code-full .tool-code-content { max-height: none; }
 .tool-code-more { display: flex; align-items: center; gap: 5px; width: 100%; height: 30px; padding: 0 var(--code-block-inset, 12px); border: 0; border-radius: 0; background: transparent; color: var(--chat-accent, var(--workbench-accent)); font-size: 12px; text-align: left; }
 .tool-code-more:hover { background: var(--chat-hover, var(--workbench-panel)); }

@@ -1,4 +1,5 @@
 export { createStableRefRegistry } from './domain/stableRefRegistry'
+export { createReadyAgentCommand } from './domain/deferredAgentCommand'
 export { terminalStatusClass } from './domain/terminalTabs'
 export { terminalContextMenu } from './application/terminalContextMenu'
 export { useCommandHistory } from './application/useCommandHistory'

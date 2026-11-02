@@ -16,6 +16,7 @@ try {
   await page.goto('http://127.0.0.1:5173/tests/browser/ai-chat.fixture.html')
   await page.waitForFunction(() => window.aiFixtureReady)
   await page.evaluate(() => aiFixture.configure({ width: 554, theme: 'light', zoom: 1 }))
+  await page.locator('[data-message-id="long-output"] .agent-work-toggle').click()
   await page.locator('[data-message-id="long-output"] .tool-step-toggle').click()
   await page.locator('[data-message-id="long-output"] .tool-step-details').click()
   await page.getByRole('dialog', { name: '命令与完整输出' }).waitFor()

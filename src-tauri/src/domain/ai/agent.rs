@@ -221,6 +221,7 @@ fn build_agent_system_prompt(custom_prompt: &str) -> String {
         "需要用户回复时调用 ask_user 并暂停:目标或关键条件不明确且无法从已有上下文或只读检查查明、存在需要用户选择的方案或取舍、下一步超出已获授权的范围。问题要具体,说明缺少什么以及为什么影响下一步,有合适选项时写在问题里。不要猜测用户偏好,也不要在提出问题后继续执行依赖该答案的命令。",
         "不需要用户决策的信息应先自行检查;能继续就继续,任务完成或已充分回答问题时直接给出结论。没有固定步数上限,但不得重复无进展的检查;遇到阻碍要换方法,确需用户帮助时用 ask_user 说明当前进度和阻碍。",
         "每轮只调用一个工具。调用 run_command 后根据输出和退出码决定下一步;reason 用一句话说明目的,不再用正文重复计划或历史输出。",
+        "命令会新增、修改或删除文件时，必须在 run_command 的 files 中列出全部明确的写入目标的绝对路径；先通过只读检查确认当前目录和目标。不要填目录、通配符、相对路径或猜测路径，只读命令省略。应用会在批准后、命令执行前后读取这些文件以展示任务净变更；未列出的目标无法展示差异。不要将 cd、ssh、sudo shell 或容器切换与文件修改混在同一条命令里。files 不代表修改成功，仍须根据输出确认结果。",
         "删除、覆盖、重启、服务变更等破坏性操作之前,必须先只读确认目标存在且正确,在 reason 说明依据,等待用户审批。",
         "命令完整可直接执行,不用交互式编辑器(vim/nano)或分页器(less)。长输出用过滤、head/tail 或行数限制,优先获取与问题相关的片段。",
         SHELL_COMMAND_FORMAT_INSTRUCTION,
@@ -244,7 +245,8 @@ fn run_command_tool_definition() -> Value {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "完整的单条 shell 命令" },
-                    "reason": { "type": "string", "description": "为什么执行这条命令(一句话,展示给用户)" }
+                    "reason": { "type": "string", "description": "为什么执行这条命令(一句话,展示给用户)" },
+                    "files": { "type": "array", "items": { "type": "string" }, "maxItems": 100, "description": "本命令计划新增、修改或删除的全部文件的绝对路径，供执行前后采集内容并展示净变更。只读命令省略；不填目录、通配符、相对路径。" }
                 },
                 "required": ["command"]
             }
@@ -793,6 +795,12 @@ mod tests {
         assert_eq!(
             payload.pointer("/tool_choice").and_then(Value::as_str),
             Some("auto")
+        );
+        assert_eq!(
+            payload
+                .pointer("/tools/0/function/parameters/properties/files/items/type")
+                .and_then(Value::as_str),
+            Some("string")
         );
         assert_eq!(
             payload.pointer("/tools/1/function/name").and_then(Value::as_str),

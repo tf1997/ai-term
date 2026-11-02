@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { AiMessage } from '../../../domain/conversation'
+import { hasCompletedAgentWork } from '../../../domain/agentWorkLog'
 import { formatMessageUsageLabel, formatMessageUsageTitle, formatTokenCount } from '../../../domain/tokenUsage'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 import { useCopyFeedback } from './useCopyFeedback'
@@ -55,7 +56,7 @@ onBeforeUnmount(() => {
     <header v-if="message.role === 'assistant'" class="chat-turn-head">
       <span class="chat-identity"><UiIcon name="ai" size="15" /><strong>{{ message.mode === 'agent' ? 'Agent' : 'AI' }}</strong></span>
       <span class="chat-source" :title="`生成上下文：${source}`">来源 · {{ source }}</span>
-      <span v-if="duration && !message.streaming" class="chat-duration" :title="message.mode === 'agent' ? '任务总耗时，包含执行命令与等待确认' : '回答耗时'">耗时 {{ duration }}</span>
+      <span v-if="duration && !message.streaming && !hasCompletedAgentWork(message)" class="chat-duration" :title="message.mode === 'agent' ? '任务总耗时，包含执行命令与等待确认' : '回答耗时'">耗时 {{ duration }}</span>
       <button
         v-if="message.usage"
         ref="usageButton"

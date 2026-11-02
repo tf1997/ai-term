@@ -9,7 +9,8 @@ export function wrapInternalTerminalCommand(command: string, nonce = `${Date.now
   // Bash adds input to history before executing it. Only delete the latest entry
   // if it contains this unique token: ignorespace/disabled history must not cause
   // the preceding user command to be removed. No shell preferences are changed.
-  const guard = `if [ -n "\${BASH_VERSION-}" ]; then case "$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)" in *'${token}'*) builtin history -d -1 2>/dev/null || : ;; esac; fi`
+  // macOS ships Bash 3, whose history -d does not accept negative offsets.
+  const guard = `if [ -n "\${BASH_VERSION-}" ]; then case "$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)" in *'${token}'*) builtin history -d "$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')" 2>/dev/null || : ;; esac; fi`
   // Leading space also honors shells configured to ignore space-prefixed input.
   return ` ${guard}; eval ${shellQuote(command.trimEnd())}`
 }

@@ -1,5 +1,7 @@
 import type { AiMessage, WorkspaceSession } from './conversation'
 import type { AgentErrorKind, AgentExecutionPhase, AgentStep } from './agent'
+import { normalizeAgentFiles } from './agentFiles'
+import { normalizeAgentFileChanges } from './agentFileSnapshots'
 import { normalizeMessageUsage } from './tokenUsage'
 import { normalizeAiDuration } from './aiTiming'
 import { normalizeAgentTimeline } from './agentTimeline'
@@ -69,7 +71,9 @@ function hydrateAgentSteps(steps: AgentStep[], message: AiMessage) {
         failureReason = failureReason || detail
       }
     }
-    return { ...step, executionPhase, failureReason }
+    const { affectedFiles: rawFiles, ...rest } = step
+    const affectedFiles = normalizeAgentFiles(rawFiles)
+    return { ...rest, ...(affectedFiles ? { affectedFiles } : {}), executionPhase, failureReason }
   })
 }
 
@@ -79,7 +83,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
   try {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
-      'mode' | 'agentSteps' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
+      'mode' | 'agentSteps' | 'agentFileChanges' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
     >> & { usage?: unknown; durationSeconds?: unknown; reasoning?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
     const durationSeconds = normalizeAiDuration(payload.durationSeconds)
@@ -101,6 +105,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       ...message,
       mode: 'agent',
       agentSteps,
+      agentFileChanges: normalizeAgentFileChanges(payload.agentFileChanges),
       agentTimeline: normalizeAgentTimeline(payload.agentTimeline),
       ...(agentReasoning ? { agentReasoning } : {}),
       agentStatus: payload.agentStatus === 'done' || payload.agentStatus === 'stopped' || payload.agentStatus === 'error' || payload.agentStatus === 'waiting-input'

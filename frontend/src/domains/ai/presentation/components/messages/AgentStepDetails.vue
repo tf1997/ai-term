@@ -11,6 +11,7 @@ const props = defineProps<{
   targetLabel?: string
   exitCode?: number
   duration?: string
+  autoApproved?: boolean
 }>()
 const open = ref(false)
 const wrap = ref(false)
@@ -58,14 +59,18 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
 <template>
   <button ref="trigger" class="tool-step-details" type="button" aria-haspopup="dialog" :aria-expanded="open" @click="show">
     <UiIcon name="terminal" size="13" /><span>查看命令与完整输出</span>
-    <span v-if="duration" class="tool-step-details-duration">{{ duration }}</span><UiIcon name="chevron-right" size="13" />
+    <UiIcon name="chevron-right" size="13" />
   </button>
   <Teleport to="body">
     <Transition name="dialog-motion">
       <div v-if="open" class="agent-detail-backdrop" :style="theme" @click.self="close">
         <section ref="dialog" class="agent-detail-dialog" role="dialog" aria-modal="true" aria-label="命令与完整输出" @keydown="handleKey">
           <header class="agent-detail-head">
-            <div><strong>命令与完整输出</strong><p v-if="targetLabel">此步骤来源 · {{ targetLabel }}</p></div>
+            <div>
+              <strong>命令与完整输出</strong>
+              <p v-if="targetLabel">此步骤来源 · {{ targetLabel }}</p>
+              <p v-if="autoApproved || duration" class="agent-detail-meta"><span v-if="autoApproved">自动执行</span><span v-if="duration">{{ duration }}</span></p>
+            </div>
             <button ref="closeButton" class="agent-detail-icon" type="button" aria-label="关闭" title="关闭" @click="close"><UiIcon name="close" size="16" /></button>
           </header>
           <div class="agent-detail-options"><label><input v-model="wrap" type="checkbox" />输出自动换行</label><span role="status">{{ copyFeedback }}</span></div>
@@ -87,8 +92,6 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
 .tool-step-details:hover:not(:disabled) { background: var(--chat-hover); color: var(--chat-text); }
 .tool-step-details > .ui-icon { flex-shrink: 0; }
 .tool-step-details > .ui-icon:last-child { margin-left: auto; }
-.tool-step-details-duration { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
-.tool-step-details-duration + .ui-icon:last-child { margin-left: 0; }
 .tool-step-details:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: -2px; }
 .agent-detail-backdrop { position: fixed; z-index: 2200; inset: 0; display: grid; place-items: center; padding: 24px; background: #0007; }
 .agent-detail-dialog { display: flex; flex-direction: column; width: min(760px, 100%); max-height: min(820px, calc(100dvh - 48px)); min-width: 0; overflow: hidden; border: 1px solid var(--chat-line); border-radius: 9px; background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 20px 70px #0004; }
@@ -96,6 +99,7 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
 .agent-detail-head > div { min-width: 0; }
 .agent-detail-head strong { font-size: 14px; font-weight: 600; }
 .agent-detail-head p { margin: 4px 0 0; font-size: 12px; color: var(--chat-muted); overflow-wrap: anywhere; }
+.agent-detail-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-variant-numeric: tabular-nums; }
 .agent-detail-icon { display: inline-grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: var(--chat-muted); background: transparent; }
 .agent-detail-icon:hover:not(:disabled) { background: var(--chat-hover); color: var(--chat-text); }
 .agent-detail-icon:focus-visible, .agent-detail-options input:focus-visible, .agent-detail-body:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: -2px; }
@@ -106,7 +110,7 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
 .agent-detail-section { margin-bottom: 16px; min-width: 0; }
 .agent-detail-section:last-child { margin-bottom: 0; }
 .agent-detail-section > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; color: var(--chat-muted); font-size: 12px; }
-.agent-detail-section pre { margin: 0; padding: 12px; min-width: 100%; width: max-content; border: 1px solid var(--chat-line); border-radius: 6px; background: var(--chat-elevated); color: var(--chat-text); font: 13px/21px var(--font-mono); white-space: pre; }
+.agent-detail-section pre { margin: 0; padding: 12px; min-width: 100%; width: max-content; border: 1px solid var(--chat-line); border-radius: 6px; background: var(--chat-elevated); color: var(--chat-text); font: 12px/18px var(--font-mono); white-space: pre; }
 .agent-detail-section pre.is-wrapped { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-detail-empty { margin: 0; padding: 12px; color: var(--chat-muted); font-size: 12px; }
 @media (max-width: 480px) { .agent-detail-backdrop { padding: 12px; } .agent-detail-dialog { max-height: calc(100dvh - 24px); } }

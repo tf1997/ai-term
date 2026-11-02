@@ -1,6 +1,7 @@
 import type { AiProviderConfig } from './provider'
 import type { AiMessageUsage, AiTokenUsage } from './tokenUsage'
 import type { ScriptRiskMatch } from '../../../shared/security/scriptRisk'
+import type { AgentFileChange } from './agentFileSnapshots'
 
 // Agent 模式共享类型。与后端 domain/ai/agent.rs 的 serde(camelCase)结构一一对应,
 // 设计见 docs/ai-agent-mode-development.md 5.2 / 6.2 / 6.3 / 6.4。
@@ -62,6 +63,9 @@ export interface AgentCommandHandle {
 
 export interface AgentCommandRunOptions {
   maxOutputChars?: number
+  /** Application-owned read-only probes; never exposed as model command arguments. */
+  internal?: boolean
+  waitForReady?: boolean
   /** 防止旧任务在同一标签重连后误发到新的终端会话。 */
   connectionGeneration?: number
 }
@@ -89,6 +93,8 @@ export interface AgentStep {
   id: string
   command: string
   reason: string
+  /** Model-declared write targets; a reference to the command, not proof of a file diff. */
+  affectedFiles?: string[]
   risks: ScriptRiskMatch[]
   sensitive: boolean
   autoApproved?: boolean
@@ -122,6 +128,7 @@ export type AgentRunStatus =
 export interface AgentRunState {
   status: AgentRunStatus
   steps: AgentStep[]
+  fileChanges?: AgentFileChange[]
   finalText: string
   /** 单条命令等待多久后询问用户(与 deadlineAt 配合显示倒计时)。 */
   commandTimeoutMs: number

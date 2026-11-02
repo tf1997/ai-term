@@ -303,7 +303,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
    */
   function runCommandAndCapture(
     command: string,
-    options?: { maxOutputChars?: number; dispatchGuard?: () => string }
+    options?: { maxOutputChars?: number; dispatchGuard?: () => string; internal?: boolean }
   ): AgentCommandHandle {
     const value = command.trim()
     if (!value) return agentDispatchFailure('命令为空')
@@ -314,7 +314,10 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
 
     const maxOutputChars = options?.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS
     const mode = agentCaptureMode()
-    if (mode === 'markers') return captureWithMarkers(value, maxOutputChars)
+    // Internal output is removed before xterm rendering; capture its raw sentinel stream.
+    if (mode === 'markers') return options?.internal
+      ? captureWithSentinel(value, maxOutputChars, { skipHistory: true })
+      : captureWithMarkers(value, maxOutputChars)
     if (mode === 'unsupported') {
       return agentDispatchFailure('当前终端既无 shell integration 语义标记,也不支持哨兵捕获,Agent 无法感知命令完成')
     }
@@ -333,7 +336,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
         () => runCommandAndCapture(value, options)
       )
     }
-    return captureWithSentinel(value, maxOutputChars)
+    return captureWithSentinel(value, maxOutputChars, { skipHistory: options?.internal })
   }
 
   function ingestCaptureOutput(data: string) {

@@ -33,6 +33,7 @@ import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEven
 import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntries } from '../../domains/ai/infrastructure/api'
 import { listConnectionProfiles, saveConnectionProfile } from '../../domains/connections/infrastructure/api'
 import type { AgentAllowlistEntry, AgentCommandHandle, AgentCommandRunOptions } from '../../domains/ai/types'
+import { createReadyAgentCommand } from '../../domains/terminal'
 
 import { createStableRefRegistry } from '../../domains/terminal/index'
 import { ConnectionSidebar } from '../../domains/connections/views'
@@ -549,10 +550,12 @@ function agentCommandRunner(terminalId: string, command: string, options?: Agent
     if (terminalRefs.value[terminalId] !== pane) return '任务绑定的终端组件已经替换'
     return ''
   }
-  return pane.runCommandAndCapture(command, {
+  const start = () => pane.runCommandAndCapture(command, {
     maxOutputChars: options?.maxOutputChars,
+    internal: options?.internal,
     dispatchGuard
   })
+  return options?.waitForReady ? createReadyAgentCommand(pane.commandExecutionReadiness, dispatchGuard, start) : start()
 }
 
 function handleAgentTakeoverChange(terminalId: string, active: boolean) {

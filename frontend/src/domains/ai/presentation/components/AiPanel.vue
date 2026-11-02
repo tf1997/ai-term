@@ -29,6 +29,9 @@ import AiReasoning from './messages/AiReasoning.vue'
 import AiErrorNotice from './messages/AiErrorNotice.vue'
 import AgentStepCard from './messages/AgentStepCard.vue'
 import AgentTimeline from './messages/AgentTimeline.vue'
+import AgentWorkLog from './messages/AgentWorkLog.vue'
+import AgentFileChanges from './messages/AgentFileChanges.vue'
+import { hasCompletedAgentWork } from '../../domain/agentWorkLog'
 import AiMessageItem from './messages/AiMessageItem.vue'
 import AiComposerSelect from './messages/AiComposerSelect.vue'
 import { normalizeTerminalContextMode } from '../../domain/terminalContext'
@@ -471,11 +474,30 @@ function revealActiveStep() {
   step.querySelector<HTMLButtonElement>('.tool-step-decision button:not(:disabled)')?.focus({ preventScroll: true })
 }
 
+async function revealAgentFileStep(message: AiMessage, stepId: string) {
+  const turn = Array.from(messageList.value?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])
+    .find(element => element.dataset.messageId === message.id)
+  const worked = turn?.querySelector<HTMLButtonElement>('.agent-work-toggle')
+  if (worked?.getAttribute('aria-expanded') === 'false') worked.click()
+  await nextTick()
+  const step = Array.from(turn?.querySelectorAll<HTMLElement>('[data-step-id]') ?? []).find(element => element.dataset.stepId === stepId)
+  const group = step?.closest<HTMLDetailsElement>('.agent-completed-group')
+  if (group) group.open = true
+  const toggle = step?.querySelector<HTMLButtonElement>('.tool-step-toggle')
+  if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click()
+  await nextTick()
+  step?.scrollIntoView({ block: 'center', behavior: 'instant' })
+  const details = step?.querySelector<HTMLButtonElement>('.tool-step-details')
+  details?.focus({ preventScroll: true })
+  details?.click()
+}
+
 function stepOwnsError(message: AiMessage) {
   return Boolean(message.error && failedAgentStep(message) && (!message.errorKind || message.errorKind === 'tool'))
 }
 
 function taskSummary(message: AiMessage) {
+  if (hasCompletedAgentWork(message)) return ''
   if (!message.agentStatus || message.agentStatus === 'running') return ''
   if (!message.agentSteps?.length && message.agentStatus === 'done') return ''
   const label = message.agentStatus === 'waiting-input' ? '等待你的回复'
@@ -948,11 +970,8 @@ watch(
             <span class="chat-progress-dot" />
             {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
-          <template v-if="message.mode === 'agent' && message.text && !message.error && !message.streaming">
-            <p v-if="isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
-            <AiMarkdownMessage v-else :content="message.text" :interactive-commands="false" />
-          </template>
-          <AgentTimeline v-if="message.mode === 'agent'" :message="message">
+          <AgentWorkLog v-if="message.mode === 'agent'" :message="message">
+          <AgentTimeline :message="message" :group-completed="!hasCompletedAgentWork(message)">
             <template #default="{ entry }">
               <AgentStepCard
                 v-if="entry.kind === 'tool'"
@@ -989,6 +1008,12 @@ watch(
               />
             </template>
           </AgentTimeline>
+          </AgentWorkLog>
+          <template v-if="message.mode === 'agent' && message.text && !message.error && !message.streaming">
+            <p v-if="isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
+            <AiMarkdownMessage v-else :content="message.text" :interactive-commands="false" />
+          </template>
+          <AgentFileChanges v-if="message.mode === 'agent' && !message.streaming" :steps="message.agentSteps" :changes="message.agentFileChanges" @inspect="revealAgentFileStep(message, $event)" />
           <AiReasoning v-if="message.mode !== 'agent' && message.reasoning" :content="message.reasoning" />
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>

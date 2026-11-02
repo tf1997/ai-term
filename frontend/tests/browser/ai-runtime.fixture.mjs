@@ -1,7 +1,7 @@
 // Synthetic native boundary for real AiPanel interactions. No model, shell or database is contacted.
 export function installAiRuntimeFixture(props) {
   const listeners = new Map()
-  const runtime = { requests: [], commands: [], pendingCommands: [], pendingSaves: [] }
+  const runtime = { requests: [], commands: [], pendingCommands: [], pendingSaves: [], snapshotReads: 0 }
   const accept = (call, value) => window[`_${call.callback}`]?.(value)
   const reject = (call, error) => window[`_${call.error}`]?.(String(error))
   let listenerId = 0
@@ -27,7 +27,15 @@ export function installAiRuntimeFixture(props) {
       reject(call, `Unexpected fixture IPC: ${call.cmd}`)
     }
   }
-  props.agentCommandRunner = (_terminal, command) => {
+  props.agentCommandRunner = (_terminal, command, options) => {
+    if (options?.internal) {
+      const tag = command.match(/AI_TERM_SNAPSHOT_[A-Za-z0-9_]+(?=_SCOPE\\n)/)?.[0]
+        ?? command.match(/AI_TERM_SNAPSHOT_([0-9]+_[a-z0-9]+)_SCOPE/)?.[0].replace(/_SCOPE$/, '')
+      if (!tag) throw Error('Expected snapshot reader')
+      const content = runtime.snapshotReads++ % 2 ? 'after\nnew line\n' : 'before\n'
+      const output = `${tag}_SCOPE\n${btoa('fixture-host')}\n${tag}_SCOPE_END\n${tag}_FILE_0\n${btoa('/workspace/fixture-file.txt')}\n${tag}_PATH_END\ntext\n${btoa(content + `\n${tag}_READ_STATUS_0\n`)}\n${tag}_FILE_END\n`
+      return { result: Promise.resolve({ status: 'completed', output, exitCode: 0, durationMs: 1, truncated: false }), peekOutput: () => '', cancel() {} }
+    }
     const startedAt = Date.now()
     let finish
     const result = new Promise(resolve => { finish = resolve })
@@ -44,7 +52,7 @@ export function installAiRuntimeFixture(props) {
   runtime.reply = (text, commands = []) => {
     const call = runtime.requests.shift()
     if (!call) throw Error('No model request is pending')
-    const toolCalls = commands.map(({ id, command }) => ({ id, name: 'run_command', arguments: JSON.stringify({ command, reason: text }) }))
+    const toolCalls = commands.map(({ id, command, files }) => ({ id, name: 'run_command', arguments: JSON.stringify({ command, reason: text, files }) }))
     accept(call, call.cmd === 'ai_agent_turn_stream'
       ? { text, toolCalls, contextCompressed: false, contextChars: 0 }
       : { answer: text, contextCompressed: false, contextChars: 0, historyCount: 0 })
@@ -77,6 +85,7 @@ export function installAiRuntimeFixture(props) {
   runtime.reset = () => {
     if (runtime.requests.length || runtime.pendingSaves.length) throw Error('Finish the previous runtime before resetting')
     runtime.commands = []
+    runtime.snapshotReads = 0
     runtime.pendingCommands = []
   }
   return runtime

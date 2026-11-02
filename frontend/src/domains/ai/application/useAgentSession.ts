@@ -10,6 +10,8 @@ import type { AgentApprovalDecision, AgentRunState, AgentStep, AgentStepProposal
 import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
 import { runAgentTask } from './agent/agentLoop'
+import { createAgentFileSnapshotReader } from './agent/readAgentFileSnapshots'
+import { normalizeAgentFileChanges } from '../domain/agentFileSnapshots'
 import type { AgentLoopDeps } from './agent/agentLoop'
 import { canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
@@ -38,7 +40,7 @@ type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | '
 
 /** Retry messages are reactive; unwrap both the step and its nested risk records. */
 function snapshotAgentStep(step: AgentStep): AgentStep {
-  return { ...step, risks: step.risks.map((risk) => ({ ...risk })) }
+  return { ...step, ...(step.affectedFiles ? { affectedFiles: [...step.affectedFiles] } : {}), risks: step.risks.map((risk) => ({ ...risk })) }
 }
 
 export function useAgentSession(options: AgentSessionOptions, source: AgentSessionSource = tauri) {
@@ -368,6 +370,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         mode: 'agent',
         text: failed ? state.error || '任务出错' : state.finalText,
         agentSteps: state.steps,
+        agentFileChanges: state.fileChanges,
         agentReasoning: agentReasoningText.value || undefined,
         agentTimeline: snapshotTimeline(),
         agentStatus: status,
@@ -381,6 +384,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           ? JSON.stringify({
               mode: 'agent',
               agentSteps: persistableAgentSteps(state.steps),
+              agentFileChanges: state.fileChanges,
               agentStatus: status,
               agentReasoning: agentReasoningText.value || undefined,
               agentTimeline: snapshotTimeline(),
@@ -477,8 +481,12 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           unlisten?.()
         }
       },
+      readFiles: createAgentFileSnapshotReader((command, options) => runner(boundTerminalId, command, {
+        ...options, connectionGeneration: boundConnectionGeneration
+      })),
       startCommand: (command) => runner(boundTerminalId, command, {
         maxOutputChars: AGENT_OUTPUT_MAX_CHARS,
+        waitForReady: true,
         connectionGeneration: boundConnectionGeneration
       }),
       classifyStep: (command) => {
@@ -551,6 +559,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     try {
       const task = runAgentTask(goal, deps, {
         commandTimeoutMs: props.agentCommandTimeoutMs,
+        initialFileChanges: normalizeAgentFileChanges(assistantMessage.agentFileChanges),
         initialSteps: assistantMessage.agentSteps
           ?.filter(step => step.status === 'completed' || step.status === 'skipped')
           .map(snapshotAgentStep),
@@ -579,11 +588,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         ...(assistantMessage.agentSteps ?? []),
         ...(retryStep && !assistantMessage.agentSteps?.some(step => step.id === retryStep.id) ? [retryStep] : [])
       ]
+      const fileChanges = agentRun.value?.fileChanges ?? assistantMessage.agentFileChanges
       agentRun.value = null
       const failedMessage: AiMessage = {
         ...assistantMessage,
         mode: 'agent',
         agentSteps: steps,
+        agentFileChanges: fileChanges,
         agentReasoning: agentReasoningText.value || undefined,
         agentTimeline: snapshotTimeline(),
         agentStatus: 'error',
@@ -592,6 +603,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         payloadJson: JSON.stringify({
           mode: 'agent',
           agentSteps: persistableAgentSteps(steps),
+          agentFileChanges: fileChanges,
           agentStatus: 'error',
           agentReasoning: agentReasoningText.value || undefined,
           agentTimeline: snapshotTimeline(),

@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDeferredAgentCommand } from "../../src/domains/terminal/domain/deferredAgentCommand"
+import { createDeferredAgentCommand, createReadyAgentCommand } from "../../src/domains/terminal/domain/deferredAgentCommand"
 
 function deferred() {
   let resolve
   return { promise: new Promise((done) => { resolve = done }), resolve }
 }
+
+test('快照结束后等待提示符，保留终端绑定、输入和取消防护', async () => {
+  let readiness = 'shell-busy', starts = 0
+  const start = () => { starts++; return { result: Promise.resolve({ status: 'completed' }), cancel() {}, peekOutput: () => '' } }
+  const handle = createReadyAgentCommand(() => readiness, () => '', start)
+  assert.equal(starts, 0)
+  readiness = 'ready'
+  assert.equal((await handle.result).status, 'completed'); assert.equal(starts, 1)
+  for (const [status, guard] of [['line-busy', ''], ['unavailable', ''], ['ready', '终端已重连'], ['shell-busy', '']]) {
+    const blocked = createReadyAgentCommand(() => status, () => guard, start, 5)
+    assert.equal((await blocked.result).status, 'dispatch-failed')
+  }
+  readiness = 'shell-busy'
+  const cancelled = createReadyAgentCommand(() => readiness, () => '', start)
+  cancelled.cancel(); readiness = 'ready'
+  assert.equal((await cancelled.result).status, 'cancelled'); assert.equal(starts, 1)
+})
 
 test('探针期间停止后不执行真实命令', async () => {
   const gate = deferred()

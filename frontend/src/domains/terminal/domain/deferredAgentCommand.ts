@@ -49,3 +49,25 @@ export function createDeferredAgentCommand(
     }
   }
 }
+
+/** A sentinel may finish just before its prompt. Wait briefly without bypassing input/binding guards. */
+export function createReadyAgentCommand(
+  readiness: () => 'ready' | 'line-busy' | 'shell-busy' | 'unavailable',
+  guard: () => string,
+  start: () => AgentCommandHandle,
+  timeoutMs = 2_500
+): AgentCommandHandle {
+  return createDeferredAgentCommand(async () => {
+    const deadline = Date.now() + timeoutMs
+    while (true) {
+      const failure = guard()
+      if (failure) return failure
+      const status = readiness()
+      if (status === 'ready') return ''
+      if (status === 'line-busy') return '当前终端命令行已有输入，请先提交或清空'
+      if (status === 'unavailable') return '任务绑定的终端不可用'
+      if (Date.now() >= deadline) return 'Shell 尚未返回可执行提示符'
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  }, start)
+}

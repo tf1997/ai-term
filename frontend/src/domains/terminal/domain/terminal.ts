@@ -22,7 +22,7 @@ export interface TerminalPaneHandle {
   ensureAgentCapture: () => Promise<AgentCaptureMode>
   runCommandAndCapture: (
     command: string,
-    options?: { maxOutputChars?: number; dispatchGuard?: () => string }
+    options?: { maxOutputChars?: number; dispatchGuard?: () => string; internal?: boolean }
   ) => AgentCommandHandle
   fillCommand: (command: string) => boolean
   pinQuickCommand: (command: string) => 'added' | 'exists' | 'invalid' | 'limit'

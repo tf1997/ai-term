@@ -28,4 +28,6 @@ summary:hover { color: var(--chat-text, var(--workbench-text)); }
 summary:focus-visible { outline: 2px solid var(--chat-muted); outline-offset: 2px; border-radius: 3px; }
 summary small { font-size: 12px; }
 .chat-markdown { padding-block: 6px; }
+.chat-reasoning :deep(.chat-markdown > .markdown-content) { font-size: 12px; line-height: 20px; }
+.chat-reasoning :deep(.chat-markdown .markdown-content :is(h1, h2, h3, h4)) { font-size: 13px; line-height: 20px; }
 </style>

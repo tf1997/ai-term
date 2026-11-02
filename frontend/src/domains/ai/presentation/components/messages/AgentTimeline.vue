@@ -2,11 +2,11 @@
 import { computed } from 'vue'
 import type { AiMessage } from '../../../domain/conversation'
 import type { AgentStep } from '../../../domain/agent'
-import { agentPresentationTimeline } from '../../../domain/agentTimeline'
+import { agentDisplayTimeline, agentPresentationTimeline } from '../../../domain/agentTimeline'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 
-const props = defineProps<{ message: AiMessage }>()
-const entries = computed(() => agentPresentationTimeline(props.message))
+const props = withDefaults(defineProps<{ message: AiMessage; groupCompleted?: boolean }>(), { groupCompleted: true })
+const entries = computed(() => props.groupCompleted ? agentPresentationTimeline(props.message) : agentDisplayTimeline(props.message))
 function duration(steps: AgentStep[]) {
   if (steps.some(step => step.durationMs === undefined)) return ''
   const milliseconds = steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0)

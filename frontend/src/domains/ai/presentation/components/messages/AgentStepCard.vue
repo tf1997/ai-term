@@ -51,7 +51,7 @@ const collapsed = computed(() => canCollapse.value && (explicitlyExpanded.value 
   ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)
   : !explicitlyExpanded.value))
 const compactSummary = computed(() => collapsed.value && (props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)))
-const compactRow = computed(() => compactSummary.value && props.step.status !== 'skipped')
+const compactRow = computed(() => canCollapse.value && props.step.status === 'completed' && !nonzeroExit.value)
 const statusLabel = computed(() => {
   if (props.approvalSaving) return '正在保存授权'
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '未执行' : '已停止等待'
@@ -126,7 +126,7 @@ function toggleDetails() {
 </script>
 
 <template>
-  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-compact': compactRow, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :class="{ 'is-compact': compactRow }" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" :title="`${step.reason || '终端命令'} · ${statusLabel}`" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
@@ -195,6 +195,7 @@ function toggleDetails() {
         :target-label="targetLabel"
         :exit-code="step.exitCode"
         :duration="durationLabel"
+        :auto-approved="step.autoApproved"
       />
     </div>
   </article>
@@ -205,13 +206,17 @@ function toggleDetails() {
 .tool-step-header { min-width: 0; padding: 8px 12px; }
 .tool-step.is-error { border-color: color-mix(in srgb, var(--chat-danger) 28%, var(--chat-line)); }
 .tool-step.is-error .tool-step-header { background: var(--chat-danger-soft); }
-.tool-step.is-collapsed.is-success { border-inline: 0; border-top: 0; border-radius: 0; }
-.tool-step.is-collapsed.is-success .tool-step-header { padding: 9px 0; }
+.tool-step.is-compact { border-inline: 0; border-top: 0; border-radius: 0; background: transparent; }
+.tool-step.is-compact .tool-step-header { padding: 8px 0; }
+.tool-step.is-compact .tool-step-body { padding: 0 0 6px 24px; }
+.tool-step.is-compact .tool-step-risk-row { padding: 0 0 6px; }
+.tool-step.is-compact :deep(.tool-step-details) { width: auto; max-width: 100%; min-height: 28px; padding: 3px 0; border-top: 0; }
 .tool-step-toggle, .tool-step-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; align-items: start; gap: 8px; width: 100%; min-width: 0; height: auto; color: inherit; text-align: left; white-space: normal; }
 .tool-step-toggle { border: 0; padding: 0; background: transparent; cursor: pointer; }
 .tool-step-toggle:hover:not(:disabled) { background: transparent; color: inherit; }
 .tool-step-toggle.is-compact { grid-template-columns: 16px minmax(0, 1fr) auto 13px; align-items: center; }
-.tool-step-toggle.is-compact .tool-step-title { font-size: 12px; font-weight: 400; color: var(--chat-muted); }
+.tool-step-toggle.is-compact .tool-step-title { font-size: 12px; font-weight: 400; line-height: 20px; color: var(--chat-muted); }
+.tool-step-toggle.is-compact .tool-step-state-icon, .tool-step-toggle.is-compact .tool-step-chevron { margin-top: 0; }
 .tool-step-compact-duration { color: var(--chat-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .tool-step.is-success .tool-step-state-icon { color: var(--chat-accent); }
 .tool-step-toggle:hover .tool-step-chevron { color: var(--chat-accent, var(--workbench-accent)); }

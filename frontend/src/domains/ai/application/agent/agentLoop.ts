@@ -1,5 +1,8 @@
 import type { AgentApprovalDecision, AgentAutoExecClassification, AgentCommandHandle, AgentCommandResult, AgentRunState, AgentStep, AgentStepProposal, AgentTimeoutDecision, AgentTimeoutInfo, AiAgentTurn, AiAgentTurnResponse, AiToolCall } from '../../domain/agent'
 import { addTokenUsage } from '../../domain/tokenUsage'
+import { normalizeAgentFiles } from '../../domain/agentFiles'
+import { createAgentFileTracker, unavailableFile } from '../../domain/agentFileSnapshots'
+import type { AgentFileChange, AgentFileSnapshot } from '../../domain/agentFileSnapshots'
 import type { ScriptRiskMatch } from '../../../../shared/security/scriptRisk'
 
 // Agent 循环编排器(任务 F3)。纯逻辑模块,不依赖 Vue/Tauri,全部外部能力经 AgentLoopDeps 注入。
@@ -12,6 +15,8 @@ export interface AgentLoopDeps {
   callModel(turns: AiAgentTurn[], signal: { readonly cancelled: boolean }): Promise<AiAgentTurnResponse>
   /** 派发命令并返回执行句柄;超时判断留在循环侧,cancel 只放弃等待、不终止命令。 */
   startCommand(command: string): AgentCommandHandle | Promise<AgentCommandHandle>
+  /** Read only approved write targets in the bound terminal; contents never enter model turns. */
+  readFiles?(paths: string[], signal: { readonly cancelled: boolean }): Promise<AgentFileSnapshot[]>
   /** 风险/敏感/自动执行三合一判定(6.4),顺序语义由循环执行。 */
   classifyStep(command: string): { risks: ScriptRiskMatch[]; sensitive: boolean; autoExec: AgentAutoExecClassification }
   /** 人工审批;stop() 后未决的审批结果作废。 */
@@ -33,6 +38,7 @@ export interface AgentLoopOptions {
   outputSampleIntervalMs?: number
   /** 重试时已完成的步骤;循环会从这些步骤继续,恢复 turns 数组。 */
   initialSteps?: AgentStep[]
+  initialFileChanges?: AgentFileChange[]
   /** 用户点击重试时需要直接重新执行的失败步骤。 */
   retryStep?: AgentStep
 }
@@ -62,7 +68,7 @@ function toolCallFromStep(step: AgentStep): AiToolCall {
   return {
     id: step.id,
     name: RUN_COMMAND_TOOL_NAME,
-    arguments: JSON.stringify({ command: step.command, reason: step.reason })
+    arguments: JSON.stringify({ command: step.command, reason: step.reason, files: step.affectedFiles })
   }
 }
 
@@ -265,11 +271,13 @@ export function runAgentTask(
       }
     : undefined
 
+  const fileTracker = createAgentFileTracker(options.initialFileChanges)
   const state: AgentRunState = {
     status: retryStep ? 'executing' : 'calling-model',
     steps: retryStep ? [...initialSteps, retryStep] : initialSteps,
     finalText: '',
-    commandTimeoutMs
+    commandTimeoutMs,
+    ...(fileTracker.values() ? { fileChanges: fileTracker.values() } : {})
   }
   let turns = rebuildTurnsFromSteps(initialSteps)
   let parseFailureStreak = 0
@@ -365,7 +373,7 @@ export function runAgentTask(
   /** 解析 run_command 的 arguments;失败或 command 为空视为 invalid_arguments。 */
   const parseRunCommandArguments = (
     raw: string
-  ): { ok: true; command: string; reason: string } | { ok: false; error: string } => {
+  ): { ok: true; command: string; reason: string; affectedFiles?: string[] } | { ok: false; error: string } => {
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
@@ -379,7 +387,7 @@ export function runAgentTask(
     const command = typeof record.command === 'string' ? record.command.trim() : ''
     if (!command) return { ok: false, error: 'command 缺失或为空' }
     const reason = typeof record.reason === 'string' ? record.reason : ''
-    return { ok: true, command, reason }
+    return { ok: true, command, reason, affectedFiles: normalizeAgentFiles(record.files) }
   }
 
   /** 人工审批;返回 undefined 表示任务已在等待期间收尾(stop 或异常)。 */
@@ -412,6 +420,21 @@ export function runAgentTask(
   const executeStep = async (step: AgentStep, toolCallId: string): Promise<'continue' | 'ended'> => {
     setStatus('executing')
     step.status = 'running'
+    step.executionPhase = 'not-started'
+    const paths = deps.readFiles ? (step.affectedFiles ?? []).filter(path => !step.sensitive || fileTracker.values()?.some(change => change.requestedPaths.includes(path))) : []
+    let transaction: ReturnType<typeof fileTracker.begin> | undefined
+    const readFiles = async () => {
+      if (step.sensitive) return paths.map(path => ({ requestedPath: path, path, scope: '', version: unavailableFile('后续敏感步骤不记录文件内容，无法核对最终变更') }))
+      try { return await deps.readFiles!(paths, signal) }
+      catch { return paths.map(path => ({ requestedPath: path, path, scope: '', version: unavailableFile('文件快照读取失败') })) }
+    }
+    if (paths.length) {
+      notify()
+      const before = await raceWithStop(readFiles())
+      if (before.kind === 'stopped') { finishStopped('任务已停止，尚未派发修改命令。'); return 'ended' }
+      if (before.kind === 'value') transaction = fileTracker.begin(step.id, before.value)
+      state.fileChanges = fileTracker.values()
+    }
     step.executionPhase = 'dispatching'
     step.startedAt = Date.now()
     notify()
@@ -425,6 +448,8 @@ export function runAgentTask(
       return 'ended'
     }
     if (startOutcome.kind === 'error') {
+      transaction?.rollback()
+      state.fileChanges = fileTracker.values()
       step.status = 'failed'
       step.executionPhase = 'not-started'
       step.failureReason = `命令启动失败:${errorMessage(startOutcome.error)}`
@@ -533,6 +558,8 @@ export function runAgentTask(
           return 'ended'
         }
         if (result.status === 'dispatch-failed') {
+          transaction?.rollback()
+          state.fileChanges = fileTracker.values()
           step.status = 'failed'
           step.executionPhase = 'not-started'
           step.failureReason = `命令派发失败:${result.failureReason ?? '未知原因'}`
@@ -559,6 +586,15 @@ export function runAgentTask(
         step.exitCode = result.exitCode
         step.durationMs = result.durationMs
         step.startedAt = undefined
+        if (transaction) {
+          // The write is complete. A stopped/failed read leaves the result explicitly unknown.
+          activeHandle = undefined
+          clearInterval(sampler)
+          const after = await raceWithStop(readFiles())
+          if (after.kind === 'stopped') { finishStopped('命令已结束，文件变更快照尚未完成。'); return 'ended' }
+          if (after.kind === 'value') transaction.finish(after.value)
+          state.fileChanges = fileTracker.values()
+        }
         notify()
         turns.push({
           kind: 'toolResult',
@@ -640,6 +676,7 @@ export function runAgentTask(
       id: toolCall.id,
       command: parsed.command,
       reason: parsed.reason,
+      ...(parsed.affectedFiles ? { affectedFiles: parsed.affectedFiles } : {}),
       risks: classification.risks,
       sensitive: classification.sensitive,
       status: 'pending',
