@@ -273,6 +273,102 @@ try {
     }
   })
 
+  await check('Resizing and switching views preserve history position while the prompt still follows output', async () => {
+    await evaluate(String.raw`new Promise(resolve => {
+      const t = window.__selectionBrowser.terminal();
+      t.reset();
+      t.write(Array.from({ length: 300 }, (_, i) => 'history-line-' + i).join('\r\n'), resolve);
+    })`)
+    await frame()
+    await scrollTo(40)
+    const topLine = () => evaluate(`(() => {
+      const t = window.__selectionBrowser.terminal();
+      return t.buffer.active.getLine(t.buffer.active.viewportY).translateToString(true);
+    })()`)
+    for (const [width, height] of [[1180, 740], [1440, 940], [1280, 820]]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
+      await delay(200)
+      assert.equal(await topLine(), 'history-line-40', 'Resize must retain the line being read')
+    }
+    await evaluate('document.querySelector("#session-view-files").click()')
+    await frame()
+    await evaluate('document.querySelector("#session-view-terminal").click()')
+    await delay(200)
+    assert.equal(await topLine(), 'history-line-40', 'Returning from files must retain history position')
+
+    const originalId = await evaluate('window.__selectionBrowser.app().activeTerminalId')
+    await evaluate('document.querySelector(".terminal-new-tab").click()')
+    await waitFor(`window.__selectionBrowser.app().activeTerminalId !== ${JSON.stringify(originalId)} && window.__selectionBrowser.app().activeTerminal.status === "local"`)
+    await evaluate(`document.querySelector('.session-tab-strip > .tab[data-terminal-id="${originalId}"] .tab-select').click()`)
+    await delay(200)
+    assert.equal(await topLine(), 'history-line-40', 'Returning from another terminal must retain history position')
+    const appendOutput = () => evaluate(String.raw`(() => {
+      const sessionId = window.__selectionBrowser.pane().setupState.sessionId;
+      window.__sftpFixture.emit('terminal:data:' + sessionId, { sessionId, data: '\r\nnew history output' });
+    })()`)
+    await appendOutput()
+    await frame()
+    assert.equal(await topLine(), 'history-line-40', 'New output must not interrupt history reading')
+    await evaluate('window.__selectionBrowser.terminal().scrollToBottom()')
+    await appendOutput()
+    await frame()
+    await send('Emulation.setDeviceMetricsOverride', { width: 1180, height: 740, deviceScaleFactor: 1, mobile: false })
+    await delay(200)
+    assert.equal((await state()).viewport, await evaluate('window.__selectionBrowser.terminal().buffer.active.baseY'), 'The prompt must stay visible when already at the bottom')
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 820, deviceScaleFactor: 1, mobile: false })
+    await delay(200)
+  })
+
+  await check('Width changes keep the same wrapped log entry in view', async () => {
+    await evaluate(String.raw`new Promise(resolve => {
+      const t = window.__selectionBrowser.terminal();
+      t.reset();
+      t.write(Array.from({ length: 100 }, (_, i) => 'entry-' + String(i).padStart(3, '0') + ': ' + 'long output '.repeat(15)).join('\r\n'), resolve);
+    })`)
+    await frame()
+    await evaluate(`(() => {
+      const t = window.__selectionBrowser.terminal();
+      const index = Array.from({ length: t.buffer.active.length }, (_, i) => i)
+        .find(i => t.buffer.active.getLine(i).translateToString(true).startsWith('entry-020:'));
+      t.scrollToLine(index + 1);
+    })()`)
+    await frame()
+    for (const width of [1180, 1500, 1280]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 820, deviceScaleFactor: 1, mobile: false })
+      await delay(200)
+      const entry = await evaluate(`(() => {
+        const buffer = window.__selectionBrowser.terminal().buffer.active;
+        let line = buffer.viewportY;
+        while (line > 0 && buffer.getLine(line).isWrapped) line--;
+        return buffer.getLine(line).translateToString(true);
+      })()`)
+      assert.ok(entry.startsWith('entry-020:'), `Reflow must keep the same log entry: ${entry}`)
+    }
+  })
+
+  await check('Auto-copy preserves selected indentation, leading blank lines and partial indentation', async () => {
+    for (const sample of [
+      { text: '    first = 1\r\n    second = 2', start: 0, rows: 2, expected: '    first = 1\n    second = 2' },
+      { text: '\r\n    名称 = "你好"\r\n        second = 2', start: 0, rows: 3, expected: '\n    名称 = "你好"\n        second = 2' },
+      { text: '    first = 1\r\n    second = 2', start: 2, rows: 2, expected: '  first = 1\n    second = 2' },
+    ]) {
+      await evaluate(`new Promise(resolve => {
+        const t = window.__selectionBrowser.terminal();
+        t.reset();
+        t.write(${JSON.stringify(sample.text)}, resolve);
+      })`)
+      await frame()
+      await evaluate(`(() => {
+        const t = window.__selectionBrowser.terminal();
+        t.select(${sample.start}, 0, t.cols * ${sample.rows} - ${sample.start});
+      })()`)
+      await delay(200)
+      assert.equal(await evaluate('window.__selectionBrowser.copied.at(-1)'), sample.expected)
+      assert.equal((await state()).text.replace(/\r\n/g, '\n'), sample.expected)
+      assert.deepEqual((await state()).selection.start, { x: sample.start, y: 0 })
+    }
+  })
+
   assert.deepEqual(exceptions, [], 'No uncaught browser exceptions')
 } finally {
   await fetch(`${debuggerUrl}/json/close/${target.id}`).catch(() => {})

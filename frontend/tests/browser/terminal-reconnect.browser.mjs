@@ -52,13 +52,36 @@ async function press(key, modifiers = 0) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
 }
 function installBrowserInspection() {
+  const ipc = window.__TAURI_IPC__
+  let heldWrite
+  const writeFailure = {
+    holdNext: false,
+    writes: [],
+    pending: () => Boolean(heldWrite),
+    reject() {
+      const call = heldWrite
+      heldWrite = undefined
+      window[`_${call.error}`]('fixture temporary write failure')
+    },
+  }
+  window.__TAURI_IPC__ = call => {
+    if (call.cmd === 'terminal_write') {
+      writeFailure.writes.push({ sessionId: call.sessionId, data: call.data })
+      if (writeFailure.holdNext) {
+        writeFailure.holdNext = false
+        heldWrite = call
+        return
+      }
+    }
+    return ipc(call)
+  }
   function app() { return document.querySelector('.app-shell')?.__vueParentComponent?.setupState }
   function pane() {
     return [...document.querySelectorAll('.terminal-pane')].map(element => element.__vueParentComponent)
       .find(component => component?.props.terminalId === app()?.activeTerminalId)
   }
   window.__debugBrowser = {
-    app, pane,
+    app, pane, writeFailure,
     read() {
       const terminal = pane()?.setupState.terminal
       if (!terminal) return null
@@ -190,6 +213,56 @@ try {
     await userCommand('echo reconnected-local')
     assert.ok((await state()).snapshot.includes('reconnected-local\r\n'))
   })
+  for (const kind of ['local', 'remote']) {
+    await check(`A ${kind} write failure permits Ctrl+R recovery without replaying failed or queued input`, async () => {
+      if (kind === 'remote') {
+        await evaluate(`(() => {
+          const id = [...document.querySelectorAll('.terminal-pane')].map(element => element.__vueParentComponent)
+            .find(component => component?.props.profile?.id === 'alpha').props.terminalId;
+          document.querySelector('.session-tab-strip > .tab[data-terminal-id="' + id + '"] .tab-select').click();
+        })()`)
+      }
+      await showTerminal()
+      await evaluate('window.__debugBrowser.pane().exposed.focusTerminal()')
+      await waitFor('window.__terminalDebugFixture.pendingChunks === 0')
+      const before = await evaluate(`({
+        id: window.__debugBrowser.app().activeTerminalId,
+        sessionId: window.__debugBrowser.pane().setupState.sessionId,
+        generation: window.__debugBrowser.app().activeTerminal.connectionGeneration,
+        tabs: document.querySelectorAll('.session-tab-strip > .tab').length,
+        commands: window.__terminalDebugFixture.ordinaryCommands.length,
+        writes: window.__debugBrowser.writeFailure.writes.length,
+      })`)
+      await evaluate('window.__debugBrowser.writeFailure.holdNext = true')
+      await send('Input.insertText', { text: 'echo failed-before-send' })
+      await waitFor('window.__debugBrowser.writeFailure.pending()')
+      await press('Enter')
+      await send('Input.insertText', { text: 'echo queued-before-failure' })
+      await press('Enter')
+      await evaluate('window.__debugBrowser.writeFailure.reject()')
+      await waitFor('window.__debugBrowser.app().activeTerminal.status === "error" && window.__debugBrowser.read().text.includes("Ctrl+R")')
+      assert.ok((await state()).text.includes('fixture temporary write failure'))
+      await send('Input.insertText', { text: 'echo ignored-after-failure' })
+      await press('Enter')
+      assert.equal(await evaluate('window.__debugBrowser.writeFailure.writes.length'), before.writes + 1, 'Input must remain stopped until the user reconnects')
+      await press('r', 2)
+      await waitFor(`window.__debugBrowser.app().activeTerminal.status === ${JSON.stringify(kind)}`)
+      const after = await evaluate(`({
+        id: window.__debugBrowser.app().activeTerminalId,
+        sessionId: window.__debugBrowser.pane().setupState.sessionId,
+        generation: window.__debugBrowser.app().activeTerminal.connectionGeneration,
+        tabs: document.querySelectorAll('.session-tab-strip > .tab').length,
+        writes: window.__debugBrowser.writeFailure.writes,
+      })`)
+      assert.equal(after.id, before.id)
+      assert.equal(after.tabs, before.tabs)
+      assert.notEqual(after.sessionId, before.sessionId)
+      assert.equal(after.generation, before.generation + 1)
+      assert.deepEqual(after.writes.slice(before.writes), [{ sessionId: before.sessionId, data: 'echo failed-before-send' }], 'No failed, queued or recovery-key input may reach the replacement session')
+      await userCommand(`echo recovered-after-${kind}-write-error`)
+      assert.deepEqual(await evaluate(`window.__terminalDebugFixture.ordinaryCommands.slice(${before.commands})`), [`echo recovered-after-${kind}-write-error`])
+    })
+  }
   assert.deepEqual(exceptions, [], 'No uncaught browser exceptions')
   console.log('Terminal reconnection browser checks passed (synthetic IPC).')
 } finally {

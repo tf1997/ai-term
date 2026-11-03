@@ -711,14 +711,30 @@ function afterTerminalWriteParsed() {
 
 function syncTerminalSize(forcePtyResize = false) {
   if (!terminal || !fitAddon || !terminalHost.value || !terminalHostIsMeasurable(terminalHost.value)) return
+  const wasPinnedToBottom = terminalIsPinnedToBottom()
+  const buffer = terminal.buffer.active
+  let viewportLine = buffer.viewportY
+  while (viewportLine > 0 && buffer.getLine(viewportLine)?.isWrapped) viewportLine -= 1
+  const viewportCellOffset = (buffer.viewportY - viewportLine) * terminal.cols
+  // Anchor the logical line so reflow above it and height changes cannot shift
+  // the history being read. The start of a wrapped line survives width changes.
+  const viewportMarker = wasPinnedToBottom ? undefined : terminal.registerMarker(viewportLine - buffer.baseY - buffer.cursorY)
   const previous = { cols: terminal.cols, rows: terminal.rows }
   const proposed = fitAddon.proposeDimensions()
-  if (proposed) {
-    const cols = Math.max(2, proposed.cols - TERMINAL_SAFE_COLUMN_MARGIN)
-    const rows = Math.max(1, proposed.rows)
-    if (cols !== terminal.cols || rows !== terminal.rows) terminal.resize(cols, rows)
-  } else {
-    fitAddon.fit()
+  try {
+    if (proposed) {
+      const cols = Math.max(2, proposed.cols - TERMINAL_SAFE_COLUMN_MARGIN)
+      const rows = Math.max(1, proposed.rows)
+      if (cols !== terminal.cols || rows !== terminal.rows) terminal.resize(cols, rows)
+    } else {
+      fitAddon.fit()
+    }
+    if (wasPinnedToBottom) scrollTerminalToBottom()
+    else if (viewportMarker) {
+      terminal.scrollToLine(viewportMarker.isDisposed ? 0 : viewportMarker.line + Math.floor(viewportCellOffset / terminal.cols))
+    }
+  } finally {
+    viewportMarker?.dispose()
   }
   const size = { cols: terminal.cols, rows: terminal.rows }
   const changed = size.cols !== previous.cols || size.rows !== previous.rows
@@ -727,7 +743,6 @@ function syncTerminalSize(forcePtyResize = false) {
     void terminalResize(sessionId, size.cols, size.rows)
   }
   if (forcePtyResize) terminal.refresh(0, terminal.rows - 1)
-  scrollTerminalToBottom()
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
 }
 
@@ -887,7 +902,8 @@ function normalizeTerminalSelectionToContent() {
 
   const buffer = terminal.buffer.active
   const cols = terminal.cols
-  let firstOffset: number | undefined
+  // Preserve the user's selection start, including indentation and leading blank lines.
+  const firstOffset = selection.start.y * cols + selection.start.x
   let lastOffset: number | undefined
 
   for (let rowIndex = selection.start.y; rowIndex <= selection.end.y; rowIndex += 1) {
@@ -897,30 +913,26 @@ function normalizeTerminalSelectionToContent() {
     const endColumn = rowIndex === selection.end.y ? selection.end.x : cols
     if (endColumn <= startColumn) continue
 
-    let selectedContentStart: number | undefined
     let selectedContentEnd: number | undefined
     for (let column = startColumn; column < Math.min(endColumn, cols); column += 1) {
       const cell = line.getCell(column)
       if (!cell?.getChars().trim()) continue
-      selectedContentStart ??= column
       selectedContentEnd = Math.min(cols, column + Math.max(1, cell.getWidth()))
     }
-    if (selectedContentStart === undefined || selectedContentEnd === undefined) continue
+    if (selectedContentEnd === undefined) continue
 
-    firstOffset ??= rowIndex * cols + selectedContentStart
     lastOffset = rowIndex * cols + selectedContentEnd
   }
 
   terminalSelectionNormalizing = true
   try {
-    if (firstOffset === undefined || lastOffset === undefined) {
+    if (lastOffset === undefined) {
       terminal.clearSelection()
       return true
     }
 
-    const currentStart = selection.start.y * cols + selection.start.x
     const currentEnd = selection.end.y * cols + selection.end.x
-    if (currentStart === firstOffset && currentEnd === lastOffset) return false
+    if (currentEnd === lastOffset) return false
 
     terminal.select(firstOffset % cols, Math.floor(firstOffset / cols), lastOffset - firstOffset)
     return true
@@ -1224,8 +1236,12 @@ async function pumpTerminalInputQueue(generation = terminalInputGeneration) {
         if (batch.generation !== terminalInputGeneration || batch.sessionId !== sessionId) continue
         terminalInputReady = false
         failedTerminalInputGeneration = batch.generation
+        // The backend may reject a write without emitting a close event. Expose
+        // recovery through Ctrl+R while keeping any remaining output available.
+        status.value = 'error'
         pendingTrackedCommands = []
         invalidateTrackedTerminalInput()
+        ingestTerminalOutput(`\r\nTerminal input failed: ${formatError(error)}\r\n${TERMINAL_RECONNECT_HINT}\r\n`, true)
         batch.failures.forEach((failure) => runTerminalInputFailure(failure, error))
         for (let index = terminalInputQueue.length - 1; index >= 0; index -= 1) {
           const queued = terminalInputQueue[index]
@@ -1856,6 +1872,9 @@ onMounted(async () => {
     cursorWidth: 2,
     cursorInactiveStyle: 'bar',
     convertEol: false,
+    // ANSI/256-color/truecolor output can set its own background (for example TUI menus).
+    // Keep text readable against each cell's background in every terminal theme.
+    minimumContrastRatio: 4.5,
     fontFamily: resolvedTerminalSettings().terminalFontFamily,
     fontSize: resolvedTerminalSettings().terminalFontSize,
     ...terminalTypographyOptions,
