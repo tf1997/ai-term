@@ -1,8 +1,4 @@
 /* Shared framing for script drafts and Agent configuration entries. */
-:root {
-  --ai-card-radius: 8px;
-}
-
 .agent-allowlist-entries li,
 .script-draft-card,
 .script-assistant-section {

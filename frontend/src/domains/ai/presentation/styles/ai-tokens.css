@@ -1,0 +1,17 @@
+/* Shared by AI content and its teleported dialogs. Defining tokens at the root
+   keeps both surfaces in sync without changing the application's UI scale. */
+:root {
+  --ai-font-body: var(--font-md);
+  --ai-font-ui: var(--font-sm);
+  --ai-font-caption: var(--font-xs);
+  --ai-font-heading: var(--font-lg);
+  --ai-leading-body: 20px;
+  --ai-leading-ui: 18px;
+  --ai-leading-heading: 22px;
+  --ai-weight-normal: 400;
+  --ai-weight-medium: 500;
+  --ai-weight-strong: 600;
+  --ai-card-radius: 8px;
+  --ai-card-inset: 12px;
+  --ai-card-gap: 10px;
+}

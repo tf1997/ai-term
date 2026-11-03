@@ -108,15 +108,24 @@ function save() {
 </template>
 
 <style scoped>
+.ai-config { font-size: var(--ai-font-body); line-height: var(--ai-leading-body); }
+.ai-config .config-top strong { font-size: var(--ai-font-body); font-weight: var(--ai-weight-medium); }
+.ai-config .config-grid label > span,
+.ai-config .config-footer,
+.ai-config .config-footer button,
+.ai-config .badge { font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.ai-config .config-grid input,
+.ai-config .config-grid textarea { font-family: var(--font-sans); font-size: var(--ai-font-body); line-height: var(--ai-leading-body); }
 .ai-config-hint {
-  font-size: var(--font-xs);
-  line-height: 1.5;
+  font-size: var(--ai-font-ui);
+  line-height: var(--ai-leading-ui);
   opacity: .8;
 }
 
 .ai-config-validation-error {
   margin: 0;
   color: #e05260;
-  font-size: var(--font-xs);
+  font-size: var(--ai-font-ui);
+  line-height: var(--ai-leading-ui);
 }
 </style>

@@ -77,8 +77,8 @@ function inferCommandShellLabel(command: string) {
 </template>
 
 <style scoped>
-.chat-markdown { display: grid; gap: 10px; min-width: 0; width: 100%; color: var(--chat-text, var(--workbench-text)); }
-.chat-markdown > .markdown-content { min-width: 0; margin: 0; font-size: var(--font-lg); line-height: 22px; overflow-wrap: anywhere; }
+.chat-markdown { display: grid; gap: var(--ai-card-gap); min-width: 0; width: 100%; color: var(--chat-text, var(--workbench-text)); }
+.chat-markdown > .markdown-content { min-width: 0; margin: 0; font-size: var(--ai-font-body); line-height: var(--ai-leading-body); overflow-wrap: anywhere; }
 .chat-markdown :deep(.markdown-content > :first-child) { margin-top: 0; }
 .chat-markdown :deep(.markdown-content > :last-child) { margin-bottom: 0; }
 /* Let the table size its columns; only its wrapper owns horizontal scrolling. */
@@ -93,15 +93,21 @@ function inferCommandShellLabel(command: string) {
 .chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-thumb) { min-height: 32px; border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--chat-muted, #8d98a5) 58%, transparent); background-clip: padding-box; }
 .chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-thumb:hover) { background: color-mix(in srgb, var(--chat-text, #22272d) 42%, transparent); background-clip: padding-box; }
 .chat-markdown :deep(.markdown-table-wrap::-webkit-scrollbar-corner) { background: transparent; }
-.chat-markdown :deep(.markdown-content h1) { font-size: var(--font-xl); font-weight: 600; line-height: 1.5; }
+.chat-markdown :deep(.markdown-content h1) { font-size: var(--ai-font-heading); font-weight: var(--ai-weight-strong); line-height: var(--ai-leading-heading); }
 .chat-markdown :deep(.markdown-content h2),
 .chat-markdown :deep(.markdown-content h3),
-.chat-markdown :deep(.markdown-content h4) { font-size: var(--font-lg); font-weight: 600; line-height: 1.5; }
-.chat-code-risk { display: inline-flex; align-items: center; gap: 3px; height: 18px; color: var(--chat-muted, var(--workbench-muted)); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.chat-markdown :deep(.markdown-content h4),
+.chat-markdown :deep(.markdown-content h5),
+.chat-markdown :deep(.markdown-content h6) { font-size: var(--ai-font-body); font-weight: var(--ai-weight-strong); line-height: var(--ai-leading-body); }
+.chat-markdown :deep(.markdown-content strong) { font-weight: var(--ai-weight-strong); }
+.chat-markdown :deep(.markdown-content code) { font-size: var(--ai-font-ui); }
+.chat-markdown :deep(.markdown-code-block pre) { font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.chat-markdown :deep(.markdown-code-block .code-head > span) { font-size: var(--ai-font-ui); font-weight: var(--ai-weight-medium); line-height: var(--ai-leading-ui); }
+.chat-code-risk { display: inline-flex; align-items: center; gap: 3px; height: 18px; color: var(--chat-muted, var(--workbench-muted)); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); white-space: nowrap; }
 .chat-code-risk .ui-icon { display: block; width: 12px; height: 12px; flex: 0 0 12px; }
 .chat-code-risk.is-medium { color: var(--chat-warning, #996015); }
 .chat-code-risk.is-high { color: var(--chat-danger, #c24150); }
-.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 7px; background: var(--workbench-action-bg); color: var(--workbench-action-text); border: 0; border-radius: 4px; cursor: pointer; font-size: 12px; line-height: 18px; }
+.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 7px; background: var(--workbench-action-bg); color: var(--workbench-action-text); border: 0; border-radius: 4px; cursor: pointer; font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
 .chat-code-run:hover:not(:disabled) { background: var(--workbench-action-hover); }
 .chat-code-run:active:not(:disabled) { background: var(--workbench-action-active); }
 .chat-code-run:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }

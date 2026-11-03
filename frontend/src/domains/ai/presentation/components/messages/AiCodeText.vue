@@ -63,6 +63,8 @@ const numberWidth = computed(() => ({
   padding-right: 10px;
   color: var(--chat-muted, var(--workbench-muted));
   background: var(--code-line-background, var(--workbench-panel));
+  font-size: var(--ai-font-caption);
+  line-height: var(--ai-leading-ui);
   font-variant-numeric: tabular-nums;
   text-align: right;
   -webkit-user-select: none;
@@ -74,6 +76,6 @@ const numberWidth = computed(() => ({
 }
 .ai-code-line-text {
   min-width: 0;
-  min-height: 1.5em;
+  min-height: var(--ai-leading-ui);
 }
 </style>

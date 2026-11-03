@@ -26,13 +26,13 @@ watch([() => props.message.id, finished], () => { expanded.value = false })
 <style scoped>
 .agent-work-log { min-width: 0; }
 .agent-work-log.is-finished { border-bottom: 1px solid var(--chat-line); }
-.agent-work-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: auto; min-height: 34px; padding: 5px 0 8px; border: 0; background: transparent; color: var(--chat-muted); font-size: 12px; font-weight: 400; line-height: 20px; text-align: left; cursor: pointer; }
+.agent-work-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: auto; min-height: 34px; padding: 5px 0 8px; border: 0; background: transparent; color: var(--chat-muted); font-size: var(--ai-font-ui); font-weight: var(--ai-weight-normal); line-height: var(--ai-leading-ui); text-align: left; cursor: pointer; }
 .agent-work-toggle > span:first-child { font-variant-numeric: tabular-nums; }
 .agent-work-toggle > .ui-icon { flex: none; }
 .agent-work-toggle:hover:not(:disabled) { color: var(--chat-text); background: transparent; }
 .agent-work-toggle:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: 2px; border-radius: 3px; }
-.agent-work-count { font-size: 11px; margin-left: auto; white-space: nowrap; }
-.agent-work-errors { color: var(--chat-danger); font-size: 11px; white-space: nowrap; }
+.agent-work-count { font-size: var(--ai-font-ui); margin-left: auto; white-space: nowrap; line-height: var(--ai-leading-ui); }
+.agent-work-errors { color: var(--chat-danger); font-size: var(--ai-font-ui); white-space: nowrap; line-height: var(--ai-leading-ui); }
 .agent-work-content { min-width: 0; }
 .is-finished > .agent-work-content { padding: 8px 0 14px; }
 </style>

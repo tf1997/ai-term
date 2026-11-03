@@ -20,14 +20,14 @@ const expanded = ref(false)
 
 <style scoped>
 .chat-reasoning { min-width: 0; color: var(--chat-muted, var(--workbench-muted)); }
-summary { display: flex; align-items: center; gap: 5px; min-height: 24px; font-size: 12px; line-height: 18px; cursor: pointer; list-style: none; }
+summary { display: flex; align-items: center; gap: 5px; min-height: 24px; font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); cursor: pointer; list-style: none; }
 summary::-webkit-details-marker { display: none; }
 summary .ui-icon { flex: none; }
 [open] > summary .ui-icon { transform: rotate(90deg); }
 summary:hover { color: var(--chat-text, var(--workbench-text)); }
 summary:focus-visible { outline: 2px solid var(--chat-muted); outline-offset: 2px; border-radius: 3px; }
-summary small { font-size: 12px; }
+summary small { font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
 .chat-markdown { padding-block: 6px; }
-.chat-reasoning :deep(.chat-markdown > .markdown-content) { font-size: 12px; line-height: 20px; }
-.chat-reasoning :deep(.chat-markdown .markdown-content :is(h1, h2, h3, h4)) { font-size: 13px; line-height: 20px; }
+.chat-reasoning :deep(.chat-markdown > .markdown-content) { font-size: var(--ai-font-ui); line-height: var(--ai-leading-body); }
+.chat-reasoning :deep(.chat-markdown .markdown-content :is(h1, h2, h3, h4, h5, h6)) { font-size: var(--ai-font-body); line-height: var(--ai-leading-body); }
 </style>

@@ -49,25 +49,25 @@ function directory(path: string) { return path.slice(0, -basename(path).length) 
 </template>
 
 <style scoped>
-.agent-file-changes { min-width: 0; border: 1px solid var(--chat-line); border-radius: 7px; overflow: hidden; }
-.agent-file-changes > header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 0; color: var(--chat-text); font-size: 12px; line-height: 18px; }
+.agent-file-changes { min-width: 0; border: 1px solid var(--chat-line); border-radius: var(--ai-card-radius); overflow: hidden; }
+.agent-file-changes > header { display: flex; align-items: center; gap: 8px; padding: var(--ai-card-gap) var(--ai-card-inset) 0; color: var(--chat-text); font-size: var(--ai-font-body); line-height: var(--ai-leading-body); }
 .agent-file-changes > header .ui-icon { flex: none; color: var(--chat-muted); }
-.agent-file-changes > header strong { font-weight: 500; }
+.agent-file-changes > header strong { font-weight: var(--ai-weight-medium); }
 .agent-file-changes > header .agent-files-stats { margin-left: auto; }
-.agent-files-stats { display: inline-flex; flex: none; gap: 5px; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agent-files-stats { display: inline-flex; flex: none; gap: 5px; font-size: var(--ai-font-caption); font-variant-numeric: tabular-nums; white-space: nowrap; line-height: var(--ai-leading-ui); }
 .is-add { color: var(--chat-accent); }.is-remove { color: var(--chat-danger); }
-.agent-files-note { margin: 4px 12px 9px; font-size: 11px; line-height: 18px; color: var(--chat-muted); }
+.agent-files-note { margin: 4px var(--ai-card-inset) 8px; font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); color: var(--chat-muted); }
 .agent-file-list { border-top: 1px solid var(--chat-line); }
-.agent-file-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: auto; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: var(--chat-text); text-align: left; font-size: 12px; font-weight: 400; line-height: 18px; cursor: pointer; }
+.agent-file-row { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: auto; padding: 8px var(--ai-card-inset); border: 0; border-radius: 0; background: transparent; color: var(--chat-text); text-align: left; font-size: var(--ai-font-ui); font-weight: var(--ai-weight-normal); line-height: var(--ai-leading-ui); cursor: pointer; }
 .agent-file-row + .agent-file-row { border-top: 1px solid var(--chat-line); }
 .agent-file-row:hover:not(:disabled) { background: var(--chat-hover); color: var(--chat-text); }
 .agent-file-row:focus-visible, .agent-files-more:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: -2px; }
 .agent-file-path { display: grid; flex: 1; min-width: 0; }
 .agent-file-path > span, .agent-file-path > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-file-path small { font-size: 11px; color: var(--chat-muted); }
+.agent-file-path small { font-size: var(--ai-font-ui); color: var(--chat-muted); line-height: var(--ai-leading-ui); }
 .agent-file-row > .ui-icon { flex: none; color: var(--chat-muted); }
-.agent-file-count, .agent-file-uncertain { flex: none; font-size: 11px; color: var(--chat-muted); white-space: nowrap; }
-.agent-file-uncertain { color: var(--chat-warning); }
-.agent-files-more { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 30px; padding: 4px 12px; border: 0; border-top: 1px solid var(--chat-line); border-radius: 0; background: transparent; color: var(--chat-muted); font-size: 11px; cursor: pointer; }
+.agent-file-uncertain { flex: none; font-size: var(--ai-font-ui); color: var(--chat-warning); white-space: nowrap; line-height: var(--ai-leading-ui); }
+.agent-file-count { flex: none; font-size: var(--ai-font-caption); color: var(--chat-muted); white-space: nowrap; line-height: var(--ai-leading-ui); }
+.agent-files-more { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 30px; padding: 4px var(--ai-card-inset); border: 0; border-top: 1px solid var(--chat-line); border-radius: 0; background: transparent; color: var(--chat-muted); font-size: var(--ai-font-ui); cursor: pointer; line-height: var(--ai-leading-ui); }
 .agent-files-more:hover:not(:disabled) { background: var(--chat-hover); color: var(--chat-text); }
 </style>

@@ -84,7 +84,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside, true)
 
 <style scoped>
 .composer-select { position: static; min-width: 0; }
-.composer-select-trigger { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: var(--composer-control-size, 30px); min-height: var(--composer-control-size, 30px); padding: 0 7px; border: 0; border-radius: var(--composer-control-radius, 6px); background: transparent; color: var(--chat-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.composer-select-trigger { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: var(--composer-control-size, 30px); min-height: var(--composer-control-size, 30px); padding: 0 7px; border: 0; border-radius: var(--composer-control-radius, 6px); background: transparent; color: var(--chat-muted); font: inherit; font-size: var(--ai-font-ui); cursor: pointer; line-height: var(--ai-leading-ui); }
 .composer-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-select-trigger .ui-icon { flex: none; }
 .composer-select-trigger:hover:not(:disabled), .composer-select-trigger.is-open { background: var(--chat-hover); color: var(--chat-text); }
@@ -94,13 +94,14 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside, true)
 .is-open .select-chevron { transform: rotate(-90deg); }
 .icon-only { flex: 0 0 var(--composer-control-size, 30px); }
 .icon-only .composer-select-trigger { padding: 0; }
-.composer-select-menu { position: absolute; z-index: 20; bottom: calc(100% + 8px); left: 0; width: 256px; max-width: calc(100cqw - 32px); max-height: min(320px, 50vh); overflow: auto; padding: 5px; border: 1px solid var(--chat-line); border-radius: 9px; background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 6px 24px #00000024; }
+.composer-select-menu { position: absolute; z-index: 20; bottom: calc(100% + 8px); left: 0; width: 256px; max-width: calc(100cqw - 32px); max-height: min(320px, 50vh); overflow: auto; padding: 5px; border: 1px solid var(--chat-line); border-radius: var(--ai-card-radius); background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 6px 24px #00000024; }
 .icon-only .composer-select-menu { left: auto; right: 0; }
-.composer-select-heading { padding: 6px 8px 7px; font-size: 12px; color: var(--chat-muted); }
+.composer-select-copy strong { font-weight: var(--ai-weight-medium); }
+.composer-select-heading { padding: 6px 8px 7px; font-size: var(--ai-font-body); font-weight: var(--ai-weight-medium); color: var(--chat-muted); line-height: var(--ai-leading-body); }
 .composer-select-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: var(--chat-text); text-align: left; cursor: pointer; }
 .composer-select-option:hover, .composer-select-option:focus-visible { background: var(--chat-hover); outline: none; }
 .composer-select-option[aria-selected="true"] { background: var(--chat-accent-soft); }
 .composer-select-option > .ui-icon { flex: none; color: var(--chat-accent); }
-.composer-select-copy { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
-.composer-select-copy small { color: var(--chat-muted); font-size: 12px; line-height: 1.5; }
+.composer-select-copy { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: var(--ai-font-ui); overflow-wrap: anywhere; line-height: var(--ai-leading-ui); }
+.composer-select-copy small { color: var(--chat-muted); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
 </style>

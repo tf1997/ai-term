@@ -34,14 +34,14 @@ function duration(steps: AgentStep[]) {
 </template>
 
 <style scoped>
-.agent-timeline { display: grid; gap: 14px; min-width: 0; }
+.agent-timeline { display: grid; gap: var(--ai-card-gap); min-width: 0; }
 .agent-completed-group { min-width: 0; border-block: 1px solid var(--chat-line); }
-.agent-completed-group > summary { display: flex; align-items: center; min-height: 40px; gap: 8px; color: var(--chat-muted); font-size: 12px; cursor: pointer; list-style: none; }
+.agent-completed-group > summary { display: flex; align-items: center; min-height: 40px; gap: 8px; color: var(--chat-muted); font-size: var(--ai-font-ui); cursor: pointer; list-style: none; line-height: var(--ai-leading-ui); }
 .agent-completed-group > summary::-webkit-details-marker { display: none; }
 .agent-completed-group > summary > .ui-icon:first-child { color: var(--chat-accent); }
 .agent-completed-group > summary:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: -2px; border-radius: 4px; }
-.agent-completed-duration { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.agent-completed-duration { margin-left: auto; font-size: var(--ai-font-ui); font-variant-numeric: tabular-nums; line-height: var(--ai-leading-ui); }
 .agent-completed-chevron { flex-shrink: 0; }
 .agent-completed-group[open] > summary .agent-completed-chevron { transform: rotate(180deg); }
-.agent-completed-content { display: grid; min-width: 0; gap: 10px; padding-bottom: 10px; }
+.agent-completed-content { display: grid; min-width: 0; gap: var(--ai-card-gap); padding-bottom: 10px; }
 </style>

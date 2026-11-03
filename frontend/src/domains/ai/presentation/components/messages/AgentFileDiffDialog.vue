@@ -84,32 +84,32 @@ onBeforeUnmount(() => { if (props.trigger?.isConnected) props.trigger.focus({ pr
 
 <style scoped>
 .agent-diff-backdrop { position: fixed; z-index: 2200; inset: 0; display: grid; place-items: center; padding: 24px; background: #0007; }
-.agent-diff-dialog { display: flex; flex-direction: column; width: min(900px, 100%); max-height: min(820px, calc(100dvh - 48px)); min-width: 0; overflow: hidden; border: 1px solid var(--chat-line); border-radius: 9px; background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 20px 70px #0004; }
+.agent-diff-dialog { display: flex; flex-direction: column; width: min(900px, 100%); max-height: min(820px, calc(100dvh - 48px)); min-width: 0; overflow: hidden; border: 1px solid var(--chat-line); border-radius: var(--ai-card-radius); background: var(--chat-surface); color: var(--chat-text); box-shadow: 0 20px 70px #0004; }
 .agent-diff-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--chat-line); }
 .agent-diff-head > div { min-width: 0; }
-.agent-diff-head strong { font-size: 14px; font-weight: 600; }
-.agent-diff-head p { margin: 4px 0 0; color: var(--chat-muted); font: 11px/18px var(--font-mono); overflow-wrap: anywhere; }
+.agent-diff-head strong { font-size: var(--ai-font-heading); font-weight: var(--ai-weight-strong); line-height: var(--ai-leading-heading); }
+.agent-diff-head p { margin: 4px 0 0; color: var(--chat-muted); font: var(--ai-font-ui)/var(--ai-leading-ui) var(--font-mono); overflow-wrap: anywhere; }
 .agent-diff-icon { display: inline-grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: var(--chat-muted); background: transparent; }
-.agent-diff-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; color: var(--chat-muted); font-size: 11px; }
+.agent-diff-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; color: var(--chat-muted); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
 .agent-diff-stats { display: inline-flex; gap: 6px; font-variant-numeric: tabular-nums; }
 .is-add { color: var(--chat-accent); }.is-remove { color: var(--chat-danger); }
 .agent-diff-copy-feedback { margin-left: auto; }
-.agent-diff-action { display: inline-flex; align-items: center; flex: none; gap: 5px; padding: 4px 6px; min-height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--chat-muted); font-size: 11px; cursor: pointer; }
+.agent-diff-action { display: inline-flex; align-items: center; flex: none; gap: 5px; padding: 4px 6px; min-height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--chat-muted); font-size: var(--ai-font-ui); cursor: pointer; line-height: var(--ai-leading-ui); }
 .agent-diff-icon:hover, .agent-diff-action:hover, .agent-diff-more:hover { background: var(--chat-hover); color: var(--chat-text); }
 .agent-diff-body { overflow: auto; min-height: 0; overscroll-behavior: contain; scrollbar-width: thin; }
-.agent-diff-lines { border-collapse: collapse; width: 100%; font: 12px/18px var(--font-mono); white-space: pre; tab-size: 4; }
-.agent-diff-lines th { color: var(--chat-muted); font: 10px/22px var(--font-mono); font-weight: 400; text-align: left; padding: 0 8px; border-bottom: 1px solid var(--chat-line); }
-.agent-diff-lines td { border: 0; padding: 0; height: 18px; vertical-align: top; }
-.agent-diff-lines .diff-line-number { width: 1%; min-width: 36px; padding: 0 6px; text-align: right; color: var(--chat-muted); font-size: 10px; user-select: none; border-right: 1px solid var(--chat-line); }
+.agent-diff-lines { border-collapse: collapse; width: 100%; font: var(--ai-font-ui)/var(--ai-leading-ui) var(--font-mono); white-space: pre; tab-size: 4; }
+.agent-diff-lines th { color: var(--chat-muted); font: var(--ai-font-ui)/var(--ai-leading-ui) var(--font-sans); font-weight: var(--ai-weight-medium); text-align: left; padding: 0 8px; border-bottom: 1px solid var(--chat-line); }
+.agent-diff-lines td { border: 0; padding: 0; height: var(--ai-leading-ui); vertical-align: top; }
+.agent-diff-lines .diff-line-number { width: 1%; min-width: 36px; padding: 0 6px; text-align: right; color: var(--chat-muted); font-size: var(--ai-font-caption); user-select: none; border-right: 1px solid var(--chat-line); line-height: var(--ai-leading-ui); }
 .agent-diff-lines .diff-sign { width: 1%; padding: 0 7px; user-select: none; }
 .agent-diff-lines .diff-code { padding-right: 16px; }
 .diff-add { background: color-mix(in srgb, var(--chat-accent) 10%, transparent); }.diff-add .diff-sign { color: var(--chat-accent); }
 .diff-remove { background: color-mix(in srgb, var(--chat-danger) 10%, transparent); }.diff-remove .diff-sign { color: var(--chat-danger); }
 .diff-hunk { color: var(--chat-muted); background: var(--chat-elevated); }.diff-hunk .diff-code { padding-block: 6px; }
-.diff-note { color: var(--chat-muted); font-size: 11px; }
-.agent-diff-empty { margin: 0; padding: 24px 16px; color: var(--chat-muted); font-size: 12px; }
-.agent-diff-more { margin: 8px 16px; padding: 5px 8px; border: 1px solid var(--chat-line); border-radius: 4px; background: transparent; color: var(--chat-muted); font-size: 11px; }
-.agent-diff-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--chat-line); font-size: 11px; color: var(--chat-muted); }
+.diff-note { color: var(--chat-muted); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.agent-diff-empty { margin: 0; padding: 24px 16px; color: var(--chat-muted); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.agent-diff-more { margin: 8px 16px; padding: 5px 8px; border: 1px solid var(--chat-line); border-radius: 4px; background: transparent; color: var(--chat-muted); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.agent-diff-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--chat-line); font-size: var(--ai-font-ui); color: var(--chat-muted); line-height: var(--ai-leading-ui); }
 .agent-diff-dialog button:focus-visible, .agent-diff-body:focus-visible { outline: 2px solid var(--chat-accent); outline-offset: -2px; }
 @media (max-width: 480px) { .agent-diff-backdrop { padding: 12px; }.agent-diff-dialog { max-height: calc(100dvh - 24px); } }
 </style>
