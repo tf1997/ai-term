@@ -48,6 +48,52 @@ test('远程标题保留用户名和主机的回退规则', () => {
   assert.equal(state.addTerminalTab(config).title, 'user@生产连接')
 })
 
+test('双向移动标签保留终端实例、连接代次、活动标签和暂停的同步目标', () => {
+  const state = useTerminalTabs()
+  const remote = state.addTerminalTab(profile())
+  const local = state.addTerminalTab()
+  state.updateTerminalStatus('local-1', 'local')
+  state.updateTerminalStatus(remote.id, 'remote')
+  state.setTerminalTargets(['local-1', remote.id, local.id])
+  state.pauseTerminalTargets([remote.id])
+  const original = [...state.terminalTabs.value]
+  const snapshot = JSON.parse(JSON.stringify(original))
+  assert.equal(state.moveTerminalTab(remote.id, 'local-1', 'before'), true)
+  assert.deepEqual(state.terminalTabs.value.map(tab => tab.id), [remote.id, 'local-1', local.id])
+  assert.equal(state.moveTerminalTab(local.id, remote.id, 'before'), true)
+  assert.deepEqual(state.terminalTabs.value.map(tab => tab.id), [local.id, remote.id, 'local-1'])
+  assert.equal(state.moveTerminalTab(remote.id, 'local-1', 'after'), true)
+  assert.deepEqual(state.terminalTabs.value.map(tab => tab.id), [local.id, 'local-1', remote.id])
+  assert.equal(state.activeTerminalId.value, local.id)
+  assert.deepEqual(new Set(state.targetTerminalIds.value), new Set(original.map(tab => tab.id)))
+  assert.deepEqual(state.pausedTerminalSyncIds.value, [remote.id])
+  for (const [index, tab] of original.entries()) {
+    const current = state.terminalTabs.value.find(item => item.id === tab.id)
+    assert.equal(current, tab, 'Moving a tab must not replace its runtime instance')
+    assert.deepEqual(JSON.parse(JSON.stringify(current)), snapshot[index])
+  }
+})
+
+test('无效、原位置及相邻无变化的拖动不修改状态，也不扩大同步范围', () => {
+  const state = useTerminalTabs()
+  const second = state.addTerminalTab()
+  const third = state.addTerminalTab()
+  const original = state.terminalTabs.value
+  for (const args of [
+    ['missing', second.id, 'before'], ['local-1', 'missing', 'after'],
+    [second.id, second.id, 'after'], ['local-1', second.id, 'before'],
+    [second.id, 'local-1', 'after']
+  ]) {
+    assert.equal(state.moveTerminalTab(...args), false)
+    assert.equal(state.terminalTabs.value, original)
+  }
+  state.moveTerminalTab('local-1', third.id, 'after')
+  assert.deepEqual(state.targetTerminalIds.value, [third.id])
+  assert.equal(state.activeTerminalId.value, third.id)
+  state.removeTerminalTab(third.id)
+  assert.equal(state.activeTerminalId.value, second.id, 'Closing uses the new visual order')
+})
+
 test('同一毫秒关闭再新增也不复用终端实例 key', context => {
   context.mock.method(Date, 'now', () => 1234)
   const state = useTerminalTabs()

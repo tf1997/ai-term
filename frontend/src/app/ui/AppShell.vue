@@ -65,7 +65,7 @@ const terminalTabState = useTerminalTabs()
 const {
   terminalTabs, activeTerminalId, activeTerminal, targetTerminalIds, targetConnectionIds,
   multiTerminalInputEnabled, terminalTargetLabel, terminalTargetTitle, selectTerminalTab,
-  addTerminalTab, removeTerminalTab, removeTerminalTabs, updateTerminalStatus, isTerminalTargetSelected,
+  addTerminalTab, removeTerminalTab, removeTerminalTabs, moveTerminalTab, updateTerminalStatus, isTerminalTargetSelected,
   pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
   resetTerminalTargetsToActive
 } = terminalTabState
@@ -927,6 +927,7 @@ onBeforeUnmount(() => {
         :agent-controlled-terminal-ids="[...agentTakeoverTerminalIds]"
         :terminal-target-title="terminalTargetTitle"
         @select="selectTerminalTab"
+        @move="moveTerminalTab"
         @close="closeTerminalTab"
         @close-others="closeOtherTerminalTabs"
         @create="openLocalTerminal"

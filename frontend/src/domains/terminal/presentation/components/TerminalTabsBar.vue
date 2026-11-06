@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch } fro
 import type { TerminalTab } from '../../domain/terminal'
 import { terminalStatusClass, terminalTitleOrdinals } from '../../domain/terminalTabs'
 import { useTerminalTabScroll } from '../../application/useTerminalTabScroll'
+import { useTerminalTabDrag } from '../../application/useTerminalTabDrag'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 import { isMenuOwnedBy } from '../../../../shared/ui/contextMenuInteraction'
 
@@ -17,6 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [terminalId: string]
+  move: [terminalId: string, targetId: string, side: 'before' | 'after']
   close: [terminalId: string]
   closeOthers: [terminalId: string]
   create: []
@@ -58,6 +60,12 @@ const filteredTabs = computed(() => {
 })
 const allVisibleSelected = computed(() => filteredTabs.value.every(tab => targetIds.value.has(tab.id)))
 const titleOrdinals = computed(() => terminalTitleOrdinals(props.terminalTabs))
+const { draggedTabId, dropTarget, startTabDrag, resetDragClick, consumeDragClick } = useTerminalTabDrag({
+  strip: sessionTabStrip,
+  tabs: toRef(props, 'terminalTabs'),
+  onStart: () => { closePopover(); emit('openPopover') },
+  onMove: (id, targetId, side) => emit('move', id, targetId, side)
+})
 
 function displayTitle(tab: TerminalTab) {
   const ordinal = titleOrdinals.value.get(tab.id)
@@ -80,7 +88,7 @@ function tabTitle(tab: TerminalTab) {
   const syncState = syncing.value && targetIds.value.has(tab.id)
     ? pausedIds.value.has(tab.id) ? '键盘同步已暂停，空提示符时自动恢复' : '同步输入目标'
     : ''
-  return [displayTitle(tab), tabDescription(tab), syncState, agentState].filter(Boolean).join('\n')
+  return [displayTitle(tab), tabDescription(tab), syncState, agentState, '拖动调整顺序'].filter(Boolean).join('\n')
 }
 
 function registerTabButton(tabId: string, element: unknown) {
@@ -262,14 +270,25 @@ onBeforeUnmount(() => {
 <template>
   <nav class="session-tabs" aria-label="终端会话">
     <div class="session-tab-scrollarea" :class="{ 'can-scroll-left': sessionTabCanScrollLeft, 'can-scroll-right': sessionTabCanScrollRight }">
-      <div ref="sessionTabStrip" class="session-tab-strip" role="tablist" aria-label="终端标签" @scroll="handleSessionTabScroll" @wheel="handleSessionTabWheel">
+      <div
+        ref="sessionTabStrip" class="session-tab-strip" :class="{ 'is-dragging': draggedTabId }"
+        role="tablist" aria-label="终端标签"
+        @scroll="handleSessionTabScroll" @wheel="handleSessionTabWheel"
+        @pointerdown.capture="resetDragClick" @click.capture="consumeDragClick"
+      >
         <div
           v-for="tab in terminalTabs"
           :key="tab.id"
           class="tab"
           role="presentation"
           :data-terminal-id="tab.id"
-          :class="{ active: tab.id === activeTerminalId, target: syncing && targetIds.has(tab.id), 'sync-paused': pausedIds.has(tab.id), 'agent-controlled': agentControlledIds.has(tab.id) }"
+          :class="{
+            active: tab.id === activeTerminalId, target: syncing && targetIds.has(tab.id),
+            'sync-paused': pausedIds.has(tab.id), 'agent-controlled': agentControlledIds.has(tab.id),
+            'is-drag-source': draggedTabId === tab.id,
+            'drop-before': dropTarget?.id === tab.id && dropTarget.side === 'before',
+            'drop-after': dropTarget?.id === tab.id && dropTarget.side === 'after'
+          }"
           @contextmenu.prevent.stop="openTabMenu($event, tab)"
           @keydown="openKeyboardMenu($event, tab)"
           @mousedown="($event.button === 1) && $event.preventDefault()"
@@ -286,6 +305,8 @@ onBeforeUnmount(() => {
             :tabindex="tab.id === activeTerminalId ? 0 : -1"
             :title="tabTitle(tab)"
             @click="selectTab(tab.id)"
+            @pointerdown="startTabDrag($event, tab.id)"
+            @dragstart.prevent
             @keydown="handleTabKeydown($event, tab.id)"
           >
             <span class="status-dot" :class="terminalStatusClass(tab.status)" aria-hidden="true" />

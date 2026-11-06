@@ -6,6 +6,7 @@ import { installSftpFixture } from './sftp-tauri-fixture.mjs'
 import { installTerminalDebugFixture } from './terminal-debug-fixture.mjs'
 import { installAiRuntimeFixture } from './ai-runtime.fixture.mjs'
 import { installAiBackgroundFixture } from './ai-background.fixture.mjs'
+import { terminalTabDrag } from './terminal-tab-drag.helper.mjs'
 
 const debuggerUrl = process.env.AI_TERM_CDP_URL ?? 'http://127.0.0.1:9231'
 const appUrl = process.env.AI_TERM_APP_URL ?? 'http://127.0.0.1:5173'
@@ -98,6 +99,17 @@ try {
   for (const terminalId of [a.terminal, b.terminal]) {
     assert.equal(await evaluate(`document.querySelector('.tab[data-terminal-id="${terminalId}"] .tab-close').disabled`), true, 'Both foreground and background terminals remain protected')
   }
+  const terminalSnapshot = await evaluate(`JSON.stringify(${app}.terminalTabs)`)
+  const drag = terminalTabDrag({ send, evaluate, waitFor })
+  await drag.reorder(a.terminal, b.terminal, 'after')
+  assert.equal(await evaluate(`${app}.terminalTabs.at(-1).id`), a.terminal)
+  assert.equal(await evaluate(`${app}.activeTerminalId`), b.terminal)
+  assert.equal(await evaluate(`${app}.activeAiSessionId`), b.session)
+  assert.deepEqual(new Set(await evaluate(`[...${app}.agentTakeoverTerminalIds]`)), new Set([a.terminal, b.terminal]))
+  assert.deepEqual(await evaluate('__aiBackground.cancellations'), [], 'Dragging an Agent-owned terminal must not cancel either task')
+  assert.equal(await evaluate(`${runtime}.requests.length`), 2)
+  await drag.reorder(a.terminal, b.terminal, 'before')
+  assert.equal(await evaluate(`JSON.stringify(${app}.terminalTabs)`), terminalSnapshot, 'Dragging must not reconnect or change terminal state')
   await evaluate(`${app}.rightCollapsed = true`)
   await waitFor(`!document.querySelector('${panel}')`)
   assert.equal(await evaluate(`${runtime}.requests.length`), 2, 'Collapsing the sidebar keeps both model requests running')

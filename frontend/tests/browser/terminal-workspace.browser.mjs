@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { terminalTabDrag } from './terminal-tab-drag.helper.mjs'
 
 const debuggerUrl = process.env.AI_TERM_CDP_URL ?? 'http://127.0.0.1:9231'
 const appUrl = process.env.AI_TERM_PREVIEW_URL ?? 'http://127.0.0.1:4179'
@@ -110,6 +111,87 @@ function row(id) { return `${popover} .terminal-switcher-row[data-terminal-id=${
 async function tabIds() { return evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(tabs)}), tab => tab.dataset.terminalId)`) }
 async function targetIds() { return evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(`${tabs}.target`)}), tab => tab.dataset.terminalId)`) }
 async function activeId() { return evaluate(`document.querySelector(${JSON.stringify(`${tabs}.active`)})?.dataset.terminalId`) }
+
+async function assertTabDragging() {
+  const original = await tabIds()
+  const previousActive = await activeId()
+  const [first, second, third] = original
+  const drag = terminalTabDrag({ send, evaluate, waitFor })
+  await click(`${tab(first)} .tab-select`)
+  await assertActiveVisible()
+  await menuAction('同步全部终端')
+  await click(`${tab(first)} .tab-select`)
+  await waitFor('document.querySelector(".terminal-stack").contains(document.activeElement)')
+  await evaluate('window.__dragFocus = document.activeElement')
+  await evaluate(`window.__dragPanes = [...document.querySelector('.terminal-stack').children].map(pane => ({ pane, xterm: pane.querySelector('.xterm') }))`)
+  await drag.begin(second)
+  const destination = await drag.toward(third, 'after')
+  const dragScreenshot = await screenshot('terminal-tab-drag.png')
+  await drag.end(destination)
+  assert.deepEqual(await tabIds(), [first, third, second, ...original.slice(3)])
+  assert.equal(await activeId(), first, 'Dragging a background tab must not activate it')
+  assert.deepEqual(new Set(await targetIds()), new Set(original), 'Reordering must preserve sync membership')
+  await drag.reorder(second, third, 'before')
+  assert.deepEqual(await tabIds(), original)
+
+  await drag.reorder(first, second, 'after')
+  assert.deepEqual(await tabIds(), [second, first, ...original.slice(2)])
+  assert.equal(await activeId(), first, 'The active terminal follows its ID, not its position')
+  await waitFor('document.activeElement === window.__dragFocus')
+  await drag.reorder(first, second, 'before')
+  assert.deepEqual(await tabIds(), original)
+  await waitFor('document.activeElement === window.__dragFocus')
+
+  // Escape and releasing outside the strip cancel, including the subsequent click.
+  await drag.begin(second)
+  const cancelled = await drag.toward(third, 'after')
+  await press('Escape')
+  await drag.end(cancelled)
+  assert.deepEqual(await tabIds(), original)
+  assert.equal(await activeId(), first)
+  await drag.begin(second)
+  const outside = { x: cancelled.x, y: cancelled.y + 90 }
+  await drag.move(outside)
+  await drag.end(outside)
+  assert.deepEqual(await tabIds(), original)
+  assert.equal(await activeId(), first)
+
+  // Small pointer movement remains a normal click; cancellation cannot eat it.
+  const clickPoint = await point(`${tab(second)} .tab-select`)
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...clickPoint, button: 'left', clickCount: 1 })
+  await drag.move({ x: clickPoint.x + 2, y: clickPoint.y })
+  await drag.end({ x: clickPoint.x + 2, y: clickPoint.y })
+  await waitForActive(second)
+  await click(`${tab(first)} .tab-select`)
+  await waitFor('document.querySelector(".session-tab-strip").scrollLeft < 1')
+
+  // Hold the pointer at both edges, without wheel input, to cross hidden tabs.
+  await drag.begin(second)
+  const edges = await evaluate(`(() => { const r = document.querySelector('.session-tab-strip').getBoundingClientRect(); return { left: r.left + 2, right: r.right - 2, y: r.top + r.height / 2 }; })()`)
+  const right = { x: edges.right, y: edges.y }
+  await drag.move(right)
+  await waitFor(`(() => { const s = document.querySelector('.session-tab-strip'); return s.scrollLeft + s.clientWidth >= s.scrollWidth - 2; })()`)
+  await drag.end(right)
+  assert.deepEqual(await tabIds(), [first, ...original.slice(2), second])
+  assert.equal(await activeId(), first)
+  await assertActiveVisible()
+  // Reveal only the source, then let edge scrolling reach the beginning again.
+  await drag.begin(second)
+  const left = { x: edges.left, y: edges.y }
+  await drag.move(left)
+  await waitFor('document.querySelector(".session-tab-strip").scrollLeft < 1')
+  await drag.end(left)
+  assert.deepEqual(await tabIds(), [second, first, ...original.slice(2)])
+  await drag.reorder(second, first, 'after')
+  assert.deepEqual(await tabIds(), original)
+  assert.equal(await evaluate(`window.__dragPanes.every(({ pane, xterm }) => document.getElementById(pane.id) === pane && pane.querySelector('.xterm') === xterm)`), true, 'Dragging must preserve every terminal and xterm instance')
+  assert.deepEqual(new Set(await targetIds()), new Set(original))
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true)
+  await menuAction('停止同步')
+  await click(`${tab(previousActive)} .tab-select`)
+  await assertActiveVisible()
+  return dragScreenshot
+}
 
 async function waitForTabCount(count) {
   await waitFor(`document.querySelectorAll(${JSON.stringify(tabs)}).length === ${count}
@@ -479,6 +561,14 @@ try {
     }
     assert.deepEqual(exceptions, [])
     console.log(JSON.stringify({ result: 'passed', checks: ['docked connections and settings at 980–1440px', 'no overlay or terminal overlap', 'collapse and restart preferences', 'terminal backgrounds match in both themes'], responsive }, null, 2))
+  } else if (process.argv.includes('--drag-only')) {
+    for (let count = 2; count <= terminalCount; count++) {
+      await click('.terminal-new-tab')
+      await waitForTabCount(count)
+    }
+    const dragScreenshot = await assertTabDragging()
+    assert.deepEqual(exceptions, [])
+    console.log(JSON.stringify({ result: 'passed', checks: ['drag reorder, cancellation, click threshold, edge scrolling, terminal identity and sync targets'], screenshots: [dragScreenshot] }, null, 2))
   } else {
   await assertLastTerminalGuard()
   await assertAuxiliaryState()
@@ -525,6 +615,7 @@ try {
     await waitForTabCount(count)
   }
   const allTabs = await tabIds()
+  const dragScreenshot = await assertTabDragging()
   await assertTabSemantics(terminalCount)
   await assertActiveVisible()
   await waitFor('document.querySelector(".session-tab-scroll-next")?.disabled === true')
@@ -704,12 +795,13 @@ try {
     checks: [
       'stable terminal DOM', 'current terminal required in sync group', 'sync group switch and exit', 'filtered sync selection and stop',
       '20 tabs with duplicate title ordinals', 'wheel and arrow scrolling with disabled boundaries', 'automatic active tab reveal',
+      'drag reorder preserves active terminal, sync targets and xterm instances', 'drag edge auto-scroll, Escape and outside cancellation',
       'search empty state and keyboard selection', 'tab keyboard navigation and focus', 'active tab has no shadow in both themes',
       'fixed terminal/files keyboard navigation', 'file panel survives view switches', 'auxiliary panel tab, width and visibility restoration',
       'background close preserves active instance', 'middle-click and Delete close', 'close other and right tabs', 'last terminal guard',
       'global draft session create/rename/delete', 'terminal switch preserves AI session', 'no uncaught exceptions'
     ],
-    screenshots: [darkScreenshot, darkMenuScreenshot, lightScreenshot, lightMenuScreenshot, syncScreenshot, sessionScreenshot, responsive.narrowScreenshot]
+    screenshots: [dragScreenshot, darkScreenshot, darkMenuScreenshot, lightScreenshot, lightMenuScreenshot, syncScreenshot, sessionScreenshot, responsive.narrowScreenshot]
   }, null, 2))
   }
 } catch (error) {

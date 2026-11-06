@@ -64,6 +64,30 @@
   display: none;
 }
 
+.session-tab-strip.is-dragging,
+.session-tab-strip.is-dragging .tab-select {
+  cursor: grabbing;
+}
+
+.session-tabs .tab.is-drag-source {
+  opacity: 0.45;
+}
+
+.session-tabs .tab.drop-before::before,
+.session-tabs .tab.drop-after::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--workbench-accent);
+  pointer-events: none;
+}
+
+.session-tabs .tab.drop-before::before { left: 0; }
+.session-tabs .tab.drop-after::before { right: 0; }
+
 .session-tabs .tab {
   position: relative;
   display: flex;
@@ -135,6 +159,9 @@
   color: inherit;
   font: inherit;
   box-shadow: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
 /* The row owns the highlight; child buttons must stay transparent on hover. */

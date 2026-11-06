@@ -64,6 +64,7 @@ The animation above is captured from the current Vue browser preview and walks t
 - Connect to direct hosts, bastions, gateway domains, and interactive jump menus.
 - Use password or SSH key authentication with separate gateway and target layers.
 - Find open terminals in the searchable tab list, scroll long tab rows with the wheel or arrow buttons, and switch with Ctrl+Tab / Ctrl+Shift+Tab. Repeated terminal names are numbered.
+- Drag terminal tabs to reorder them; hold near either edge to scroll, or press Esc to cancel. Reordering preserves the active terminal, running Agents, and synchronized input targets.
 - Choose synchronized input targets from the tab bar and stop synchronization with one click. Switching to an unselected terminal or opening a new one returns input to the current terminal only; paused keyboard targets stay marked until their prompts are ready.
 - Close other tabs or tabs to the right from the context menu, or middle-click a tab to close it. At least one terminal stays open.
 - Keep connection profiles, workspace sessions, and per-connection command history.
@@ -183,7 +184,7 @@ cargo test
 
 ## Project Status
 
-The current release is `v0.3.4`. It is available for evaluation and active development, with packaged builds for Windows, Ubuntu, macOS, and musl-based Linux.
+The current release is `v0.4.0`. It is available for evaluation and active development, with packaged builds for Windows, Ubuntu, macOS, and musl-based Linux.
 
 Version tags trigger the release workflow. Release descriptions automatically group all commits since the previous version tag, including direct commits. Write release notes and commit subjects in English. Optional user-facing highlights live in `.github/release-notes/<tag>.md`; rerunning a release regenerates the same description from the tagged source. Keep the Cargo, Tauri, and About dialog versions aligned when preparing a new release.
 

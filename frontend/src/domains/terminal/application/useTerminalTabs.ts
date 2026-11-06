@@ -114,6 +114,21 @@ export function useTerminalTabs() {
     return removeTerminalTabs([tabId]).length > 0
   }
 
+  function moveTerminalTab(tabId: string, targetId: string, side: 'before' | 'after') {
+    const tabs = terminalTabs.value
+    const sourceIndex = tabs.findIndex(tab => tab.id === tabId)
+    const targetIndex = tabs.findIndex(tab => tab.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0 || tabId === targetId) return false
+    const insertionIndex = targetIndex + (side === 'after' ? 1 : 0) - (sourceIndex < targetIndex ? 1 : 0)
+    if (insertionIndex === sourceIndex) return false
+    const reordered = [...tabs]
+    const [tab] = reordered.splice(sourceIndex, 1)
+    reordered.splice(insertionIndex, 0, tab)
+    // Keep terminal identities, the active terminal and sync membership unchanged.
+    terminalTabs.value = reordered
+    return true
+  }
+
   function updateTerminalStatus(terminalId: string, status: TerminalRuntimeStatus) {
     terminalTabs.value = terminalTabs.value.map((tab) => {
       if (tab.id !== terminalId) return tab
@@ -174,7 +189,7 @@ export function useTerminalTabs() {
     pausedTerminalSyncIds: readonly(pausedTerminalSyncIds),
     activeTerminal, targetTerminalIds, targetConnectionIds, multiTerminalInputEnabled,
     pausedTerminalTargetCount, terminalTargetLabel, terminalTargetTitle,
-    selectTerminalTab, addTerminalTab, removeTerminalTab, removeTerminalTabs,
+    selectTerminalTab, addTerminalTab, removeTerminalTab, removeTerminalTabs, moveTerminalTab,
     updateTerminalStatus, isTerminalTargetSelected, isTerminalSyncPaused, terminalTargetToggleTitle,
     setTerminalTargets, toggleTerminalTarget, selectAllTerminalTargets, resetTerminalTargetsToActive,
     pauseTerminalTargets, resumeTerminalSyncTarget
