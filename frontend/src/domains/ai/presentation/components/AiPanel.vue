@@ -533,12 +533,13 @@ async function revealAgentFileStep(message: AiMessage, stepId: string) {
   const step = Array.from(turn?.querySelectorAll<HTMLElement>('[data-step-id]') ?? []).find(element => element.dataset.stepId === stepId)
   const group = step?.closest<HTMLDetailsElement>('.agent-completed-group')
   if (group) group.open = true
-  const toggle = step?.querySelector<HTMLButtonElement>('.tool-step-toggle')
+  const toggle = step?.querySelector<HTMLButtonElement>('.tool-step-toggle, .file-edit-heading')
   if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click()
   await nextTick()
   step?.scrollIntoView({ block: 'center', behavior: 'instant' })
   const details = step?.querySelector<HTMLButtonElement>('.tool-step-details')
-  details?.focus({ preventScroll: true })
+  const focusTarget = details ?? toggle
+  focusTarget?.focus({ preventScroll: true })
   details?.click()
 }
 
@@ -1088,7 +1089,7 @@ watch(
           <template v-if="message.agentStatus === 'waiting-input'">
             <AgentTaskReply v-for="run in interruptedAgentRuns.filter(run => run.messageId === message.id && run.state.status === 'waiting-input')" :key="run.runId" :run="run" :busy="composerBusy" @reply="replyToAgentTask" />
           </template>
-          <AgentFileChanges v-if="message.mode === 'agent' && !message.streaming" :steps="message.agentSteps" :changes="message.agentFileChanges" @inspect="revealAgentFileStep(message, $event)" />
+          <AgentFileChanges v-if="message.mode === 'agent'" :steps="message.agentSteps" :changes="message.agentFileChanges" @inspect="revealAgentFileStep(message, $event)" />
           <AiReasoning v-if="message.mode !== 'agent' && message.reasoning" :content="message.reasoning" />
           <p v-if="taskSummary(message)" class="chat-task-summary">{{ taskSummary(message) }}</p>
           <p v-if="message.stopReason && message.stopReason !== message.text" class="chat-stop-reason">{{ message.stopReason }}</p>

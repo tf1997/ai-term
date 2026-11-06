@@ -4,13 +4,14 @@ import type { AgentStep } from '../../../domain/agent'
 import { agentFileReferences } from '../../../domain/agentFiles'
 import type { AgentFileChange } from '../../../domain/agentFileSnapshots'
 import { agentFileDiff } from '../../../domain/agentFileDiff'
+import { agentTaskFileChanges } from '../../../domain/agentTaskFileChanges'
 import type { AgentFileDiff } from '../../../domain/agentFileDiff'
 import AgentFileDiffDialog from './AgentFileDiffDialog.vue'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 
 const props = defineProps<{ steps?: AgentStep[]; changes?: AgentFileChange[] }>()
 const emit = defineEmits<{ inspect: [stepId: string] }>()
-const diffs = computed(() => (props.changes ?? []).map(agentFileDiff))
+const diffs = computed(() => agentTaskFileChanges(props.steps, props.changes).map(agentFileDiff))
 const files = computed(() => [
   ...diffs.value.map(diff => ({ path: diff.change.path, stepIds: diff.change.stepIds, uncertain: diff.status === 'unavailable', diff })),
   ...agentFileReferences(props.steps).filter(file => !diffs.value.some(diff => diff.change.requestedPaths.includes(file.path) && file.stepIds.every(id => diff.change.stepIds.includes(id)))).map(file => ({ ...file, diff: undefined }))

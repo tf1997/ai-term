@@ -823,6 +823,7 @@ try {
   await waitFor('Boolean(document.querySelector("[data-step-id=edit-batch] .file-edit-actions .is-primary"))')
   assert.equal(await evaluate('aiFixture.editRecords.writes'), 0)
   assert.equal(await evaluate('document.querySelectorAll("[data-step-id=edit-batch] .file-edit-patch").length'), 3)
+  assert.equal(await evaluate('Boolean(document.querySelector(".chat-message-content > :last-child .agent-file-changes"))'), false, 'Unapproved proposals do not appear as task file changes')
   assert.ok(await evaluate('document.querySelector("[data-step-id=edit-batch] .file-edit-patch").textContent.includes("-before") && document.querySelector("[data-step-id=edit-batch] .file-edit-patch").textContent.includes("+after")'))
   assert.ok(await evaluate('(() => { const card = document.querySelector("[data-step-id=edit-batch]"); return card.scrollWidth <= card.clientWidth + 1 })()'))
   await evaluate('document.querySelector("[data-step-id=edit-batch]").scrollIntoView({ block: "start", behavior: "instant" })')
@@ -830,10 +831,17 @@ try {
   await click('[data-step-id=edit-batch] .file-edit-actions .is-primary')
   await waitFor('aiFixture.editRecords.writes === 2 && aiFixture.runtime.requests.length === 1')
   assert.deepEqual(await evaluate('aiFixture.state.props.messages.at(-1).agentSteps.at(-1).fileEdits.map(item => item.status)'), ['applied', 'conflict', 'not-started'])
+  assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).streaming'), true)
+  assert.equal(await evaluate('document.querySelectorAll(".chat-message-content > :last-child .agent-file-row").length'), 1, 'Applied files appear while the task is still running; conflicts and unstarted files are excluded')
+  assert.equal(await evaluate('document.querySelector(".chat-message-content > :last-child .agent-files-stats").textContent'), '+1−1')
   await evaluate('aiFixture.runtime.reply("第一个文件已写入，第二个文件存在冲突，第三个未开始。")')
   await waitFor('aiFixture.state.props.messages.at(-1).agentStatus === "done"')
   await evaluate('aiFixture.reopen()')
-  await click('.chat-message-content > :last-child .agent-work-toggle')
+  assert.equal(await evaluate('document.querySelectorAll(".chat-message-content > :last-child .agent-file-row").length'), 1)
+  await click('.chat-message-content > :last-child .agent-file-row')
+  assert.equal(await evaluate('document.querySelector(".agent-diff-dialog .diff-remove .diff-code").textContent.trim()'), 'before')
+  assert.equal(await evaluate('document.querySelector(".agent-diff-dialog .diff-add .diff-code").textContent.trim()'), 'after')
+  await click('.agent-diff-footer .agent-diff-action')
   await waitFor('Boolean(document.querySelector("[data-step-id=edit-batch] .file-edit-item .file-edit-action"))')
   await click('[data-step-id=edit-batch] .file-edit-item .file-edit-action')
   await waitFor('Boolean(document.querySelector("[data-tool=restore_file] .file-edit-actions .is-primary"))')
@@ -868,6 +876,8 @@ try {
   assert.equal(await evaluate('aiFixture.state.props.messages.at(-1).payloadJson.includes("EDIT_PRIVATE_")'), false)
   await evaluate('aiFixture.reopen()')
   assert.equal(await evaluate('JSON.stringify(aiFixture.state.props.messages.at(-1)).includes("EDIT_PRIVATE_")'), false)
+  assert.equal(await evaluate('Boolean(document.querySelector(".chat-message-content > :last-child .agent-file-row"))'), true)
+  assert.equal(await evaluate('Boolean(document.querySelector(".chat-message-content > :last-child .agent-files-stats"))'), false, 'Redacted file edits do not fabricate diff counts')
   checks.push('Sensitive file edit previews are available for the live approval and are removed from persisted history')
   assert.deepEqual(exceptions, [], 'Uncaught browser exceptions after file and SSH workflows')
   const checkpointEvidence = await evaluate(`(() => {
@@ -935,6 +945,26 @@ try {
   assert.equal(await evaluate('document.querySelector(".agent-recovery-history").textContent.includes("已核对账号和当前状态")'), true)
   assert.deepEqual(exceptions, [], 'No browser errors in recovery and rehydration')
   checks.push('Recovery keeps the original goal and unknown result, waits for new evidence and target confirmation, then asks for fresh approval even for a built-in read-only command')
+
+  await evaluate(`(() => {
+    const report = Array.from({ length: 66 }, (_, i) => '报告第 ' + (i + 1) + ' 行').join('\\n') + '\\n';
+    const path = '/root/kernel-vuln-report.md';
+    const payload = { mode: 'agent', agentStatus: 'done', agentSteps: [{ id: 'historical-write', toolName: 'write_file', command: '', reason: '写入报告', risks: [], sensitive: false, status: 'completed', executionPhase: 'finished', fileEdits: [{ status: 'applied', changeId: 'historical-change', view: { provider: 'current-terminal', writeStrategy: 'create-exclusive', path, resolvedPath: path, environmentScope: 'a'.repeat(64), revision: null, before: null, after: report, sensitive: false, restoreOf: null, restoreAttributes: null }, outcome: { status: 'applied', revision: 'verified', contentHash: 'verified', beforeAttributes: null, afterAttributes: null, error: null } }] }] };
+    aiFixture.state.props.messages = [{ ...aiFixture.messages.find(message => message.id === 'completed'), id: 'historical-report', text: '文档已写好，共 66 行。', payloadJson: JSON.stringify(payload) }];
+  })()`)
+  await evaluate('aiFixture.reopen()')
+  assert.equal(await evaluate('aiFixture.state.props.messages[0].agentFileChanges'), undefined)
+  assert.equal(await evaluate('document.querySelector(".agent-files-stats").textContent'), '+66−0')
+  assert.match(await evaluate('document.querySelector(".agent-file-row").textContent'), /kernel-vuln-report\.md.*新建/s)
+  reasoningScreenshots.push(await screenshot('ai-file-edit-history-summary-dark-360.png'))
+  await click('.agent-file-row')
+  assert.equal(await evaluate('document.querySelectorAll(".agent-diff-dialog .diff-add").length'), 66)
+  await click('.agent-diff-footer .agent-diff-action')
+  await waitFor('Boolean(document.querySelector("[data-step-id=historical-write] .file-edit-body"))')
+  assert.equal(await evaluate('document.activeElement === document.querySelector("[data-step-id=historical-write] .file-edit-heading")'), true)
+  assert.equal(await evaluate('document.querySelector("[data-step-id=historical-write] .file-edit-heading").getAttribute("aria-expanded")'), 'true')
+  checks.push('Historical write_file receipts show the created report and +66/−0 without command snapshots, and diff links expand and focus the file edit record')
+  assert.deepEqual(exceptions, [], 'No browser errors in historical file summaries')
 
   console.log(JSON.stringify({ result: 'passed', fixtureUrl, checks, geometry, screenshots: [firstScreenshot, topScreenshot, narrowScreenshot, approvalScreenshot, darkApprovalScreenshot, timelineScreenshot, contextMenuScreenshot, configMenuScreenshot, ...reasoningScreenshots, fileToolScreenshot, sshTaskScreenshot, taskProgressScreenshot, adjustedPlanScreenshot, fileEditScreenshot, interruptedScreenshot, recoveryScreenshot], nativeBackendTested: false }, null, 2))
 } catch (error) {
