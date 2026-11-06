@@ -263,6 +263,13 @@ function connectProfile(profile: ConnectionProfile, event?: MouseEvent) {
                 </button>
               </div>
             </label>
+            <label>
+              <span>Shell 命令集成</span>
+              <select :value="selectedProfile.shellIntegration !== false ? 'enabled' : 'disabled'" @change="selectedProfile.shellIntegration = ($event.target as HTMLSelectElement).value === 'enabled'">
+                <option value="enabled">自动加载（支持的 Bash / Zsh）</option>
+                <option value="disabled">关闭自动加载</option>
+              </select>
+            </label>
           </div>
           <div class="modal-actions profile-editor-actions">
             <button type="button" @click="emit('closeEditor')">取消</button>

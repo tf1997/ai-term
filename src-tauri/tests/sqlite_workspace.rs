@@ -74,6 +74,7 @@ fn script(
     updated_at: &str,
 ) -> UpdateScript {
     UpdateScript {
+        task_metadata: None,
         id: id.into(),
         connection_id: connection_id.into(),
         workspace_session_id: workspace_session_id.into(),

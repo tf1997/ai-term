@@ -1,3 +1,4 @@
+import { recoveryFacts } from './agentCheckpoints'
 import type { AiMessage, WorkspaceSession } from './conversation'
 import type { AgentErrorKind, AgentExecutionPhase, AgentStep } from './agent'
 import { normalizeAgentFiles } from './agentFiles'
@@ -5,6 +6,7 @@ import { normalizeAgentFileChanges } from './agentFileSnapshots'
 import { normalizeMessageUsage } from './tokenUsage'
 import { normalizeAiDuration } from './aiTiming'
 import { normalizeAgentTimeline } from './agentTimeline'
+import { hydrateTaskProgress } from './agentTaskProgress'
 
 export const DEFAULT_AI_SESSION_ID = 'ai:default'
 export const COMMAND_HISTORY_SESSION_ID = 'connection-history'
@@ -83,7 +85,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
   try {
     const payload = JSON.parse(raw) as Partial<Pick<
       AiMessage,
-      'mode' | 'agentSteps' | 'agentFileChanges' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason'
+      'mode' | 'agentSteps' | 'agentFileChanges' | 'agentStatus' | 'agentReasoning' | 'agentTimeline' | 'terminalConnectionGeneration' | 'errorKind' | 'stopReason' | 'agentPlan' | 'agentVerifications' | 'agentRecovery'
     >> & { usage?: unknown; durationSeconds?: unknown; reasoning?: unknown }
     const usage = normalizeMessageUsage(payload.usage)
     const durationSeconds = normalizeAiDuration(payload.durationSeconds)
@@ -94,6 +96,7 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
     }
     if (payload.mode !== 'agent') return Object.keys(metadata).length ? { ...message, ...metadata } : message
     const agentSteps = hydrateAgentSteps(Array.isArray(payload.agentSteps) ? payload.agentSteps : [], message)
+    const progress = payload.agentPlan || payload.agentVerifications ? hydrateTaskProgress(payload.agentPlan, payload.agentVerifications) : undefined
     const errorKind = normalizeErrorKind(payload.errorKind) ?? (message.error
       ? agentSteps.some((step) => step.status === 'failed') ? 'tool' : 'model'
       : undefined)
@@ -105,6 +108,8 @@ export function hydrateAiMessagePayload(message: AiMessage): AiMessage {
       ...message,
       mode: 'agent',
       agentSteps,
+      agentRecovery: recoveryFacts(payload.agentRecovery),
+      ...(progress ? { agentPlan: progress.plan, agentVerifications: progress.verifications, agentOutcome: progress.outcome } : {}),
       agentFileChanges: normalizeAgentFileChanges(payload.agentFileChanges),
       agentTimeline: normalizeAgentTimeline(payload.agentTimeline),
       ...(agentReasoning ? { agentReasoning } : {}),

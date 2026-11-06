@@ -1,4 +1,16 @@
 <script setup lang="ts">
+import HostKnowledgePanel from './HostKnowledgePanel.vue'
+import { useHostKnowledge } from '../../application/useHostKnowledge'
+import AgentTaskScript from './messages/AgentTaskScript.vue'
+import type { TaskScriptSource, TaskScriptDraft } from '../../../scripts/types'
+import { completedAgentCheckpointForMessage } from '../../infrastructure/agentCheckpoints'
+import { loadTaskScriptSource } from '../../application/loadTaskScriptSource'
+
+import SshTaskContext from './messages/SshTaskContext.vue'
+import AgentTaskProgress from './messages/AgentTaskProgress.vue'
+import AgentTaskReply from './messages/AgentTaskReply.vue'
+import AgentInterruptedRuns from './messages/AgentInterruptedRuns.vue'
+import AgentRecoveryReview from './messages/AgentRecoveryReview.vue'
 import { useAgentSession } from '../../application/useAgentSession'
 import { useAiChat } from '../../application/useAiChat'
 import { useAiAnswerState } from '../../application/useAiAnswerState'
@@ -45,6 +57,7 @@ const props = defineProps<AiPanelProps>()
 
 const emit = defineEmits<AiPanelEvents>()
 const { terminalContextMode, terminalContext } = useAiTerminalContext(props)
+const hostKnowledge = useHostKnowledge(props, () => terminalContextMode.value)
 
 // A terminal's unsent context must never become another session's question.
 const composerDrafts = ref<Record<string, string>>({})
@@ -56,7 +69,7 @@ const askText = computed({
 const answerState = useAiAnswerState()
 const { isAsking, currentAssistantMessageId, answerElapsedSeconds, stopAnswerTimer, messageAnswerDuration, formatAnswerDuration } = answerState
 const conversationContext = useAiConversationContext(props, emit)
-const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useAiChat({ props, emit, answerState, conversationContext, terminalContextMode: () => terminalContextMode.value })
+const { currentRequestId, stopRequested, runChatTurn, stopCurrentAnswer } = useAiChat({ props, emit, answerState, conversationContext, terminalContextMode: () => terminalContextMode.value, hostKnowledgeContext: hostKnowledge.context })
 const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
 const collapsedMessages = ref<Record<string, boolean>>({})
 const messageList = ref<HTMLElement | null>(null)
@@ -75,8 +88,33 @@ const sessionNameDraft = ref('')
 const pendingAiCommandExecution = ref('')
 const pendingAiCommandSourceConnectionId = ref('')
 const pendingAgentRiskReview = ref(false)
-const { agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const taskScriptSource = ref<TaskScriptSource | null>(null)
+const taskScriptMessageId = ref('')
+const taskScriptLoading = ref(false)
+const taskScriptError = ref('')
+let taskScriptEpoch = 0
+watch(() => [props.connectionId, props.workspaceSessionId], () => {
+  taskScriptEpoch++; taskScriptSource.value = null; taskScriptMessageId.value = ''; taskScriptLoading.value = false; taskScriptError.value = ''
+})
+async function prepareTaskScript(message: AiMessage) {
+  if (taskScriptLoading.value) return
+  const epoch = ++taskScriptEpoch
+  taskScriptMessageId.value = message.id; taskScriptLoading.value = true; taskScriptError.value = ''; taskScriptSource.value = null
+  try {
+    const record = await completedAgentCheckpointForMessage(message.connectionId, message.workspaceSessionId, message.id)
+    if (!record) throw new Error('此历史任务没有完整的成功步骤记录，可参考历史内容手动整理脚本。')
+    if (epoch !== taskScriptEpoch) return
+    const source = await loadTaskScriptSource(record, props.agentFileTools?.edits?.getChange)
+    if (epoch === taskScriptEpoch) taskScriptSource.value = source
+  } catch (error) { if (epoch === taskScriptEpoch) taskScriptError.value = error instanceof Error ? error.message : String(error) }
+  finally { if (epoch === taskScriptEpoch) taskScriptLoading.value = false }
+}
+onBeforeUnmount(() => { taskScriptEpoch++ })
+function openTaskScript(draft: TaskScriptDraft) { emit('createScriptDraft', draft); taskScriptSource.value = null; taskScriptMessageId.value = '' }
+
+const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
+  hostKnowledgeContext: hostKnowledge.context,
   canSendMessage: () => canSendMessage.value,
   composerBusy: () => composerBusy.value,
   selectedTerminalContext: () => selectedTerminalContext.value,
@@ -91,11 +129,11 @@ const aiCommandExecutionNotice = ref('')
 const aiCommandExecutionNoticeTitle = ref('')
 let aiCommandNoticeTimer: number | undefined
 
-const pendingAiCommandRisks = computed(() => analyzeScriptRisks(pendingAiCommandExecution.value))
+const pendingAiCommandRisks = computed(() => pendingAgentRiskReview.value && agentPendingApproval.value ? agentPendingApproval.value.proposal.risks : analyzeScriptRisks(pendingAiCommandExecution.value))
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
 const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
 const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
-const pendingAiCommandSensitive = computed(() => isSensitiveAgentCommand(pendingAiCommandExecution.value))
+const pendingAiCommandSensitive = computed(() => (pendingAgentRiskReview.value && agentPendingApproval.value?.proposal.sensitive) || isSensitiveAgentCommand(pendingAiCommandExecution.value))
 const pendingAiCommandCrossConnection = computed(() => {
   return executionTargetsDifferFromSource(pendingAiCommandSourceConnectionId.value)
 })
@@ -124,7 +162,7 @@ const activeSession = computed(() => {
 const panelMode = computed<AiPanelMode>(() => (activeSession.value?.aiMode === 'agent' ? 'agent' : 'chat'))
 const composerBusy = computed(() => agentPreparing.value || isAsking.value || agentRunActive.value)
 const activeAnswer = computed(() => props.messages.find(message => message.id === currentAssistantMessageId.value))
-const needsAgentDecision = computed(() => Boolean(agentPendingApproval.value || agentPendingTimeout.value) && !agentApprovalSaving.value)
+const needsAgentDecision = computed(() => Boolean(agentPendingApproval.value || agentPendingTimeout.value || agentPendingRecovery.value) && !agentApprovalSaving.value)
 const composerFlow = computed(() => {
   if (!composerBusy.value) return 'idle'
   if (needsAgentDecision.value) return 'waiting'
@@ -139,12 +177,14 @@ const composerFlow = computed(() => {
   return 'thinking'
 })
 const activityLabel = computed(() => {
+  if (agentPendingRecovery.value) return agentRecoverySaving.value ? '正在确认恢复结果' : '等待恢复核对'
   if (agentPreparing.value) return '正在检查终端'
   if (agentApprovalSaving.value) return '正在保存授权'
-  if (agentPendingApproval.value) return '等待确认命令'
+  if (agentPendingApproval.value) return agentPendingApproval.value.proposal.fileEdits ? '等待确认文件差异' : agentPendingApproval.value.proposal.fileRequest ? '等待读取确认' : '等待确认命令'
   if (agentPendingTimeout.value) return '等待超时处理'
   if (agentRunActive.value) {
-    if (agentRun.value?.status === 'executing') return '正在执行命令'
+    if (agentRun.value?.recovery?.phase === 'inspecting' && agentRun.value?.status !== 'executing') return '正在核对中断任务'
+    if (agentRun.value?.status === 'executing') return agentRun.value.steps.slice(-1)[0]?.fileRequest ? '正在读取文件' : '正在执行命令'
     return agentRun.value?.steps.length ? '正在分析执行结果' : '正在规划任务'
   }
   return activeAnswer.value?.text ? '正在回复' : '正在思考'
@@ -326,6 +366,10 @@ function pairedUserMessage(message: AiMessage) {
 /** 重试按钮不可用时的原因;返回空串表示可以重试。 */
 function retryBlockedReason(message: AiMessage) {
   if (!message.error) return '这条消息没有失败'
+  if (message.agentSteps?.some(step => step.commandRedacted && step.status === 'failed')) return '历史命令已脱敏，请核对现场后重新发起任务'
+  if (message.agentSteps?.some(step => step.checkpointHistory)) return '请通过中断任务入口核对后继续，历史操作不能直接重试'
+  if (message.agentSteps?.some(step => step.fileEdits && step.status === 'failed')) return '文件修改需要重新读取并生成差异，不能直接重试'
+  if (message.agentSteps?.some(step => step.toolName === 'run_ssh_task' && step.status === 'failed' && step.executionPhase !== 'not-started')) return '独立任务结果未知，请先核验远端状态后发起新任务'
   if (composerBusy.value) return '当前还有请求在进行,稍后再试'
   if (!canSendMessage.value) return '当前没有可用的 AI 配置'
   if (message.workspaceSessionId !== props.workspaceSessionId) return '该消息不属于当前会话'
@@ -466,6 +510,12 @@ function resizeComposer() {
 }
 
 function revealActiveStep() {
+  if (agentPendingRecovery.value) {
+    const review = messageList.value?.querySelector<HTMLElement>('.agent-recovery-review')
+    review?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    review?.querySelector<HTMLElement>('select, input')?.focus({ preventScroll: true })
+    return
+  }
   const stepId = agentPendingApproval.value?.proposal.id || agentPendingTimeout.value?.step.id
   const step = Array.from(messageList.value?.querySelectorAll<HTMLElement>('[data-step-id]') ?? [])
     .find(element => element.dataset.stepId === stepId)
@@ -604,9 +654,15 @@ function toggleMessage(messageId: string) {
   }
 }
 
-function executeGeneratedCommand(command: string, message?: AiMessage) {
+async function executeGeneratedCommand(command: string, message?: AiMessage) {
   const value = command.trim()
   if (!value) return
+  if (props.applicationCommandExecutor) {
+    try {
+      if (await props.applicationCommandExecutor(value, 'command', message?.connectionId || props.connectionId)) showAiCommandNotice('已发送', '命令已发送到确认的目标终端。')
+    } catch (error) { showAiCommandNotice('命令执行未完成', String(error)) }
+    return
+  }
   const risks = analyzeScriptRisks(value)
   const sourceConnectionId = message?.connectionId || props.connectionId
   if (risks.length > 0 || isSensitiveAgentCommand(value) || executionTargetsDifferFromSource(sourceConnectionId)) {
@@ -854,6 +910,7 @@ watch(
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm"><UiIcon name="close" /></button>
         </div>
         <div class="script-risk-body">
+          <SshTaskContext v-if="agentRiskReviewOpen && agentPendingApproval?.proposal.sshRequest && agentPendingApproval.proposal.sshTarget" :request="agentPendingApproval.proposal.sshRequest" :target="agentPendingApproval.proposal.sshTarget" />
           <div v-if="pendingAiCommandCrossConnection && !agentRiskReviewOpen" class="script-risk-ai" role="note" aria-label="命令来源与当前目标">
             <div>
               <strong>命令来源：{{ connectionLabel(pendingAiCommandSourceConnectionId) }}</strong>
@@ -920,7 +977,7 @@ watch(
           </div>
         </div>
         <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? '确认后继续 Agent 任务，并在任务绑定的终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
+          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? agentPendingApproval?.proposal.sshRequest ? '确认后在上述登录目标启动独立 SSH 任务' : '确认后继续 Agent 任务，并在任务绑定的终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
           <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
           <template v-if="agentRiskReviewOpen">
             <button class="text-button" type="button" @click="skipAgentRiskReview">跳过命令</button>
@@ -953,6 +1010,8 @@ watch(
     <div class="chat-viewport">
     <div ref="messageList" class="chat-message-list" tabindex="0" aria-label="对话记录" @scroll="handleMessageScroll">
     <div ref="messageContent" class="chat-message-content">
+      <HostKnowledgePanel :model="hostKnowledge" :messages="messages" :task-busy="composerBusy" />
+      <AgentInterruptedRuns :runs="interruptedAgentRuns.filter(run => run.messageId !== agentRunMessageId)" :error="checkpointLoadError" :busy="composerBusy" @recover="startAgentRecovery" @reply="replyToAgentTask" />
       <div v-if="!hasUsableConfig" class="chat-empty">
         <UiIcon name="settings" size="24" />
         <span>尚未配置模型</span>
@@ -970,6 +1029,7 @@ watch(
             <span class="chat-progress-dot" />
             {{ message.id === currentAssistantMessageId ? activityLabel : message.mode === 'agent' ? '任务执行中' : message.text ? '正在回复' : '正在思考' }} · {{ formatAnswerDuration(messageAnswerDuration(message)) }}
           </div>
+          <AgentTaskProgress v-if="message.mode === 'agent'" :message="message" />
           <AgentWorkLog v-if="message.mode === 'agent'" :message="message">
           <AgentTimeline :message="message" :group-completed="!hasCompletedAgentWork(message)">
             <template #default="{ entry }">
@@ -985,6 +1045,7 @@ watch(
                 :high-risk-armed="agentHighRiskArmed"
                 :target-label="messageSourceLabel(message)"
                 :failure-detail="stepOwnsError(message) && entry.step.id === failedAgentStep(message)?.id ? message.text : ''"
+                :can-restore="Boolean(props.agentFileTools?.edits) && !composerBusy && message.connectionId === props.connectionId"
                 :can-retry="stepOwnsError(message) && entry.step.id === failedAgentStep(message)?.id && canRetryMessage(message)"
                 :retry-disabled-reason="retryBlockedReason(message)"
                 :observation-stopped="message.agentStatus === 'stopped'"
@@ -993,9 +1054,10 @@ watch(
                 @execute-and-allow="resolveAgentApproval('execute-and-allow')"
                 @execute-and-allow-exact="resolveAgentApproval('execute-and-allow-exact')"
                 @skip="resolveAgentApproval('skip')"
-                @stop="resolveAgentApproval('stop')"
+                @stop="agentPendingApproval ? resolveAgentApproval('stop') : stopAgentRun()"
                 @wait="resolveAgentTimeout('wait')"
                 @timeout-stop="resolveAgentTimeout('stop')"
+                @restore="(changeId, path) => startFileRestore(changeId, path)"
                 @retry="retryMessage(message)"
                 @focus-terminal="emit('focusTerminal')"
               />
@@ -1009,9 +1071,22 @@ watch(
             </template>
           </AgentTimeline>
           </AgentWorkLog>
+          <AgentRecoveryReview v-if="message.id === agentRunMessageId && agentPendingRecovery" :review="agentPendingRecovery.review" :saving="agentRecoverySaving" :target-label="messageSourceLabel(message)" @decide="resolveAgentRecovery" />
+          <details v-if="message.agentRecovery?.resolutions.length" class="agent-recovery-history">
+            <summary>恢复时的核对结论 · {{ message.agentRecovery.resolutions.length }} 项</summary>
+            <p v-for="item in message.agentRecovery.resolutions" :key="item.stepId">{{ item.observation }}（依据：{{ item.evidenceStepIds.join('、') }}）</p>
+          </details>
+          <div v-if="message.mode === 'agent' && message.agentStatus === 'done' && !message.streaming" class="agent-script-export">
+            <button type="button" class="chat-text-button" :disabled="composerBusy || taskScriptLoading" @click="prepareTaskScript(message)">{{ taskScriptLoading && taskScriptMessageId === message.id ? '读取任务记录…' : '整理为脚本' }}</button>
+            <p v-if="taskScriptMessageId === message.id && taskScriptError" role="status">{{ taskScriptError }}</p>
+            <AgentTaskScript v-if="taskScriptMessageId === message.id && taskScriptSource" :source="taskScriptSource" @create="openTaskScript" @close="taskScriptSource = null" />
+          </div>
           <template v-if="message.mode === 'agent' && message.text && !message.error && !message.streaming">
             <p v-if="isMessageCollapsed(message)" class="chat-response-preview">{{ message.text.slice(0, 400) }}...</p>
             <AiMarkdownMessage v-else :content="message.text" :interactive-commands="false" />
+          </template>
+          <template v-if="message.agentStatus === 'waiting-input'">
+            <AgentTaskReply v-for="run in interruptedAgentRuns.filter(run => run.messageId === message.id && run.state.status === 'waiting-input')" :key="run.runId" :run="run" :busy="composerBusy" @reply="replyToAgentTask" />
           </template>
           <AgentFileChanges v-if="message.mode === 'agent' && !message.streaming" :steps="message.agentSteps" :changes="message.agentFileChanges" @inspect="revealAgentFileStep(message, $event)" />
           <AiReasoning v-if="message.mode !== 'agent' && message.reasoning" :content="message.reasoning" />
@@ -1056,7 +1131,7 @@ watch(
         <span class="chat-activity-stage" role="status"><span class="chat-progress-dot" aria-hidden="true" />{{ activityLabel }}</span>
         <span v-if="activityStepLabel" class="chat-activity-step">{{ activityStepLabel }}</span>
         <span v-if="!agentPreparing" class="chat-activity-time" role="timer" aria-live="off" title="本次总耗时，包含执行命令与等待确认">{{ formatAnswerDuration(answerElapsedSeconds) }}</span>
-        <button v-if="needsAgentDecision" type="button" class="chat-text-button chat-activity-jump" :aria-label="agentPendingApproval ? '查看待确认命令' : '查看超时命令'" :title="agentPendingApproval ? '查看待确认命令' : '查看超时命令'" @click="revealActiveStep">查看<UiIcon name="arrow-up" size="12" /></button>
+        <button v-if="needsAgentDecision" type="button" class="chat-text-button chat-activity-jump" :aria-label="agentPendingRecovery ? '查看恢复核对' : agentPendingApproval ? '查看待确认命令' : '查看超时命令'" :title="agentPendingRecovery ? '查看恢复核对' : agentPendingApproval ? '查看待确认命令' : '查看超时命令'" @click="revealActiveStep">查看<UiIcon name="arrow-up" size="12" /></button>
       </div>
       <div v-if="selectedTerminalContext" class="chat-selection">
         <UiIcon name="terminal" size="14" />

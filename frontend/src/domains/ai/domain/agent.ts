@@ -2,6 +2,12 @@ import type { AiProviderConfig } from './provider'
 import type { AiMessageUsage, AiTokenUsage } from './tokenUsage'
 import type { ScriptRiskMatch } from '../../../shared/security/scriptRisk'
 import type { AgentFileChange } from './agentFileSnapshots'
+import type { FileToolRequest, FileToolResponse, FileProvider } from '../../transfer/index'
+import type { CommandIntent, TerminalProbe } from '../../../shared/security/commandPolicy'
+import type { SshTaskRequest, SshTaskTarget, SshTaskResult } from '../../terminal/types'
+import type { AgentTaskPlan, AgentVerification, AgentTaskOutcome } from './agentTaskProgress'
+import type { AgentFileEditItem, FileEditToolName } from './agentFileEdits'
+import type { AgentRecovery, AgentCheckpointStep } from './agentCheckpoints'
 
 // Agent 模式共享类型。与后端 domain/ai/agent.rs 的 serde(camelCase)结构一一对应,
 // 设计见 docs/ai-agent-mode-development.md 5.2 / 6.2 / 6.3 / 6.4。
@@ -19,6 +25,12 @@ export type AiAgentTurn =
   | { kind: 'toolResult'; toolCallId: string; content: string }
 
 export interface AiAgentTurnRequest {
+  hostKnowledgeContext?: string
+  fileEdits?: boolean
+  taskTools?: boolean
+  taskContext?: string
+  sshTasks?: boolean
+  fileTools?: boolean
   config: AiProviderConfig
   apiKey: string
   goal: string
@@ -47,8 +59,10 @@ export interface AgentCommandResult {
   exitCode?: number
   durationMs: number
   truncated: boolean
-  /** 完成的命令与派发命令不一致(用户手动输入串扰),按执行失败处理。 */
+  /** 捕获的命令文本与派发内容不一致，不能确认本次结果；不表示检测到用户输入。 */
   commandMismatch?: boolean
+  /** Shell returned to a prompt without a complete command lifecycle. */
+  completionUnconfirmed?: boolean
   /** dispatch-failed 时的原因说明。 */
   failureReason?: string
 }
@@ -62,8 +76,10 @@ export interface AgentCommandHandle {
 }
 
 export interface AgentCommandRunOptions {
+  intent?: CommandIntent
+  probe?: TerminalProbe
   maxOutputChars?: number
-  /** Application-owned read-only probes; never exposed as model command arguments. */
+  /** Application-owned helpers (reads or separately approved edits); never model shell arguments. */
   internal?: boolean
   waitForReady?: boolean
   /** 防止旧任务在同一标签重连后误发到新的终端会话。 */
@@ -89,9 +105,25 @@ export type AgentErrorKind = 'model' | 'tool' | 'protocol'
 export type AgentExecutionPhase = 'not-started' | 'dispatching' | 'running' | 'finished'
 
 export interface AgentStep {
+  checkpointHistory?: AgentCheckpointStep
+  fileAbsence?: { path: string; resolvedPath: string; environmentScope: string }
+  /** Missing on old records means run_command. File steps never execute command. */
+  toolName?: 'run_command' | 'read_file' | 'list_directory' | 'run_ssh_task' | FileEditToolName
+  fileEdits?: AgentFileEditItem[]
+  sshRequest?: SshTaskRequest
+  sshTarget?: SshTaskTarget
+  sshEnvironment?: Record<string, string>
+  sshResult?: SshTaskResult
+  fileRequest?: FileToolRequest
+  fileResult?: FileToolResponse
+  fileProvider?: FileProvider
+  fileResolvedPath?: string
+  fileRevision?: string
   /** 即 tool_call_id。 */
   id: string
   command: string
+  /** Persisted source was removed; it cannot become an executable retry. */
+  commandRedacted?: boolean
   reason: string
   /** Model-declared write targets; a reference to the command, not proof of a file diff. */
   affectedFiles?: string[]
@@ -103,6 +135,7 @@ export interface AgentStep {
   executionPhase?: AgentExecutionPhase
   failureReason?: string
   output?: string
+  outputTruncated?: boolean
   exitCode?: number
   durationMs?: number
   /** 命令派发与观察开始时刻，仅运行期间用于显示已等待时间。 */
@@ -126,6 +159,10 @@ export type AgentRunStatus =
   | 'error'
 
 export interface AgentRunState {
+  recovery?: AgentRecovery
+  plan?: AgentTaskPlan
+  verifications?: AgentVerification[]
+  outcome?: AgentTaskOutcome
   status: AgentRunStatus
   steps: AgentStep[]
   fileChanges?: AgentFileChange[]
@@ -165,6 +202,13 @@ export interface AgentTimeoutInfo {
 }
 
 export interface AgentStepProposal {
+  fileEdits?: AgentFileEditItem[]
+  sshRequest?: SshTaskRequest
+  sshTarget?: SshTaskTarget
+  toolName?: AgentStep['toolName']
+  fileRequest?: FileToolRequest
+  fileResolvedPath?: string
+  fileRevision?: string
   id: string
   command: string
   reason: string

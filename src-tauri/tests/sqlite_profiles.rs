@@ -27,6 +27,7 @@ fn profile(id: &str, name: &str) -> ConnectionProfile {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     }
 }
 
@@ -95,6 +96,7 @@ fn sqlite_store_roundtrips_direct_connection_profiles() {
         jump_mode: JumpMode::Direct,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::SftpDirect,
+        shell_integration: true,
     };
 
     store.save_connection_profile(&direct).unwrap();
@@ -552,5 +554,40 @@ fn platform_credentials_store_ssh_passwords_in_database_on_unix() {
     assert_eq!(
         reopened.get_connection_profile(&saved.id).unwrap(),
         Some(saved)
+    );
+}
+
+#[test]
+fn shell_integration_preference_roundtrips_and_old_profiles_default_to_enabled() {
+    let path = temp_db_path("shell-integration-preference");
+    let store = SqliteConfigStore::new(&path);
+    let mut saved = profile("shell-hooks", "shell-hooks");
+    saved.shell_integration = false;
+    store.save_connection_profile(&saved).unwrap();
+    assert!(!store.list_connection_profiles().unwrap()[0].shell_integration);
+    drop(store);
+    // Reopening also exercises the persisted setting, independent of UI state.
+    let reopened = SqliteConfigStore::new(&path);
+    assert!(!reopened.list_connection_profiles().unwrap()[0].shell_integration);
+    drop(reopened);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "ALTER TABLE connection_profiles DROP COLUMN shell_integration",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let migrated = SqliteConfigStore::new(&path);
+    assert!(migrated.list_connection_profiles().unwrap()[0].shell_integration);
+    let mut legacy_json = serde_json::to_value(saved).unwrap();
+    legacy_json
+        .as_object_mut()
+        .unwrap()
+        .remove("shellIntegration");
+    assert!(
+        serde_json::from_value::<ConnectionProfile>(legacy_json)
+            .unwrap()
+            .shell_integration
     );
 }

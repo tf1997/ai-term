@@ -122,6 +122,88 @@ window.aiFixture = {
     state.props.messages = structuredClone(messages.slice(0, 8))
     await nextTick(); await new Promise(requestAnimationFrame)
   },
+  installSshTasks() {
+    const origin = { sessionId: 'fixture-terminal', sessionInstance: 'fixture', profileId: 'ssh-profile', routeVersion: 0, contextVersion: 1, context: { shell: 'bash', user: '1000', workingDirectory: '/interactive', environmentScope: 'container' } }
+    const target = { profileId: 'ssh-profile', user: 'deploy', host: 'ssh.fixture.invalid', port: 22, gateway: 'gateway.fixture.invalid' }
+    const records = { starts: 0, approvals: 0, stops: 0 }
+    state.props.sshTasks = {
+      prepare: async (_terminal, _generation, request) => ({ reference: { id: 'ssh-task', origin, policyVersion: 'test' }, request, target, effectiveEnvironment: { PATH: '/usr/local/bin:/usr/bin:/bin', ...request.environment }, analysis: { decision: 'ask', analysisStatus: 'complete', risks: [], unknownReasons: [], highestSeverity: null, policyVersion: 'test' }, expiresInMs: 300000 }),
+      approve: async () => { records.approvals++ },
+      start: async (_terminal, _generation, intent, update) => {
+        records.starts++
+        const initial = { reference: intent.reference, target, status: 'running', sequence: 1, stdout: 'streamed stdout', stderr: 'streamed stderr', outputBytes: 30, truncated: false, exitCode: null, exitSignal: null, exitEvidence: null, reason: null, startedAt: Date.now(), finishedAt: null }
+        update(initial)
+        let resolve
+        const result = new Promise(done => { resolve = done })
+        records.finish = (values = {}) => { const final = { ...initial, status: 'completed', sequence: 2, exitCode: 0, exitEvidence: 'shell-trailer-and-channel-close', finishedAt: Date.now(), ...values }; update(final); resolve(final) }
+        return { result, cancel() { records.stops++; records.finish({ status: 'unknown', exitCode: null, exitEvidence: null, reason: '已停止观察，远端任务可能仍在运行' }) } }
+      },
+      cancel: async () => {}
+    }
+    window.aiFixture.sshRecords = records
+  },
+  installFileTools(sensitive = false) {
+    const records = { reads: 0, approvals: 0 }
+    const target = { sessionId: 'fixture-terminal', sessionInstance: 'fixture', profileId: 'local', routeVersion: 0, contextVersion: 1, context: { shell: 'bash', user: '1000', workingDirectory: '/workspace', environmentScope: 'fixture' } }
+    state.props.agentFileTools = {
+      prepare: async (_terminal, _generation, request) => ({ reference: { id: 'file-operation', target }, request, provider: 'current-terminal', resolvedPath: request.path, revision: 'metadata:fixture', sensitive }),
+      approve: async () => { records.approvals++ },
+      execute: async (_terminal, _generation, operation) => {
+        records.reads++
+        return { tool: 'read_file', provider: 'current-terminal', target, path: operation.request.path, resolvedPath: operation.request.path, revision: operation.revision, sensitive, environmentScope: 'a'.repeat(64), content: sensitive ? 'FIXTURE_PRIVATE_FILE_VALUE' : 'first\r\nsecond', metadata: { kind: 'file', size: 13, modifiedNs: null, identity: null }, start: { byte: 0, line: 1, midLine: false }, end: { byte: 13, line: 2, midLine: true }, eof: true, complete: true, changedDuringRead: false, truncation: null, nextCursor: null, scannedBytes: 13 }
+      },
+      cancel: async () => {}
+    }
+    window.aiFixture.fileRecords = records
+  },
+  installFileEdits(options = {}) {
+    const guid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    const target = { sessionId: 'fixture-terminal', sessionInstance: 'fixture', profileId: 'local', routeVersion: 0, contextVersion: 1, context: { shell: 'bash', user: '1000', workingDirectory: '/workspace', environmentScope: 'fixture' } }
+    const records = { reads: 0, approvals: 0, writes: 0, latestBaselines: [], contents: {}, changes: {} }
+    const baselines = new Map()
+    let serial = 100
+    const paths = ['/workspace/config-one.txt', '/workspace/config-two.txt', '/workspace/config-three.txt']
+    for (const path of paths) records.contents[path] = options.sensitive ? 'EDIT_PRIVATE_BEFORE\r\n' : 'before\r\n'
+    const makeProposal = (baselineId, after, restoreOf = null) => {
+      const base = baselines.get(baselineId)
+      if (!base) throw { kind: 'version-changed', message: '基线失效' }
+      return { reference: { id: guid(++serial), target }, provider: 'current-terminal', writeStrategy: after === null ? 'delete' : base.before === null ? 'create-exclusive' : 'atomic-replace', path: base.path, resolvedPath: base.path, environmentScope: 'a'.repeat(64), revision: 'metadata:fixture', before: base.before, after, sensitive: Boolean(options.sensitive), reviewHash: 'review-' + serial, restoreOf, restoreAttributes: null }
+    }
+    state.props.agentFileTools = {
+      prepare: async (_terminal, _generation, request) => ({ reference: { id: 'file-operation', target }, request, provider: 'current-terminal', resolvedPath: request.path, revision: 'metadata:fixture', sensitive: Boolean(options.sensitive) }),
+      approve: async () => {}, cancel: async () => {},
+      execute: async (_terminal, _generation, operation) => {
+        const path = operation.request.path, content = records.contents[path] ?? ''
+        const baselineId = guid(++records.reads)
+        baselines.set(baselineId, { path, before: content }); records.latestBaselines.push(baselineId)
+        return { tool: 'read_file', provider: 'current-terminal', target, path, resolvedPath: path, revision: 'metadata:fixture', baselineId, sensitive: Boolean(options.sensitive), environmentScope: 'a'.repeat(64), content, metadata: { kind: 'file', size: content.length, modifiedNs: null, identity: null }, start: { byte: 0, line: 1, midLine: false }, end: { byte: content.length, line: 2, midLine: false }, eof: true, complete: true, changedDuringRead: false, truncation: null, nextCursor: null, scannedBytes: content.length }
+      },
+      edits: {
+        prepare: async (_terminal, _generation, request) => {
+          const before = baselines.get(request.baselineId)?.before
+          const after = request.change.action === 'delete' ? null : request.change.action === 'replace' ? request.change.content : request.change.replacements.reduce((text, edit) => text.replace(edit.oldText, edit.newText), before)
+          return makeProposal(request.baselineId, after)
+        },
+        prepareRestore: async (_terminal, _generation, request) => {
+          const change = records.changes[request.changeId], base = baselines.get(request.baselineId)
+          if (!change || base.before !== change.after) throw { kind: 'version-changed', message: '文件已被外部修改，恢复存在冲突' }
+          return makeProposal(request.baselineId, change.before, request.changeId)
+        },
+        approve: async () => { records.approvals++ }, cancel: async () => {},
+        execute: async (_terminal, _generation, proposal) => {
+          records.writes++
+          const status = records.writes === options.failure ? options.failureStatus ?? 'conflict' : 'applied'
+          if (status === 'applied') records.contents[proposal.path] = proposal.after
+          const change = { id: proposal.reference.id, target, provider: proposal.provider, writeStrategy: proposal.writeStrategy, path: proposal.path, resolvedPath: proposal.path, environmentScope: proposal.environmentScope, before: proposal.before, after: proposal.after, sensitive: proposal.sensitive, restoreOf: proposal.restoreOf, createdAt: Date.now(), outcome: { status, revision: 'metadata:after', contentHash: 'verified', beforeAttributes: { mode: 420, uid: 1000, gid: 1000 }, afterAttributes: { mode: 420, uid: 1000, gid: 1000 }, error: status === 'applied' ? null : { kind: 'version-changed', message: status === 'conflict' ? '文件已变化，未覆盖' : '写入回执丢失，结果未知' } } }
+          records.changes[change.id] = change
+          return change
+        },
+        getChange: async id => records.changes[id] ?? null,
+        listChanges: async () => Object.values(records.changes)
+      }
+    }
+    window.aiFixture.editRecords = records
+  },
   async reopen() {
     state.props.messages = state.props.messages.map(message => {
       const { id, connectionId, workspaceSessionId, terminalId, role, text, command, error, payloadJson, createdAt } = message

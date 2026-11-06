@@ -1,7 +1,10 @@
 import { ref } from 'vue'
 import type { UpdateScript } from '../domain/recording'
+import type { TaskScriptMetadata } from '../domain/taskScript'
+import { persistTaskScriptMetadata } from '../domain/taskScript'
 
 export interface ScriptDocument {
+  taskMetadata?: TaskScriptMetadata
   id: string
   savedScriptId: string
   title: string
@@ -29,12 +32,12 @@ export function useScriptDrafts() {
   const documents = ref<Record<string, ScriptDocument>>({})
   let draftNumber = 0
 
-  function createDraft(source: Partial<Pick<ScriptDocument, 'connectionId' | 'workspaceSessionId' | 'sourceCommands'>> = {}) {
+  function createDraft(source: Partial<Pick<ScriptDocument, 'connectionId' | 'workspaceSessionId' | 'sourceCommands' | 'taskMetadata'>> = {}) {
     const id = `script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     documents.value[id] = {
       id, savedScriptId: '', title: `未命名脚本 ${++draftNumber}`, content: '', revision: 0,
       connectionId: source.connectionId ?? '', workspaceSessionId: source.workspaceSessionId ?? '',
-      sourceCommands: [...(source.sourceCommands ?? [])]
+      sourceCommands: [...(source.sourceCommands ?? [])], taskMetadata: persistTaskScriptMetadata(source.taskMetadata)
     }
     return documents.value[id]
   }
@@ -48,7 +51,7 @@ export function useScriptDrafts() {
     documents.value[script.id] = {
       id: script.id, savedScriptId: script.id, title: script.name, content: script.content,
       revision: 0, connectionId: script.connectionId, workspaceSessionId: script.workspaceSessionId,
-      sourceCommands: [...script.sourceCommands]
+      sourceCommands: [...script.sourceCommands], taskMetadata: persistTaskScriptMetadata(script.taskMetadata)
     }
     return documents.value[script.id]
   }
@@ -87,6 +90,7 @@ export function useScriptDrafts() {
     const document = ensureSaved(script)
     document.savedScriptId = script.id
     document.title = script.name
+    document.taskMetadata = persistTaskScriptMetadata(script.taskMetadata)
   }
 
   return { documents, createDraft, ensureSaved, updateContent, snapshot, receiveGeneration, acceptPending, markSaved }

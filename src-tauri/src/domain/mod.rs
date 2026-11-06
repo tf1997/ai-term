@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod auth;
+pub mod command_policy;
 pub mod connection;
 pub mod filesystem;
 pub mod pty;

@@ -1,0 +1,1 @@
+echo "cores: $(sysctl -n hw.ncpu)"; echo '--- WindowServer 采样(5s) ---'; top -l 2 -s 5 -pid 411 -stats pid,command,cpu,mem,th,ports | tail -n 2; echo '--- 显示器 ---'; system_profiler SPDisplaysDataType 2>/dev/null | grep -Ei 'Resolution|UI Looks like|Main Display|Connection Type|Refresh Rate|Mirror' | head -n 12

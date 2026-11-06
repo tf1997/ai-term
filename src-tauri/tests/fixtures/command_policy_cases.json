@@ -1,0 +1,107 @@
+[
+  {
+    "name": "continued arguments",
+    "command": "rm \\\n  -rf /tmp/example",
+    "kind": "delete"
+  },
+  {
+    "name": "continued command name",
+    "command": "r\\\nm --recursive /tmp/example",
+    "kind": "delete"
+  },
+  {
+    "name": "quoted command concatenation",
+    "command": "r'm' -rf /tmp/example",
+    "kind": "delete"
+  },
+  {
+    "name": "quoted option concatenation",
+    "command": "rm -'rf' /tmp/example",
+    "kind": "delete"
+  },
+  {
+    "name": "quoted resource subcommand",
+    "command": "docker 'r'm container-id",
+    "kind": "delete"
+  },
+  {
+    "name": "combined shell flags",
+    "command": "bash -lc 'rm -rf /tmp/example'",
+    "kind": "execution"
+  },
+  {
+    "name": "shell options before code",
+    "command": "/bin/bash --noprofile -ilc 'rm -rf /tmp/example'",
+    "kind": "execution"
+  },
+  {
+    "name": "pipeline interpreter",
+    "command": "curl https://example.invalid/setup | sh",
+    "kind": "execution"
+  },
+  {
+    "name": "double quoted substitution",
+    "command": "echo \"$(rm -rf /tmp/example)\"",
+    "kind": "execution"
+  },
+  {
+    "name": "backtick substitution",
+    "command": "echo \"`rm -rf /tmp/example`\"",
+    "kind": "execution"
+  },
+  {
+    "name": "process substitution",
+    "command": "cat <(rm -rf /tmp/example)",
+    "kind": "execution"
+  },
+  {
+    "name": "interpreter heredoc",
+    "command": "python3 <<'PY'\nimport shutil\nshutil.rmtree('/tmp/example')\nPY",
+    "kind": "execution"
+  },
+  {
+    "name": "interpreter input",
+    "command": "sh < /tmp/setup.sh",
+    "kind": "execution"
+  },
+  {
+    "name": "ANSI escape command",
+    "command": "$'\\x72m' -rf /tmp/example",
+    "kind": "execution"
+  },
+  {
+    "name": "wrapped interpreter",
+    "command": "env MODE=production bash /tmp/setup.sh",
+    "kind": "execution"
+  },
+  {
+    "name": "env split-string execution",
+    "command": "env '-S bash -c reboot'",
+    "kind": "execution"
+  },
+  {
+    "name": "find nested execution",
+    "command": "find /tmp -exec bash setup.sh \\;",
+    "kind": "execution"
+  },
+  {
+    "name": "search preprocessor",
+    "command": "rg --pre=./setup.sh needle .",
+    "kind": "execution"
+  },
+  {
+    "name": "quoted find action",
+    "command": "find /tmp/example '-delete'",
+    "kind": "delete"
+  },
+  {
+    "name": "later same-kind escalation",
+    "command": "sed -i 's/a/b/' local.conf; cp app.conf /etc/app.conf",
+    "kind": "edit"
+  },
+  {
+    "name": "quoted redirection target",
+    "command": "echo value > \"/etc/example.conf\"",
+    "kind": "edit"
+  }
+]

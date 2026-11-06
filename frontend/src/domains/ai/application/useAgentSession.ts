@@ -10,7 +10,7 @@ import type { AgentApprovalDecision, AgentRunState, AgentStep, AgentStepProposal
 import type { useAiAnswerState } from './useAiAnswerState'
 import type { useAiConversationContext } from './useAiConversationContext'
 import { runAgentTask } from './agent/agentLoop'
-import { createAgentFileSnapshotReader } from './agent/readAgentFileSnapshots'
+import { createAgentFileSnapshotReader, createBoundAgentFileSnapshotReader } from './agent/readAgentFileSnapshots'
 import { normalizeAgentFileChanges } from '../domain/agentFileSnapshots'
 import type { AgentLoopDeps } from './agent/agentLoop'
 import { canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
@@ -21,8 +21,12 @@ import { conversationMessageContent } from '../domain/conversationContext'
 import { mergeMessageUsage } from '../domain/tokenUsage'
 import { MAX_AI_CONVERSATION_MESSAGES, buildQuestionWithSelectedTerminalText, formatSelectedLineRange, formatAiError, createMessage, isSensitiveAgentCommand } from '../domain/aiConversation'
 import * as tauri from '../infrastructure/api'
+import type { AgentCheckpointApi, AgentCheckpoint, AgentRecoveryReview, AgentRecoveryDecision, AgentRunReply } from '../domain/agentCheckpoints'
+import { agentGoalWithInputs, recoveredAgentSteps, recoveryEvidenceSteps, recoveryFacts } from '../domain/agentCheckpoints'
+import { createAgentCheckpointJournal } from './agent/agentCheckpointJournal'
 
 interface AgentSessionOptions {
+  hostKnowledgeContext?: import('../domain/hostKnowledge').HostKnowledgeContextLoader
   props: Readonly<AiPanelProps>
   emit: AiPanelEmit
   askText: Ref<string>
@@ -36,12 +40,18 @@ interface AgentSessionOptions {
   answerState: ReturnType<typeof useAiAnswerState>
   conversationContext: ReturnType<typeof useAiConversationContext>
 }
-type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | 'aiAgentTurnStream' | 'touchAgentCommandAllowlistEntry'>
+type AgentSessionSource = Pick<typeof tauri, 'onAiChatStream' | 'cancelTask' | 'aiAgentTurnStream' | 'touchAgentCommandAllowlistEntry'> & Partial<AgentCheckpointApi>
 
 /** Retry messages are reactive; unwrap both the step and its nested risk records. */
 function snapshotAgentStep(step: AgentStep): AgentStep {
-  return { ...step, ...(step.affectedFiles ? { affectedFiles: [...step.affectedFiles] } : {}), risks: step.risks.map((risk) => ({ ...risk })) }
+  return JSON.parse(JSON.stringify(step)) as AgentStep
 }
+
+import { persistableFileResult } from '../domain/agentFileTools'
+import { persistableFileEdits } from '../domain/agentFileEdits'
+import { persistableVerifications } from '../domain/agentTaskProgress'
+import type { CommandIntent } from '../../../shared/security/commandPolicy'
+import { commandPolicyRisks } from '../../../shared/security/commandPolicyPresentation'
 
 export function useAgentSession(options: AgentSessionOptions, source: AgentSessionSource = tauri) {
   const { props, emit, askText, pendingAgentRiskReview, canSendMessage, composerBusy, selectedTerminalContext, scrollMessagesToLatest, closeAiCommandRiskConfirm } = options
@@ -50,6 +60,34 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   const { onAiChatStream, cancelTask, aiAgentTurnStream, touchAgentCommandAllowlistEntry } = source
   // Agent 模式运行态
   const agentRun = ref<AgentRunState | null>(null)
+  const interruptedAgentRuns = ref<AgentCheckpoint[]>([])
+  const checkpointLoadError = ref('')
+  const agentPendingRecovery = ref<{ review: AgentRecoveryReview; resolve: (decision: AgentRecoveryDecision) => void } | null>(null)
+  const agentRecoverySaving = ref(false)
+  function resolveAgentRecovery(decision: AgentRecoveryDecision) {
+    const pending = agentPendingRecovery.value
+    if (!pending || agentRecoverySaving.value) return
+    if (decision.action === 'continue') {
+      const evidence = new Set(recoveryEvidenceSteps(pending.review).map(step => step.id))
+      if (decision.resolutions.length !== pending.review.recovery.requiredStepIds.length || decision.resolutions.some(item => !item.observation.trim() || !item.evidenceStepIds.length || item.evidenceStepIds.some(id => !evidence.has(id)))) return
+      agentRecoverySaving.value = true
+    } else agentPendingRecovery.value = null
+    pending.resolve(decision)
+  }
+  let checkpointLoadSequence = 0
+  async function refreshAgentCheckpoints() {
+    if (!source.listAgentCheckpoints) return
+    const sequence = ++checkpointLoadSequence
+    try {
+      const saved = await source.listAgentCheckpoints(props.connectionId, props.workspaceSessionId)
+      if (sequence !== checkpointLoadSequence) return
+      interruptedAgentRuns.value = saved
+      checkpointLoadError.value = ''
+    } catch (error) {
+      if (sequence === checkpointLoadSequence) checkpointLoadError.value = `未能读取中断任务：${formatAiError(error)}`
+    }
+  }
+  watch([() => props.connectionId, () => props.workspaceSessionId], () => { interruptedAgentRuns.value = []; void refreshAgentCheckpoints() }, { immediate: true })
 
   const agentRunMessageId = ref('')
 
@@ -65,10 +103,36 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   const agentHighRiskArmed = ref(false)
   const agentApprovalSaving = ref(false)
   const sessionCommandGrants = ref(new Map<string, Set<string>>())
+  const sessionGrantEnvironments = new Map<string, string>()
   let activeGrantScope = ''
   const currentGrantScope = () => JSON.stringify([props.connectionId, props.workspaceSessionId, props.terminalId, props.terminalConnectionGeneration])
   const agentSessionGrantCount = computed(() => sessionCommandGrants.value.get(currentGrantScope())?.size ?? 0)
-  function revokeSessionCommandGrants() { sessionCommandGrants.value.clear() }
+  function revokeSessionCommandGrants() {
+    sessionCommandGrants.value.clear()
+    sessionGrantEnvironments.clear()
+    activeGrantScope = ''
+  }
+  function observeGrantEnvironment(scope: string, intent: CommandIntent | undefined) {
+    let environment: string | null = 'legacy'
+    if (intent) {
+      const { target, policyVersion, operation } = intent.reference
+      const context = target.context
+      environment = intent.analysis.analysisStatus === 'complete' && intent.analysis.decision === 'allow'
+        && policyVersion && policyVersion === intent.analysis.policyVersion
+        && target.sessionInstance && context?.shell !== 'unknown'
+        && context?.workingDirectory && context.user && context.environmentScope
+        ? JSON.stringify([target.sessionId, target.sessionInstance, target.profileId, target.routeVersion,
+          context.shell, context.workingDirectory, context.user, context.environmentScope, policyVersion, operation])
+        : null
+    }
+    // Every command gets a fresh native target. Its observation version can
+    // advance without an environment change; the actual identity and context
+    // must still match. Discard old grants instead of caching them per context.
+    if (!environment || sessionGrantEnvironments.get(scope) !== environment) sessionCommandGrants.value.delete(scope)
+    if (environment) sessionGrantEnvironments.set(scope, environment)
+    else sessionGrantEnvironments.delete(scope)
+    activeGrantScope = environment ? scope : ''
+  }
   watch([() => props.connectionId, () => props.workspaceSessionId, () => props.terminalId, () => props.terminalConnectionGeneration], revokeSessionCommandGrants)
 
   const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
@@ -118,6 +182,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       return
     }
     if (decision === 'execute-and-allow-exact') {
+      if (pending.proposal.toolName === 'run_ssh_task') return
       if (pending.proposal.sensitive || pending.proposal.risks.length || !canGrantExactCommand(pending.proposal.command) || !activeGrantScope || activeGrantScope !== currentGrantScope()) return
       const grants = sessionCommandGrants.value.get(activeGrantScope) ?? new Set<string>()
       grants.add(pending.proposal.command.trim())
@@ -176,6 +241,14 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function persistableAgentSteps(steps: AgentStep[]) {
     return steps.map((step) => {
+      if (step.sensitive && ['run_command', 'run_ssh_task'].includes(step.toolName ?? 'run_command')) {
+        step = { ...step, command: '[敏感命令未存储]', commandRedacted: true, reason: '[敏感步骤说明未存储]',
+          failureReason: step.failureReason ? '[敏感失败详情未存储]' : undefined,
+          risks: step.risks.map(risk => ({ ...risk, text: '[敏感命令未存储]', message: '[敏感风险详情未存储]' })) }
+      }
+      if (step.fileEdits) return { ...step, fileEdits: persistableFileEdits(step.fileEdits) }
+      if (step.toolName === 'run_ssh_task' && step.sensitive) return { ...step, sshRequest: undefined, sshEnvironment: undefined, sshResult: step.sshResult ? { ...step.sshResult, stdout: '[敏感命令输出未存储]', stderr: '[敏感命令输出未存储]' } : undefined, output: '[敏感命令输出未存储]' }
+      if (step.fileRequest) return { ...step, fileRequest: { ...step.fileRequest, cursor: undefined }, fileResult: step.fileResult ? persistableFileResult(step.fileResult) : undefined, output: step.sensitive ? '[敏感文件内容未存储]' : step.output }
       if (!step.sensitive || !step.output) return step
       return { ...step, output: '[敏感命令输出未存储]' }
     })
@@ -258,10 +331,59 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   }
 
   async function startAgentTask() {
-    const text = askText.value.trim()
+    return beginAgentTask()
+  }
+  async function startFileRestore(id: string, path: string) {
+    if (!props.agentFileTools?.edits) return
+    return beginAgentTask({ id, path })
+  }
+  async function replyToAgentTask(checkpoint: AgentCheckpoint, text: string, confirmedPlanItemIds: string[] = []) {
+    if (!source.replyAgentRun || checkpoint.state.status !== 'waiting-input' || !text.trim() || new TextEncoder().encode(text).length > 8192) return
+    return startAgentRecovery(checkpoint, text.trim(), confirmedPlanItemIds)
+  }
+  async function startAgentRecovery(checkpoint: AgentCheckpoint, replyText?: string, confirmedPlanItemIds: string[] = []) {
+    if (!source.recoverAgentRun || !source.confirmAgentRecovery || !canSendMessage() || composerBusy() || checkpoint.target.profileId !== props.connectionId || checkpoint.workspaceSessionId !== props.workspaceSessionId) return
+    const target = currentAgentTarget()
+    const prepared = await prepareAgentAction(target)
+    if (prepared.cancelled) return
+    if (prepared.blocked) { agentModeNotice.value = prepared.blocked; return }
+    revokeSessionCommandGrants()
+    agentModeNotice.value = ''
+    const existing = replyText === undefined ? props.messages.find(message => message.id === checkpoint.messageId) : undefined
+    const userMessage = replyText === undefined ? undefined : createMessage(target.connectionId, target.workspaceSessionId, target.terminalId, 'user', replyText)
+    if (userMessage) {
+      emit('appendMessage', userMessage)
+      if (askText.value.trim() === replyText) askText.value = ''
+    }
+    const message: AiMessage = {
+      ...(existing ?? createMessage(target.connectionId, target.workspaceSessionId, target.terminalId, 'assistant', '', '', false, true)),
+      ...(replyText === undefined ? { id: checkpoint.messageId } : {}), terminalId: target.terminalId, terminalConnectionGeneration: target.connectionGeneration,
+      mode: 'agent', agentStatus: 'running', streaming: true, error: false, text: '', errorKind: undefined, stopReason: undefined,
+      agentSteps: recoveredAgentSteps(checkpoint), agentPlan: checkpoint.state.plan ?? undefined,
+      agentVerifications: checkpoint.state.verifications, payloadJson: undefined
+    }
+    emit(existing ? 'updateMessage' : 'appendMessage', message)
+    const reply = userMessage ? { messageId: userMessage.id, assistantMessageId: message.id, text: replyText!, ...(confirmedPlanItemIds.length ? { confirmedPlanItemIds: [...confirmedPlanItemIds] } : {}) } : undefined
+    await runAgentTurn(message, checkpoint.goal, undefined, userMessage?.id ?? message.id, undefined, true, undefined, checkpoint, reply)
+  }
+  async function beginAgentTask(restoreChange?: { id: string; path: string }) {
+    const text = restoreChange ? `恢复文件 ${restoreChange.path} 的这次修改` : askText.value.trim()
     if (!text || !canSendMessage() || composerBusy()) return
     const target = currentAgentTarget()
-    const selectedContext = selectedTerminalContext()
+    if (!restoreChange && source.replyAgentRun) {
+      const last = [...props.messages].reverse().find(message => message.connectionId === target.connectionId && message.workspaceSessionId === target.workspaceSessionId)
+      if (last?.role === 'assistant' && last.agentStatus === 'waiting-input') {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try { await Promise.race([refreshAgentCheckpoints(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('任务记录读取超时，请重新载入后继续')), 5000) })]) }
+        catch (error) { agentModeNotice.value = formatAiError(error); return }
+        finally { clearTimeout(timer) }
+        if (!agentTargetIsCurrent(target)) return
+        const waiting = interruptedAgentRuns.value.find(run => run.messageId === last.id && run.state.status === 'waiting-input')
+        if (!waiting) { agentModeNotice.value = '未能取得等待回复的原任务记录，请重新载入后继续'; return }
+        return replyToAgentTask(waiting, text)
+      }
+    }
+    const selectedContext = restoreChange ? undefined : selectedTerminalContext()
     const prepared = await prepareAgentAction(target)
     if (prepared.cancelled) return
     if (prepared.blocked) {
@@ -284,8 +406,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       terminalConnectionGeneration: target.connectionGeneration
     }
     emit('appendMessage', assistantMessage)
-    askText.value = ''
-    await runAgentTurn(assistantMessage, text, selectedContext, userMessage.id, undefined, true)
+    if (!restoreChange) askText.value = ''
+    await runAgentTurn(assistantMessage, text, selectedContext, userMessage.id, undefined, true, restoreChange)
   }
 
   /**
@@ -298,8 +420,16 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     selectedContext: TerminalSelectionEvent | undefined,
     historyCutoffMessageId: string,
     retryStep?: AgentStep,
-    takeoverAlreadyAcquired = false
+    takeoverAlreadyAcquired = false,
+    restoreChange?: { id: string; path: string },
+    resumeCheckpoint?: AgentCheckpoint,
+    reply?: AgentRunReply
   ) {
+    if (retryStep?.commandRedacted) {
+      if (takeoverAlreadyAcquired) props.agentTakeoverChange?.(assistantMessage.terminalId, false)
+      agentModeNotice.value = '历史命令已脱敏，请核对现场后重新发起任务'
+      return
+    }
     const runner = props.agentCommandRunner
     if (!runner) {
       if (takeoverAlreadyAcquired) props.agentTakeoverChange?.(assistantMessage.terminalId, false)
@@ -310,8 +440,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const requestWorkspaceSessionId = assistantMessage.workspaceSessionId
     const boundTerminalId = assistantMessage.terminalId
     const boundConnectionGeneration = assistantMessage.terminalConnectionGeneration ?? props.terminalConnectionGeneration
+    const policy = props.agentCommandPolicy
+    let preparedIntent: CommandIntent | undefined
+    let policyDisposed = false
     const grantScope = JSON.stringify([requestConnectionId, requestWorkspaceSessionId, boundTerminalId, boundConnectionGeneration])
-    activeGrantScope = grantScope
+    activeGrantScope = ''
     const { summary: conversationSummary, unsummarized } = conversationContextParts(
       requestWorkspaceSessionId,
       historyCutoffMessageId
@@ -340,7 +473,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       allowlistPatterns,
       builtinReadonlyEnabled
     } = runSnapshot
-    const goal = buildQuestionWithSelectedTerminalText(rawGoal, terminalContext.selection)
+    let goal = buildQuestionWithSelectedTerminalText(rawGoal, terminalContext.selection)
     const text = rawGoal
 
     isAsking.value = true
@@ -370,6 +503,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         mode: 'agent',
         text: failed ? state.error || '任务出错' : state.finalText,
         agentSteps: state.steps,
+        agentRecovery: recoveryFacts(state.recovery),
+        agentPlan: state.plan,
+        agentVerifications: state.verifications,
+        agentOutcome: state.outcome,
         agentFileChanges: state.fileChanges,
         agentReasoning: agentReasoningText.value || undefined,
         agentTimeline: snapshotTimeline(),
@@ -382,8 +519,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         usage,
         payloadJson: terminal
           ? JSON.stringify({
+              payloadVersion: 2,
               mode: 'agent',
               agentSteps: persistableAgentSteps(state.steps),
+              agentRecovery: recoveryFacts(state.recovery),
+              agentPlan: state.plan,
+              agentVerifications: persistableVerifications(state.verifications, state.steps),
+              agentOutcome: state.outcome,
               agentFileChanges: state.fileChanges,
               agentStatus: status,
               agentReasoning: agentReasoningText.value || undefined,
@@ -405,8 +547,36 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       emit('updateMessage', terminal ? finishAnswerMessage(message) : message)
     }
 
+    const files = props.agentFileTools
+    const edits = files?.edits
+    const ssh = props.sshTasks
+    const legacySnapshotReader = createAgentFileSnapshotReader((command, options) => runner(boundTerminalId, command, { ...options, connectionGeneration: boundConnectionGeneration }))
+    let journal: ReturnType<typeof createAgentCheckpointJournal> | undefined
+    let knowledgeRunId: string | undefined
+    let recovered: AgentCheckpoint | undefined
     const deps: AgentLoopDeps = {
-      callModel: async (turns, signal) => {
+      requestRecoveryReview: review => new Promise(resolve => { agentRecoverySaving.value = false; agentPendingRecovery.value = { review, resolve }; scrollMessagesToLatest() }),
+      confirmRecovery: async resolutions => {
+        if (!journal || !source.agentCheckpointTarget) throw new Error('恢复会话已经结束')
+        const expected = await (policy?.target?.(boundTerminalId, boundConnectionGeneration) ?? source.agentCheckpointTarget(boundTerminalId))
+        const confirmed = await journal.confirm(expected, resolutions)
+        if (!confirmed.recovery || confirmed.recovery.phase !== 'continuing') throw new Error('恢复确认没有生效')
+        agentPendingRecovery.value = null; agentRecoverySaving.value = false
+        return confirmed.recovery
+      },
+      prepareFileEdit: edits ? (request, signal) => 'changeId' in request ? edits.prepareRestore(boundTerminalId, boundConnectionGeneration, request, signal) : edits.prepare(boundTerminalId, boundConnectionGeneration, request, signal) : undefined,
+      approveFileEdit: edits ? proposal => edits.approve(proposal) : undefined,
+      executeFileEdit: edits ? (proposal, signal) => edits.execute(boundTerminalId, boundConnectionGeneration, proposal, signal) : undefined,
+      cancelFileEdit: edits ? proposal => edits.cancel(proposal) : undefined,
+      prepareSshTask: ssh ? request => ssh.prepare(boundTerminalId, boundConnectionGeneration, request) : undefined,
+      approveSshTask: ssh ? intent => ssh.approve(intent) : undefined,
+      startSshTask: ssh ? (intent, update) => ssh.start(boundTerminalId, boundConnectionGeneration, intent, update) : undefined,
+      cancelSshTask: ssh ? intent => ssh.cancel(intent) : undefined,
+      prepareFile: files ? (request, signal) => files.prepare(boundTerminalId, boundConnectionGeneration, request, signal) : undefined,
+      approveFile: files ? operation => files.approve(operation) : undefined,
+      executeFile: files ? (operation, signal) => files.execute(boundTerminalId, boundConnectionGeneration, operation, signal) : undefined,
+      cancelFile: files ? operation => files.cancel(operation) : undefined,
+      callModel: async (turns, signal, taskContext) => {
         const requestId = `${requestConnectionId}-${requestWorkspaceSessionId}-${boundTerminalId}-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         agentStreamText.value = ''
         const thinking: Extract<AgentTimelineEntry, { kind: 'thinking' }> = {
@@ -452,11 +622,19 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
               syncThinking()
             }
           })
+          const hostKnowledgeContext = await options.hostKnowledgeContext?.(goal, knowledgeRunId)
+          if (signal.cancelled || boundTerminalId !== props.terminalId || boundConnectionGeneration !== props.terminalConnectionGeneration || requestConnectionId !== props.connectionId || requestWorkspaceSessionId !== props.workspaceSessionId) throw new Error('任务已停止或目标已变化')
           const response = await aiAgentTurnStream(requestId, {
+            hostKnowledgeContext,
             config: requestConfig,
             apiKey,
             goal,
             turns,
+            fileTools: Boolean(files),
+            fileEdits: Boolean(edits) && agentRun.value?.recovery?.phase !== 'inspecting',
+            taskTools: true,
+            taskContext,
+            sshTasks: Boolean(ssh) && agentRun.value?.recovery?.phase !== 'inspecting',
             terminalSnapshot,
             commandHistory,
             conversationMessages: runSnapshot.conversationMessages,
@@ -481,22 +659,30 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           unlisten?.()
         }
       },
-      readFiles: createAgentFileSnapshotReader((command, options) => runner(boundTerminalId, command, {
-        ...options, connectionGeneration: boundConnectionGeneration
-      })),
+      readFiles: files ? createBoundAgentFileSnapshotReader(files, boundTerminalId, boundConnectionGeneration, legacySnapshotReader) : legacySnapshotReader,
       startCommand: (command) => runner(boundTerminalId, command, {
+        intent: preparedIntent,
         maxOutputChars: AGENT_OUTPUT_MAX_CHARS,
         waitForReady: true,
         connectionGeneration: boundConnectionGeneration
       }),
-      classifyStep: (command) => {
-        const risks = analyzeScriptRisks(command)
-        const sensitive = isSensitiveAgentCommand(command)
+      classifyStep: async (command) => {
+        if (preparedIntent) { void policy?.cancel(preparedIntent).catch(() => {}); preparedIntent = undefined }
+        if (policy) {
+          const intent = await policy.prepare(boundTerminalId, boundConnectionGeneration, command)
+          if (policyDisposed) { void policy.cancel(intent).catch(() => {}); throw new Error('任务已停止') }
+          preparedIntent = intent
+        }
+        observeGrantEnvironment(grantScope, preparedIntent)
+        const risks = preparedIntent ? commandPolicyRisks(preparedIntent) : analyzeScriptRisks(command)
+        const sensitive = Boolean(preparedIntent?.sourceSensitive) || isSensitiveAgentCommand(command)
         const autoExec = classifyForAutoExec(command, {
           userPatterns: allowlistPatterns,
           includeBuiltin: builtinReadonlyEnabled
         })
-        if (!sensitive && risks.length === 0 && sessionCommandGrants.value.get(grantScope)?.has(command.trim())) {
+        if (preparedIntent?.analysis.decision === 'deny') return { risks, sensitive, autoExec, denied: '命令被后端策略阻止，请修改操作后重新发起任务' }
+        if (preparedIntent && preparedIntent.analysis.decision !== 'allow') return { risks, sensitive, autoExec: { ...autoExec, eligible: false, suggestedPatterns: [] } }
+        if (!sensitive && risks.length === 0 && canGrantExactCommand(command) && sessionCommandGrants.value.get(grantScope)?.has(command.trim())) {
           return { risks, sensitive, autoExec: { ...autoExec, eligible: true, matched: undefined } }
         }
         // 命中计数只在真正会自动执行时记录(镜像循环的判定顺序:风险/敏感门在前)
@@ -505,6 +691,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         }
         return { risks, sensitive, autoExec }
       },
+      authorizeStep: policy ? async (command, manuallyApproved) => {
+        if (!preparedIntent || preparedIntent.source !== command) throw new Error('执行内容与分析记录不一致')
+        if (manuallyApproved) await policy.approve(preparedIntent)
+        else if (preparedIntent.analysis.decision !== 'allow') throw new Error('该命令必须逐次确认')
+      } : undefined,
       requestApproval: (proposal) =>
         new Promise<AgentApprovalDecision>((resolve) => {
           agentHighRiskArmed.value = false
@@ -544,6 +735,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           if (pendingAgentRiskReview.value) closeAiCommandRiskConfirm()
         }
         if (state.status !== 'awaiting-user') agentPendingTimeout.value = null
+        if (state.status !== 'awaiting-user') { agentPendingRecovery.value = null; agentRecoverySaving.value = false }
         syncAgentRunToMessage(state)
       }
     }
@@ -556,12 +748,61 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const takeoverChange = props.agentTakeoverChange
     if (!takeoverAlreadyAcquired) takeoverChange?.(boundTerminalId, true)
     let takeoverAcquired = true
+    let setupCancelled = false
+    let stopSetup!: () => void
+    const setupStopped = new Promise<void>(resolve => { stopSetup = resolve })
+    agentStopHandle = () => { setupCancelled = true; stopSetup() }
+    const waitForSetup = async <T>(request: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        return await Promise.race([
+          request,
+          setupStopped.then(() => { throw new Error('任务已停止，尚未派发操作') }),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('检查点准备超时，尚未派发操作')), 10_000) })
+        ])
+      } catch (error) { setupCancelled = true; throw error }
+      finally { clearTimeout(timer) }
+    }
     try {
+      if (source.beginAgentRun) {
+        if (!source.agentCheckpointTarget || !source.saveAgentCheckpoint || !source.releaseAgentRun) throw new Error('任务检查点通道不完整')
+        const expected = await waitForSetup(policy?.target?.(boundTerminalId, boundConnectionGeneration) ?? source.agentCheckpointTarget(boundTerminalId))
+        if (expected.profileId !== requestConnectionId || boundConnectionGeneration !== props.terminalConnectionGeneration || boundTerminalId !== props.terminalId) throw new Error('任务目标已变化')
+        if (setupCancelled) throw new Error('任务已停止，尚未派发操作')
+        if (resumeCheckpoint && !source.recoverAgentRun) throw new Error('恢复通道未接入')
+        if (reply && !source.replyAgentRun) throw new Error('任务回复通道未接入')
+        const starting = resumeCheckpoint
+          ? (reply ? source.replyAgentRun!(expected, resumeCheckpoint.runId, resumeCheckpoint.sequence, reply) : source.recoverAgentRun!(expected, resumeCheckpoint.runId, resumeCheckpoint.sequence)).then(value => { recovered = value.checkpoint; return value.lease })
+          : source.beginAgentRun(expected, { runId: crypto.randomUUID(), workspaceSessionId: requestWorkspaceSessionId, messageId: assistantMessage.id, goal: rawGoal })
+        void starting.then(lease => { if (setupCancelled) void source.releaseAgentRun?.(lease).catch(() => {}) }, () => {})
+        const lease = await waitForSetup(starting)
+        knowledgeRunId = lease.runId
+        journal = createAgentCheckpointJournal({ saveAgentCheckpoint: source.saveAgentCheckpoint, releaseAgentRun: source.releaseAgentRun, confirmAgentRecovery: source.confirmAgentRecovery }, lease)
+        deps.checkpoint = async (state, boundary, stepId) => {
+          if (boundary === 'prepared' && state.recovery?.phase === 'inspecting') await policy?.target?.(boundTerminalId, boundConnectionGeneration)
+          const step = state.steps.find(step => step.id === stepId)
+          const reference = step && (step.toolName ?? 'run_command') === 'run_command' && preparedIntent?.source === step.command ? preparedIntent.reference : undefined
+          await journal!.save(state, boundary, stepId, reference)
+        }
+      }
+      if (setupCancelled) throw new Error('任务已停止，尚未派发操作')
+      if (resumeCheckpoint && !recovered?.recovery) throw new Error('没有取得可恢复的检查点，尚未派发操作')
+      if (recovered) {
+        goal = buildQuestionWithSelectedTerminalText(agentGoalWithInputs(rawGoal, recovered.userInputs, reply), terminalContext.selection)
+        assistantMessage.agentSteps = recoveredAgentSteps(recovered)
+        assistantMessage.agentPlan = recovered.state.plan ?? undefined
+        assistantMessage.agentVerifications = recovered.state.verifications
+      }
       const task = runAgentTask(goal, deps, {
+        recovery: recovered?.recovery ?? undefined,
+        resolvedEffects: recovered?.resolvedEffects,
+        restoreChange,
+        initialPlan: assistantMessage.agentPlan ? JSON.parse(JSON.stringify(assistantMessage.agentPlan)) : undefined,
+        initialVerifications: assistantMessage.agentVerifications ? JSON.parse(JSON.stringify(assistantMessage.agentVerifications)) : undefined,
         commandTimeoutMs: props.agentCommandTimeoutMs,
         initialFileChanges: normalizeAgentFileChanges(assistantMessage.agentFileChanges),
         initialSteps: assistantMessage.agentSteps
-          ?.filter(step => step.status === 'completed' || step.status === 'skipped')
+          ?.filter(step => recovered || step.status === 'completed' || step.status === 'skipped' || step.fileEdits?.some(item => item.changeId))
           .map(snapshotAgentStep),
         retryStep: retryStep ? snapshotAgentStep(retryStep) : undefined
       })
@@ -601,6 +842,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         errorKind: 'protocol',
         stopReason: undefined,
         payloadJson: JSON.stringify({
+          payloadVersion: 2,
           mode: 'agent',
           agentSteps: persistableAgentSteps(steps),
           agentFileChanges: fileChanges,
@@ -615,6 +857,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       emit('updateMessage', finishAnswerMessage(createAiStreamErrorMessage(failedMessage, detail, agentStreamText.value)))
       emit('aiError', detail)
     } finally {
+      if (journal) await journal.release().catch(error => { agentModeNotice.value = `检查点所有权释放失败：${formatAiError(error)}` })
+      void refreshAgentCheckpoints()
+      policyDisposed = true
+      if (preparedIntent) void policy?.cancel(preparedIntent).catch(() => {})
       if (takeoverAcquired) {
         takeoverAcquired = false
         takeoverChange?.(boundTerminalId, false)
@@ -623,6 +869,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       agentPendingApproval.value = null
       agentApprovalSaving.value = false
       agentPendingTimeout.value = null
+      agentPendingRecovery.value = null
+      agentRecoverySaving.value = false
       agentStreamText.value = ''
       agentReasoningText.value = ''
       agentRunMessageId.value = ''
@@ -664,5 +912,5 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, refreshAgentCheckpoints, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

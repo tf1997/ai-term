@@ -1,3 +1,4 @@
+import { persistTaskScriptMetadata } from '../../domain/taskScript'
 import type { UpdateScript } from '../../domain/recording'
 
 export function createScriptPreviewStorage(getStorage: () => Storage = () => window.localStorage) {
@@ -73,7 +74,7 @@ export function createScriptPreviewStorage(getStorage: () => Storage = () => win
   }
 
   function savePreviewScript(script: UpdateScript) {
-    const nextScripts = [script, ...loadPreviewScripts().filter((item) => item.id !== script.id)]
+    const nextScripts = [{ ...script, taskMetadata: persistTaskScriptMetadata(script.taskMetadata) }, ...loadPreviewScripts().filter((item) => item.id !== script.id)]
     getStorage().setItem(PREVIEW_SCRIPT_STORAGE_KEY, JSON.stringify(nextScripts))
   }
 

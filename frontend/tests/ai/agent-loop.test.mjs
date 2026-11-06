@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  AGENT_RUN_BUDGET,
   compressAgentTurns,
   describeTimeoutHint,
   looksLikeInteractivePrompt,
@@ -56,6 +57,86 @@ function makeDeps(overrides = {}) {
   }
   return { deps, states }
 }
+
+test('valid plan updates cannot keep the model loop alive indefinitely; the stopped checkpoint retains the plan', async () => {
+  let calls = 0
+  const saved = []
+  const { deps } = makeDeps({
+    callModel: async () => {
+      assert.ok(calls <= AGENT_RUN_BUDGET.modelTurns, 'unbounded model loop')
+      const version = calls++
+      return turnResponse('', [{ id: `plan-${version}`, name: 'update_plan', arguments: JSON.stringify({ expectedVersion: version, reason: '继续排查', items: [{ id: 'inspect', description: '核对服务状态', status: 'pending', stepIds: [] }] }) }])
+    },
+    startCommand: () => { throw Error('plan cannot execute a command') },
+    checkpoint: async (state, boundary) => saved.push({ state: structuredClone(state), boundary })
+  })
+  const state = await runAgentTask('诊断服务', deps).done
+  assert.equal(calls, AGENT_RUN_BUDGET.modelTurns)
+  assert.equal(state.status, 'stopped')
+  assert.equal(state.plan.version, calls)
+  assert.equal(state.plan.items[0].status, 'pending')
+  assert.equal(state.outcome, 'unverified')
+  assert.match(state.stopReason, /模型请求.*已保存.*选择继续/)
+  assert.equal(saved.at(-1).boundary, 'finished')
+  assert.deepEqual(saved.at(-1).state, state)
+})
+
+test('an oversized tool batch stops before approving or dispatching excess operations and preserves completed results', async () => {
+  let approved = 0, dispatched = 0, requests = 0
+  const { deps } = makeDeps({
+    callModel: async () => {
+      requests++
+      assert.equal(requests, 1)
+      return turnResponse('', Array.from({ length: AGENT_RUN_BUDGET.toolCalls + 1 }, (_, i) => toolCall(`command-${i}`, `check-${i}`)))
+    },
+    requestApproval: async () => { approved++; return 'execute' },
+    startCommand: () => { dispatched++; return makeSimpleHandle({ output: 'observed' }) }
+  })
+  const state = await runAgentTask('检查全部项目', deps).done
+  assert.equal(state.status, 'stopped')
+  assert.equal(approved, AGENT_RUN_BUDGET.toolCalls)
+  assert.equal(dispatched, approved)
+  assert.equal(state.steps.length, dispatched)
+  assert.ok(state.steps.every(step => step.status === 'completed' && step.output === 'observed'))
+  assert.equal(state.outcome, 'unverified')
+  assert.match(state.stopReason, /工具调用.*已保存.*选择继续/)
+})
+
+test('a final answer at the model allowance remains a normal completion', async () => {
+  let calls = 0
+  const { deps } = makeDeps({ callModel: async () => {
+    if (++calls === AGENT_RUN_BUDGET.modelTurns) return turnResponse('保留已取得的观察结果')
+    assert.ok(calls < AGENT_RUN_BUDGET.modelTurns)
+    return turnResponse('', [toolCall(`check-${calls}`, 'printf observation')])
+  } })
+  const state = await runAgentTask('分步检查', deps).done
+  assert.equal(calls, AGENT_RUN_BUDGET.modelTurns)
+  assert.equal(state.status, 'done')
+  assert.equal(state.finalText, '保留已取得的观察结果')
+  assert.equal(state.stopReason, undefined)
+})
+
+test('repeated failed health checks stop within the allowance without erasing failure or starting repairs', async () => {
+  let calls = 0
+  const commands = []
+  const { deps } = makeDeps({
+    callModel: async () => {
+      assert.ok(calls <= AGENT_RUN_BUDGET.modelTurns, 'unbounded health checks')
+      const id = `health-${++calls}`
+      return turnResponse('', [toolCall(id, 'check health'), {
+        id: `verify-${calls}`, name: 'record_verification', arguments: JSON.stringify({ id: 'health', purpose: '确认服务可用', required: true, check: { kind: 'output-contains', stepId: id, expected: 'HTTP 200' } })
+      }])
+    },
+    startCommand: command => { commands.push(command); return makeSimpleHandle({ output: 'HTTP 503', exitCode: 0 }) }
+  })
+  const state = await runAgentTask('诊断响应异常', deps).done
+  assert.equal(state.status, 'stopped')
+  assert.equal(calls, AGENT_RUN_BUDGET.modelTurns)
+  assert.equal(state.verifications[0].status, 'failed')
+  assert.equal(state.outcome, 'verification-failed')
+  assert.equal(state.steps.length, calls)
+  assert.ok(commands.every(command => command === 'check health'))
+})
 
 test('两步任务 happy path:toolResult 逐轮回传给模型', async () => {
   const { calls, callModel } = scriptedModel([
@@ -637,7 +718,7 @@ test('超时后选择停止:handle.cancel 被调、步骤 timeout、任务 stopp
   assert.match(state.stopReason, /命令可能仍在终端运行/)
 })
 
-test('commandMismatch:按串扰处理,任务 stopped 并带说明', async () => {
+test('commandMismatch stops without blaming manual input or assigning another command’s exit result', async () => {
   const { callModel } = scriptedModel([
     turnResponse('执行', [toolCall('c1', 'echo hi')])
   ])
@@ -649,9 +730,31 @@ test('commandMismatch:按串扰处理,任务 stopped 并带说明', async () => 
 
   assert.equal(state.status, 'stopped')
   assert.equal(state.steps[0].status, 'failed')
-  assert.ok(state.error && state.error.includes('串扰'))
+  assert.match(state.error, /无法确认本次执行结果/)
+  assert.doesNotMatch(state.error, /用户手动输入|串扰/)
+  assert.equal(state.steps[0].executionPhase, 'running')
+  assert.equal(state.steps[0].exitCode, undefined)
+  assert.equal(state.steps[0].output, 'ok')
   assert.equal(state.stopReason, state.error)
   assert.equal(state.steps[0].failureReason, state.stopReason)
+})
+
+test('a returned prompt with incomplete completion markers stops immediately and retains the parse error', async () => {
+  let dispatched = 0
+  const { callModel } = scriptedModel([turnResponse('执行', [toolCall('c1', 'echo hi')])])
+  const { deps } = makeDeps({
+    callModel,
+    startCommand: () => { dispatched++; return makeSimpleHandle({ completionUnconfirmed: true, exitCode: undefined, output: "zsh: parse error near `then'" }) },
+    requestTimeoutDecision: () => { throw Error('must not wait for a timeout after the shell has returned') }
+  })
+  const state = await runAgentTask('测试', deps).done
+  assert.equal(state.status, 'stopped')
+  assert.equal(state.steps[0].status, 'failed')
+  assert.equal(state.steps[0].executionPhase, 'running', 'the unknown effect remains available for recovery review')
+  assert.equal(state.steps[0].exitCode, undefined)
+  assert.match(state.steps[0].output, /parse error near/)
+  assert.match(state.stopReason, /Shell 已返回提示符/)
+  assert.equal(dispatched, 1, 'no automatic replay')
 })
 
 test('轮次压缩:最旧 toolResult 保留退出码与输出尾部,最近 6 轮保留', () => {
@@ -872,6 +975,7 @@ test('deadlineAt:派发即置位、完成后清除、不进入终态快照', asy
 
 test('deadlineAt:「继续等待」把下次询问时刻推后(倒计时复位)', async () => {
   const deadlines = []
+  const decisionTimes = []
   const handle = makePendingHandle()
   const { callModel } = scriptedModel([
     turnResponse('慢命令', [toolCall('c1', 'sleep 999')])
@@ -881,6 +985,7 @@ test('deadlineAt:「继续等待」把下次询问时刻推后(倒计时复位)'
     startCommand: () => handle,
     requestTimeoutDecision: async (step) => {
       deadlines.push(step.deadlineAt)
+      decisionTimes.push(Date.now())
       return deadlines.length === 1 ? 'wait' : 'stop'
     }
   })
@@ -889,7 +994,9 @@ test('deadlineAt:「继续等待」把下次询问时刻推后(倒计时复位)'
   assert.equal(deadlines.length, 2, '两次超时询问')
   assert.ok(deadlines[0] !== undefined && deadlines[1] !== undefined)
   assert.ok(deadlines[1] > deadlines[0], '「继续等待」后 deadlineAt 被推后,倒计时复位')
-  assert.ok(deadlines[1] - deadlines[0] >= 20, '推后幅度至少一个超时周期')
+  // Node timers may wake on the preceding wall-clock millisecond. The contract
+  // is a full new wait after the user's decision, not exact timer wake spacing.
+  assert.ok(deadlines[1] >= decisionTimes[0] + 20, '从继续等待的决策时刻起重新给予一个完整超时周期')
   // 超时选停止后同样清除,不留残余倒计时
   assert.equal(state.steps[0].deadlineAt, undefined)
   assert.equal(state.steps[0].status, 'timeout')
@@ -920,7 +1027,8 @@ test('超时判据:输出仍在增长时 outputGrowing 为真,文案说"持续�
   assert.ok(seen.waitedMs >= 20)
 })
 
-test('超时判据:静默的旧输出不算增长,尾部像提示符时命中 likelyInteractive', async () => {
+test('超时判据:静默的旧输出不算增长,尾部像提示符时命中 likelyInteractive', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000 })
   // 派发前就存在的输出保持不变——基线采样保证它不会在超时那一刻被误判成刚刚增长
   const handle = makePendingHandle(() => 'Enter passphrase for key: ')
   const { callModel } = scriptedModel([
@@ -935,11 +1043,17 @@ test('超时判据:静默的旧输出不算增长,尾部像提示符时命中 li
       return 'stop'
     }
   })
-  await runAgentTask('测试', deps, { commandTimeoutMs: 60, outputSampleIntervalMs: 5 }).done
+  const task = runAgentTask('测试', deps, { commandTimeoutMs: 60, outputSampleIntervalMs: 5 })
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(59)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(seen, undefined, '尚未到达超时边界')
+  t.mock.timers.tick(1)
+  await task.done
 
   assert.equal(seen.outputGrowing, false, '长度未变即视为静默')
   assert.equal(seen.likelyInteractive, true)
-  assert.ok(seen.silentMs >= 60, '静默时长从派发基线起算')
+  assert.equal(seen.silentMs, 60, '静默时长从派发基线起算')
   assert.ok(seen.hint.includes('等待你的输入'))
   assert.ok(seen.hint.includes('不会终止终端里的命令'), '需附停止语义说明')
 })

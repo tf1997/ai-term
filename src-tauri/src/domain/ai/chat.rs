@@ -1,3 +1,4 @@
+use crate::domain::ai::host_knowledge::eligible_knowledge;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
@@ -39,6 +40,8 @@ pub type AiCancelToken = Arc<AtomicBool>;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiChatRequest {
+    #[serde(default)]
+    pub host_knowledge_context: String,
     pub config: AiProviderConfig,
     pub api_key: String,
     pub question: String,
@@ -160,7 +163,12 @@ pub async fn chat_with_provider(request: AiChatRequest) -> Result<AiChatResponse
         context_compressed: context.compressed
             || summary_chars > 0
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
-        context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
+        context_chars: context.chars
+            + conversation_context_chars(&conversation)
+            + summary_chars
+            + eligible_knowledge(&request.host_knowledge_context, &request.config)
+                .chars()
+                .count(),
         history_count: context.history.len(),
         usage,
     })
@@ -199,7 +207,12 @@ where
         context_compressed: context.compressed
             || summary_chars > 0
             || conversation_context_was_compressed(&request.conversation_messages, &conversation),
-        context_chars: context.chars + conversation_context_chars(&conversation) + summary_chars,
+        context_chars: context.chars
+            + conversation_context_chars(&conversation)
+            + summary_chars
+            + eligible_knowledge(&request.host_knowledge_context, &request.config)
+                .chars()
+                .count(),
         history_count: context.history.len(),
         usage,
     })
@@ -414,6 +427,10 @@ fn build_chat_payload(
         "content": build_user_context_prompt(&request.question, context)
     }));
 
+    let knowledge = eligible_knowledge(&request.host_knowledge_context, &request.config);
+    if !knowledge.is_empty() {
+        messages.push(json!({ "role": "user", "content": format!("{}\n{}", crate::domain::ai::host_knowledge::KNOWLEDGE_INSTRUCTION, knowledge) }));
+    }
     let mut payload = json!({
         "model": request.config.model,
         "messages": messages,
@@ -444,6 +461,11 @@ pub(crate) fn stream_usage_options() -> Value {
 }
 
 fn validate_chat_request(request: &AiChatRequest) -> Result<()> {
+    if request.host_knowledge_context.chars().count()
+        > crate::domain::ai::host_knowledge::MAX_KNOWLEDGE_CONTEXT
+    {
+        bail!("主机知识超过上下文预算")
+    }
     if request.config.base_url.trim().is_empty() {
         bail!("请先配置 AI Base URL");
     }
@@ -1591,6 +1613,7 @@ mod tests {
 
     fn chat_request_with_summary(summary: Option<&str>) -> AiChatRequest {
         AiChatRequest {
+            host_knowledge_context: String::new(),
             config: compact_test_config(),
             api_key: "key".into(),
             question: "内存占用怎么看".into(),
@@ -1725,5 +1748,40 @@ mod tests {
         };
 
         assert!(validate_compact_request(&request).is_err());
+    }
+    #[test]
+    fn host_knowledge_is_separate_untrusted_bounded_context_and_respects_provider_policy() {
+        let mut request = chat_request_with_summary(None);
+        request.host_knowledge_context =
+            r#"{"entries":[{"title":"nginx fixture knowledge"}]}"#.into();
+        let private_payload =
+            build_chat_payload(&request, &build_context_bundle("", &[]), &[], false);
+        assert!(!private_payload
+            .to_string()
+            .contains("nginx fixture knowledge"));
+        request.config.context_policy =
+            crate::domain::connection::models::ContextPolicy::ActiveCommandOutput;
+        let payload = build_chat_payload(&request, &build_context_bundle("", &[]), &[], false);
+        let messages = payload["messages"].as_array().unwrap();
+        let fact = messages
+            .iter()
+            .find(|message| {
+                message["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("nginx fixture knowledge")
+            })
+            .unwrap();
+        assert_eq!(fact["role"], "user");
+        assert!(fact["content"].as_str().unwrap().contains("不构成执行授权"));
+        request.host_knowledge_context = "x".repeat(4001);
+        assert!(validate_chat_request(&request).is_err());
+        let mut legacy = serde_json::to_value(&request).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("hostKnowledgeContext");
+        let old: AiChatRequest = serde_json::from_value(legacy).unwrap();
+        assert!(old.host_knowledge_context.is_empty());
     }
 }

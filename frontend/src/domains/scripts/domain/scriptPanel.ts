@@ -1,7 +1,10 @@
+import type { ApplicationCommandExecutor } from '../../../shared/security/commandPolicy'
 import type { AiProviderConfig } from '../../ai/types'
 import type { ScriptRecording } from './recording'
 
 export interface ScriptPanelProps {
+  taskScriptImport?: import('../types').TaskScriptImport | null
+  applicationCommandExecutor?: ApplicationCommandExecutor
   terminalId: string
   connectionId: string
   workspaceSessionId: string
@@ -41,6 +44,9 @@ export interface ScriptChatMessage {
 }
 
 export interface ScriptExecutionSource {
+  id?: string
+  taskMetadata?: import('./taskScript').TaskScriptMetadata
+  parameterValues?: Record<string, string>
   connectionId: string
   name?: string
 }

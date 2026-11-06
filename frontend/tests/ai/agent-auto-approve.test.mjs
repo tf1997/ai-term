@@ -2,12 +2,32 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   BUILTIN_READONLY_COMMANDS,
+  canGrantExactCommand,
+  isSuffixSafeForSentinel,
   classifyForAutoExec,
   suggestPatternForCommand,
   validateAllowlistPattern
 } from "../../src/domains/ai/domain/agentAutoApprove"
+import { commandRiskCases } from '../shared/command-risk-cases.mjs'
+import { MAX_RISK_SCAN_CHARS } from '../../src/shared/security/shellCommandScan'
 
 const builtinOnly = { userPatterns: [], includeBuiltin: true }
+
+for (const { name, command, patterns } of commandRiskCases) {
+  test(`已有允许项不能绕过风险：${name}`, () => {
+    assert.deepEqual(classifyForAutoExec(command, { userPatterns: patterns, includeBuiltin: true }), { eligible: false, suggestedPatterns: [] })
+    assert.equal(canGrantExactCommand(command), false)
+  })
+}
+
+test('精确授权不能复用动态内容或超限分析结果', () => {
+  for (const command of ['echo $(date)', 'echo "$COMMAND" | sh', 'bash script.sh', 'echo ' + 'x'.repeat(MAX_RISK_SCAN_CHARS)]) {
+    assert.equal(canGrantExactCommand(command), false, command.slice(0, 80))
+    assert.deepEqual(classify(command, { userPatterns: ['echo', 'bash', 'sh'], includeBuiltin: true }).suggestedPatterns, [])
+  }
+  assert.equal(canGrantExactCommand("printf '%s' '$(date)'"), true)
+  assert.equal(isSuffixSafeForSentinel('echo ' + 'x'.repeat(MAX_RISK_SCAN_CHARS)).ok, false)
+})
 
 function classify(command, sources = builtinOnly) {
   return classifyForAutoExec(command, sources)

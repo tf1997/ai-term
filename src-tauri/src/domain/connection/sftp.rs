@@ -47,6 +47,16 @@ pub type SftpCancelToken = Arc<AtomicBool>;
 #[path = "sftp_upload.rs"]
 mod upload;
 
+#[path = "sftp_agent_edits.rs"]
+mod agent_edits;
+#[path = "sftp_agent_files.rs"]
+mod agent_files;
+pub use agent_edits::edit_agent_file_sftp;
+pub use agent_files::{
+    inspect_agent_file_sftp, list_agent_directory_sftp, list_agent_directory_sftp_with_permit,
+    read_agent_file_sftp, read_agent_file_sftp_with_permit,
+};
+
 #[cfg(test)]
 #[path = "sftp_protocol_tests.rs"]
 mod protocol_tests;
@@ -3583,6 +3593,7 @@ mod tests {
             jump_mode: JumpMode::Direct,
             menu_profile_id: String::new(),
             file_transfer_mode: FileTransferMode::Auto,
+            shell_integration: true,
         }
     }
 

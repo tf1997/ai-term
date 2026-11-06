@@ -4,15 +4,17 @@ import type { TerminalPaneHandle as TerminalPaneInstance } from '../domain/termi
 import type { TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent } from '../domain/events'
 import type { useTerminalTabs } from './useTerminalTabs'
 import type { useToasts } from '../../../shared/ui/useToasts'
+import type { ApplicationCommandExecutor } from '../../../shared/security/commandPolicy'
 
 interface TerminalInputRouterOptions {
   tabs: Pick<ReturnType<typeof useTerminalTabs>, 'terminalTabs' | 'activeTerminalId' | 'targetTerminalIds' | 'multiTerminalInputEnabled' | 'isTerminalSyncPaused' | 'pauseTerminalTargets' | 'resumeTerminalSyncTarget'>
   terminalRefs: ShallowRef<Record<string, TerminalPaneInstance | null>>
   showToast: ReturnType<typeof useToasts>['showToast']
   isTerminalAgentControlled?: (terminalId: string) => boolean
+  applicationCommandExecutor?: ApplicationCommandExecutor
 }
 
-export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTerminalAgentControlled = () => false }: TerminalInputRouterOptions) {
+export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTerminalAgentControlled = () => false, applicationCommandExecutor }: TerminalInputRouterOptions) {
   const { terminalTabs, activeTerminalId, targetTerminalIds, multiTerminalInputEnabled, isTerminalSyncPaused, pauseTerminalTargets, resumeTerminalSyncTarget } = tabs
   const pendingDelays = new Map<number, (active: boolean) => void>()
   let disposed = false
@@ -72,7 +74,7 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTermin
         const pane = terminalRefs.value[terminalId]
         const readiness = pane?.commandExecutionReadiness() ?? 'unavailable'
         lastReadiness.set(terminalId, readiness)
-        if (readiness === 'ready' && pane?.executeCommand(value)) {
+        if (readiness === 'ready' && await pane?.executeCommand(value)) {
           sentCount += 1
           pendingTargets.delete(terminalId)
         } else if (readiness === 'line-busy') {
@@ -98,6 +100,12 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTermin
   }
 
   function executeCommandOnTargetTerminals(command: string) {
+    if (applicationCommandExecutor) {
+      void applicationCommandExecutor(command, 'command').then(sent => {
+        if (sent) showToast('success', '命令已发送', commandPreview(command))
+      }).catch(error => showToast('error', '命令执行未完成', String(error)))
+      return
+    }
     void executeCommandOnTerminalIds(command, [...targetTerminalIds.value])
   }
 
@@ -155,6 +163,10 @@ export function useTerminalInputRouter({ tabs, terminalRefs, showToast, isTermin
   }
 
   async function writeInputToTargetTerminals(data: string) {
+    if (applicationCommandExecutor) {
+      showToast('error', '脚本未发送', '旧脚本派发入口已关闭，请重新打开脚本后执行。')
+      return
+    }
     if (!data) return
     if (isActiveTerminalOnlyInput(data)) {
       if (isTerminalAgentControlled(activeTerminalId.value)) {

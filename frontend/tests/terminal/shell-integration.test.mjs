@@ -14,9 +14,9 @@ function makeHost() {
     registerMarker: () => ({ line: state.cursorRow, isDisposed: false, dispose() {} }),
     cursorRow: () => state.cursorRow,
     cursorColumn: () => state.cursorCol,
-    rowText: (row, endColumn) => {
+    rowText: (row, endColumn, startColumn = 0) => {
       const text = state.rows[row] ?? ''
-      const sliced = endColumn === undefined ? text : text.slice(0, endColumn)
+      const sliced = text.slice(startColumn, endColumn)
       return sliced.replace(/\s+$/, '')
     },
     rowIsWrapped: (row) => Boolean(state.wrapped[row]),
@@ -29,6 +29,34 @@ function makeHost() {
 function base64(text) {
   return Buffer.from(text, 'utf-8').toString('base64')
 }
+
+test('bracketed Bash lines share the first input, output anchor and timestamp until the final exit', () => {
+  const { host, state } = makeHost(), finished = [], captures = []
+  const tracker = new ShellIntegrationTracker(host, { onCommandFinished: result => finished.push(result) })
+  state.rows = ['$ ']; state.cursorCol = 2; tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  tracker.armCommandCapture(4000, result => captures.push(result))
+  state.rows = ["$ printf 'first\\n'", "printf 'second\\n'", '(exit 9)', '']; state.cursorRow = 3; state.cursorCol = 0
+  tracker.handleOsc133('C'); state.rows[3] = 'first'; state.rows.push(''); state.cursorRow = 4
+  state.now = 1500; tracker.handleOsc133('C'); state.rows[4] = 'second'; state.rows.push(''); state.cursorRow = 5
+  state.now = 2000; tracker.handleOsc133('C'); assert.equal(captures.length, 0)
+  state.now = 2500; tracker.handleOsc133('D;9')
+  assert.equal(captures[0].output, 'first\nsecond'); assert.equal(captures[0].startedAt, 1000); assert.equal(captures[0].exitCode, 9)
+  assert.equal(finished[0].command, "printf 'first\\n'\nprintf 'second\\n'\n(exit 9)")
+})
+
+test('reviewed multiline history preserves literal tabs while mismatch checks keep observed input', () => {
+  const { host, state } = makeHost(), history = [], captures = []
+  const tracker = new ShellIntegrationTracker(host, { onCommandFinished: result => history.push(result) })
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  tracker.setSubmittedCommand("printf '%s' 'literal\ttab'\nprintf done")
+  tracker.armCommandCapture(4000, result => captures.push(result))
+  state.rows = ["printf '%s' 'literal   tab'", 'printf done', '']; state.cursorRow = 2
+  tracker.handleOsc133('C'); tracker.handleOsc133('D;0')
+  assert.equal(history[0].command, "printf '%s' 'literal\ttab'\nprintf done")
+  assert.equal(captures[0].command, "printf '%s' 'literal   tab'\nprintf done")
+  tracker.handleOsc633(`E;${base64('next command')};base64`); tracker.handleOsc133('C'); tracker.handleOsc133('D;0')
+  assert.equal(history[1].command, 'next command')
+})
 
 test('happy path: A/B/E/C/D produces command with exit code', () => {
   const { host, state } = makeHost()
@@ -207,9 +235,9 @@ function makeCaptureHost() {
     }),
     cursorRow: () => state.cursorRow,
     cursorColumn: () => state.cursorCol,
-    rowText: (row, endColumn) => {
+    rowText: (row, endColumn, startColumn = 0) => {
       const text = state.rows[row] ?? ''
-      const sliced = endColumn === undefined ? text : text.slice(0, endColumn)
+      const sliced = text.slice(startColumn, endColumn)
       return sliced.replace(/\s+$/, '')
     },
     rowIsWrapped: (row) => Boolean(state.wrapped[row]),
@@ -252,6 +280,72 @@ test('capture collects output rows between C and D', () => {
   assert.equal(results[0].output, 'Filesystem  Size  Used\n/dev/disk1  500G  200G')
   assert.equal(results[0].truncated, false)
   assert.equal(results[0].markerLost, false)
+})
+
+test('a submitted command rejected before preexec settles at the returned prompt without inventing an exit code', () => {
+  const { host, state } = makeCaptureHost()
+  const results = [], history = []
+  const tracker = new ShellIntegrationTracker(host, { onCommandFinished: value => history.push(value) })
+  state.rows = ['$ ']; state.cursorCol = 2
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  tracker.armCommandCapture(4000, result => results.push(result), 'echo before; then')
+  state.rows = ['$ echo before; then', "zsh: parse error near `then'", '']
+  state.cursorRow = 2; state.cursorCol = 0
+  tracker.handleOsc133('D')
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].completionUnconfirmed, true)
+  assert.equal(results[0].exitCode, undefined)
+  assert.match(results[0].output, /parse error near/)
+  assert.equal(history.length, 0, 'no fabricated successful command history')
+})
+
+test('a new prompt with missing D settles once and allows the next command lifecycle', () => {
+  const { host, state } = makeCaptureHost()
+  const results = []
+  const tracker = new ShellIntegrationTracker(host)
+  tracker.armCommandCapture(4000, result => results.push(result))
+  beginCapturedCommand(tracker, state, 'first')
+  state.rows.push('observed output', ''); state.cursorRow = 2
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].completionUnconfirmed, true)
+  assert.equal(results[0].output, 'observed output')
+  tracker.armCommandCapture(4000, result => results.push(result))
+  beginCapturedCommand(tracker, state, 'second')
+  tracker.handleOsc133('D;0')
+  assert.equal(results.length, 2)
+  assert.equal(results[1].command, 'second')
+  assert.equal(results[1].exitCode, 0)
+})
+
+test('only a fresh prompt releases input readiness, not an editor B redraw', () => {
+  const { host } = makeHost()
+  let ready = 0
+  const tracker = new ShellIntegrationTracker(host, { onPromptReady: () => ready++ })
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  tracker.handleOsc133('B')
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  assert.equal(ready, 1)
+  tracker.handleOsc133('D'); tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  assert.equal(ready, 2)
+})
+
+test('redrawing prompt A/B while entering an application command does not finish its capture', () => {
+  const { host, state } = makeCaptureHost()
+  const results = []
+  const tracker = new ShellIntegrationTracker(host)
+  state.rows = ['$ ']; state.cursorCol = 2
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  tracker.armCommandCapture(4000, result => results.push(result), 'echo hello')
+  tracker.handleOsc133('A'); tracker.handleOsc133('B')
+  assert.equal(results.length, 0)
+  beginCapturedCommand(tracker, state, 'echo hello')
+  state.rows.push('hello', ''); state.cursorRow = 2; state.cursorCol = 0
+  tracker.handleOsc133('D;0')
+  assert.equal(results.length, 1)
+  assert.equal(results[0].output, 'hello')
+  assert.equal(results[0].exitCode, 0)
 })
 
 test('capture includes cursor row when output lacks trailing newline', () => {
@@ -394,4 +488,19 @@ test('bare enter does not consume an armed capture', () => {
   tracker.handleOsc133('D;0')
   assert.equal(results.length, 1)
   assert.equal(results[0].command, 'uptime')
+})
+
+test('OSC 633 lifecycle captures through an existing compatible integration', () => {
+  const { host, state } = makeHost()
+  const tracker = new ShellIntegrationTracker(host)
+  let capture
+  tracker.handleOsc633('A'); tracker.handleOsc633('B')
+  tracker.armCommandCapture(200, value => { capture = value })
+  tracker.handleOsc633('E;printf hello')
+  tracker.handleOsc633('C')
+  state.rows = ['hello', '']; state.cursorRow = 1; state.cursorCol = 0
+  tracker.handleOsc633('D;7')
+  assert.equal(capture.command, 'printf hello')
+  assert.equal(capture.output, 'hello')
+  assert.equal(capture.exitCode, 7)
 })

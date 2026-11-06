@@ -1,5 +1,8 @@
 ﻿<script setup lang="ts">
+import { createAgentFileToolService } from '../../domains/transfer'
 import { captureSurfaceWidth } from '../../shared/ui/surfaceMotion'
+import { useCommandPolicyReview, commandReviewerKey, createApplicationCommandExecutor, createSshTaskService } from '../../domains/terminal/index'
+import { CommandPolicyReview } from '../../domains/terminal/views'
 import AboutDialog from './AboutDialog.vue'
 import { useChromeSelection } from '../layout/useChromeSelection'
 import { useTerminalInputRouter } from '../../domains/terminal/index'
@@ -9,7 +12,7 @@ import { useConnectionProfiles } from '../../domains/connections/index'
 import { useAiConfigs } from '../../domains/ai/index'
 import { normalizeConnectionProfileForSave } from '../../domains/connections/index'
 import { formatError } from '../../shared/platform/errors'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { provide, computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 
 import type { ConnectionProfile } from '../../domains/connections/types'
 import type { AppUserSettings } from '../../domains/settings/types'
@@ -115,8 +118,15 @@ const {
 const { commandHistoryForConnection, loadCommandHistoryForConnection, recordCommandForConnection } = useCommandHistory()
 const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu()
 const { toasts, showToast, dismissToast } = useToasts()
+const policyReview = useCommandPolicyReview()
+provide(commandReviewerKey, policyReview.review)
+const { execute: applicationCommandExecutor, agentPolicy: agentCommandPolicy } = createApplicationCommandExecutor({
+  panes: terminalRefs, tabs: () => terminalTabs.value, targets: () => [...targetTerminalIds.value],
+  isAgentControlled: id => agentTakeoverTerminalId.value === id, review: policyReview.review
+})
 const { executeCommandOnTargetTerminals, fillHistoryCommandOnActiveTerminal, pinQuickCommandOnActiveTerminal, writeInputToTargetTerminals, syncTerminalInputToTargets, handleTerminalInputWriteFailure } = useTerminalInputRouter({
   tabs: terminalTabState,
+  applicationCommandExecutor,
   terminalRefs,
   showToast,
   isTerminalAgentControlled: terminalId => agentTakeoverTerminalId.value === terminalId
@@ -553,10 +563,41 @@ function agentCommandRunner(terminalId: string, command: string, options?: Agent
   const start = () => pane.runCommandAndCapture(command, {
     maxOutputChars: options?.maxOutputChars,
     internal: options?.internal,
+    intent: options?.intent,
+    probe: options?.probe,
     dispatchGuard
   })
   return options?.waitForReady ? createReadyAgentCommand(pane.commandExecutionReadiness, dispatchGuard, start) : start()
 }
+
+const sshTasks = createSshTaskService({
+  async target(terminalId, generation) {
+    const tab = terminalTabs.value.find(item => item.id === terminalId)
+    const pane = terminalRefs.value[terminalId]
+    if (!tab?.profile || tab.status !== 'remote' || !pane || tab.connectionGeneration !== generation) throw new Error('独立 SSH 任务绑定的连接已关闭或重连')
+    const target = await pane.prepareExecutionTarget(false)
+    const current = terminalTabs.value.find(item => item.id === terminalId)
+    if (!current || current.connectionGeneration !== generation || terminalRefs.value[terminalId] !== pane) throw new Error('独立任务来源连接已变化')
+    return target
+  }
+})
+const availableSshTasks = computed(() => {
+  const tab = activeTerminal.value
+  return tab?.profile && tab.status === 'remote' && !tab.profile.menuProfileId ? sshTasks : undefined
+})
+
+const agentFileTools = createAgentFileToolService({
+  async target(terminalId, generation) {
+    const tab = terminalTabs.value.find(item => item.id === terminalId)
+    const pane = terminalRefs.value[terminalId]
+    if (!tab || !pane || tab.connectionGeneration !== generation) throw new Error('文件工具绑定的终端已关闭或重连')
+    const target = await pane.prepareExecutionTarget(true)
+    const current = terminalTabs.value.find(item => item.id === terminalId)
+    if (!current || current.connectionGeneration !== generation || terminalRefs.value[terminalId] !== pane) throw new Error('文件工具绑定的终端已变化')
+    return target
+  },
+  capture: (terminalId, generation, plan) => agentCommandRunner(terminalId, plan.intent.source, { intent: plan.intent, internal: true, waitForReady: true, connectionGeneration: generation, maxOutputChars: plan.maxOutputChars })
+})
 
 function handleAgentTakeoverChange(terminalId: string, active: boolean) {
   if (active) {
@@ -842,6 +883,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <CommandPolicyReview v-if="policyReview.pending.value" :items="policyReview.pending.value.items" :note="policyReview.pending.value.note" @resolve="policyReview.resolve" />
   <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
     <header class="titlebar">
       <div class="brand">
@@ -1116,6 +1158,10 @@ onBeforeUnmount(() => {
       :agent-availability-check="agentAvailabilityCheck"
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
+      :agent-command-policy="agentCommandPolicy"
+      :agent-file-tools="agentFileTools"
+      :ssh-tasks="availableSshTasks"
+      :application-command-executor="applicationCommandExecutor"
       :agent-takeover-change="handleAgentTakeoverChange"
       :agent-allowlist-patterns="agentAllowlist.map((entry) => entry.pattern)"
       :agent-allow-pattern="persistAgentPattern"

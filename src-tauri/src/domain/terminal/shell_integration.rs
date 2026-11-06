@@ -10,6 +10,26 @@ const ZDOTDIR_ZSHENV: &str = include_str!("shell_integration/zdotdir-zshenv.zsh"
 const ZDOTDIR_ZSHRC: &str = include_str!("shell_integration/zdotdir-zshrc.zsh");
 const BASH_INIT: &str = include_str!("shell_integration/bash-init.bash");
 
+/// Loaded into an authenticated, idle interactive shell through the typed
+/// command-policy operation. No startup files or remote files are modified.
+pub fn session_integration_source() -> String {
+    use base64::Engine;
+    let encoded = |source: &str| {
+        let script = source
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        base64::engine::general_purpose::STANDARD.encode(script.as_bytes())
+    };
+    // One readline input: no literal newlines, nested quoting expansion or
+    // history expansion from comments in the embedded source.
+    format!(
+        "__ai_term_load_integration() {{ if [ -n \"${{BASH_VERSION-}}\" ]; then eval \"$(printf '%s' '{}' | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null))\"; elif [ -n \"${{ZSH_VERSION-}}\" ]; then eval \"$(printf '%s' '{}' | (base64 --decode 2>/dev/null || base64 -D 2>/dev/null))\"; fi; }}; __ai_term_load_integration; unset -f __ai_term_load_integration",
+        encoded(INTEGRATION_BASH), encoded(INTEGRATION_ZSH)
+    )
+}
+
 /// 把集成脚本写入 `<app_config_dir>/shell-integration/`(内容变化时覆盖),
 /// 返回该目录路径。
 pub fn ensure_integration_scripts(app_config_dir: &Path) -> Result<PathBuf> {

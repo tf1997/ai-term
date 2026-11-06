@@ -1,6 +1,7 @@
 import type { AgentErrorKind, AgentStep } from './agent'
 import type { AiMessageUsage } from './tokenUsage'
 import type { AgentFileChange } from './agentFileSnapshots'
+import type { AgentTaskPlan, AgentVerification, AgentTaskOutcome } from './agentTaskProgress'
 
 
 export interface WorkspaceSession {
@@ -30,6 +31,10 @@ export type AgentTimelineEntry =
   | { kind: 'tool'; id: string; stepId: string }
 
 export interface AiMessage {
+  agentRecovery?: import('./agentCheckpoints').AgentRecoveryFacts
+  agentPlan?: AgentTaskPlan
+  agentVerifications?: AgentVerification[]
+  agentOutcome?: AgentTaskOutcome
   id: string
   /** Source connection for this turn; it does not control conversation visibility. */
   connectionId: string

@@ -2,8 +2,16 @@ import type { AiProviderConfig } from './provider'
 import type { AiContextStatus, AiMessage, WorkspaceSession } from './conversation'
 import type { CommandHistoryEntry, TerminalSelectionEvent } from '../../terminal/types'
 import type { AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from './agent'
+import type { AgentCommandPolicy, ApplicationCommandExecutor } from '../../../shared/security/commandPolicy'
+
+import type { AgentFileToolService } from '../../transfer/index'
+import type { SshTaskService } from '../../terminal/types'
 
 export interface AiPanelProps {
+  sshTasks?: SshTaskService
+  agentFileTools?: AgentFileToolService
+  agentCommandPolicy?: AgentCommandPolicy
+  applicationCommandExecutor?: ApplicationCommandExecutor
   terminalId: string
   terminalConnectionGeneration: number
   connectionId: string
@@ -39,6 +47,7 @@ export interface AiPanelProps {
 }
 
 export interface AiPanelEvents {
+  createScriptDraft: [draft: import('../../scripts/types').TaskScriptDraft]
   selectConfig: [configId: string]
   configureAi: []
   clearSelection: []

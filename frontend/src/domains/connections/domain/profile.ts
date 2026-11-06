@@ -29,6 +29,8 @@ export interface ConnectionProfile {
   jumpMode: JumpMode
   menuProfileId: string
   fileTransferMode: FileTransferMode
+  /** Missing in older profiles means enabled. */
+  shellIntegration?: boolean
 }
 
 export interface MenuStep {

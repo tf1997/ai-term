@@ -6,3 +6,8 @@ export { useCommandHistory } from './application/useCommandHistory'
 export { useTerminalInputRouter } from './application/useTerminalInputRouter'
 export { useTerminalTabScroll } from './application/useTerminalTabScroll'
 export { useTerminalTabs } from './application/useTerminalTabs'
+
+export { useCommandPolicyReview, commandReviewerKey } from './application/useCommandPolicyReview'
+export { createApplicationCommandExecutor } from './application/useApplicationCommandExecutor'
+export { createSshTaskService } from './application/sshTasks'
+export { sshTaskResult, sshTaskTargetLabel, sshTaskOutput } from './domain/sshTasks'

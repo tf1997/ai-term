@@ -7,15 +7,22 @@ import type { SentinelScanner } from '../domain/agentSentinelCapture'
 import { isSuffixSafeForSentinel } from '../../ai/index'
 import { createDeferredAgentCommand } from '../domain/deferredAgentCommand'
 import { formatError } from '../../../shared/platform/errors'
+import type { CommandIntent, TerminalProbe } from '../../../shared/security/commandPolicy'
+import { createShellCaptureVerification } from '../domain/shellCaptureVerification'
 
 interface TerminalCaptureOptions {
   getSessionId: () => string
   getShellIntegration: () => AttachedShellIntegration | undefined
   commandExecutionReadiness: TerminalPaneHandle['commandExecutionReadiness']
   executeCommand: (command: string, options?: { historyCommand?: string; internal?: boolean; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) => boolean
+  dispatchIntent?: (intent: CommandIntent, onWriteFailed: (error: unknown) => void) => boolean
+  prepareProbe?: (probe: TerminalProbe) => Promise<CommandIntent>
+  cancelIntent?: (intent: CommandIntent) => Promise<unknown>
+  enableShellIntegration?: () => boolean
+  bracketedPasteEnabled?: () => boolean
 }
 
-export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand }: TerminalCaptureOptions) {
+export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand, dispatchIntent, prepareProbe, cancelIntent, enableShellIntegration, bracketedPasteEnabled }: TerminalCaptureOptions) {
   let disposed = false
   let activeAgentCaptureAbort: ((reason: string) => void) | undefined
 
@@ -23,9 +30,20 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
   let sentinelSink: ((chunk: string) => void) | undefined
 
   /** 按会话缓存的哨兵探针结论;会话变更(重连)即失效。 */
-  let sentinelProbe: { sessionId: string; supported: boolean } | undefined
+  let sentinelProbe: { sessionId: string; epoch: number; mode: AgentCaptureMode } | undefined
 
-  let sentinelProbeInFlight: Promise<boolean> | undefined
+  let sentinelProbeInFlight: Promise<AgentCaptureMode> | undefined
+  let captureEpoch = 0
+  let verification: ReturnType<typeof createShellCaptureVerification> | undefined
+  let bracketedProbe: { sessionId: string; epoch: number; supported: boolean } | undefined
+  let bracketedProbeInFlight: Promise<boolean> | undefined
+
+  function invalidateCaptureCapability() {
+    captureEpoch++
+    sentinelProbe = undefined
+    bracketedProbe = undefined
+    verification = undefined
+  }
 
   const AGENT_CAPTURE_DEFAULT_MAX_CHARS = 4000
 
@@ -36,18 +54,42 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
    * 真正的结论由 ensureAgentCapture 的探针给出。
    */
   function agentCaptureMode(): AgentCaptureMode {
-    if (getShellIntegration()?.tracker.sawMarkers) return 'markers'
-    if (sentinelProbe?.sessionId === getSessionId() && !sentinelProbe.supported) return 'unsupported'
+    if (sentinelProbe?.sessionId === getSessionId() && sentinelProbe.epoch === captureEpoch) return sentinelProbe.mode
     return 'sentinel'
   }
 
   /** 哨兵探针是否已对当前会话给出结论。 */
   function agentCaptureProbed() {
-    return agentCaptureMode() === 'markers' || sentinelProbe?.sessionId === getSessionId()
+    return sentinelProbe?.sessionId === getSessionId() && sentinelProbe.epoch === captureEpoch
   }
 
   function agentCapturePreparing() {
-    return sentinelProbeInFlight !== undefined
+    return sentinelProbeInFlight !== undefined || bracketedProbeInFlight !== undefined
+  }
+
+  /** Negotiate a whole multiline readline/ZLE input, only while DECSET 2004
+   * is live. Marker support by itself never opts a command into raw paste. */
+  async function ensureBracketedCapture(): Promise<boolean> {
+    if (!prepareProbe || !bracketedPasteEnabled?.() || agentCaptureMode() !== 'markers' || agentReadinessFailure()) return false
+    if (bracketedProbe?.sessionId === getSessionId() && bracketedProbe.epoch === captureEpoch) return bracketedProbe.supported
+    if (bracketedProbeInFlight) return bracketedProbeInFlight
+    const sessionId = getSessionId(), epoch = captureEpoch
+    const current = () => !disposed && getSessionId() === sessionId && captureEpoch === epoch
+    const pending = (async () => {
+      const handle = runProbe({ kind: 'bracketed-capture' }, 256, () => current() && bracketedPasteEnabled?.() ? '' : '括号粘贴能力或目标已变化')
+      const timer = window.setTimeout(() => handle.cancel(), SENTINEL_PROBE_TIMEOUT_MS)
+      try {
+        const outcome = await handle.result
+        if (!current() || outcome.status !== 'completed' || outcome.exitCode !== 7) return false
+        const deadline = Date.now() + 2500
+        while (current() && Date.now() < deadline && (!verification?.verified() || commandExecutionReadiness() !== 'ready' || !bracketedPasteEnabled?.())) await new Promise(resolve => window.setTimeout(resolve, 25))
+        const supported = current() && bracketedPasteEnabled?.() === true && verification?.verified() === true && outcome.status === 'completed' && outcome.exitCode === 7
+        if (current()) bracketedProbe = { sessionId, epoch, supported }
+        return supported
+      } finally { window.clearTimeout(timer) }
+    })()
+    bracketedProbeInFlight = pending
+    try { return await pending } finally { if (bracketedProbeInFlight === pending) bracketedProbeInFlight = undefined; verification = undefined }
   }
 
   /** Agent 模式可用性:有语义标记,或哨兵兜底未被探针否定。 */
@@ -83,7 +125,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
   }
 
   /** OSC 133 路径:布防 tracker,由语义标记划定输出区间(文档 6.2)。 */
-  function captureWithMarkers(command: string, maxOutputChars: number): AgentCommandHandle {
+  function captureWithMarkers(command: string, maxOutputChars: number, intent?: CommandIntent): AgentCommandHandle {
     const tracker = getShellIntegration()?.tracker
     if (!tracker) return agentDispatchFailure('终端未启用 shell integration')
     if (activeAgentCaptureAbort) return agentDispatchFailure('已有 Agent 命令正在等待终端结果')
@@ -101,18 +143,23 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
       if (settled) return
       settled = true
       clearActiveCapture()
-      // 捕获到的命令与派发不一致 = 用户手动输入串扰;空文本视为未知,不判串扰
+      // A text mismatch means the result cannot be associated with this
+      // dispatch. Screen reconstruction or shell reporting can also cause it;
+      // this is not evidence of manual input. Empty text remains unknown.
       const captured = normalizeForCommandMatch(capture.command)
       const mismatch = captured !== '' && captured !== normalizeForCommandMatch(command)
+      const completionUnconfirmed = capture.completionUnconfirmed || capture.exitCode === undefined
+      if (mismatch || completionUnconfirmed) invalidateCaptureCapability()
       resolveResult({
         status: 'completed',
         output: capture.output,
         exitCode: capture.exitCode,
         durationMs: Math.max(0, capture.finishedAt - capture.startedAt),
         truncated: capture.truncated,
+        completionUnconfirmed: completionUnconfirmed || undefined,
         commandMismatch: mismatch || undefined
       })
-    })
+    }, command)
 
     abortCapture = (reason: string) => {
       if (settled) return
@@ -130,7 +177,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     activeAgentCaptureAbort = abortCapture
     const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
 
-    if (!executeCommand(command, { onWriteFailed: failWrite, allowDuringAgentTakeover: true })) {
+    if (!(intent && dispatchIntent ? dispatchIntent(intent, failWrite) : executeCommand(command, { onWriteFailed: failWrite, allowDuringAgentTakeover: true }))) {
       armed.dispose()
       settled = true
       clearActiveCapture()
@@ -144,6 +191,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
         if (settled) return
         settled = true
         const partial = armed.peekOutput()
+        invalidateCaptureCapability()
         armed.dispose()
         clearActiveCapture()
         resolveResult({
@@ -163,15 +211,15 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
   function captureWithSentinel(
     command: string,
     maxOutputChars: number,
-    options?: { skipHistory?: boolean }
+    options?: { skipHistory?: boolean; intent?: CommandIntent }
   ): AgentCommandHandle {
     const safety = isSuffixSafeForSentinel(command)
-    if (!safety.ok) {
+    if (!options?.intent && !safety.ok) {
       return agentDispatchFailure(`${safety.reason};该终端无 shell integration 标记,需改写为可追加哨兵的单条命令`)
     }
     if (activeAgentCaptureAbort) return agentDispatchFailure('已有 Agent 命令正在等待终端结果')
 
-    const nonce = createSentinelNonce()
+    const nonce = options?.intent?.capture.nonce ?? createSentinelNonce()
     const wrapped = wrapCommandWithSentinel(command, nonce)
     const dispatchedAt = Date.now()
     let settled = false
@@ -229,12 +277,12 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
 
     sentinelSink = feed
-    if (!executeCommand(wrapped, {
+    if (!(options?.intent && dispatchIntent ? dispatchIntent(options.intent, failWrite) : executeCommand(wrapped, {
       historyCommand: options?.skipHistory ? '' : command,
       internal: options?.skipHistory === true,
       onWriteFailed: failWrite,
       allowDuringAgentTakeover: true
-    })) {
+    }))) {
       settled = true
       detach()
       clearActiveCapture()
@@ -266,35 +314,58 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
    * 因此不需要猜 shell 方言。结论按会话缓存。
    */
   async function ensureAgentCapture(): Promise<AgentCaptureMode> {
-    const mode = agentCaptureMode()
-    if (mode === 'markers' || mode === 'unsupported') return mode
-    if (sentinelProbe?.sessionId === getSessionId()) return sentinelProbe.supported ? 'sentinel' : 'unsupported'
-    if (sentinelProbeInFlight) return (await sentinelProbeInFlight) ? 'sentinel' : 'unsupported'
+    if (agentCaptureProbed()) return agentCaptureMode()
+    if (sentinelProbeInFlight) return sentinelProbeInFlight
     if (agentReadinessFailure()) return 'sentinel'
 
     const probedSessionId = getSessionId()
-    // 派发裸载荷:包装与 nonce 由 captureWithSentinel 独占,重复包装会读到 printf 的退出码
-    const probe = captureWithSentinel(SENTINEL_PROBE_COMMAND, 256, { skipHistory: true })
-    sentinelProbeInFlight = (async () => {
+    const epoch = captureEpoch
+    const current = () => !disposed && probedSessionId === getSessionId() && epoch === captureEpoch
+    const waitForPrompt = async (verifyMarkers: boolean) => {
+      const deadline = Date.now() + 2500
+      while (current() && Date.now() < deadline && (commandExecutionReadiness() === 'shell-busy'
+        || (verifyMarkers && verification?.started() && !verification.verified()))) {
+        await new Promise(resolve => window.setTimeout(resolve, 25))
+      }
+      return current() && commandExecutionReadiness() === 'ready'
+    }
+    const run = async (kind: 'capture' | 'shell-integration') => {
+      const probe = prepareProbe ? runProbe({ kind }, 256, () => current() ? '' : '探测目标已经变化') : captureWithSentinel(SENTINEL_PROBE_COMMAND, 256, { skipHistory: true })
       const timer = window.setTimeout(() => probe.cancel(), SENTINEL_PROBE_TIMEOUT_MS)
       try {
         const outcome = await probe.result
-        return outcome.status === 'completed' && outcome.exitCode === SENTINEL_PROBE_EXIT_CODE
+        const ready = await waitForPrompt(kind === 'capture')
+        return { outcome, ready }
       } finally {
         window.clearTimeout(timer)
       }
-    })()
-
-    let supported = false
-    try {
-      supported = await sentinelProbeInFlight
-    } finally {
-      sentinelProbeInFlight = undefined
     }
-    // 探针期间会话被切换/重连时结论作废
-    if (probedSessionId !== getSessionId()) return agentCaptureMode()
-    sentinelProbe = { sessionId: probedSessionId, supported }
-    return supported ? 'sentinel' : 'unsupported'
+    const pending = (async (): Promise<AgentCaptureMode> => {
+      let result = await run('capture')
+      if (!current()) return 'sentinel'
+      if (result.outcome.status !== 'completed' || result.outcome.exitCode !== SENTINEL_PROBE_EXIT_CODE) return 'unsupported'
+      if (verification?.verified()) return 'markers'
+      // Existing integrations get first use. The fixed loader is idempotent,
+      // limited to supported shells and never writes remote startup files.
+      if (prepareProbe && enableShellIntegration?.() && result.ready) {
+        const installed = await run('shell-integration')
+        if (!current() || !installed.ready || installed.outcome.status !== 'completed') return 'sentinel'
+        result = await run('capture')
+        if (!current()) return 'sentinel'
+        if (result.outcome.status !== 'completed' || result.outcome.exitCode !== SENTINEL_PROBE_EXIT_CODE) return 'unsupported'
+        if (verification?.verified()) return 'markers'
+      }
+      return 'sentinel'
+    })()
+    sentinelProbeInFlight = pending
+    try {
+      const mode = await pending
+      if (current()) sentinelProbe = { sessionId: probedSessionId, epoch, mode }
+      return current() ? mode : agentCaptureMode()
+    } finally {
+      if (sentinelProbeInFlight === pending) sentinelProbeInFlight = undefined
+      verification = undefined
+    }
   }
 
   /**
@@ -303,8 +374,9 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
    */
   function runCommandAndCapture(
     command: string,
-    options?: { maxOutputChars?: number; dispatchGuard?: () => string; internal?: boolean }
+    options?: { maxOutputChars?: number; dispatchGuard?: () => string; internal?: boolean; intent?: CommandIntent; probe?: TerminalProbe }
   ): AgentCommandHandle {
+    if (options?.probe && prepareProbe) return runProbe(options.probe, options.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS, options.dispatchGuard)
     const value = command.trim()
     if (!value) return agentDispatchFailure('命令为空')
     const bindingFailure = options?.dispatchGuard?.() ?? ''
@@ -313,6 +385,14 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     if (readinessFailure) return agentDispatchFailure(readinessFailure)
 
     const maxOutputChars = options?.maxOutputChars ?? AGENT_CAPTURE_DEFAULT_MAX_CHARS
+    if (dispatchIntent) {
+      const intent = options?.intent
+      if (!intent || intent.source !== command || (intent.capture.internal && (!options?.internal || intent.capture.kind !== 'sentinel'))) return agentDispatchFailure('缺少与完整命令对应的后端执行记录')
+      if (intent.capture.kind === 'bracketed' && !bracketedPasteEnabled?.()) return agentDispatchFailure('终端括号粘贴模式已关闭，请重新准备命令')
+      if (intent.capture.kind === 'markers' || intent.capture.kind === 'bracketed') return captureWithMarkers(value, maxOutputChars, intent)
+      if (intent.capture.kind === 'sentinel') return captureWithSentinel(value, maxOutputChars, { intent })
+      return agentDispatchFailure('执行记录未绑定输出捕获方式')
+    }
     const mode = agentCaptureMode()
     // Internal output is removed before xterm rendering; capture its raw sentinel stream.
     if (mode === 'markers') return options?.internal
@@ -339,11 +419,30 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     return captureWithSentinel(value, maxOutputChars, { skipHistory: options?.internal })
   }
 
+  function runProbe(probe: TerminalProbe, maxOutputChars: number, guard?: () => string): AgentCommandHandle {
+    let prepared: CommandIntent | undefined
+    let started = false
+    const handle = createDeferredAgentCommand(async () => {
+      const failure = guard?.() || agentReadinessFailure()
+      if (failure) return failure
+      prepared = await prepareProbe!(probe)
+      return guard?.() || agentReadinessFailure()
+    }, () => {
+      started = true
+      if (probe.kind === 'capture' || probe.kind === 'bracketed-capture') verification = createShellCaptureVerification(prepared!.capture.nonce, probe.kind === 'bracketed-capture')
+      return captureWithSentinel(prepared!.source, maxOutputChars, { intent: prepared, skipHistory: true })
+    })
+    void handle.result.finally(() => { if (prepared && !started) void cancelIntent?.(prepared).catch(() => {}) })
+    return handle
+  }
+
   function ingestCaptureOutput(data: string) {
+    verification?.push(data)
     sentinelSink?.(data)
   }
 
   function abortActiveCapture(reason: string) {
+    invalidateCaptureCapability()
     activeAgentCaptureAbort?.(reason)
   }
 
@@ -352,5 +451,5 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     abortActiveCapture('终端会话已关闭或重新连接')
   })
 
-  return { agentCapturePreparing, agentCaptureSupported, ensureAgentCapture, runCommandAndCapture, ingestCaptureOutput, abortActiveCapture }
+  return { agentCaptureMode, agentCapturePreparing, agentCaptureSupported, ensureAgentCapture, ensureBracketedCapture, runCommandAndCapture, ingestCaptureOutput, abortActiveCapture, invalidateCaptureCapability }
 }

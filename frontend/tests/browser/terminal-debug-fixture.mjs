@@ -7,11 +7,16 @@ export function installTerminalDebugFixture() {
   const schedule = window.setTimeout.bind(window)
   const typed = new Map()
   const tails = new Map()
+  const policyTargets = new Map(), policyIntents = new Map()
+  let policySequence = 0
   const debug = window.__terminalDebugFixture = {
     diagnostics: [],
     ordinaryCommands: [],
+    bracketedPaste: false,
     rawChunks: [],
     pendingChunks: 0,
+    promptDelayMs: 0,
+    waitingForPrompt: 0,
     fileBody: `${btoa('fixture-file-payload')}\r\nstatus=0`,
     localWrites: [],
     endControlSplit: 3,
@@ -35,7 +40,7 @@ export function installTerminalDebugFixture() {
     const identity = fixture.identities[profileId]
     const label = identity ? `${identity.username}@${identity.hostname}:${identity.pwd}$ ` : 'PS C:\\fixture> '
     return debug.shellIntegration
-      ? `\x1b]133;D;${exitCode}\x07\x1b]133;A\x07${label}\x1b]133;B\x07`
+      ? `\x1b]133;D;${exitCode}\x07\x1b]133;A\x07${label}\x1b]133;B\x07${debug.bracketedPaste ? '\x1b[?2004h' : '\x1b[?2004l'}`
       : label
   }
   function transportChunks(data) {
@@ -61,6 +66,13 @@ export function installTerminalDebugFixture() {
     const previous = tails.get(sessionId) ?? Promise.resolve()
     const next = previous.then(async () => {
       for (const chunk of chunks) {
+        if (typeof chunk !== 'string') {
+          debug.waitingForPrompt++
+          await new Promise(resolve => schedule(resolve, chunk.delay))
+          debug.waitingForPrompt--
+          debug.pendingChunks--
+          continue
+        }
         await new Promise(resolve => schedule(resolve, 2))
         debug.rawChunks.push({ sessionId, data: chunk })
         fixture.emit(`terminal:data:${sessionId}`, { sessionId, data: chunk })
@@ -89,7 +101,9 @@ export function installTerminalDebugFixture() {
         const command = line.trim()
         const result = userOutput(command)
         debug.ordinaryCommands.push(command)
-        output += `\r\n${debug.shellIntegration ? '\x1b]133;C\x07' : ''}${result.body ? `${result.body}\r\n` : ''}${prompt(profileId, result.code)}`
+        output += command === 'fixture-parse-error'
+          ? `\r\nzsh: parse error near \`then'\r\n${prompt(profileId).replace('\x1b]133;D;0\x07', '\x1b]133;D\x07')}`
+          : `\r\n${debug.shellIntegration ? '\x1b]133;C\x07' : ''}${result.body ? `${result.body}\r\n` : ''}${prompt(profileId, result.code)}`
         line = ''
       } else if (char === '\x7f' || char === '\b') {
         if (line) { line = line.slice(0, -1); output += '\b \b' }
@@ -102,6 +116,42 @@ export function installTerminalDebugFixture() {
     if (output) void enqueue(sessionId, output)
   }
   window.__TAURI_IPC__ = payload => {
+    const reply = value => Promise.resolve().then(() => window[`_${payload.callback}`]?.(value))
+    if (payload.cmd === 'command_execution_target') {
+      if (!policyTargets.has(payload.sessionId)) policyTargets.set(payload.sessionId, {
+        sessionId: payload.sessionId, sessionInstance: payload.sessionId, profileId: profileFor(payload.sessionId), routeVersion: 0, contextVersion: 0,
+        context: { shell: 'unknown', workingDirectory: null, user: null, environmentScope: null },
+      })
+      reply(policyTargets.get(payload.sessionId)); return
+    }
+    if (payload.cmd === 'update_command_context') {
+      const target = { ...payload.expected, contextVersion: payload.expected.contextVersion + 1, context: payload.context }
+      policyTargets.set(target.sessionId, target); reply(target); return
+    }
+    if (payload.cmd === 'prepare_terminal_probe' || payload.cmd === 'analyze_command_intent') {
+      const nonce = (++policySequence).toString(16).padStart(32, '0')
+      const internal = payload.cmd === 'prepare_terminal_probe'
+      const source = internal ? `fixture ${payload.probe.kind}` : payload.source
+      const kind = internal ? payload.probe.kind === 'bracketed-capture' ? 'bracketed' : 'sentinel' : (payload.capture ?? 'none')
+      const probeKind = payload.probe?.kind
+      let terminalInput = internal
+        ? ` : 'AI_TERM_INTERNAL_${nonce}'; printf 'AI_TERM_PROBE_BEGIN_${nonce}'; printf '__AI_TERM_%s__' ${nonce}B; ${source}; printf '__AI_TERM_%s__:%d' ${nonce}E $?; printf 'AI_TERM_PROBE_END_${nonce}'\r`
+        : `${source}\r`
+      if (kind === 'bracketed') terminalInput = `\x1b[200~${terminalInput.replace(/\r$/, '')}\x1b[201~\r`
+      const intent = { reference: { id: nonce, target: payload.expected, operation: 'command', policyVersion: 'fixture' }, source, operation: 'command',
+        capture: { kind, nonce, internal }, terminalInput, expiresInMs: 300000,
+        analysis: { analysisStatus: 'complete', decision: 'allow', risks: [], unknownReasons: [], highestSeverity: null, policyVersion: 'fixture' } }
+      policyIntents.set(nonce, { intent, probeKind }); reply(intent); return
+    }
+    if (payload.cmd === 'cancel_command_intent') { reply(policyIntents.delete(payload.reference.id)); return }
+    if (payload.cmd === 'approve_command_intent') { reply(null); return }
+    if (payload.cmd === 'dispatch_command_intent') {
+      const stored = policyIntents.get(payload.reference.id)
+      if (!stored) { window[`_${payload.error}`]?.('expired fixture intent'); return }
+      policyIntents.delete(payload.reference.id)
+      window.__TAURI_IPC__({ ...payload, cmd: 'terminal_write', sessionId: stored.intent.reference.target.sessionId, data: stored.intent.terminalInput, fixtureProbeKind: stored.probeKind, fixtureCaptureKind: stored.intent.capture.kind, fixtureSource: stored.intent.source })
+      return
+    }
     if (payload.cmd === 'tauri' && payload.__tauriModule === 'Event' &&
         payload.message?.cmd === 'listen' && payload.message.event.startsWith('terminal:data:')) {
       const key = `_${payload.message.handler}`
@@ -125,6 +175,11 @@ export function installTerminalDebugFixture() {
     fixture.calls.push({ cmd, ...args })
     const profileId = profileFor(args.sessionId)
     const identity = fixture.identities[profileId]
+    if (args.fixtureCaptureKind === 'bracketed' && !args.fixtureProbeKind) {
+      debug.ordinaryCommands.push(args.fixtureSource)
+      void enqueue(args.sessionId, `${args.fixtureSource.replace(/\n/g, '\r\n')}\r\n\x1b[?2004l\x1b]633;E;${btoa(args.fixtureSource)};base64\x07\x1b]133;C\x07first\r\n\x1b]133;C\x07second\r\n${prompt(profileId, 9)}`)
+      Promise.resolve().then(() => window[`_${callback}`]?.(null)); return
+    }
     const begin = args.data.match(/AI_TERM_(?:IDENT|FILE|PROBE)_BEGIN_[A-Za-z0-9_]+/)?.[0]
     const end = args.data.match(/AI_TERM_(?:IDENT|FILE|PROBE)_END_[A-Za-z0-9_]+/)?.[0]
     if (identity && begin && end) {
@@ -137,9 +192,11 @@ export function installTerminalDebugFixture() {
       }
       if (mode !== 'hold') {
         const echo = `${args.data.replace(/\r?\n/g, '\r\n')}\x1b[?2004l${debug.shellIntegration ? '\x1b]133;C\x07' : ''}`
-        const sentinelNonce = args.data.match(/\b([a-f0-9]{8})B\b/)?.[1]
+        const sentinelNonce = args.data.match(/\b([a-f0-9]{8,32})B\b/)?.[1]
+        const probeExitCode = args.fixtureProbeKind && !['capture', 'bracketed-capture'].includes(args.fixtureProbeKind) ? 0 : 7
+        const probeBody = args.fixtureProbeKind === 'context' ? `bash\r\n${btoa('/srv/atlas')}\r\nAI_TERM_CONTEXT_USER\r\n${btoa('1000')}\r\nAI_TERM_CONTEXT_SCOPE\r\n${btoa('fixture-host\n1000')}\r\nAI_TERM_CONTEXT_END` : args.fixtureProbeKind === 'bracketed-capture' ? 'AI_TERM_MULTILINE_FIRST\r\n\x1b]133;C\x07\nAI_TERM_CAPTURE_OK' : 'AI_TERM_CAPTURE_OK'
         const body = begin.startsWith('AI_TERM_PROBE_')
-          ? sentinelNonce ? `__AI_TERM_${sentinelNonce}B__\r\n\r\n__AI_TERM_${sentinelNonce}E__:7` : 'probe-result'
+          ? sentinelNonce ? `__AI_TERM_${sentinelNonce}B__\r\n${probeBody}\r\n\r\n__AI_TERM_${sentinelNonce}E__:${probeExitCode}` : 'probe-result'
           : begin.startsWith('AI_TERM_IDENT_')
           ? `user=${identity.username}\r\nhostname=${identity.hostname}\r\nips=${identity.ips.join(' ')}\r\npwd=${identity.pwd}\r\nmachine=${identity.machine}`
           : debug.fileBody
@@ -152,7 +209,11 @@ export function installTerminalDebugFixture() {
             `${control.slice(debug.endControlSplit)}\r\n${prompt(profileId)}`,
           ])
         } else {
-          void enqueue(args.sessionId, mode === 'echo-only' ? echo : `${echo}\r\n${begin}\r\n${body}\r\n${end}\r\n${prompt(profileId)}`)
+          void enqueueChunks(args.sessionId, mode === 'echo-only' ? transportChunks(echo) : [
+            ...transportChunks(`${echo}\r\n${begin}\r\n${body}\r\n${end}\r\n`),
+            { delay: debug.promptDelayMs },
+            ...transportChunks(prompt(profileId, ['capture', 'bracketed-capture'].includes(args.fixtureProbeKind) ? 7 : 0)),
+          ])
         }
       }
     } else ordinaryInput(args.sessionId, args.data, profileId)

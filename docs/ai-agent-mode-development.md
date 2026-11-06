@@ -264,7 +264,7 @@ runCommandAndCapture(command: string, options: { timeoutMs: number; maxOutputCha
 - **截断**:超过 `maxOutputChars`(默认 4000 字符)保留头 500 + 尾 3500,中间插入省略说明(与 `compress_terminal_snapshot` 同思路,保住报错通常在尾部的特性)。
 - **marker 失效兜底**:输出超过 scrollback 导致起始 marker 被回收时,退化为取当前缓冲尾部 `maxOutputChars` 并标注"输出过长,仅保留末尾"。
 - **超时**:默认 120s。超时不杀命令(这是用户的活动终端),Promise 以 `timeout` 结果返回,输出为已捕获的尾部内容;循环层转入 `awaiting-user`。
-- **串扰防护**:布防到 D 期间用户手动输入回车会让捕获对应到错误的命令。布防时记录派发的命令文本,`onCommandFinished.command` 不匹配时结果标注 `commandMismatch`,循环层按执行失败处理并提示用户接管。
+- **命令对应关系校验**:Agent 接管终端期间拦截手动输入；布防时仍记录派发文本，`onCommandFinished.command` 不匹配时标注 `commandMismatch`。该标志只表示无法将捕获结果对应到本次派发，不证明用户输入过命令；Shell 上报或屏幕文本重建也可能导致不一致。循环停止后续操作、保留观察到的输出，并把本次执行结果标为未知，不借用另一条命令的退出码，也不自动重放。Zsh 语法错误等路径可能未发送 C 就直接返回提示符；无 C 的 D、执行后缺 D 的新提示符或缺退出码均以 `completionUnconfirmed` 立即结束等待，明确显示“Shell 已返回提示符”，不拖到超时。
 - **写入失败回传**:PTY 写入队列的异步失败同时通知 Agent 捕获句柄,立即形成 `dispatch-failed`,不再只弹 toast 后等待命令超时。
 - **会话失效**:终端关闭或重连时立即结算活动捕获并清理排队写入；同一终端只允许一个 Agent 捕获,防止哨兵扫描器互相覆盖。
 - **探针可取消**:首次哨兵探针期间停止任务时,探针可自行结束,但真实命令不会在探针完成后延迟派发。

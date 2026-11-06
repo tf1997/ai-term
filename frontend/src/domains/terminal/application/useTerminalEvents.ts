@@ -31,8 +31,10 @@ export function useTerminalEvents(options: TerminalEventsOptions, source: Termin
     const isCurrent = () => !disposed && requestGeneration === generation && options.sessionId() === activeSessionId
     const nextUnlisten = await source.onTerminalData(activeSessionId, event => {
       if (!isCurrent() || event.sessionId !== activeSessionId) return
-      options.ingestTerminalOutput(event.data)
       options.captureOutput(event.data)
+      // Display ingestion can synchronously run xterm lifecycle callbacks.
+      // Consume the unfiltered protocol first, before those callbacks run.
+      options.ingestTerminalOutput(event.data)
     })
     if (!isCurrent()) { nextUnlisten(); return false }
     let nextUnlistenClosed: () => void

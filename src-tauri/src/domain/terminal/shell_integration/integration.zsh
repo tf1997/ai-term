@@ -3,10 +3,11 @@
 # 协议与前端消费逻辑见 docs/shell-integration-development.md。
 
 [[ -o interactive ]] || return 0
-[[ -n "${AI_TERM_SHELL_INTEGRATION_ACTIVE:-}" ]] && return 0
+[[ "${AI_TERM_SHELL_INTEGRATION_ACTIVE:-}" == "zsh:$$" ]] && return 0
 # 避让:宿主环境已有其它 shell integration 在发标记时不重复安装
 [[ -n "${VSCODE_SHELL_INTEGRATION:-}" ]] && return 0
-AI_TERM_SHELL_INTEGRATION_ACTIVE=1
+[[ "$PS1" == *']133;'* || "$PS1" == *']633;'* ]] && return 0
+AI_TERM_SHELL_INTEGRATION_ACTIVE="zsh:$$"
 
 builtin autoload -Uz add-zsh-hook
 

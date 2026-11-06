@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import type { AgentFileToolService } from '../../domains/transfer'
+import type { SshTaskService } from '../../domains/terminal/types'
 import { computed, ref } from 'vue'
+import type { AgentCommandPolicy, ApplicationCommandExecutor } from '../../shared/security/commandPolicy'
 import type { AiProviderConfig } from '../../domains/ai/types'
 import type { ConnectionProfile } from '../../domains/connections/types'
 import type { AiContextStatus, AiMessage, WorkspaceSession } from '../../domains/ai/types'
 import type { CommandHistoryEntry, TerminalOutputDeltaEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
-import type { ScriptRecording } from '../../domains/scripts/types'
+import type { TaskScriptImport, TaskScriptDraft, ScriptRecording } from '../../domains/scripts/types'
 import type { AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from '../../domains/ai/types'
 import { AiPanel } from '../../domains/ai/views'
 import { CommandHistoryPanel } from '../../domains/terminal/views'
@@ -12,6 +15,10 @@ import { ScriptPanel } from '../../domains/scripts/views'
 import UiIcon from '../../shared/ui/UiIcon.vue'
 
 const props = defineProps<{
+  sshTasks?: SshTaskService
+  agentFileTools?: AgentFileToolService
+  agentCommandPolicy?: AgentCommandPolicy
+  applicationCommandExecutor?: ApplicationCommandExecutor
   collapsed: boolean
   activeTab: 'history' | 'ai' | 'scripts'
   terminalId: string
@@ -72,6 +79,9 @@ const emit = defineEmits<{
   clearScriptRecording: []
   aiError: [detail: string]
 }>()
+
+const taskScriptImport = ref<TaskScriptImport | null>(null)
+function openTaskScript(draft: TaskScriptDraft) { taskScriptImport.value = { requestId: crypto.randomUUID(), draft }; selectWorkspaceTab('scripts') }
 
 const activeWorkspaceTab = computed(() => props.activeTab)
 const visitedTabs = ref(new Set([props.activeTab]))
@@ -153,12 +163,17 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :agent-availability-check="agentAvailabilityCheck"
       :agent-availability-confirm="agentAvailabilityConfirm"
       :agent-command-runner="agentCommandRunner"
+      :agent-command-policy="agentCommandPolicy"
+      :agent-file-tools="agentFileTools"
+      :ssh-tasks="sshTasks"
+      :application-command-executor="applicationCommandExecutor"
       :agent-takeover-change="agentTakeoverChange"
       :agent-allowlist-patterns="agentAllowlistPatterns"
       :agent-allow-pattern="agentAllowPattern"
       :agent-allow-patterns="agentAllowPatterns"
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
       :agent-command-timeout-ms="agentCommandTimeoutMs"
+      @create-script-draft="openTaskScript"
       @select-session="emit('selectWorkspaceSession', $event)"
       @select-config="emit('selectAiConfig', $event)"
       @configure-ai="emit('configureAi')"
@@ -190,6 +205,8 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :config="aiConfig"
       :api-key="apiKey"
       :recording="scriptRecording"
+      :task-script-import="taskScriptImport"
+      :application-command-executor="applicationCommandExecutor"
       @start-recording="emit('startScriptRecording')"
       @stop-recording="emit('stopScriptRecording')"
       @clear-recording="emit('clearScriptRecording')"

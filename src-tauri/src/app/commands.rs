@@ -1326,6 +1326,7 @@ mod sftp_route_binding_tests {
             jump_mode: JumpMode::Direct,
             menu_profile_id: String::new(),
             file_transfer_mode: FileTransferMode::SftpDirect,
+            shell_integration: true,
         };
         state
             .save_connection_profile(profile.clone())

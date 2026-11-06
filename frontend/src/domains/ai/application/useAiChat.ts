@@ -16,6 +16,7 @@ import type { TerminalContextMode } from '../domain/terminalContext'
 
 type ChatSource = Pick<typeof tauri, 'onAiChatStream' | 'chatWithAiProviderStream' | 'cancelTask'>
 interface AiChatOptions {
+  hostKnowledgeContext?: import('../domain/hostKnowledge').HostKnowledgeContextLoader
   props: Readonly<AiPanelProps>
   emit: AiPanelEmit
   answerState: ReturnType<typeof useAiAnswerState>
@@ -23,7 +24,7 @@ interface AiChatOptions {
   terminalContextMode?: () => TerminalContextMode
 }
 
-export function useAiChat({ props, emit, answerState, conversationContext, terminalContextMode }: AiChatOptions, source: ChatSource = tauri) {
+export function useAiChat({ props, emit, answerState, conversationContext, terminalContextMode, hostKnowledgeContext }: AiChatOptions, source: ChatSource = tauri) {
   const { onAiChatStream, chatWithAiProviderStream, cancelTask } = source
   const { isAsking, currentAssistantMessageId, startAnswerTimer, finishAnswerTimer, finishAnswerMessage } = answerState
   const { aiCommandHistory, conversationContextParts, maybeGenerateSessionTitle, maybeCompactConversation } = conversationContext
@@ -112,6 +113,10 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
         }
       })
       if (disposed || currentRequestId.value !== requestId) return
+      const knowledgeBinding = JSON.stringify([props.connectionId, props.terminalId, props.terminalConnectionGeneration])
+      const knowledge = requestConnectionId === props.connectionId && requestTerminalId === props.terminalId ? await hostKnowledgeContext?.(question) : undefined
+      if (knowledgeBinding !== JSON.stringify([props.connectionId, props.terminalId, props.terminalConnectionGeneration])) throw new Error('读取上下文期间目标发生变化，请重试')
+      if (disposed || stopRequested.value || currentRequestId.value !== requestId) return
       const response = await callConfiguredModelStream(
         requestId,
         requestConfig,
@@ -120,7 +125,8 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
         terminalSnapshot,
         commandHistory,
         conversationMessages,
-        conversationSummary
+        conversationSummary,
+        knowledge
       )
       if (disposed || stopRequested.value || currentRequestId.value !== requestId || errorNotified) return
       cancelStreamFlush()
@@ -208,7 +214,8 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
     terminalSnapshot: string,
     commandHistory: string[],
     conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>,
-    conversationSummary?: string
+    conversationSummary?: string,
+    hostKnowledgeContext?: string
   ) {
     if (!config.baseUrl.trim() || !config.model.trim()) {
       throw new Error('请先配置 AI Base URL 和 Model')
@@ -219,6 +226,7 @@ export function useAiChat({ props, emit, answerState, conversationContext, termi
 
     return chatWithAiProviderStream(requestId, {
       config,
+      hostKnowledgeContext,
       apiKey,
       question,
       terminalSnapshot,

@@ -10,6 +10,7 @@ import type { AiTokenUsage } from '../domain/tokenUsage'
 
 
 export interface AiChatRequest {
+  hostKnowledgeContext?: string
   config: AiProviderConfig
   apiKey: string
   question: string
@@ -155,3 +156,6 @@ export function onAiChatStream(requestId: string, handler: (event: AiChatStreamE
 }
 
 export { cancelTask } from '../../../shared/platform/tasks'
+export { agentCheckpointTarget, beginAgentRun, saveAgentCheckpoint, releaseAgentRun, listAgentCheckpoints, recoverAgentRun, replyAgentRun, confirmAgentRecovery } from './agentCheckpoints'
+
+export { completedAgentCheckpointForMessage } from './agentCheckpoints'

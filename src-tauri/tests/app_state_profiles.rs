@@ -25,6 +25,7 @@ fn profile(id: &str, name: &str) -> ConnectionProfile {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     }
 }
 
@@ -87,4 +88,63 @@ async fn saved_connection_profile_can_be_loaded_by_id() {
             .unwrap(),
         profile("prod-1", "prod-1")
     );
+}
+
+#[tokio::test]
+async fn profile_edits_and_deletion_invalidate_outstanding_intents() {
+    use ai_term_lib::domain::command_policy::OperationKind;
+    use ai_term_lib::domain::terminal::ssh::TerminalSession;
+    struct NoWriteTerminal;
+    impl TerminalSession for NoWriteTerminal {
+        fn write(&mut self, _: &[u8]) -> anyhow::Result<()> {
+            panic!("stale intent reached terminal");
+        }
+        fn resize(&mut self, _: u16, _: u16) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    let state = state("profile-intent-invalidation");
+    state
+        .save_connection_profile(profile("profile", "old"))
+        .await
+        .unwrap();
+    state
+        .register_terminal_session(
+            "session".into(),
+            "profile".into(),
+            Box::new(NoWriteTerminal),
+        )
+        .await;
+    let target = state.command_execution_target("session").await.unwrap();
+    let intent = state
+        .analyze_command_intent(target.clone(), "ls".into(), OperationKind::Command)
+        .await
+        .unwrap();
+    state
+        .approve_command_intent(&intent.reference, &intent.source)
+        .await
+        .unwrap();
+    state
+        .save_connection_profile(profile("profile", "changed"))
+        .await
+        .unwrap();
+    assert!(state
+        .dispatch_command_intent(&intent.reference)
+        .await
+        .is_err());
+    let changed = state.command_execution_target("session").await.unwrap();
+    assert!(changed.route_version > target.route_version);
+    let intent = state
+        .analyze_command_intent(changed, "ls".into(), OperationKind::Command)
+        .await
+        .unwrap();
+    state
+        .approve_command_intent(&intent.reference, &intent.source)
+        .await
+        .unwrap();
+    assert!(state.delete_connection_profile("profile").await.unwrap());
+    assert!(state
+        .dispatch_command_intent(&intent.reference)
+        .await
+        .is_err());
 }

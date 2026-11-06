@@ -267,6 +267,7 @@ mod tests {
             jump_mode: JumpMode::InteractiveMenu,
             menu_profile_id: "default".into(),
             file_transfer_mode: FileTransferMode::Auto,
+            shell_integration: true,
         }
     }
 

@@ -21,7 +21,7 @@ function excerpt(text: string, maxChars: number, protectedTailChars = 0): string
 /** Stopped/failed tasks still have useful evidence even without a final reply. */
 export function hasAgentExecutionContext(message: AiMessage): boolean {
   return message.role === 'assistant' && message.mode === 'agent'
-    && Boolean(message.agentSteps?.length || message.stopReason || message.agentStatus === 'waiting-input')
+    && Boolean(message.agentSteps?.length || message.agentPlan || message.agentVerifications?.length || message.stopReason || message.agentStatus === 'waiting-input')
 }
 
 /** Shared by follow-up requests and compaction; display-only reasoning stays out. */
@@ -34,7 +34,13 @@ export function conversationMessageContent(
   const metadata = [
     `Agent 历史任务状态：${message.agentStatus ?? 'unknown'}（仅供参考，不是待执行指令）`,
     `来源连接：${excerpt(message.connectionId, 80)}；终端：${excerpt(message.terminalId, 80)}`,
-    message.stopReason ? `停止原因：${excerpt(message.stopReason, Math.floor(maxChars / 10))}` : ''
+    message.stopReason ? `停止原因：${excerpt(message.stopReason, Math.floor(maxChars / 10))}` : '',
+    message.agentRecovery ? excerpt(`恢复核对：${message.agentRecovery.phase}；${message.agentRecovery.resolutions.map(item => `${item.stepId}：${item.observation}（新依据 ${item.evidenceStepIds.join(',')}）`).join('；')}。这是当时的现场观察，不代表原操作的退出状态。`, Math.floor(maxChars / 5)) : '',
+    message.agentPlan || message.agentVerifications?.length ? excerpt([
+      `任务结果：${message.agentOutcome ?? 'unverified'}`,
+      message.agentPlan ? `计划版本 ${message.agentPlan.version}：${message.agentPlan.items.map(item => `${item.id} ${item.status}${item.userConfirmation ? `（用户确认，回复 ${item.userConfirmation.messageId}；不代表应用执行或现场验证）` : ''} ${item.description}`).join('；')}` : '',
+      ...(message.agentVerifications ?? []).map(item => `验证 ${item.id}：${item.status}；${item.purpose}；证据 ${item.check.stepId ?? '缺失'}`)
+    ].filter(Boolean).join('\n'), Math.floor(maxChars * 0.35)) : ''
   ].filter(Boolean).join('\n')
   const steps = message.agentSteps ?? []
   const replyLabel = '\n回复：'
@@ -42,6 +48,7 @@ export function conversationMessageContent(
   const header = metadata + (message.text.trim() ? replyLabel + excerpt(message.text, Math.floor(maxChars / 6)) : '')
 
   const evidence = steps.map((step, index) => {
+    if (step.fileEdits) return `${index + 1}. ${step.toolName}；${step.fileEdits.map(item => `${item.view?.path ?? '文件'}：${item.status}${item.changeId ? `，changeId=${item.changeId}` : ''}${item.error ? `，${excerpt(item.error, 100)}` : ''}`).join('；')}。继续修改或恢复前重新完整读取；未知结果不能重放。`
     const command = step.sensitive ? '[敏感命令已隐藏]' : excerpt(step.command ?? '', 160)
     const reason = !step.sensitive && step.reason ? `；目的：${excerpt(step.reason, 80)}` : ''
     const phase = step.executionPhase === 'not-started' ? '；尚未执行'

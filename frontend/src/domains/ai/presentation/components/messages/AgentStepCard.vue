@@ -6,6 +6,10 @@ import { formatAiDuration } from '../../../domain/aiTiming'
 import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 import AiCodeBlock from './AiCodeBlock.vue'
 import AgentStepDetails from './AgentStepDetails.vue'
+import AgentFileStepCard from './AgentFileStepCard.vue'
+import AgentFileEditStepCard from './AgentFileEditStepCard.vue'
+import SshTaskContext from './SshTaskContext.vue'
+import { sshTaskTargetLabel } from '../../../../terminal/index'
 import { useCopyFeedback } from './useCopyFeedback'
 
 const props = withDefaults(defineProps<{
@@ -19,6 +23,7 @@ const props = withDefaults(defineProps<{
   highRiskArmed?: boolean
   failureDetail?: string
   canRetry?: boolean
+  canRestore?: boolean
   retryDisabledReason?: string
   targetLabel?: string
   observationStopped?: boolean
@@ -34,12 +39,15 @@ const emit = defineEmits<{
   wait: []
   timeoutStop: []
   retry: []
+  restore: [changeId: string, path: string]
   focusTerminal: []
 }>()
 
 const { copyFeedback, copyText } = useCopyFeedback()
 const explicitlyExpanded = ref<boolean | null>(null)
-const nonzeroExit = computed(() => props.step.exitCode !== undefined && props.step.exitCode !== 0)
+const isSsh = computed(() => props.step.toolName === 'run_ssh_task')
+const resolvedTargetLabel = computed(() => props.step.sshTarget ? sshTaskTargetLabel(props.step.sshTarget) : props.targetLabel)
+const nonzeroExit = computed(() => Boolean(props.step.sshResult?.exitSignal) || (props.step.exitCode !== undefined && props.step.exitCode !== 0))
 const isFailed = computed(() => props.step.status === 'failed' || (props.step.status === 'completed' && nonzeroExit.value))
 const didNotStart = computed(() => props.step.executionPhase === 'not-started')
 const stoppedWhileWaiting = computed(() => props.observationStopped && (props.step.status === 'running' || props.step.status === 'timeout' || props.step.status === 'pending'))
@@ -89,14 +97,16 @@ const countdownLabel = computed(() => {
   return remaining <= 0 ? '即将询问' : `${Math.ceil(remaining / 1000)}s 后询问`
 })
 const allowPatterns = computed(() => !hasRisk.value && props.proposal?.id === props.step.id ? props.proposal.suggestedPatterns ?? [] : [])
-const canAllowExact = computed(() => !hasRisk.value && !allowPatterns.value.length && props.proposal?.id === props.step.id && canGrantExactCommand(props.step.command))
+const canAllowExact = computed(() => !isSsh.value && !hasRisk.value && !allowPatterns.value.length && props.proposal?.id === props.step.id && canGrantExactCommand(props.step.command))
 const allowUnavailableReason = computed(() => {
+  if (isSsh.value) return '独立任务的目标、目录和环境需要逐次确认。'
   if (props.step.sensitive) return '涉及敏感信息，需每次确认，不能总是允许。'
   if (hasRisk.value) return '命中风险规则，需每次确认，不能总是允许。'
   if (!canGrantExactCommand(props.step.command)) return '此命令需要每次确认，不能自动授权。'
   return '复合命令可按完整内容授权；仅当前终端会话有效，命令变化或重连后需重新确认。'
 })
 const failureReason = computed(() => {
+  if (isSsh.value) return props.step.failureReason || props.step.sshResult?.reason || (stoppedWhileWaiting.value ? '已停止观察；独立任务可能仍在远端运行，请先核验实际状态。' : nonzeroExit.value ? `独立任务已结束，${props.step.sshResult?.exitSignal ? `信号 ${props.step.sshResult.exitSignal}` : `退出码 ${props.step.exitCode}`}。` : '')
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '任务已停止，命令未执行。' : '已停止等待；命令可能仍在终端运行。'
   if (didNotStart.value && isFailed.value) {
     const detail = props.step.failureReason || props.failureDetail
@@ -126,7 +136,9 @@ function toggleDetails() {
 </script>
 
 <template>
-  <article class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-compact': compactRow, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <AgentFileStepCard v-if="step.toolName === 'read_file' || step.toolName === 'list_directory'" :step="step" :awaiting-approval="awaitingApproval" :approval-saving="approvalSaving" :now-ms="nowMs" :target-label="targetLabel" :observation-stopped="observationStopped" :can-retry="canRetry" :retry-disabled-reason="retryDisabledReason" @execute="emit('execute')" @skip="emit('skip')" @stop="emit('stop')" @retry="emit('retry')" />
+  <AgentFileEditStepCard v-else-if="step.fileEdits" :step="step" :awaiting-approval="awaitingApproval" :approval-saving="approvalSaving" :target-label="targetLabel" :observation-stopped="observationStopped" :can-restore="canRestore" @execute="emit('execute')" @skip="emit('skip')" @stop="emit('stop')" @restore="(changeId, path) => emit('restore', changeId, path)" />
+  <article v-else class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-compact': compactRow, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :class="{ 'is-compact': compactRow }" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" :title="`${step.reason || '终端命令'} · ${statusLabel}`" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
@@ -148,7 +160,10 @@ function toggleDetails() {
     </header>
 
     <div v-if="!collapsed" class="tool-step-body">
-      <div v-if="targetLabel && (awaitingApproval || awaitingTimeout)" class="tool-step-target" :title="targetLabel"><UiIcon name="terminal" size="13" /><span>执行目标 · {{ targetLabel }}</span></div>
+      <SshTaskContext v-if="isSsh && step.sshRequest && step.sshTarget" :request="step.sshRequest" :target="step.sshTarget" :environment="step.sshEnvironment" />
+      <div v-else-if="resolvedTargetLabel && (awaitingApproval || awaitingTimeout)" class="tool-step-target" :title="resolvedTargetLabel"><UiIcon name="terminal" size="13" /><span>执行目标 · {{ resolvedTargetLabel }}</span></div>
+      <div v-if="isSsh && step.status === 'running' && !observationStopped" class="tool-step-decision"><button type="button" class="tool-step-action" aria-label="停止观察独立任务" @click="emit('stop')">停止观察</button><p class="tool-step-timeout-hint">停止观察不代表远端进程已终止。</p></div>
+      <p v-if="step.sshResult?.truncated" class="tool-step-target">输出超过 64 KiB，已截断显示；通道仍持续读取至任务结束。</p>
       <div v-if="riskLabels.length || step.sensitive" class="tool-step-risk-row">
         <span v-for="label in riskLabels" :key="label" class="tool-step-risk" :class="{ 'is-high': hasHighRisk }"><UiIcon name="shield" size="12" />{{ label }}</span>
         <span v-if="step.sensitive" class="tool-step-risk is-high">敏感命令</span>
@@ -157,7 +172,7 @@ function toggleDetails() {
         <p v-if="failureReason" class="tool-step-failure-reason">{{ failureReason }}</p>
         <pre v-if="outputExcerpt" class="tool-step-output-excerpt" aria-label="输出摘录">{{ outputExcerpt }}</pre>
         <div class="tool-step-actions">
-          <button type="button" class="tool-step-action is-primary" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
+          <button v-if="!isSsh" type="button" class="tool-step-action is-primary" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
           <button v-if="isFailed" type="button" class="tool-step-action" :disabled="!canRetry" :title="canRetry ? '重新执行此命令' : retryDisabledReason || '当前无法重试'" @click="emit('retry')"><UiIcon name="refresh" size="13" />重试命令</button>
           <button v-if="failureDetailText" type="button" class="tool-step-action is-icon" :title="copyFeedback || '复制错误详情'" :aria-label="copyFeedback || '复制错误详情'" @click="copyText(failureDetailText)"><UiIcon name="copy" size="14" /></button>
           <span class="tool-step-copy-feedback" role="status">{{ copyFeedback }}</span>
@@ -169,7 +184,7 @@ function toggleDetails() {
         <div class="tool-step-actions">
           <button type="button" class="tool-step-action is-primary" :disabled="approvalSaving" :class="{ 'is-risk': hasRisk, 'is-armed': hasHighRisk && highRiskArmed }" :title="hasRisk ? '检查风险后确认执行' : '仅执行本次命令，不改变允许列表'" @click="hasRisk ? emit('reviewRisk') : emit('execute')"><UiIcon :name="hasRisk ? 'shield' : 'play'" size="13" />{{ hasRisk ? '查看风险' : '仅执行本次' }}</button>
           <button v-if="canAllowExact" type="button" class="tool-step-action is-allow-exact" :disabled="approvalSaving" :title="allowUnavailableReason" @click="emit('executeAndAllowExact')"><UiIcon name="shield" size="13" />本会话允许此命令</button>
-          <button v-else type="button" class="tool-step-action is-allow" :disabled="approvalSaving || !allowPatterns.length" :title="allowPatterns.length ? `执行本次并加入允许列表：${allowPatterns.join('、')}` : allowUnavailableReason" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" />{{ approvalSaving ? '保存授权中…' : '总是允许' }}</button>
+          <button v-else-if="!isSsh" type="button" class="tool-step-action is-allow" :disabled="approvalSaving || !allowPatterns.length" :title="allowPatterns.length ? `执行本次并加入允许列表：${allowPatterns.join('、')}` : allowUnavailableReason" @click="emit('executeAndAllow')"><UiIcon name="shield" size="13" />{{ approvalSaving ? '保存授权中…' : '总是允许' }}</button>
           <button type="button" class="tool-step-action" :disabled="approvalSaving" @click="emit('skip')">跳过</button>
           <button type="button" class="tool-step-action" @click="emit('stop')"><UiIcon name="stop" size="12" />停止任务</button>
         </div>
@@ -191,8 +206,10 @@ function toggleDetails() {
       <AgentStepDetails
         :command="step.command"
         :output="showOutput ? outputContent : undefined"
+        :stdout="step.sshResult?.stdout"
+        :stderr="step.sshResult?.stderr"
         :failure-detail="failureDetailText"
-        :target-label="targetLabel"
+        :target-label="resolvedTargetLabel"
         :exit-code="step.exitCode"
         :duration="durationLabel"
         :auto-approved="step.autoApproved"

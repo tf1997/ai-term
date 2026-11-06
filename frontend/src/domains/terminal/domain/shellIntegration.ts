@@ -17,6 +17,8 @@ export interface ShellCommandResult {
 export interface CommandCaptureResult {
   command: string
   exitCode?: number
+  /** Shell returned without a complete, attributable C/D lifecycle. */
+  completionUnconfirmed?: boolean
   /** [133;C 行, 结束行) 区间的缓冲文本,已按 maxOutputChars 截断。 */
   output: string
   truncated: boolean
@@ -49,6 +51,8 @@ export function truncateCaptureOutput(output: string, maxChars: number): { outpu
 
 export interface ShellIntegrationEvents {
   onInputStart?: () => void
+  /** A prompt after completion (or startup), excluding line editor redraws. */
+  onPromptReady?: () => void
   onCommandStart?: (command: string) => void
   onCommandFinished?: (result: ShellCommandResult) => void
 }
@@ -66,10 +70,12 @@ export interface ShellIntegrationHost {
   cursorRow(): number
   /** 光标列号。 */
   cursorColumn(): number
-  /** 指定行的右侧去空白文本;endColumn 限定只读取到该列。 */
-  rowText(row: number, endColumn?: number): string
+  /** 按终端显示列截取文本；列号不能用作 UTF-16 字符串下标。 */
+  rowText(row: number, endColumn?: number, startColumn?: number): string
   /** 指定行是否是上一行的折行延续。 */
   rowIsWrapped(row: number): boolean
+  /** Drop metadata belonging to the previous rendered input. */
+  clearInputWrapPadding?(): void
   rowCount(): number
   now(): number
 }
@@ -111,12 +117,20 @@ export class ShellIntegrationTracker {
   private executingCommand = ''
   private commandStartedAt = 0
   private commandSeen = false
+  private promptAfterCompletion = true
+  private submittedCommand = ''
+
+  /** Application-reviewed source for history only. Screen text can expand
+   * literal tabs; capture mismatch checks still use the observed command. */
+  setSubmittedCommand(command: string) { this.submittedCommand = command }
   private capture:
     | {
         maxOutputChars: number
         onFinished: (result: CommandCaptureResult) => void
         marker: ShellIntegrationMarker | undefined
         sawCommandStart: boolean
+        expectedCommand?: string
+        armedAt: number
       }
     | undefined
 
@@ -131,16 +145,32 @@ export class ShellIntegrationTracker {
     this.sawMarkers = true
     switch (kind) {
       case 'A':
+        // Prompt escapes can also be replayed by the line editor while typing.
+        // Without C or D, A alone is not proof that the submitted input ended.
+        if (this.commandSeen) this.promptAfterCompletion = true
+        if (this.capture?.sawCommandStart) this.finishUnconfirmedCapture()
+        this.commandSeen = false
+        this.executingCommand = ''
         this.clearInputAnchor()
         this.pendingCommandText = ''
         this.state = 'prompt'
         return true
-      case 'B':
+      case 'B': {
+        const freshPrompt = this.state === 'prompt' && this.promptAfterCompletion
         this.anchorInput()
         this.state = 'input'
         this.events.onInputStart?.()
+        if (freshPrompt) {
+          this.promptAfterCompletion = false
+          this.events.onPromptReady?.()
+        }
         return true
+      }
       case 'C': {
+        this.promptAfterCompletion = false
+        // A bracketed Bash input may contain several PS0 markers before its
+        // sole prompt/exit marker. Keep the first input, timestamp and anchor.
+        if (this.commandSeen) return true
         this.executingCommand = this.pendingCommandText || this.capturedInputLine()
         this.pendingCommandText = ''
         this.commandStartedAt = this.host.now()
@@ -150,12 +180,14 @@ export class ShellIntegrationTracker {
         if (this.capture && !this.capture.sawCommandStart) {
           // C 时刻光标行即输出起始行(preexec 在回车换行之后触发)
           this.capture.sawCommandStart = true
+          this.capture.marker?.dispose()
           this.capture.marker = this.host.registerMarker()
         }
         this.events.onCommandStart?.(this.executingCommand)
         return true
       }
       case 'D': {
+        this.promptAfterCompletion = true
         // 空回车(zsh 不触发 preexec)只有 D 没有 C,不产出命令
         if (this.commandSeen) {
           this.commandSeen = false
@@ -164,19 +196,21 @@ export class ShellIntegrationTracker {
             ? Number.parseInt(exitCodeRaw, 10)
             : undefined
           const command = this.executingCommand.trim()
+          const historyCommand = this.submittedCommand || command
+          this.submittedCommand = ''
           const startedAt = this.commandStartedAt
           const finishedAt = this.host.now()
           this.executingCommand = ''
           this.finishCapture(command, exitCode, startedAt, finishedAt)
-          if (command) {
+          if (historyCommand) {
             this.events.onCommandFinished?.({
-              command,
+              command: historyCommand,
               exitCode,
               startedAt,
               finishedAt
             })
           }
-        }
+        } else if (this.capture?.expectedCommand) this.finishUnconfirmedCapture()
         this.state = 'prompt'
         return true
       }
@@ -188,6 +222,7 @@ export class ShellIntegrationTracker {
   /** OSC 633;<payload>。仅消费 E(命令文本),其余留给默认处理。 */
   handleOsc633(data: string): boolean {
     const [kind, ...fields] = data.split(';')
+    if (['A', 'B', 'C', 'D'].includes(kind)) return this.handleOsc133(data)
     if (kind !== 'E') return false
     this.sawMarkers = true
     this.pendingCommandText = decodeCommandLinePayload(fields).trim()
@@ -221,10 +256,10 @@ export class ShellIntegrationTracker {
     if (cursorRow < anchor.line) return ''
     let text = ''
     for (let row = anchor.line; row < cursorRow; row += 1) {
-      text += this.host.rowText(row)
+      text += this.host.rowText(row, undefined, row === anchor.line ? this.inputStartColumn : 0)
     }
-    text += this.host.rowText(cursorRow, this.host.cursorColumn())
-    return text.slice(this.inputStartColumn)
+    text += this.host.rowText(cursorRow, this.host.cursorColumn(), cursorRow === anchor.line ? this.inputStartColumn : 0)
+    return text
   }
 
   /**
@@ -238,7 +273,7 @@ export class ShellIntegrationTracker {
     let lastRow = cursorRow
     while (lastRow + 1 < this.host.rowCount() && this.host.rowIsWrapped(lastRow + 1)) lastRow += 1
     if (cursorRow !== lastRow) return false
-    const after = this.host.rowText(cursorRow).slice(this.host.cursorColumn())
+    const after = this.host.rowText(cursorRow, undefined, this.host.cursorColumn())
     return after === '' || /^\s{2,}/.test(after)
   }
 
@@ -246,28 +281,32 @@ export class ShellIntegrationTracker {
   private capturedInputLine(): string {
     const anchor = this.inputAnchor()
     if (!anchor) return ''
-    let text = this.host.rowText(anchor.line)
-    for (let row = anchor.line + 1; row < this.host.rowCount() && this.host.rowIsWrapped(row); row += 1) {
-      text += this.host.rowText(row)
+    let text = this.host.rowText(anchor.line, undefined, this.inputStartColumn)
+    const lastRow = Math.max(anchor.line, this.host.cursorRow() - (this.host.cursorColumn() === 0 ? 1 : 0))
+    for (let row = anchor.line + 1; row <= lastRow && row < this.host.rowCount(); row += 1) {
+      text += (this.host.rowIsWrapped(row) ? '' : '\n') + this.host.rowText(row)
     }
-    return text.slice(this.inputStartColumn).trim()
+    return text.trim()
   }
 
   /**
    * 一次性布防:捕获下一条命令(133;C → 133;D)的输出区间。
    * 仅 agent 派发的命令使用;重复布防会替换上一次。命令实际文本随结果返回,
-   * 与派发命令是否一致由调用方判断(用户手动输入串扰防护)。
+   * 与派发命令是否一致由调用方判断；不一致本身不能证明有用户输入。
    */
   armCommandCapture(
     maxOutputChars: number,
-    onFinished: (result: CommandCaptureResult) => void
+    onFinished: (result: CommandCaptureResult) => void,
+    expectedCommand?: string
   ): ArmedCommandCapture {
     this.disposeCapture()
     const capture = {
       maxOutputChars,
       onFinished,
-      marker: undefined as ShellIntegrationMarker | undefined,
-      sawCommandStart: false
+      marker: expectedCommand ? this.host.registerMarker() : undefined,
+      sawCommandStart: false,
+      expectedCommand,
+      armedAt: this.host.now()
     }
     this.capture = capture
     return {
@@ -279,6 +318,22 @@ export class ShellIntegrationTracker {
         if (this.capture === capture) this.disposeCapture()
       }
     }
+  }
+
+  private finishUnconfirmedCapture() {
+    const capture = this.capture
+    if (!capture) return
+    const endRow = this.host.cursorRow() + (this.host.cursorColumn() > 0 ? 1 : 0)
+    const collected = this.collectCaptureOutput(endRow, capture)
+    this.disposeCapture()
+    this.submittedCommand = ''
+    capture.onFinished({
+      command: this.executingCommand,
+      ...collected,
+      completionUnconfirmed: true,
+      startedAt: capture.sawCommandStart ? this.commandStartedAt : capture.armedAt,
+      finishedAt: this.host.now()
+    })
   }
 
   private finishCapture(
@@ -354,6 +409,8 @@ export class ShellIntegrationTracker {
     this.pendingCommandText = ''
     this.executingCommand = ''
     this.commandSeen = false
+    this.promptAfterCompletion = true
+    this.submittedCommand = ''
   }
 
   dispose() {
@@ -377,20 +434,40 @@ export class ShellIntegrationTracker {
     this.inputMarker?.dispose()
     this.inputMarker = undefined
     this.inputStartColumn = 0
+    this.host.clearInputWrapPadding?.()
   }
 }
 
-function xtermHost(terminal: Terminal): ShellIntegrationHost {
+function xtermHost(terminal: Terminal): ShellIntegrationHost & { noteLineErase(): void } {
+  const wrapPadding: { marker: ShellIntegrationMarker; cols: number }[] = []
+  const clearInputWrapPadding = () => { wrapPadding.splice(0).forEach(padding => padding.marker.dispose()) }
   return {
+    clearInputWrapPadding,
+    noteLineErase: () => {
+      const buffer = terminal.buffer.active
+      // Readline pads the last column before a wide character with SPACE +
+      // EL(0), while the cursor is still beyond the right edge. A literal space
+      // at a wrap boundary does not have this erase sequence.
+      if (buffer.type !== 'normal' || buffer.cursorX !== terminal.cols) return
+      const row = buffer.baseY + buffer.cursorY
+      if (buffer.getLine(row)?.getCell(terminal.cols - 1)?.getChars() !== ' ') return
+      if (wrapPadding.some(padding => !padding.marker.isDisposed && padding.marker.line === row && padding.cols === terminal.cols)) return
+      const marker = terminal.registerMarker(0)
+      if (marker) wrapPadding.push({ marker, cols: terminal.cols })
+    },
     registerMarker: () => terminal.registerMarker(0) ?? undefined,
     cursorRow: () => terminal.buffer.active.baseY + terminal.buffer.active.cursorY,
     cursorColumn: () => terminal.buffer.active.cursorX,
-    rowText: (row, endColumn) => {
+    rowText: (row, endColumn, startColumn = 0) => {
       const line = terminal.buffer.active.getLine(row)
       if (!line) return ''
-      return endColumn === undefined
-        ? line.translateToString(true)
-        : line.translateToString(true, 0, endColumn)
+      const next = terminal.buffer.active.getLine(row + 1)
+      const padding = wrapPadding.some(padding => !padding.marker.isDisposed && padding.marker.line === row && padding.cols === terminal.cols)
+      if (padding && next?.isWrapped && next.getCell(0)?.getWidth() === 2
+          && line.getCell(terminal.cols - 1)?.getChars() === ' ') {
+        endColumn = Math.min(endColumn ?? terminal.cols, terminal.cols - 1)
+      }
+      return line.translateToString(true, startColumn, endColumn)
     },
     rowIsWrapped: (row) => terminal.buffer.active.getLine(row)?.isWrapped ?? false,
     rowCount: () => terminal.buffer.active.length,
@@ -407,8 +484,14 @@ export function attachShellIntegration(
   terminal: Terminal,
   events: ShellIntegrationEvents = {}
 ): AttachedShellIntegration {
-  const tracker = new ShellIntegrationTracker(xtermHost(terminal), events)
+  const host = xtermHost(terminal)
+  const tracker = new ShellIntegrationTracker(host, events)
   const disposables = [
+    terminal.parser.registerCsiHandler({ final: 'K' }, params => {
+      if (tracker.state === 'input' && params.length === 1 && params[0] === 0) host.noteLineErase()
+      return false
+    }),
+    terminal.onResize(() => host.clearInputWrapPadding?.()),
     terminal.parser.registerOscHandler(133, (data) => tracker.handleOsc133(data)),
     terminal.parser.registerOscHandler(633, (data) => tracker.handleOsc633(data)),
     terminal.parser.registerOscHandler(7, (data) => tracker.handleOsc7(data)),

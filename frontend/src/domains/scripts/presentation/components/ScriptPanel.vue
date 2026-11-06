@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ScriptTaskContext from './ScriptTaskContext.vue'
+import { persistTaskScriptMetadata } from '../../domain/taskScript'
+import type { ScriptExecutionSource } from '../../domain/scriptPanel'
 import { shellCommandForPart } from '../../domain/scriptPresentation'
 import { useScriptExecution } from '../../application/useScriptExecution'
 import { useScriptGeneration } from '../../application/useScriptGeneration'
@@ -40,7 +43,7 @@ const LONG_MESSAGE_LINES = 12
 const saveState = ref<SaveState>('idle')
 const lastSavedScriptId = ref('')
 const panelError = ref('')
-const { scriptExecutionNotice, pendingScriptExecution, pendingScriptSource, scriptRiskExplanation, scriptRiskExplanationError, scriptRiskExplanationLoading, scriptRiskExplanationRequestId, preparedScriptContent, pendingScriptRisks, scriptRiskConfirmOpen, pendingScriptRiskSummary, pendingScriptRiskLines, pendingScriptConnectionMismatch, pendingExecutionTitle, pendingExecutionSubtitle, buildScriptRiskExplanationPrompt, explainPendingScriptRisk, clearScriptRiskExplanation, executeScriptContent, writeScriptToTerminal, confirmPendingScriptExecution, closeScriptRiskConfirm, executionTargetsDifferFromSource } = useScriptExecution({
+const { scriptExecutionNotice, pendingScriptExecution, pendingScriptSource, scriptRiskExplanation, scriptRiskExplanationError, scriptRiskExplanationLoading, scriptRiskExplanationRequestId, preparedScriptContent, pendingScriptRisks, scriptRiskConfirmOpen, pendingScriptRiskSummary, pendingScriptRiskLines, pendingScriptConnectionMismatch, pendingExecutionTitle, pendingExecutionSubtitle, buildScriptRiskExplanationPrompt, explainPendingScriptRisk, clearScriptRiskExplanation, executeScriptContent: executeReviewedScriptContent, writeScriptToTerminal, confirmPendingScriptExecution, closeScriptRiskConfirm, executionTargetsDifferFromSource } = useScriptExecution({
   props, emit, panelError, sourceCommands: () => sourceCommands.value,
   recordedOutput: () => recordedOutput.value, hasUsableConfig: () => hasUsableConfig.value,
   connectionLabel
@@ -71,6 +74,20 @@ const editingMessageId = ref('')
 const scriptDrafts = ref<Record<string, string>>({})
 const { documents, createDraft, ensureSaved, updateContent, snapshot, receiveGeneration, acceptPending, markSaved } = useScriptDrafts()
 const draftScriptId = ref(createDraft({ connectionId: props.connectionId, workspaceSessionId: props.workspaceSessionId }).id)
+const taskParameterValues = ref<Record<string, Record<string, string>>>({})
+function setTaskParameter(id: string, name: string, value: string) { taskParameterValues.value[id] = { ...taskParameterValues.value[id], [name]: value } }
+function executeScriptContent(content: string, source?: ScriptExecutionSource) {
+  executeReviewedScriptContent(content, source ? { ...source, parameterValues: source.id ? taskParameterValues.value[source.id] : undefined } : undefined)
+}
+watch(() => props.taskScriptImport?.requestId, () => {
+  const value = props.taskScriptImport
+  if (!value) return
+  const draft = value.draft
+  const document = createDraft({ connectionId: draft.metadata.environment.profileId, workspaceSessionId: draft.metadata.source.workspaceSessionId, sourceCommands: draft.sourceCommands, taskMetadata: draft.metadata })
+  document.title = '任务脚本.sh'; updateContent(document.id, draft.content)
+  draftScriptId.value = document.id; scriptPanelMode.value = 'generate'; saveState.value = 'idle'; panelError.value = ''
+}, { immediate: true })
+
 const activeDraft = computed(() => documents.value[draftScriptId.value])
 const selectedScriptDraft = computed({
   get: () => selectedScript.value ? ensureSaved(selectedScript.value).content : '',
@@ -654,6 +671,7 @@ async function saveSelectedScript() {
   }
   const updated: UpdateScript = {
     ...script,
+    taskMetadata: script.taskMetadata ? { ...persistTaskScriptMetadata(script.taskMetadata)!, revision: script.taskMetadata.revision + (script.content === content ? 0 : 1) } : undefined,
     content,
     updatedAt: nowText()
   }
@@ -816,7 +834,7 @@ async function saveDraftScript() {
   const savedCommands = [...(document.sourceCommands.length ? document.sourceCommands : sourceCommands.value)]
   const savedDescription = inferDescription(latestAssistantText()) || inferDescription(latestUserScriptRequest()) || '手动保存脚本'
   const fallbackName = inferScriptName(content, existing?.name || '脚本')
-  const shouldGenerateName = !existing || isAutoScriptName(existing.name)
+  const shouldGenerateName = !document.taskMetadata && (!existing || isAutoScriptName(existing.name))
   const name = shouldGenerateName
     ? await generateScriptTitle(
         content,
@@ -824,8 +842,9 @@ async function saveDraftScript() {
         latestUserScriptRequest(),
         savedCommands
       )
-    : existing.name
+    : existing?.name ?? document.title
   const script: UpdateScript = {
+    taskMetadata: document.taskMetadata ? { ...persistTaskScriptMetadata(document.taskMetadata)!, revision: existing?.taskMetadata ? existing.taskMetadata.revision + (existing.content === content ? 0 : 1) : 1 } : undefined,
     id: document.id,
     connectionId: savedConnectionId,
     workspaceSessionId: savedSessionId,
@@ -880,7 +899,7 @@ function executeDraftScript() {
     return
   }
   panelError.value = ''
-  const source = draftSavedScript.value ?? (draftSourceConnectionId.value ? { connectionId: draftSourceConnectionId.value } : undefined)
+  const source = { ...(draftSavedScript.value ?? {}), id: activeDraft.value.id, connectionId: draftSourceConnectionId.value, taskMetadata: activeDraft.value.taskMetadata }
   executeScriptContent(content, source)
 }
 
@@ -945,7 +964,7 @@ function executeExpandedScript() {
   panelError.value = ''
   const sourceScript = scriptPreviewSource.value === 'selected'
     ? selectedScript.value
-    : draftSavedScript.value ?? (draftSourceConnectionId.value ? { connectionId: draftSourceConnectionId.value } : undefined)
+    : { ...(draftSavedScript.value ?? {}), id: activeDraft.value.id, connectionId: draftSourceConnectionId.value, taskMetadata: activeDraft.value.taskMetadata }
   executeScriptContent(content, sourceScript)
 }
 
@@ -1099,6 +1118,8 @@ function focusScriptComposer() {
       </section>
     </Teleport>
 
+    <ScriptTaskContext v-if="editingSelectedScript && selectedScript?.taskMetadata" :metadata="selectedScript.taskMetadata" :values="taskParameterValues[selectedScript.id] ?? {}" @parameter="(name, value) => setTaskParameter(selectedScript!.id, name, value)" />
+    <ScriptTaskContext v-else-if="!editingSelectedScript && activeDraft.taskMetadata" :metadata="activeDraft.taskMetadata" :values="taskParameterValues[activeDraft.id] ?? {}" @parameter="(name, value) => setTaskParameter(activeDraft.id, name, value)" />
     <div class="script-editor-toolbar">
       <button v-if="!props.recording.isRecording" class="text-button record-action" type="button" @click="startRecording"><UiIcon :name="recordingHasData ? 'refresh' : 'play'" />{{ recordingActionLabel }}</button>
       <button v-else class="text-button danger" type="button" @click="stopRecording"><UiIcon name="stop" />停止录制</button>

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{
     fmt,
     ops::{Deref, DerefMut},
@@ -44,7 +44,8 @@ const CONNECTION_PROFILE_SELECT: &str = r#"
       target_password,
       jump_mode,
       menu_profile_id,
-      file_transfer_mode
+      file_transfer_mode,
+      shell_integration
     FROM connection_profiles
 "#;
 
@@ -93,6 +94,7 @@ fn map_connection_profile_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conne
         jump_mode: jump_mode_from_str(&jump_mode),
         menu_profile_id: row.get(16)?,
         file_transfer_mode: file_transfer_mode_from_str(&file_transfer_mode),
+        shell_integration: row.get(18)?,
     })
 }
 
@@ -226,9 +228,10 @@ impl SqliteConfigStore {
               jump_mode,
               menu_profile_id,
               file_transfer_mode,
+              shell_integration,
               updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, CURRENT_TIMESTAMP)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               connection_role = excluded.connection_role,
@@ -247,6 +250,7 @@ impl SqliteConfigStore {
               jump_mode = excluded.jump_mode,
               menu_profile_id = excluded.menu_profile_id,
               file_transfer_mode = excluded.file_transfer_mode,
+              shell_integration = excluded.shell_integration,
               updated_at = CURRENT_TIMESTAMP
             "#,
             params![
@@ -268,6 +272,7 @@ impl SqliteConfigStore {
                 jump_mode_to_str(&stored.jump_mode),
                 stored.menu_profile_id,
                 file_transfer_mode_to_str(&stored.file_transfer_mode),
+                stored.shell_integration,
             ],
         )?;
         Ok(())
@@ -705,6 +710,34 @@ impl SqliteConfigStore {
 
     pub fn save_update_script(&self, script: &UpdateScript) -> Result<()> {
         let connection = self.connection()?;
+        let mut metadata = script.task_metadata.clone();
+        if let Some(value) = &mut metadata {
+            value.sanitize()?;
+            let previous: Option<(String, Option<String>)> = connection
+                .query_row(
+                    "SELECT content, task_metadata_json FROM update_scripts WHERE id=?1",
+                    [&script.id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((content, Some(json))) = previous {
+                if let Ok(old) = serde_json::from_str::<
+                    crate::domain::workspace::task_script::ScriptTaskMetadata,
+                >(&json)
+                {
+                    value.revision = old.revision;
+                    if content != script.content || *value != old {
+                        value.revision = value
+                            .revision
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow::anyhow!("脚本版本超过上限"))?;
+                    }
+                }
+            }
+        }
+        let task_metadata_json = metadata
+            .map(|value| serde_json::to_string(&value))
+            .transpose()?;
         let source_commands_json = serde_json::to_string(&script.source_commands)?;
         connection.execute(
             r#"
@@ -717,9 +750,10 @@ impl SqliteConfigStore {
               content,
               source_commands_json,
               created_at,
-              updated_at
+              updated_at,
+              task_metadata_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
               connection_id = excluded.connection_id,
               workspace_session_id = excluded.workspace_session_id,
@@ -727,7 +761,8 @@ impl SqliteConfigStore {
               description = excluded.description,
               content = excluded.content,
               source_commands_json = excluded.source_commands_json,
-              updated_at = excluded.updated_at
+              updated_at = excluded.updated_at,
+              task_metadata_json = excluded.task_metadata_json
             "#,
             params![
                 script.id,
@@ -739,6 +774,7 @@ impl SqliteConfigStore {
                 source_commands_json,
                 script.created_at,
                 script.updated_at,
+                task_metadata_json,
             ],
         )?;
         Ok(())
@@ -757,7 +793,8 @@ impl SqliteConfigStore {
               content,
               source_commands_json,
               created_at,
-              updated_at
+              updated_at,
+              task_metadata_json
             FROM update_scripts
             ORDER BY updated_at DESC, created_at DESC, id DESC
             "#,
@@ -768,6 +805,9 @@ impl SqliteConfigStore {
             let source_commands =
                 serde_json::from_str::<Vec<String>>(&source_commands_json).unwrap_or_default();
             Ok(UpdateScript {
+                task_metadata: row
+                    .get::<_, Option<String>>(9)?
+                    .and_then(|json| serde_json::from_str(&json).ok()),
                 id: row.get(0)?,
                 connection_id: row.get(1)?,
                 workspace_session_id: row.get(2)?,
@@ -797,7 +837,8 @@ impl SqliteConfigStore {
               content,
               source_commands_json,
               created_at,
-              updated_at
+              updated_at,
+              task_metadata_json
             FROM update_scripts
             WHERE id = ?1
             "#,
@@ -808,6 +849,9 @@ impl SqliteConfigStore {
             let source_commands =
                 serde_json::from_str::<Vec<String>>(&source_commands_json).unwrap_or_default();
             Ok(UpdateScript {
+                task_metadata: row
+                    .get::<_, Option<String>>(9)?
+                    .and_then(|json| serde_json::from_str(&json).ok()),
                 id: row.get(0)?,
                 connection_id: row.get(1)?,
                 workspace_session_id: row.get(2)?,
@@ -1095,7 +1139,7 @@ impl SqliteConfigStore {
         }
         Ok(())
     }
-    fn connection(&self) -> Result<StoreConnection<'_>> {
+    pub(super) fn connection(&self) -> Result<StoreConnection<'_>> {
         let mut guard = self
             .connection
             .lock()
@@ -1124,6 +1168,12 @@ impl SqliteConfigStore {
 }
 
 fn migrate_connection_profiles(connection: &Connection) -> Result<()> {
+    ensure_column(
+        connection,
+        "connection_profiles",
+        "shell_integration",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
     ensure_column(
         connection,
         "connection_profiles",
@@ -1225,6 +1275,7 @@ fn migrate_update_scripts(connection: &Connection) -> Result<()> {
           ON update_scripts(connection_id, updated_at);
         "#,
     )?;
+    ensure_column(connection, "update_scripts", "task_metadata_json", "TEXT")?;
     Ok(())
 }
 

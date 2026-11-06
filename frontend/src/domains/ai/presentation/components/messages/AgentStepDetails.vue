@@ -4,15 +4,19 @@ import UiIcon from '../../../../../shared/ui/UiIcon.vue'
 import AiCodeText from './AiCodeText.vue'
 import { useCopyFeedback } from './useCopyFeedback'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  inputLabel?: string
+  detailsTitle?: string
   command: string
   output?: string
+  stdout?: string
+  stderr?: string
   failureDetail?: string
   targetLabel?: string
   exitCode?: number
   duration?: string
   autoApproved?: boolean
-}>()
+}>(), { inputLabel: '命令', detailsTitle: '命令与完整输出' })
 const open = ref(false)
 const wrap = ref(false)
 const trigger = ref<HTMLButtonElement | null>(null)
@@ -21,8 +25,8 @@ const closeButton = ref<HTMLButtonElement | null>(null)
 const theme = ref<Record<string, string>>({})
 const { copyFeedback, copyText } = useCopyFeedback()
 const sections = computed(() => [
-  { kind: 'command', label: '命令', content: props.command },
-  ...(props.output !== undefined ? [{ kind: 'output', label: props.exitCode === undefined ? '输出' : `输出 · exit ${props.exitCode}`, content: props.output }] : []),
+  { kind: 'command', label: props.inputLabel, content: props.command },
+  ...(props.stdout !== undefined ? [{ kind: 'stdout', label: '标准输出 · stdout', content: props.stdout }, { kind: 'stderr', label: '错误输出 · stderr', content: props.stderr ?? '' }] : props.output !== undefined ? [{ kind: 'output', label: props.exitCode === undefined ? '输出' : `输出 · exit ${props.exitCode}`, content: props.output }] : []),
   ...(props.failureDetail ? [{ kind: 'error', label: '错误详情', content: props.failureDetail }] : [])
 ])
 
@@ -58,16 +62,16 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
 
 <template>
   <button ref="trigger" class="tool-step-details" type="button" aria-haspopup="dialog" :aria-expanded="open" @click="show">
-    <UiIcon name="terminal" size="13" /><span>查看命令与完整输出</span>
+    <UiIcon name="terminal" size="13" /><span>查看{{ detailsTitle }}</span>
     <UiIcon name="chevron-right" size="13" />
   </button>
   <Teleport to="body">
     <Transition name="dialog-motion">
       <div v-if="open" class="agent-detail-backdrop" :style="theme" @click.self="close">
-        <section ref="dialog" class="agent-detail-dialog" role="dialog" aria-modal="true" aria-label="命令与完整输出" @keydown="handleKey">
+        <section ref="dialog" class="agent-detail-dialog" role="dialog" aria-modal="true" :aria-label="detailsTitle" @keydown="handleKey">
           <header class="agent-detail-head">
             <div>
-              <strong>命令与完整输出</strong>
+              <strong>{{ detailsTitle }}</strong>
               <p v-if="targetLabel">此步骤来源 · {{ targetLabel }}</p>
               <p v-if="autoApproved || duration" class="agent-detail-meta"><span v-if="autoApproved">自动执行</span><span v-if="duration">{{ duration }}</span></p>
             </div>
@@ -78,7 +82,7 @@ onBeforeUnmount(() => { if (open.value && trigger.value?.isConnected) trigger.va
             <section v-for="section in sections" :key="section.kind" class="agent-detail-section" :data-kind="section.kind">
               <header><span>{{ section.label }}</span><button class="agent-detail-icon" type="button" :disabled="!section.content" :aria-label="`复制${section.kind === 'output' ? '输出' : section.label}`" :title="`复制${section.kind === 'output' ? '输出' : section.label}`" @click="copyText(section.content)"><UiIcon name="copy" size="14" /></button></header>
               <pre v-if="section.content" :class="{ 'is-wrapped': section.kind !== 'output' || wrap }"><AiCodeText :content="section.content" :line-numbers="false" :wrap="section.kind !== 'output' || wrap" /></pre>
-              <p v-else class="agent-detail-empty">命令已结束，没有输出。</p>
+              <p v-else class="agent-detail-empty">{{ inputLabel === '命令' ? '命令已结束，没有输出。' : '没有返回内容。' }}</p>
             </section>
           </div>
         </section>

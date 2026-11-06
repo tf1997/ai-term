@@ -2,7 +2,7 @@
 import { useTerminalCapture } from '../../application/useTerminalCapture'
 import { useTerminalEvents } from '../../application/useTerminalEvents'
 import { useQuickCommands } from '../../application/useQuickCommands'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { inject, computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { IDisposable, ITheme } from '@xterm/xterm'
@@ -14,7 +14,8 @@ import { createDefaultUserSettings } from '../../../settings/index'
 import type { AuthEndpoint, ConnectionProfile } from '../../../connections/types'
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
 import { createInternalTerminalOutputFilter } from '../../domain/internalTerminalOutput'
-import { frameInternalProbe, isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../domain/internalTerminalCommand'
+import { createSentinelDisplayFilter } from '../../domain/sentinelDisplayFilter'
+import { isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../domain/internalTerminalCommand'
 import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
 import { attachShellIntegration } from '../../domain/shellIntegration'
 import type { AttachedShellIntegration } from '../../domain/shellIntegration'
@@ -27,6 +28,13 @@ import { isWindowsPlatform } from '../../../../shared/platform/platform'
 import { SYSTEM_TERMINAL_CJK_FALLBACK, WINDOWS_TERMINAL_CJK_FALLBACK, withCjkFallback } from '../../domain/terminalFont'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
+import type { CommandIntent, CommandIntentReference, ExecutionTarget } from '../../../../shared/security/commandPolicy'
+import * as commandPolicy from '../../infrastructure/commandPolicy'
+import { commandReviewerKey } from '../../application/useCommandPolicyReview'
+import { createReadyAgentCommand } from '../../domain/deferredAgentCommand'
+import { parseCommandContext } from '../../domain/commandContext'
+
+const reviewCommand = inject(commandReviewerKey, undefined)
 const defaultTerminalSettings = createDefaultUserSettings(isWindowsPlatform())
 const terminalTypographyOptions = isWindowsPlatform()
   ? { lineHeight: 1.25, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
@@ -53,6 +61,7 @@ interface TerminalVisualSettings {
 }
 
 interface TerminalInputBatch {
+  intent?: CommandIntentReference
   generation: number
   sessionId: string
   data: string
@@ -73,6 +82,7 @@ interface DeferredCommandCapture {
 }
 
 interface PreparedTerminalInputOptions {
+  intent?: CommandIntentReference
   source: TerminalInputWriteSource
   sourceTerminalId?: string
   submittedCommands?: readonly string[]
@@ -154,6 +164,7 @@ let selectionRenderDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
 const internalOutputFilter = createInternalTerminalOutputFilter()
+const sentinelDisplayFilter = createSentinelDisplayFilter()
 let internalOutputTimer: number | undefined
 let terminalProtocolSequence = 0
 let terminalOutputEmitTimer: number | undefined
@@ -170,17 +181,26 @@ let shellPromptText = ''
 let shellPromptSignature: ShellPromptSignature | undefined
 let shellPromptDiscoveryOpen = true
 let shellCommandAwaitingPrompt = false
+let applicationPromptPending: { markers: boolean } | undefined
 let terminalWasInAlternateBuffer = false
 let pendingTrackedCommands: string[] = []
 let pendingDeferredCommandCaptures: DeferredCommandCapture[] = []
 let completionDebounceTimer: number | undefined
 let completionSuppressedForHistoryNavigation = false
 let shellIntegrationAttachment: AttachedShellIntegration | undefined
-const { agentCapturePreparing, agentCaptureSupported, ensureAgentCapture, runCommandAndCapture, ingestCaptureOutput, abortActiveCapture } = useTerminalCapture({
+let sessionIntegrationAttempted = -1
+let sessionIntegrationScheduled = false
+const { agentCaptureMode, agentCapturePreparing, agentCaptureSupported, ensureAgentCapture, ensureBracketedCapture, runCommandAndCapture, ingestCaptureOutput, abortActiveCapture, invalidateCaptureCapability } = useTerminalCapture({
   getSessionId: () => sessionId,
+  bracketedPasteEnabled: () => terminal?.modes.bracketedPasteMode === true,
   getShellIntegration: () => shellIntegrationAttachment,
   commandExecutionReadiness,
-  executeCommand
+  // Native production capture only accepts backend-owned operations.
+  executeCommand: () => false,
+  dispatchIntent: dispatchPreparedCommand,
+  prepareProbe: async probe => commandPolicy.prepareTerminalProbe(await commandPolicy.commandExecutionTarget(sessionId), probe),
+  cancelIntent: intent => commandPolicy.cancelCommandIntent(intent.reference),
+  enableShellIntegration: () => shellIntegrationInjectionEnabled() && activeSessionProfile.value?.shellIntegration !== false
 })
 let pendingInputControlSequence = ''
 let terminalInputGeneration = 0
@@ -694,7 +714,7 @@ function writeTerminalView(data: string, forceScroll = false) {
 function afterTerminalWriteParsed() {
   if (scrollAfterParse) scrollTerminalToBottom()
   scrollAfterParse = false
-  updateTerminalInputContextFromOutput()
+  updateTerminalInputContextFromOutput(true)
   if (shellIntegrationInputActive()) {
     // 集成模式下输入内容以屏幕回显为准:回显落地后再评估是否弹补全,
     // Tab 补全、autosuggestion、历史翻找造成的行内容变化都会经过这里
@@ -707,6 +727,23 @@ function afterTerminalWriteParsed() {
     scheduleCompletionSuggestions()
   }
   if (terminalCompletionOpen.value) scheduleCompletionPosition()
+  scheduleSessionIntegration()
+}
+
+function scheduleSessionIntegration() {
+  if (sessionIntegrationScheduled || sessionIntegrationAttempted === terminalInputGeneration
+      || activeSession.value !== 'remote' || status.value !== 'remote'
+      || !shellIntegrationInjectionEnabled() || activeSessionProfile.value?.shellIntegration === false
+      || ['powershell', 'cmd'].includes(shellPromptSignature?.kind ?? '')
+      || commandExecutionReadiness() !== 'ready') return
+  const generation = terminalInputGeneration
+  sessionIntegrationScheduled = true
+  void nextTick(() => {
+    sessionIntegrationScheduled = false
+    if (generation !== terminalInputGeneration || commandExecutionReadiness() !== 'ready') return
+    sessionIntegrationAttempted = generation
+    void ensureAgentCapture().catch(() => { /* Availability is retried when an Agent task starts. */ })
+  })
 }
 
 function syncTerminalSize(forcePtyResize = false) {
@@ -813,7 +850,7 @@ function ingestTerminalOutput(data: string, forceScroll = false) {
     delta: data,
     sequence: ++terminalProtocolSequence
   })
-  data = internalOutputFilter.push(data)
+  data = internalOutputFilter.push(sentinelDisplayFilter.push(data))
   if (!data) return
   appendTerminalOutput(data)
   writeTerminalView(data, forceScroll)
@@ -822,7 +859,7 @@ function ingestTerminalOutput(data: string, forceScroll = false) {
 function flushInternalOutput() {
   if (internalOutputTimer !== undefined) window.clearTimeout(internalOutputTimer)
   internalOutputTimer = undefined
-  const data = internalOutputFilter.push('')
+  const data = internalOutputFilter.push(sentinelDisplayFilter.push(''))
   if (data) { appendTerminalOutput(data); writeTerminalView(data) }
 }
 
@@ -832,9 +869,11 @@ function scheduleInternalOutputFlush(delay: number) {
 }
 
 function resetInternalOutput() {
+  applicationPromptPending = undefined
   if (internalOutputTimer !== undefined) window.clearTimeout(internalOutputTimer)
   internalOutputTimer = undefined
   internalOutputFilter.reset()
+  sentinelDisplayFilter.reset()
 }
 
 function finishFileInput(command: string) {
@@ -843,6 +882,8 @@ function finishFileInput(command: string) {
 }
 
 function resumeUserOutput() {
+  const remaining = sentinelDisplayFilter.resume()
+  if (remaining) { appendTerminalOutput(remaining); writeTerminalView(remaining) }
   internalOutputFilter.resume()
   flushInternalOutput()
   scheduleInternalOutputFlush(2_010)
@@ -1172,7 +1213,7 @@ function sameTerminalInputBatch(
   source: TerminalInputWriteSource,
   sourceTerminalId?: string
 ) {
-  return batch.generation === generation &&
+  return !batch.intent && batch.generation === generation &&
     batch.sessionId === activeSessionId &&
     batch.source === source &&
     batch.sourceTerminalId === sourceTerminalId
@@ -1183,19 +1224,21 @@ function enqueueTerminalInput(
   source: TerminalInputWriteSource,
   commits: Array<() => void> = [],
   failures: Array<(error: unknown) => void> = [],
-  sourceTerminalId?: string
+  sourceTerminalId?: string,
+  intent?: CommandIntentReference
 ) {
   if (!data || !terminalBackendInputReady()) return false
   const generation = terminalInputGeneration
   const activeSessionId = sessionId
   const tail = terminalInputQueue[terminalInputQueue.length - 1]
-  if (tail && sameTerminalInputBatch(tail, generation, activeSessionId, source, sourceTerminalId)) {
+  if (!intent && tail && sameTerminalInputBatch(tail, generation, activeSessionId, source, sourceTerminalId)) {
     tail.data += data
     tail.commits.push(...commits)
     tail.failures.push(...failures)
   } else {
     terminalInputQueue.push({
       generation,
+      intent,
       sessionId: activeSessionId,
       data,
       source,
@@ -1231,9 +1274,21 @@ async function pumpTerminalInputQueue(generation = terminalInputGeneration) {
         continue
       }
       try {
-        await terminalWrite(batch.sessionId, batch.data)
+        if (batch.intent && batch.data.startsWith('\x1b[200~') && !terminal?.modes.bracketedPasteMode) {
+          void commandPolicy.cancelCommandIntent(batch.intent).catch(() => {})
+          throw new Error('队列派发前括号粘贴模式已关闭，请重新准备命令')
+        }
+        if (batch.intent) await commandPolicy.dispatchCommandIntent(batch.intent)
+        else await terminalWrite(batch.sessionId, batch.data)
       } catch (error) {
         if (batch.generation !== terminalInputGeneration || batch.sessionId !== sessionId) continue
+        if (batch.intent && !formatError(error).includes('实际效果可能未知')) {
+          // A stale/denied intent is not evidence of a disconnected transport.
+          shellCommandAwaitingPrompt = false
+          invalidateTrackedTerminalInput()
+          batch.failures.forEach(failure => runTerminalInputFailure(failure, error))
+          continue
+        }
         terminalInputReady = false
         failedTerminalInputGeneration = batch.generation
         // The backend may reject a write without emitting a close event. Expose
@@ -1483,6 +1538,7 @@ function refreshTerminalInputContext() {
 
 function commandExecutionReadiness(): TerminalCommandReadiness {
   if (status.value !== 'preview' && !terminalBackendInputReady()) return 'unavailable'
+  if (applicationPromptPending) return 'shell-busy'
   if (internalOutputFilter.active()) return 'shell-busy'
   if (shellIntegrationInputActive()) {
     return shellIntegrationCommandLine().trim() ? 'line-busy' : 'ready'
@@ -1507,7 +1563,8 @@ function trackedInputResidueIsStale() {
   return shellPromptSignature?.kind !== 'bare' && rendered.endsWith(shellPromptText)
 }
 
-function updateTerminalInputContextFromOutput() {
+function updateTerminalInputContextFromOutput(freshOutput = false) {
+  if (applicationPromptPending && (!freshOutput || applicationPromptPending.markers)) return
   if (terminal?.buffer.active.type === 'alternate') {
     terminalWasInAlternateBuffer = true
     terminalInputContext = 'unknown'
@@ -1547,6 +1604,7 @@ function updateTerminalInputContextFromOutput() {
   if (!prompt) return
   shellPromptText = prompt.text
   shellPromptSignature = prompt.signature
+  applicationPromptPending = undefined
   markTrackedTerminalInputAsShell()
 }
 
@@ -1886,6 +1944,7 @@ onMounted(async () => {
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   shellIntegrationAttachment = attachShellIntegration(terminal, {
+    onPromptReady: () => { applicationPromptPending = undefined },
     onInputStart: () => {
       completionSuppressedForHistoryNavigation = false
     },
@@ -1950,6 +2009,7 @@ onMounted(async () => {
 })
 
 watch(status, (value) => emitTerminalStatus(value), { immediate: true })
+watch(status, scheduleSessionIntegration)
 
 watch([() => props.terminalSettings, () => props.appTheme], applyTerminalAppearance)
 
@@ -2299,6 +2359,7 @@ function runTerminalInputFailure(failure: (error: unknown) => void, error: unkno
 
 function writePreparedTerminalInput(data: string, options: PreparedTerminalInputOptions) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  if (!options.intent) invalidateCaptureCapability()
   const submittedCommands = [...(options.submittedCommands ?? [])]
   const commits: Array<() => void> = []
   const failures: Array<(error: unknown) => void> = []
@@ -2309,7 +2370,7 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
   if (options.onWriteFailed) failures.push(options.onWriteFailed)
 
   if (terminalBackendInputReady()) {
-    if (!enqueueTerminalInput(data, options.source, commits, failures, options.sourceTerminalId)) return false
+    if (!enqueueTerminalInput(data, options.source, commits, failures, options.sourceTerminalId, options.intent)) return false
     // vim 鼠标模式下 xterm 会以 onData 形式发出鼠标上报等转义序列,并不代表
     // 用户在终端打字;此时不抢焦点,避免把 AI/脚本面板输入框的焦点拉回终端
     if (!options.preserveFocus && (options.source !== 'interactive' || !data.startsWith('\x1b'))) {
@@ -2324,65 +2385,104 @@ function writePreparedTerminalInput(data: string, options: PreparedTerminalInput
   return true
 }
 
-/**
- * 派发一条命令到终端。`historyCommand` 用于哨兵路径:派发的是包装后的长命令,
- * 但命令历史与事件应记录用户/模型看到的干净命令;传空串则不记历史(探针)。
- */
-function executeCommand(command: string, options?: { historyCommand?: string; internal?: boolean; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) {
-  const value = command.trim()
-  if (!value) return false
-  if (props.agentControlled && !options?.allowDuringAgentTakeover) return false
-  const recorded = options?.historyCommand ?? value
-  refreshTerminalInputContext()
-  if (terminalBackendInputReady()) {
-    if (!terminalLineReadyForAppInput()) return false
-    closeCompletion()
-    const integrationCaptures = shellIntegrationInputActive()
-    const dispatched = options?.internal
-      ? wrapInternalTerminalCommand(frameInternalProbe(value, `${Date.now()}_${Math.random().toString(36).slice(2)}`))
-      : value
-    if (options?.internal) {
-      internalOutputFilter.begin(dispatched, {
-        debug: props.terminalSettings?.debugMode === true,
-        timeoutMs: 8_000,
-        restorePrefix: internalPromptRestorePrefix()
-      })
-      scheduleInternalOutputFlush(8_010)
-    }
-    const accepted = writePreparedTerminalInput(dispatched + '\r', {
-      source: 'command',
-      preserveFocus: props.agentControlled && options?.allowDuringAgentTakeover === true,
-      // 集成模式下由 OSC 133;C/D 记录(含退出码),避免重复
-      onWritten: () => {
-        if (!integrationCaptures) recordCommand(recorded)
-      },
-      onWriteFailed: error => {
-        if (options?.internal) finishFileInput(dispatched)
-        options?.onWriteFailed?.(error)
+/** Review and execution share the immutable backend intent, including transport. */
+async function prepareExecutionTarget(capture = false) {
+  const boundSession = sessionId
+  const generation = terminalInputGeneration
+  const guard = () => sessionId !== boundSession || terminalInputGeneration !== generation ? '目标终端已经变化' : ''
+  if (capture) {
+    const mode = await ensureAgentCapture()
+    if (guard()) throw new Error(guard())
+    if (mode === 'unsupported') throw new Error('当前终端不支持可靠命令捕获')
+  }
+  let target = await commandPolicy.commandExecutionTarget(boundSession)
+  if (guard()) throw new Error(guard())
+  if (target.context.shell === 'unknown' && !['powershell', 'cmd'].includes(shellPromptSignature?.kind ?? '')) {
+    const probe = createReadyAgentCommand(commandExecutionReadiness, guard, () => runCommandAndCapture('', { probe: { kind: 'context' }, maxOutputChars: 8192, dispatchGuard: guard }))
+    const timer = window.setTimeout(() => probe.cancel(), 8000)
+    try {
+      const result = await probe.result
+      if (guard()) throw new Error(guard())
+      if (result.status === 'completed' && result.exitCode === 0 && !result.truncated) {
+        const context = parseCommandContext(result.output)
+        if (context) target = await commandPolicy.updateCommandContext(target, context)
       }
-    })
-    if (!accepted) {
-      if (options?.internal) finishFileInput(dispatched)
-      return false
+    } finally { window.clearTimeout(timer) }
+  }
+  // Probe END can precede the prompt. Wait for readiness without sending input.
+  const ready = createReadyAgentCommand(commandExecutionReadiness, guard, () => ({
+    result: Promise.resolve({ status: 'completed' as const, output: '', durationMs: 0, truncated: false }), peekOutput: () => '', cancel() {}
+  }))
+  const outcome = await ready.result
+  if (outcome.status !== 'completed') throw new Error(outcome.failureReason ?? '终端未就绪')
+  return target
+}
+
+async function prepareCommandIntent(source: string, operation: CommandIntent['operation'] = 'command', capture = false) {
+  const multiline = operation === 'command' && source.includes('\n')
+  const target = await prepareExecutionTarget(capture || multiline)
+  const mode = capture ? agentCaptureMode() : 'none'
+  if (mode === 'unsupported') throw new Error('当前终端不支持可靠命令捕获')
+  const transport = multiline && agentCaptureMode() === 'markers' && await ensureBracketedCapture() ? 'bracketed' : mode
+  return commandPolicy.analyzeCommandIntent(target, source, operation, transport)
+}
+
+async function executeCommand(command: string) {
+  if (props.agentControlled || !command.trim()) return false
+  let intent: CommandIntent | undefined
+  try {
+    intent = await prepareCommandIntent(command.trim())
+    if (intent.analysis.decision !== 'allow') {
+      if (!reviewCommand) throw new Error('命令审批界面未接入')
+      if (!await reviewCommand([{ intent, label: activeSessionProfile.value?.name ?? props.terminalId }])) return false
+      await commandPolicy.approveCommandIntent(intent.reference, intent.source)
     }
-    shellCommandAwaitingPrompt = true
-    resetTrackedTerminalInput('unknown')
-    pendingInputControlSequence = ''
-    return true
+    return await new Promise<boolean>((resolve, reject) => {
+      if (!dispatchPreparedCommand(intent!, reject, () => resolve(true))) resolve(false)
+    })
+  } catch (error) {
+    showQuickCommandBarNotice(`命令未发送：${formatError(error)}`)
+    return false
+  } finally { if (intent) void commandPolicy.cancelCommandIntent(intent.reference).catch(() => {}) }
+}
+
+function dispatchPreparedCommand(intent: CommandIntent, onWriteFailed?: (error: unknown) => void, onWritten?: () => void) {
+  if (intent.reference.target.sessionId !== sessionId || !terminalBackendInputReady()) return false
+  if (applicationPromptPending || internalOutputFilter.active()) return false
+  if (intent.capture.kind === 'bracketed' && !terminal?.modes.bracketedPasteMode) return false
+  refreshTerminalInputContext()
+  if (!terminalLineReadyForAppInput()) return false
+  if (!intent.capture.internal) invalidateCaptureCapability()
+  closeCompletion()
+  const dispatched = intent.terminalInput.replace(/\r$/, '')
+  if (intent.capture.internal) {
+    internalOutputFilter.begin(dispatched, { debug: props.terminalSettings?.debugMode === true, timeoutMs: 8000, restorePrefix: internalPromptRestorePrefix() })
+    scheduleInternalOutputFlush(8010)
+  } else if (intent.capture.kind === 'sentinel') {
+    const remaining = sentinelDisplayFilter.begin(intent.capture.nonce, intent.terminalInput, intent.source, props.terminalSettings?.debugMode === true)
+    if (remaining) { appendTerminalOutput(remaining); writeTerminalView(remaining) }
+    scheduleInternalOutputFlush(65_010)
   }
-  if (status.value === 'preview') {
-    if (!terminalLineReadyForAppInput()) return false
-    const previewLine = `${value}\r\n`
-    ingestTerminalOutput(previewLine, true)
-    recordCommand(recorded)
-    resetTrackedTerminalInput('shell')
-    return true
-  }
-  return false
+  if (intent.capture.kind === 'bracketed' && !intent.capture.internal) shellIntegrationAttachment?.tracker.setSubmittedCommand(intent.source)
+  // Reserve this input before enqueueing: write acknowledgement and a probe's
+  // sentinel result can both precede the next prompt being rendered.
+  applicationPromptPending = { markers: shellIntegrationInputActive() }
+  const accepted = writePreparedTerminalInput(intent.terminalInput, {
+    source: 'command', intent: intent.reference, preserveFocus: props.agentControlled || intent.capture.internal,
+    onWritten: () => { if (!intent.capture.internal && !shellIntegrationInputActive()) recordCommand(intent.source); onWritten?.() },
+    onWriteFailed: error => { applicationPromptPending = undefined; if (intent.capture.internal) finishFileInput(dispatched); else shellIntegrationAttachment?.tracker.setSubmittedCommand(''); onWriteFailed?.(error) }
+  })
+  if (!accepted) { applicationPromptPending = undefined; if (intent.capture.internal) finishFileInput(dispatched); else shellIntegrationAttachment?.tracker.setSubmittedCommand(''); return false }
+  shellCommandAwaitingPrompt = true
+  resetTrackedTerminalInput('unknown')
+  pendingInputControlSequence = ''
+  return true
 }
 
 function forwardInteractiveTerminalInput(data: string, synchronize = true) {
   if (!data || !terminalInputDestinationAvailable()) return false
+  shellIntegrationAttachment?.tracker.setSubmittedCommand('')
+  invalidateCaptureCapability()
   resumeUserOutput()
   const beforeState = terminalInputSyncState()
   const inputResult = trackUserInput(data)
@@ -2585,6 +2685,7 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
+  prepareCommandIntent, prepareExecutionTarget, dispatchPreparedCommand,
   agentCapturePreparing,
   agentCaptureSupported,
   clearTerminal,

@@ -6,6 +6,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child as ProcessChild, Command, Stdio};
 use std::thread;
 
+const FIXTURE_ROOT_MOUNTINFO: &str =
+    "25 1 8:1 / / rw,relatime - ext4 /dev/fixture rw\n26 25 0:5 / /proc rw - proc proc rw\n";
+
 struct Fixture {
     child: ProcessChild,
     directory: PathBuf,
@@ -94,6 +97,7 @@ impl Fixture {
             jump_mode: JumpMode::Direct,
             menu_profile_id: String::new(),
             file_transfer_mode: FileTransferMode::SftpDirect,
+            shell_integration: true,
         }
     }
 
@@ -731,5 +735,561 @@ fn system_sftp_failed_directory_change_never_sends_the_queued_write() {
             .contains("SFTP command failed"));
         assert_eq!(fixture.event_count("write"), 0);
         assert!(!fixture.root.join("must-not-upload.txt").exists());
+    });
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn agent_file_reads_are_bounded_preserve_bytes_and_bind_route_and_revision() {
+    use crate::domain::filesystem::agent_files::*;
+    let fixture = Fixture::start();
+    let content = "\u{feff}line one\r\n第二行  \r\nlast";
+    fs::write(fixture.root.join("with space.txt"), content).unwrap();
+    fs::write(fixture.root.join("huge.log"), vec![b'a'; 4 * 1024 * 1024]).unwrap();
+    fs::write(fixture.root.join("empty"), b"").unwrap();
+    fs::write(fixture.root.join("binary"), b"a\0b").unwrap();
+    fs::write(fixture.root.join("encoding"), b"a\xffb").unwrap();
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        let profile = fixture.profile();
+        let target = SftpTargetOverride::default();
+        let route = sftp_profile_route(&profile);
+        let options = FileReadOptions {
+            max_lines: 1,
+            ..Default::default()
+        };
+        let stale = read_agent_file_sftp(
+            &profile,
+            "wrong-route",
+            &target,
+            "/with space.txt",
+            &options,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(stale.kind, FileErrorKind::TargetChanged);
+        assert_eq!(fixture.event_count("connect"), 0);
+        let first = read_agent_file_sftp(
+            &profile,
+            &route,
+            &target,
+            "/with space.txt",
+            &options,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.page.content, "\u{feff}line one\r\n");
+        assert!(!first.page.eof);
+        let next = read_agent_file_sftp(
+            &profile,
+            &route,
+            &target,
+            "/with space.txt",
+            &FileReadOptions::default(),
+            Some(&first.page.end),
+            Some(&first.revision),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.page.content + &next.page.content, content);
+        fs::write(fixture.root.join("with space.txt"), b"changed size").unwrap();
+        assert_eq!(
+            read_agent_file_sftp(
+                &profile,
+                &route,
+                &target,
+                "/with space.txt",
+                &options,
+                None,
+                Some(&first.revision),
+                None
+            )
+            .unwrap_err()
+            .kind,
+            FileErrorKind::VersionChanged
+        );
+        let before_reads = fixture.event_count("read");
+        let large = read_agent_file_sftp(
+            &profile,
+            &route,
+            &target,
+            "/huge.log",
+            &FileReadOptions::default(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(large.page.content.len(), MAX_FILE_BYTES);
+        assert!(!large.page.complete);
+        let read_bytes: u64 = fs::read_to_string(&fixture.audit)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event["event"] == "read")
+            .skip(before_reads)
+            .map(|event| event["length"].as_u64().unwrap())
+            .sum();
+        assert!(
+            read_bytes <= (MAX_FILE_BYTES + 32768) as u64,
+            "SFTP read ahead exceeded bounded window: {read_bytes}"
+        );
+        assert!(
+            read_agent_file_sftp(&profile, &route, &target, "/empty", &options, None, None, None)
+                .unwrap()
+                .page
+                .complete
+        );
+        for (path, kind) in [
+            ("/missing", FileErrorKind::Missing),
+            ("/binary", FileErrorKind::Binary),
+            ("/encoding", FileErrorKind::UnsupportedEncoding),
+            ("/", FileErrorKind::NotRegularFile),
+            ("/.env", FileErrorKind::SensitivePath),
+        ] {
+            assert_eq!(
+                read_agent_file_sftp(&profile, &route, &target, path, &options, None, None, None)
+                    .unwrap_err()
+                    .kind,
+                kind
+            );
+        }
+        // File errors may retire the pooled transport; none is retried on another route.
+        assert!(fixture.event_count("connect") <= 6);
+    });
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn agent_directory_pages_and_sensitive_symlinks_use_the_same_bound_sftp_route() {
+    use crate::domain::filesystem::agent_files::*;
+    let fixture = Fixture::start();
+    fs::create_dir(fixture.root.join("entries")).unwrap();
+    for n in 0..600 {
+        fs::write(fixture.root.join(format!("entries/{n:04}.txt")), b"").unwrap();
+    }
+    fs::write(fixture.root.join(".env"), b"secret fixture").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(".env", fixture.root.join("alias.txt")).unwrap();
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        let profile = fixture.profile();
+        let route = sftp_profile_route(&profile);
+        let target = SftpTargetOverride::default();
+        let first =
+            list_agent_directory_sftp(&profile, &route, &target, "/entries", 0, 100, None, None)
+                .unwrap();
+        assert_eq!(first.page.entries.len(), 100);
+        assert_eq!(first.page.next_offset, Some(100));
+        let next = list_agent_directory_sftp(
+            &profile,
+            &route,
+            &target,
+            "/entries",
+            100,
+            500,
+            Some(&first.revision),
+            None,
+        )
+        .unwrap();
+        assert_eq!(next.page.entries.len(), 500);
+        assert_eq!(next.page.next_offset, None);
+        let mut names: Vec<_> = first
+            .page
+            .entries
+            .iter()
+            .chain(&next.page.entries)
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 600);
+        #[cfg(unix)]
+        assert_eq!(
+            read_agent_file_sftp(
+                &profile,
+                &route,
+                &target,
+                "/alias.txt",
+                &FileReadOptions::default(),
+                None,
+                None,
+                None
+            )
+            .unwrap_err()
+            .kind,
+            FileErrorKind::SensitivePath
+        );
+        assert_eq!(fixture.event_count("connect"), 1);
+    });
+}
+
+#[test]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn agent_sftp_cancel_does_not_retry_or_return_a_late_page() {
+    use crate::domain::filesystem::agent_files::*;
+    let fixture = Fixture::start();
+    let token = Arc::new(AtomicBool::new(false));
+    let cancellation = token.clone();
+    let audit = fixture.audit.clone();
+    let cancel = thread::spawn(move || {
+        wait_event(&audit, "stall-read");
+        cancellation.store(true, Ordering::SeqCst);
+    });
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        let profile = fixture.profile();
+        let started = Instant::now();
+        let error = read_agent_file_sftp(
+            &profile,
+            &sftp_profile_route(&profile),
+            &SftpTargetOverride::default(),
+            "/stall-read.txt",
+            &FileReadOptions::default(),
+            None,
+            None,
+            Some(&token),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, FileErrorKind::Cancelled);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(fixture.event_count("connect"), 1);
+    });
+    cancel.join().unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn agent_sftp_mapping_requires_namespace_root_credentials_and_fresh_evidence() {
+    use crate::domain::command_policy::ExecutionTarget;
+    use crate::domain::filesystem::agent_files::*;
+    let fixture = Fixture::start();
+    let proc = fixture.root.join("proc");
+    fs::create_dir_all(proc.join("sys/kernel/random")).unwrap();
+    fs::create_dir_all(proc.join("self/ns")).unwrap();
+    fs::create_dir_all(proc.join("self/attr")).unwrap();
+    let status = "Name:\tfixture\nUid:\t1000 1000 1000 1000\nGid:\t1000 1000 1000 1000\nGroups:\t1000 1001\nCapEff:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t0\n";
+    let boot = "91aa2343-556d-4cd1-b33c-63406c4a146f";
+    fs::write(proc.join("sys/kernel/random/boot_id"), boot).unwrap();
+    fs::write(proc.join("self/status"), status).unwrap();
+    fs::write(proc.join("self/attr/current"), "unconfined\n").unwrap();
+    fs::write(proc.join("self/mountinfo"), FIXTURE_ROOT_MOUNTINFO).unwrap();
+    std::os::unix::fs::symlink("mnt:[4026531841]", proc.join("self/ns/mnt")).unwrap();
+    std::os::unix::fs::symlink("/", proc.join("self/root")).unwrap();
+    let environment = FileEnvironment::Linux {
+        boot: boot.into(),
+        mount: "mnt:[4026531841]".into(),
+        root: "/".into(),
+        root_mount: Some(linux_root_mount(FIXTURE_ROOT_MOUNTINFO).unwrap()),
+        credentials: linux_credentials(status).unwrap(),
+        security: "unconfined".into(),
+    };
+    let terminal = FileInspection {
+        path: "/hello.txt".into(),
+        resolved_path: "/hello.txt".into(),
+        metadata: FileMetadata {
+            kind: FileKind::File,
+            size: 0,
+            modified_ns: None,
+            identity: None,
+        },
+        revision: "terminal-version".into(),
+        environment: Some(environment.clone()),
+        scope: "f".repeat(64),
+    };
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        let profile = fixture.profile();
+        let route = sftp_profile_route(&profile);
+        let target = SftpTargetOverride::default();
+        let mut mismatched = terminal.clone();
+        if let Some(FileEnvironment::Linux { mount, .. }) = &mut mismatched.environment {
+            *mount = "mnt:[4026531842]".into();
+        }
+        assert_eq!(
+            inspect_agent_file_sftp(&profile, &route, &target, &mismatched, None)
+                .unwrap_err()
+                .kind,
+            FileErrorKind::Unavailable
+        );
+        let inspected =
+            inspect_agent_file_sftp(&profile, &route, &target, &terminal, None).unwrap();
+        let execution_target = ExecutionTarget::new("session".into(), profile.id.clone());
+        let mut store = FileOperationStore::default();
+        let request = FileToolRequest::ReadFile {
+            path: "/hello.txt".into(),
+            options: FileReadOptions::default(),
+            cursor: None,
+        };
+        let operation = store
+            .prepare(
+                execution_target.clone(),
+                request,
+                FileProvider::Sftp,
+                inspected,
+            )
+            .unwrap();
+        let permit = store
+            .consume(&operation.reference, &execution_target)
+            .unwrap()
+            .native_permit()
+            .unwrap();
+        let result = read_agent_file_sftp_with_permit(
+            &profile,
+            &route,
+            &target,
+            &permit,
+            &FileReadOptions::default(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.page.content, "hello from SFTP\n");
+        let target_reads = || {
+            fs::read_to_string(&fixture.audit)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter(|entry| entry["event"] == "open" && entry["path"] == "/hello.txt")
+                .count()
+        };
+        assert_eq!(
+            target_reads(),
+            1,
+            "environment inspection must not read target contents"
+        );
+        for changed_root in [
+            FIXTURE_ROOT_MOUNTINFO.replace("8:1 / /", "8:1 /jail /"),
+            "26 25 0:5 / /proc rw - proc proc rw\n".into(),
+        ] {
+            fs::write(proc.join("self/mountinfo"), changed_root).unwrap();
+            assert_eq!(
+                inspect_agent_file_sftp(&profile, &route, &target, &terminal, None)
+                    .unwrap_err()
+                    .kind,
+                FileErrorKind::Unavailable,
+                "same uid, namespace and root symlink are not enough for a chroot mapping"
+            );
+            assert_eq!(
+                read_agent_file_sftp_with_permit(
+                    &profile,
+                    &route,
+                    &target,
+                    &permit,
+                    &FileReadOptions::default(),
+                    None,
+                    None
+                )
+                .unwrap_err()
+                .kind,
+                FileErrorKind::TargetChanged
+            );
+            assert_eq!(
+                target_reads(),
+                1,
+                "root mismatch must stop before opening target contents"
+            );
+        }
+        fs::write(proc.join("self/mountinfo"), FIXTURE_ROOT_MOUNTINFO).unwrap();
+        fs::write(
+            proc.join("self/status"),
+            status.replace("1000 1000 1000 1000", "0 0 0 0"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_agent_file_sftp_with_permit(
+                &profile,
+                &route,
+                &target,
+                &permit,
+                &FileReadOptions::default(),
+                None,
+                None
+            )
+            .unwrap_err()
+            .kind,
+            FileErrorKind::TargetChanged
+        );
+        assert_eq!(
+            target_reads(),
+            1,
+            "changed identity must fail before target open"
+        );
+        fs::write(proc.join("self/status"), status).unwrap();
+        let mut missing = terminal.clone();
+        missing.path = "/missing".into();
+        missing.resolved_path = missing.path.clone();
+        assert_eq!(
+            inspect_agent_file_sftp(&profile, &route, &target, &missing, None)
+                .unwrap_err()
+                .kind,
+            FileErrorKind::Missing
+        );
+        let mut unavailable = profile.clone();
+        unavailable.file_transfer_mode = FileTransferMode::InlineSmallFile;
+        assert_eq!(
+            inspect_agent_file_sftp(
+                &unavailable,
+                &sftp_profile_route(&unavailable),
+                &target,
+                &terminal,
+                None
+            )
+            .unwrap_err()
+            .kind,
+            FileErrorKind::Unavailable
+        );
+    });
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires isolated Python/paramiko loopback fixture"]
+fn agent_sftp_edits_bind_complete_content_preserve_mode_and_do_not_retry_lost_close_ack() {
+    use crate::domain::command_policy::ExecutionTarget;
+    use crate::domain::filesystem::agent_files::*;
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::start();
+    let proc = fixture.root.join("proc");
+    fs::create_dir_all(proc.join("sys/kernel/random")).unwrap();
+    fs::create_dir_all(proc.join("self/ns")).unwrap();
+    fs::create_dir_all(proc.join("self/attr")).unwrap();
+    let status = "Uid:\t1000 1000 1000 1000\nGid:\t1000 1000 1000 1000\nGroups:\t1000\nCapEff:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t0\n";
+    let boot = "91aa2343-556d-4cd1-b33c-63406c4a146f";
+    fs::write(proc.join("sys/kernel/random/boot_id"), boot).unwrap();
+    fs::write(proc.join("self/status"), status).unwrap();
+    fs::write(proc.join("self/attr/current"), "unconfined").unwrap();
+    fs::write(proc.join("self/mountinfo"), FIXTURE_ROOT_MOUNTINFO).unwrap();
+    std::os::unix::fs::symlink("mnt:[4026531841]", proc.join("self/ns/mnt")).unwrap();
+    std::os::unix::fs::symlink("/", proc.join("self/root")).unwrap();
+    let environment = FileEnvironment::Linux {
+        boot: boot.into(),
+        mount: "mnt:[4026531841]".into(),
+        root: "/".into(),
+        root_mount: Some(linux_root_mount(FIXTURE_ROOT_MOUNTINFO).unwrap()),
+        credentials: linux_credentials(status).unwrap(),
+        security: "unconfined".into(),
+    };
+    with_test_known_hosts(fixture.known_hosts.clone(), || {
+        let profile = fixture.profile();
+        let route = sftp_profile_route(&profile);
+        let target = ExecutionTarget::new("session".into(), profile.id.clone());
+        for scenario in ["success", "conflict", "lost-ack"] {
+            let name = if scenario == "lost-ack" {
+                "fail-edit-close.txt"
+            } else {
+                "edit.txt"
+            };
+            let path = format!("/{name}");
+            fs::write(fixture.root.join(name), "before\r\n").unwrap();
+            fs::set_permissions(fixture.root.join(name), fs::Permissions::from_mode(0o640))
+                .unwrap();
+            let terminal = FileInspection {
+                path: path.clone(),
+                resolved_path: path.clone(),
+                metadata: FileMetadata {
+                    kind: FileKind::File,
+                    size: 0,
+                    modified_ns: None,
+                    identity: None,
+                },
+                revision: "terminal-version".into(),
+                environment: Some(environment.clone()),
+                scope: "f".repeat(64),
+            };
+            let inspected = inspect_agent_file_sftp(
+                &profile,
+                &route,
+                &SftpTargetOverride::default(),
+                &terminal,
+                None,
+            )
+            .unwrap();
+            let mut operations = FileOperationStore::default();
+            let request = FileToolRequest::ReadFile {
+                path,
+                options: FileReadOptions::default(),
+                cursor: None,
+            };
+            let operation = operations
+                .prepare(target.clone(), request, FileProvider::Sftp, inspected)
+                .unwrap();
+            let dispatch = operations.consume(&operation.reference, &target).unwrap();
+            let data = read_agent_file_sftp_with_permit(
+                &profile,
+                &route,
+                &SftpTargetOverride::default(),
+                &dispatch.native_permit().unwrap(),
+                &FileReadOptions::default(),
+                None,
+                None,
+            )
+            .unwrap();
+            let response = operations
+                .finish(dispatch.clone(), &target, FileToolData::ReadFile { data })
+                .unwrap();
+            let mut edits = FileEditStore::default();
+            let baseline_id = edits
+                .register_read(dispatch, Some(route.clone()), &response)
+                .unwrap();
+            let proposal = edits
+                .prepare(
+                    &target,
+                    FileEditRequest {
+                        baseline_id,
+                        change: FileChange::Replace {
+                            content: "after\r\n".into(),
+                        },
+                    },
+                )
+                .unwrap();
+            edits
+                .approve(&proposal.reference, &target, &proposal.review_hash)
+                .unwrap();
+            let dispatch = edits.consume(&proposal.reference, &target).unwrap();
+            if scenario == "conflict" {
+                fs::write(fixture.root.join(name), "external").unwrap();
+            }
+            let result = edit_agent_file_sftp(
+                &profile,
+                &SftpTargetOverride::default(),
+                &dispatch,
+                None,
+                &AtomicBool::new(false),
+            );
+            let expected = match scenario {
+                "success" => FileEditStatus::Applied,
+                "conflict" => FileEditStatus::Conflict,
+                _ => FileEditStatus::Unknown,
+            };
+            assert_eq!(result.status, expected, "{scenario}: {result:?}");
+            assert_eq!(
+                fs::read_to_string(fixture.root.join(name)).unwrap(),
+                if scenario == "conflict" {
+                    "external"
+                } else {
+                    "after\r\n"
+                }
+            );
+            assert_eq!(
+                fs::metadata(fixture.root.join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o7777,
+                0o640
+            );
+        }
+        let audit = fs::read_to_string(&fixture.audit).unwrap();
+        assert_eq!(
+            audit
+                .lines()
+                .filter(|line| line.contains("\"event\": \"write\"")
+                    && line.contains("fail-edit-close.txt"))
+                .count(),
+            1,
+            "unknown write must not retry"
+        );
     });
 }

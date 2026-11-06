@@ -82,7 +82,8 @@ async function press(key, modifiers = 0) {
 }
 async function replaceText(selector, value) {
   await click(selector)
-  await press('a', 2)
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', commands: ['selectAll'] })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' })
   await send('Input.insertText', { text: value })
   await waitFor(`document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(value)}`)
 }
@@ -270,6 +271,38 @@ try {
     assert.equal(toggle.properties.find(property => property.name === 'checked').value.value, 'false')
   })
   await connectAtlas()
+  await check('idle SSH prompts automatically validate complete marker capture before reuse', async () => {
+    await waitFor('window.__terminalDebugFixture.diagnostics.some(item => item.command.includes("fixture capture"))')
+    await waitFor('!window.__debugBrowser.pane().exposed.agentCapturePreparing()')
+    assert.equal(await evaluate('window.__debugBrowser.pane().exposed.ensureAgentCapture()'), 'markers')
+    await settleTerminal()
+  })
+  await check('a hidden probe result cannot reuse the old prompt before the next prompt is parsed', async () => {
+    await evaluate(`window.__terminalDebugFixture.promptDelayMs = 400;
+      window.__promptProbe = window.__debugBrowser.pane().exposed.runCommandAndCapture('', { probe: { kind: 'context' }, maxOutputChars: 8192 }).result;
+      true`)
+    await waitFor('window.__terminalDebugFixture.waitingForPrompt > 0')
+    assert.equal((await state()).readiness, 'shell-busy', 'The displayed prompt still belongs to the previous command')
+    assert.equal(await evaluate('window.__debugBrowser.pane().exposed.fillCommand("echo too-early")'), false)
+    assert.equal((await evaluate('window.__promptProbe')).status, 'completed')
+    await settleTerminal()
+    assert.equal((await state()).readiness, 'ready')
+    await evaluate('window.__terminalDebugFixture.promptDelayMs = 0')
+  })
+  await check('Zsh parse errors without preexec settle the real pane capture and release command readiness', async () => {
+    const result = await evaluate(`(async () => {
+      const pane = window.__debugBrowser.pane().exposed;
+      const source = 'fixture-parse-error';
+      const intent = await pane.prepareCommandIntent(source, 'command', true);
+      return pane.runCommandAndCapture(source, { intent }).result;
+    })()`)
+    assert.equal(result.status, 'completed')
+    assert.equal(result.completionUnconfirmed, true)
+    assert.equal(result.exitCode, undefined)
+    assert.match(result.output, /parse error near/)
+    await settleTerminal()
+    assert.equal((await state()).readiness, 'ready')
+  })
   const original = await state()
   await check('automatic SFTP identification consumes raw protocol while hiding echoed commands and identity fields', async () => {
     await showFiles()
@@ -373,7 +406,7 @@ try {
     await showTerminal()
     const record = (await diagnostics()).at(-1)
     assertVisible(record, await state())
-    await evaluate('window.__debugBrowser.pane().exposed.executeCommand("(exit 7)", { internal: true, historyCommand: "" })')
+    await evaluate('window.__debugBrowser.pane().exposed.runCommandAndCapture("", { probe: { kind: "capture" } }).result')
     await settleTerminal()
     const debugProbe = (await diagnostics()).at(-1)
     assert.ok(debugProbe.begin.startsWith('AI_TERM_PROBE_BEGIN_'))
@@ -533,6 +566,24 @@ try {
     await evaluate('delete window.__sftpFixture.identityMode.alpha')
     await showTerminal()
     await screenshot('terminal-split-end-control-light.png')
+  })
+  await check('negotiated multiline input uses the real pane capture and rejects a later disabled paste mode', async () => {
+    await evaluate('window.__terminalDebugFixture.shellIntegration = true; window.__terminalDebugFixture.bracketedPaste = true; window.__debugBrowser.pane().exposed.writeTerminalInput("\\r")')
+    await settleTerminal()
+    const source = "printf 'first\\n'\nprintf 'second\\n'\n(exit 9)"
+    await evaluate(`window.__debugBrowser.pane().exposed.prepareCommandIntent(${JSON.stringify(source)}, 'command', true).then(intent => window.__multilineIntent = intent)`)
+    assert.equal(await evaluate('window.__multilineIntent.capture.kind'), 'bracketed')
+    assert.equal(await evaluate('window.__multilineIntent.source'), source)
+    await evaluate(`window.__debugBrowser.pane().exposed.runCommandAndCapture(${JSON.stringify(source)}, { intent: window.__multilineIntent }).result.then(result => window.__multilineResult = result)`)
+    assert.equal(await evaluate('window.__multilineResult.exitCode'), 9)
+    assert.equal(await evaluate('window.__multilineResult.output'), 'first\nsecond')
+    await settleTerminal()
+    const before = await evaluate('window.__terminalDebugFixture.ordinaryCommands.length')
+    await evaluate(`window.__debugBrowser.pane().exposed.prepareCommandIntent(${JSON.stringify(source)}, 'command', true).then(intent => window.__stalePasteIntent = intent)`)
+    await evaluate('window.__terminalDebugFixture.bracketedPaste = false; window.__terminalDebugFixture.emitPrompt("alpha")')
+    await settleTerminal()
+    assert.equal(await evaluate('window.__debugBrowser.pane().exposed.dispatchPreparedCommand(window.__stalePasteIntent)'), false)
+    assert.equal(await evaluate('window.__terminalDebugFixture.ordinaryCommands.length'), before)
   })
   assert.deepEqual(exceptions, [], 'No uncaught browser exceptions')
   const report = {

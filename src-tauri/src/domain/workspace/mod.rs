@@ -1,3 +1,4 @@
+pub mod task_script;
 use serde::{Deserialize, Serialize};
 
 pub const LOCAL_CONNECTION_ID: &str = "local";
@@ -62,6 +63,8 @@ pub struct AiConversationMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateScript {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_metadata: Option<task_script::ScriptTaskMetadata>,
     pub id: String,
     pub connection_id: String,
     pub workspace_session_id: String,

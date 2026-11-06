@@ -1,0 +1,1 @@
+echo '=== 负载 / 运行时长 ==='; uptime; echo; echo '=== CPU 占用前 12 ==='; ps -Ao pcpu=,pmem=,rss=,pid=,comm= | sort -k1 -nr | head -n 12; echo; echo '=== 内存压力 ==='; memory_pressure 2>/dev/null | tail -n 6; echo; vm_stat | head -n 6; echo; echo '=== 磁盘空间 ==='; df -h / /System/Volumes/Data 2>/dev/null | head -n 5

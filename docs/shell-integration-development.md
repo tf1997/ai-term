@@ -61,9 +61,71 @@ idle ──────▶ prompt ──────▶ input ──────
 ```
 
 - `input` 态：收到 B 时用 `terminal.registerMarker(0)` 锚定行（marker 随滚动与 reflow 自动跟踪），并记录列号。`commandLine()` 返回 B 锚点到光标的渲染文本。
+- 输入起点和光标位置按终端显示列传给 xterm 的 `translateToString`，不能用作 UTF-16 字符串切片下标。中文、组合字符提示符的宽度与字符串长度不同，旧实现会截掉命令字符并误触发 Agent 命令不匹配；浏览器回归覆盖这两种提示符、自动折行及真正不同的命令。
 - `executing` 态：收到 C 时截取命令文本（优先用最近一次 `633;E`，否则读 B→C 的渲染行）。
 - 收到 D 时产出 `{ command, exitCode, startedAt, finishedAt }` 事件。
 - 乱序 / 缺失容错：任何时刻收到 A 都强制回到 `prompt`；只收到 133 无 633 时全部功能可用，仅命令文本走渲染行截取。
+
+### 4.3 macOS 长组合命令回归（2026-11-05）
+
+针对用户提供的 `uptime`、`ps`、`memory_pressure`、`vm_stat`、`df` 组合命令，原文保存于 `src-tauri/tests/fixtures/macos-system-status.sh`。`shell_capture_integration` 的 `macos_status_command_retains_source_through_real_shell_echo` 在真实本机 PTY 中按 40、80、120、160 列运行；系统 Zsh 默认覆盖，现代 Bash 通过 `AI_TERM_TEST_BASH` 显式指定。命令使用生产命令意图审批和原样派发，运行前执行真实内部探针，Zsh 的 `633;E` 上报需与原文逐字一致。
+
+`AI_TERM_COMMAND_REPLAY_FILE` 可保存这些输出，再交给 `test:bracketed-capture-browser`。浏览器先隐藏内部探针，再把后续原始输出分片送入生产过滤器、xterm 和 `useTerminalCapture`；断言每段只产生一个结果、命令原文一致、退出码为 0、四组结果标题齐全且没有 `commandMismatch`。回放必须等整段输出写完后再重置终端，避免前一用例的末尾提示符污染后一用例。真实 PTY 测试同样等待 D 后的提示符，不能把编辑长行时的提示符重绘当成命令结束；UTF-8 字节在合并后解码，防止测试工具自身破坏跨块中文。
+
+本次系统 Zsh 5.9 与 Bash 5.2.37 的 8 组实际输出回放通过，另有中文／组合字符提示符、原命令不同列宽的屏幕回显和真正不同命令的拒绝用例。没有复现此前该条命令的失败。只读核对的旧任务记录缺少当时捕获到的命令和输出，因此不能把已修复的提示符列宽问题断言为那次失败的唯一原因；这些测试也不代表已验证用户当时的整个 Tauri 会话。
+
+关联回归：前端 644/644、AI 313/313、现代 Bash 的原生 Shell 套件 7/7、构建、架构 4/4 和 UI 契约通过。浏览器另通过 2 组真实多行回放和 15 组命令文本核对，并确认真正不同的命令仍被拒绝。日志保存在本机 `/tmp/ai-term-status-final-*.log`。
+
+```sh
+AI_TERM_TEST_BASH='/path/to/modern/bash' AI_TERM_COMMAND_REPLAY_FILE=/tmp/ai-term-command-replay.json cargo test --manifest-path src-tauri/Cargo.toml --test shell_capture_integration macos_status_command -- --nocapture
+# 沿用已有真实多行回放文件；需要先启动 Vite 与 Chrome CDP。
+AI_TERM_CAPTURE_REPLAY_FILE=/tmp/ai-term-macos-replay.json AI_TERM_COMMAND_REPLAY_FILE=/tmp/ai-term-command-replay.json npm --prefix frontend run test:bracketed-capture-browser
+```
+
+### 4.4 探针后的旧提示符与 Zsh 语法错误收尾（2026-11-05）
+
+用户后续截图明确为 macOS 本地终端：出现 `zsh: parse error near 'then'` 后已经回到提示符，Agent 仍等待完成。这里是错误后返回 Shell，不是命令成功的证据。
+
+完整 `TerminalPane` 浏览器测试复现了一个派发竞态：隐藏探针的外层 END 到达后，过滤器已不再占用输出，但下一次提示符还没解析；原 `commandExecutionReadiness()` 此时读取旧的空提示符并返回 `ready`。现在在应用命令入队前保留等待状态，必须等 Shell 完成后的新提示符解析完，才允许准备／派发下一条命令。行编辑器只重绘 A/B 或 B 不会解除等待；非集成 Shell 使用新解析的可识别提示符恢复，连接重置和派发失败清理等待状态。回归用例把探针 END 与提示符分开 400 ms，确认期间不能填入命令。
+
+真实系统 Zsh 另证明：`echo before; then` 的语法错误不调用 `preexec`，只发送无退出码的 D 和后续提示符。原捕获只等待 C→D，因此一直不结束。现在显式派发的捕获在收到无 C 的 D、执行开始后缺 D 却返回新提示符，或 D 缺退出码时，立即返回 `completionUnconfirmed`。Agent 停止后续步骤，保留观察到的错误输出并说明 Shell 已返回但结果未确认；不伪造退出码、不记录成功历史，也不自动重放。未收到 C/D 的行编辑器提示符重绘不会提前结束捕获。结果未知的效果仍保留恢复核对要求。
+
+`zsh_syntax_error_returns_a_prompt_without_preexec_or_a_completion_status` 可通过 `AI_TERM_PARSE_ERROR_REPLAY_FILE` 导出真实输出；设置同一变量运行 `test:bracketed-capture-browser`，验证生产捕获立即返回且保留语法错误。完整终端组件另验证错误收尾后就绪状态恢复，Agent 循环用例确认不会再询问超时或再次执行。该证据确认了等待状态的缺陷；没有把旧截图中的那次具体语法错误归因于某个未经保留的原始输入流。
+
+最终回归：前端 649/649、AI 314/314、原生 Shell 8/8；完整终端浏览器 19 项、真实流回放（2 组多行、16 组命令与错误场景）、完整 AI 界面、构建、架构、UI 契约、格式与空白检查通过。AI 界面用例确认不再显示活动计时，发送按钮恢复，重开后仍保留错误输出，且没有额外模型请求或命令重放。日志为本机 `/tmp/ai-term-prompt-lifecycle-*.log`。
+
+### 4.5 内部多行探针破坏 Zsh 输入（2026-11-06）
+
+第二张 macOS 本地终端截图的原命令已保存到 `src-tauri/tests/fixtures/macos-display-status.sh`：包含 `echo "cores: $(sysctl -n hw.ncpu)"`、WindowServer 采样及显示器信息。单独运行原文没有语法错误；将真实 Capture、Context 探针放在它之前后，原生 Zsh PTY 测试在 Context 阶段复现了输入错乱，5 秒内没有返回完成标记和新提示符，后续业务命令尚未派发。失败日志为 `/tmp/ai-term-display-quoted-native.log`。
+
+问题位于后端 `command_policy/transport.rs`：`eval '…'` 虽然保护了 Shell 引号，却仍把内部程序的真实换行、Tab 直接发送给交互行编辑器。修复后的内部程序和哨兵兜底传输只提交一个物理输入行，由 Shell 内的 `printf %b` 还原，再在当前 Shell 中执行。先转义已有反斜杠，避免改变 `\\n`、`\\c` 等原始数据；编码完整的引用程序，避免命令替换吞掉原文尾部的换行。审批仍绑定原文与最终传输字节，保留 cwd、export 和退出码；已协商的括号粘贴仍使用原样多行输入。
+
+`macos_display_command_preserves_quotes_and_substitution` 覆盖会话内加载，以及正常 `zsh -i` 经生产 ZDOTDIR 中转脚本加载的两种方式。后者使用临时配置和 macOS 风格提示符，不读取或修改用户个人启动文件。两种方式都先执行真实内部探针，再按原样派发截图命令，断言 Zsh 上报全文一致、单次退出码为 0，没有 `unmatched` 或 `parse error`。通过 `AI_TERM_DISPLAY_REPLAY_FILE` 导出后，浏览器将连续探针和命令输出分片送入生产过滤器、xterm 与捕获器，验证探针隐藏、命令匹配、核心数和两组标题完整且没有结果未知。
+
+本轮通过原生 Shell 9 项（含真实交互式文件读取）、命令意图 12 项、策略 15 项、Rust 单测 163 项（另有 22 项按原配置忽略）；随后新增的尾部续行用例与转义用例也通过。前端 649 项；浏览器 2 组真实多行及 18 组命令／错误场景通过。另在系统 sh、Bash、Zsh 上核对转义、Tab、heredoc、当前 Shell 状态和退出码。日志为本机 `/tmp/ai-term-display-regression-*.log` 与 `/tmp/ai-term-display-transport-unit.log`。
+
+该复现确认了传输缺陷，但旧任务没有保留捕获到的命令全文，不能声称重现了截图中完全相同的截断字节。用户尚未在当前版本复测；本次修改包含 Rust 后端，需要重启开发进程或重新构建应用，再新开本地终端验证。
+
+```sh
+AI_TERM_DISPLAY_REPLAY_FILE=/tmp/ai-term-display-quoted-replay.json cargo test --manifest-path src-tauri/Cargo.toml --test shell_capture_integration macos_display_command -- --nocapture
+# 已有真实多行回放文件，且 Vite 与 Chrome CDP 已启动。
+AI_TERM_DISPLAY_REPLAY_FILE=/tmp/ai-term-display-quoted-replay.json npm --prefix frontend run test:bracketed-capture-browser
+```
+
+### 4.6 Bash 中文折行补位造成命令不匹配（2026-11-06）
+
+远端 Ubuntu 截图中的 apt / 内核 / 安全更新组合命令原文保存于 `src-tauri/tests/fixtures/ubuntu-security-status.sh`。这次没有 Shell 语法错误：本机真实 Bash 5.2.37 PTY 回放在 40 列下复现了明确差异，派发的 `更新时间` 被前端捕获为 `更新 时间`。原始字节流为 `更新 SPACE ESC[K 时间`（实际没有这些说明文字）：Readline 为不能放进末列的双宽字符补空格并清除行尾，前端把显示补位当成了源码。失败回放日志为 `/tmp/ai-term-ubuntu-browser-before.log`。
+
+修复位于前端 `shellIntegration.ts`。只在输入态观察光标位于右边界之外、最后一格为空格时的 `EL(0)`；用 xterm marker 保存位置。重建输入时还需确认下一行是自动折行且首字符宽度为 2，才忽略该末列显示补位。普通空格保留，不修改终端画面，也不放宽命令比较规则。新提示符、命令开始、重置、释放及窗口尺寸变化时清理补位元数据。
+
+真实 Bash 用例覆盖 40、76、80、96、120、160 列，另在相同边界执行原本就带 `更新 时间` 的变体。前端回放需准确区分显示补位和真正的空格：原命令匹配，带空格变体也按原文匹配；把后者冒充成没有空格的命令时仍拒绝。所有输出标题、退出码均保留，已有不同命令拒绝、Zsh 语法错误及 macOS 原命令回放一并覆盖。原生用例验证 Bash 输入与标记，Linux 专用工具在非 Ubuntu 测试机上可缺省，因此它不等于重连用户服务器进行端到端验证。
+
+验证日志为 `/tmp/ai-term-ubuntu-*.log`：前端 649 项、构建、架构 4 项、UI 契约和完整终端组件浏览器 19 项通过；真实流浏览器回放通过 2 组多行及 25 组命令／错误场景，并另验证真实空格不能被忽略。
+
+```sh
+AI_TERM_TEST_BASH='/path/to/modern/bash' AI_TERM_BASH_REPLAY_FILE=/tmp/ai-term-ubuntu-bash-replay.json cargo test --manifest-path src-tauri/Cargo.toml --test shell_capture_integration bash_security_command -- --nocapture
+AI_TERM_BASH_REPLAY_FILE=/tmp/ai-term-ubuntu-bash-replay.json npm --prefix frontend run test:bracketed-capture-browser
+```
 
 ## 5. 技术方案
 

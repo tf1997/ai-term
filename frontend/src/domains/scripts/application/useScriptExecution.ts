@@ -8,6 +8,7 @@ import { detectShellScriptLanguage } from '../../../shared/shell/shellCommand'
 import { buildBashScriptTerminalInput, prepareScriptForExecution } from '../domain/scriptExecution'
 import { formatError } from '../domain/scriptPresentation'
 import * as tauri from '../../ai/infrastructure/api'
+import { renderTaskScript } from '../domain/taskScript'
 
 interface ScriptExecutionOptions {
   props: Readonly<ScriptPanelProps>
@@ -146,6 +147,10 @@ export function useScriptExecution(options: ScriptExecutionOptions, source: Scri
   }
 
   function executeScriptContent(content: string, sourceScript?: ScriptExecutionSource) {
+    try {
+      if (sourceScript?.taskMetadata) content = renderTaskScript(content, sourceScript.taskMetadata, sourceScript.parameterValues)
+      else if (content.includes('__AI_TERM_PARAM_')) throw Error('脚本缺少参数定义，不能运行未填写的模板')
+    } catch (error) { panelError.value = formatError(error); scriptExecutionNotice.value = ''; return }
     const language = detectShellScriptLanguage(content, sourceScript?.name)
     if (language === 'powershell' || language === 'cmd') {
       panelError.value = '运行脚本需要 Bash。请先将 PowerShell / CMD 内容转换为 Bash 脚本。'
@@ -158,6 +163,15 @@ export function useScriptExecution(options: ScriptExecutionOptions, source: Scri
       const remaining = readinessIssues.length > 3 ? `等 ${readinessIssues.length} 项` : ''
       panelError.value = `脚本尚未填写完整：${issueLines}${remaining}。完成后再运行。`
       scriptExecutionNotice.value = ''
+      return
+    }
+    if (props.applicationCommandExecutor) {
+      scriptExecutionNotice.value = '正在分析脚本和执行目标…'
+      const prepared = prepareScriptForExecution(content, language)
+      void props.applicationCommandExecutor(prepared, 'bash-script', sourceScript?.connectionId).then(sent => {
+        scriptExecutionNotice.value = sent ? '脚本已发送到确认的目标终端。' : '已取消执行。'
+        panelError.value = ''
+      }).catch(error => { scriptExecutionNotice.value = ''; panelError.value = formatError(error) })
       return
     }
     const risks = analyzeScriptRisks(executableContent)

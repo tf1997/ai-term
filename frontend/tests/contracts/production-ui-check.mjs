@@ -1149,7 +1149,8 @@ assert(
     scriptRisk.includes('Windows 软件升级') &&
     scriptRisk.includes('Windows 网络配置') &&
     scriptRisk.includes('Windows 磁盘操作') &&
-    scriptRisk.includes('normalizeRiskScanLine') &&
+    scriptRisk.includes('scanCommand') &&
+    scriptRisk.includes('wordValue') &&
     scriptRisk.includes('未检测到危险命令'),
   'Script risk scanning must include Windows bat/cmd/PowerShell dangerous commands in the same risk pipeline.'
 )
@@ -3312,7 +3313,7 @@ assert(
     terminalPane.includes('captureOutput: data => ingestCaptureOutput(data)') && terminalEvents.includes('options.captureOutput(event.data)') && terminalCapture.includes('sentinelSink?.(data)') &&
     terminalCapture.includes('isSuffixSafeForSentinel') &&
     // 哨兵派发的是包装命令,历史必须记干净命令
-    /recordCommand\(recorded\)/.test(terminalPane) &&
+    /recordCommand\(intent.source\)/.test(terminalPane) &&
     agentAutoApprove.includes('trailingOperator'),
   'Sentinel capture contract: the assembled marker must never appear literally in the dispatched command (nonce passed as a %s argument, exit code matched as digits), the scanner must be fed from the terminal data chokepoint behind a suffix-safety guard, and command history must record the unwrapped command.'
 )
@@ -3367,3 +3368,18 @@ assert(
   'Agent timeout contract: timeout hints use sampled output and the configured command timeout; no fixed task step limit is reintroduced.'
 )
 console.log('production-ui-check passed')
+
+const policyState = readFileSync(resolve(root, '../src-tauri/src/app/state.rs'), 'utf8')
+const applicationExecutor = read('src/domains/terminal/application/useApplicationCommandExecutor.ts')
+assert(
+  appShell.includes(':agent-command-policy="agentCommandPolicy"') &&
+  appShell.includes(':application-command-executor="applicationCommandExecutor"') &&
+  workspacePanel.includes(':application-command-executor="applicationCommandExecutor"') &&
+  terminalPane.includes('if (batch.intent) await commandPolicy.dispatchCommandIntent(batch.intent)') &&
+  terminalPane.includes('executeCommand: () => false') &&
+  terminalCapture.includes('缺少与完整命令对应的后端执行记录') &&
+  agentLoop.includes('await handleToolCall(toolCallFromStep(retryStep))') &&
+  applicationExecutor.includes('source.approveCommandIntent(intent.reference, commandSource)') &&
+  policyState.includes('.consume_dispatch(reference, &record.execution_target)?'),
+  'Production Agent, scripts and command actions must be wired to immutable backend intents; retries must re-enter analysis and approval.'
+)

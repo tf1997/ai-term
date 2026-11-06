@@ -1,5 +1,10 @@
+pub mod agent_checkpoints;
+pub mod command_policy;
 pub mod commands;
 pub mod events;
+pub mod file_tools;
+pub mod host_knowledge;
 pub(crate) mod sftp_task;
+pub mod ssh_tasks;
 pub mod state;
 mod tasks;

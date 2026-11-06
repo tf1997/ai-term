@@ -3,6 +3,7 @@ import type { TerminalSelectionEvent } from '../../terminal/types'
 import { parseMessageParts } from '../../../shared/content/aiMarkdown'
 import type { MessagePart } from '../../../shared/content/aiMarkdown'
 import { isSensitiveCommand } from '../../../shared/security/commandPrivacy'
+import { MAX_RISK_SCAN_CHARS } from '../../../shared/security/shellCommandScan'
 import { commandTokensForPrivacy } from './agentAutoApprove'
 import { isSensitivePath } from '../../../shared/security/pathPrivacy'
 import { looksLikeShellCommand, normalizeShellCommand, shellCommandFromCodeBlock } from '../../../shared/shell/shellCommand'
@@ -18,7 +19,8 @@ export const MAX_AI_CONVERSATION_MESSAGES = 16
 export const AI_CONTEXT_COMPACT_THRESHOLD = 8
 
 export function isSensitiveAgentCommand(command: string) {
-  return isSensitiveCommand(command)
+  // An incomplete privacy scan must not release potentially sensitive output.
+  return command.length > MAX_RISK_SCAN_CHARS || isSensitiveCommand(command)
     || commandTokensForPrivacy(command).some((token) => isSensitivePath(token))
 }
 

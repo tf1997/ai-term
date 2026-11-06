@@ -1,3 +1,5 @@
+import { scanCommand, type ScannedShellWord } from './shellCommandScan'
+
 export type ScriptRiskKind = 'delete' | 'edit' | 'reboot' | 'upgrade' | 'service' | 'network' | 'permission' | 'disk' | 'execution'
 export type ScriptRiskSeverity = 'high' | 'medium'
 export type ScriptRiskLevel = 'safe' | 'medium' | 'high'
@@ -29,7 +31,8 @@ interface ScriptRiskRule {
 const WINDOWS_SYSTEM_PATH = String.raw`(?:[a-z]:\\(?:windows|program files|program files \(x86\)|programdata)|%windir%|%systemroot%|%programfiles%|%programdata%)`
 
 const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
-  { kind: 'delete', label: '删除操作', severity: 'high', message: '可能删除文件、容器或集群资源，部分操作不可恢复。', pattern: /\brm\s+(-[^\s]*[rf][^\s]*|-r|-f)\b/i },
+  { kind: 'delete', label: '删除操作', severity: 'medium', message: '会删除文件或目录，请确认目标和备份。', pattern: /^rm\s+/i },
+  { kind: 'delete', label: '删除操作', severity: 'high', message: '可能删除文件、容器或集群资源，部分操作不可恢复。', pattern: /^rm\b.*\s(?:-[^-\s]*[rf][^\s]*|--recursive|--force)\b/i },
   { kind: 'delete', label: '删除操作', severity: 'high', message: 'sudo 删除会绕过普通权限保护，请确认目标路径。', pattern: /\bsudo\s+rm\b/i },
   { kind: 'delete', label: '批量删除', severity: 'high', message: 'find -delete 会批量删除匹配文件，请确认搜索范围。', pattern: /\bfind\b.*\s-delete\b/i },
   { kind: 'delete', label: '资源删除', severity: 'high', message: '会删除容器、镜像或 Kubernetes 资源。', pattern: /\b(?:kubectl\s+delete|docker\s+(?:rm|rmi)|docker\s+system\s+prune\b.*(?:\s-a\b|--all\b))/i },
@@ -45,7 +48,7 @@ const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
   { kind: 'edit', label: 'PowerShell 写入', severity: 'high', message: '会通过 PowerShell 写入或覆盖系统目录文件，请确认目标路径。', pattern: new RegExp(String.raw`\b(?:Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|Rename-Item)\b.*${WINDOWS_SYSTEM_PATH}`, 'i') },
   { kind: 'edit', label: '系统变量变更', severity: 'medium', message: '会修改环境变量，可能影响后续终端和系统行为。', pattern: /(?:^|[&|()\s])setx\b/i },
 
-  { kind: 'reboot', label: '重启关机', severity: 'high', message: '会中断当前会话或重启/关闭机器。', pattern: /\b(?:shutdown|reboot|poweroff|halt)\b/i },
+  { kind: 'reboot', label: '重启关机', severity: 'high', message: '会中断当前会话或重启/关闭机器。', pattern: /^(?:shutdown|reboot|poweroff|halt)\b/i },
   { kind: 'reboot', label: 'Windows 重启关机', severity: 'high', message: '会重启、关机或注销 Windows，会中断当前会话。', pattern: /(?:^|[&|()\s])shutdown(?:\.exe)?\b.*(?:\/r|\/s|\/l|\/g|\/p|\/h)/i },
   { kind: 'reboot', label: 'PowerShell 重启关机', severity: 'high', message: '会通过 PowerShell 重启或关闭电脑。', pattern: /\b(?:Restart-Computer|Stop-Computer)\b/i },
 
@@ -65,6 +68,7 @@ const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
   { kind: 'permission', label: 'Windows 权限变更', severity: 'medium', message: '会更改 Windows ACL、所有者或执行策略。', pattern: /(?:^|[&|()\s])(?:icacls|takeown)\b|\b(?:Set-Acl|Set-ExecutionPolicy)\b/i },
 
   { kind: 'execution', label: '动态执行', severity: 'high', message: '会通过解释器、脚本或动态命令执行任意代码，无法仅凭外层命令判断影响。', pattern: /(?:^|[&|()\s])(?:eval|source|exec|xargs)\b|(?:^|[&|()\s])(?:sh|bash|zsh|dash|ksh|fish|python(?:3)?|perl|ruby|node|php|pwsh|powershell|cmd)(?:\.exe)?\s+(?:-c|--command|\/c|\/r|\/command)\b/i },
+  { kind: 'execution', label: '外部命令执行', severity: 'high', message: '此参数会执行外部命令，不能仅按查询工具的名称自动授权。', pattern: /^(?:find\b.*\s-(?:exec|execdir|ok|okdir)\b|rg\b.*\s--pre(?:=|\s))/i },
 
   { kind: 'edit', label: '文件写入', severity: 'medium', message: '会通过输出重定向写入文件，请确认目标路径和覆盖行为。', pattern: /(?:^|[\s;|&])(?:\d+)?>{1,2}\s*(?!\/dev\/null\b|&\d\b)\S+/i },
 
@@ -72,197 +76,135 @@ const SCRIPT_RISK_RULES: ScriptRiskRule[] = [
   { kind: 'disk', label: 'Windows 磁盘操作', severity: 'high', message: '会格式化、清理、加密或修改启动/磁盘配置，风险极高。', pattern: /(?:^|[&|()\s])(?:format(?:\.com)?\b|diskpart\b|bcdedit\b|bootrec\b|manage-bde\b|cipher\s+\/w)|\b(?:Clear-Disk|Initialize-Disk|Format-Volume|Remove-Partition|Set-Partition)\b/i }
 ]
 
+/**
+ * Reuse the Agent's whole-command lexical scan. It joins escaped newlines and
+ * retains word boundaries across quotes; unsupported execution structures are
+ * review findings, never a claim that the command has been fully understood.
+ */
 export function analyzeScriptRisks(content: string): ScriptRiskMatch[] {
-  return content.split(/\r?\n/).flatMap((line, index) => {
-    const normalized = normalizeRiskScanLine(line)
-    if (!normalized || isCommentLine(normalized)) return []
-    const segments = splitShellSegments(normalized)
-    const matches = new Map<ScriptRiskKind, ScriptRiskMatch>()
-    segments.forEach((segment) => {
-      const head = riskCommandHead(segment)
-      const preservePaths = PATH_WRITING_COMMANDS.has(head)
-      const text = maskShellLiterals(segment, preservePaths)
-      SCRIPT_RISK_RULES.filter((rule) => rule.pattern.test(text)).forEach((rule) => {
-        if (!matches.has(rule.kind)) matches.set(rule.kind, {
-          kind: rule.kind,
-          label: rule.label,
-          severity: rule.severity,
-          line: index + 1,
-          text: line,
-          message: rule.message
-        })
-      })
-    })
-    return [...matches.values()]
-  })
+  const scan = scanCommand(content)
+  if (scan.budgetExceeded) {
+    return [{ kind: 'execution', label: '需要逐次审查', severity: 'high', message: scan.issues[0].message, line: 1, text: content.slice(0, 512).split(/\r?\n/, 1)[0] }]
+  }
+  const source = content.replace(/\r\n?/g, '\n')
+  const lines = source.split('\n')
+  const lineStarts = [0]
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '\n') lineStarts.push(index + 1)
+  }
+  const lineAt = (offset: number) => {
+    let low = 0
+    let high = lineStarts.length
+    while (low + 1 < high) {
+      const middle = (low + high) >>> 1
+      if (lineStarts[middle] <= offset) low = middle
+      else high = middle
+    }
+    return low + 1
+  }
+  const matches: ScriptRiskMatch[] = []
+  const add = (risk: Pick<ScriptRiskMatch, 'kind' | 'label' | 'severity' | 'message'>, offset: number) => {
+    const line = lineAt(offset)
+    // Keep findings from every command, including a later higher severity of
+    // the same kind. Only the display summary groups them by kind.
+    matches.push({ ...risk, line, text: lines[line - 1] ?? '' })
+  }
+  const review = (message: string, offset: number) => add({ kind: 'execution', label: '需要逐次审查', severity: 'high', message }, offset)
+  // This scanner does not parse heredoc bodies. Do not report their data as
+  // commands; the finding on the opener already requires whole-script review.
+  const heredocOffset = scan.heredocOffset ?? Infinity
+  scan.issues.filter(issue => issue.offset <= heredocOffset).forEach(issue => review(issue.message, issue.offset))
+  for (const segment of scan.details) {
+    if (segment.start > heredocOffset) break
+    const words = segment.words
+    if (!words.length) continue
+    const headIndex = riskCommandIndex(words)
+    if (words.slice(0, headIndex).some(word => /^(?:PATH|IFS|ENV|BASH_ENV|SHELLOPTS|PS4|LD_[A-Z_]+|DYLD_[A-Z_]+)\+?=/.test(word.value))) {
+      review('环境赋值可能改变命令解析或加载额外代码，需要逐次确认。', words[0].start)
+    }
+    const head = commandName(words[headIndex] ? wordValue(words[headIndex]) : '')
+    if (!head || /^(?:rem|::)$/i.test(head)) continue
+    const offset = words[headIndex]?.start ?? segment.start
+    if (DYNAMIC_COMMANDS.test(head) || SHELL_CONTROL_WORDS.has(head) || /[$*?\[\]`]/.test(head)) {
+      review('此命令会执行脚本、动态内容或尚未完整分析的 Shell 结构，不能仅凭命令前缀自动授权。', offset)
+    }
+    if (head === 'env' && words.slice(headIndex + 1).some(word => !['-0', '--null', '--help', '--version'].includes(word.value))) {
+      review('env 包含环境赋值或内层命令，需要检查实际执行内容。', offset)
+    }
+    const args = words.slice(headIndex + 1).map(word => word.value)
+    const optionsEnd = args.indexOf('--')
+    const options = optionsEnd < 0 ? args : args.slice(0, optionsEnd)
+    if (head === 'file' && options.some(arg => /^-[^-]*C/.test(arg) || arg === '--compile')) {
+      add({ kind: 'edit', label: '文件编译', severity: 'medium', message: 'file 的编译选项会生成或覆盖 magic 数据库文件。' }, offset)
+    }
+    if (head === 'rg' && options.some(arg => arg === '--hostname-bin' || arg.startsWith('--hostname-bin='))) {
+      review('搜索工具会启动指定的外部程序来获取主机名，需要检查该程序。', offset)
+    }
+    if (head === 'printf') {
+      const format = args[0] === '--' ? args[1] : args[0]
+      if (options.some(arg => arg.startsWith('-v')) || /%[-+ #0-9.*hlLjztqI]*n/.test(format?.replace(/%%/g, '') ?? '')) {
+        review('printf 的变量赋值选项或格式会改变 Shell 状态，需要逐次确认。', offset)
+      }
+    }
+    const preservePaths = PATH_WRITING_COMMANDS.has(head)
+    const text = words.slice(headIndex).map((word, index) => {
+      if (index === 0) return head
+      // Command/flag quote concatenation is executable syntax, while a quoted
+      // example such as echo "rm -rf /tmp" remains data.
+      if (!/["']/.test(word.raw) || /^[-A-Za-z0-9_./:@%+=,]+$/.test(word.value)) return wordValue(word)
+      if (preservePaths && /^(?:\/|[A-Za-z]:[\\/]|[~.][\\/])/.test(word.value)) return word.value
+      return '_'
+    }).join(' ')
+    if (DATA_COMMANDS.has(head)) continue
+    for (const rule of SCRIPT_RISK_RULES) {
+      if (rule.pattern.test(text)) {
+        const { pattern: _pattern, ...risk } = rule
+        add(risk, offset)
+      }
+    }
+  }
+  for (const redirect of scan.redirects) {
+    if (redirect.start > heredocOffset || redirect.target === '/dev/null') continue
+    const system = /^(?:\/(?:etc|boot|usr|var|opt)(?:\/|$)|[A-Za-z]:[\\/](?:windows|program files|programdata)(?:[\\/]|$))/i.test(redirect.target)
+    add({ kind: 'edit', label: system ? '系统文件覆盖' : '文件写入', severity: system ? 'high' : 'medium', message: '输出重定向会写入文件，请确认目标路径和覆盖行为。' }, redirect.start)
+  }
+  return matches
 }
 
 const PATH_WRITING_COMMANDS = new Set([
   'cp', 'mv', 'tee', 'sed', 'perl', 'rm', 'chmod', 'chown', 'dd', 'install',
   'set-content', 'add-content', 'out-file', 'copy-item', 'move-item', 'rename-item'
 ])
+const DATA_COMMANDS = new Set(['echo', 'printf', 'grep', 'cat', 'head', 'tail'])
+const DYNAMIC_COMMANDS = /^(?:\.|builtin|eval|source|exec|xargs|sudo|doas|nohup|nice|sh|bash|zsh|dash|ksh|fish|busybox|python[\d.]*|perl|ruby|node|php|pwsh|powershell|cmd|awk|gawk|mawk|lua|osascript)$/i
+const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'select', 'function', 'coproc', 'time', '!'])
 
-const RISK_WRAPPER_COMMANDS = new Set(['sudo', 'doas', 'command', 'nohup', 'nice', 'timeout'])
-
-function splitShellSegments(line: string) {
-  const segments: string[] = []
-  let start = 0
-  let quote: 'single' | 'double' | 'ansi' | null = null
-  let escaped = false
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index]
-    const previous = line[index - 1]
-    if (escaped) { escaped = false; continue }
-    if (quote === 'single') {
-      if (character === "'") quote = null
-      continue
-    }
-    if (quote === 'ansi') {
-      if (character === '\\') escaped = true
-      else if (character === "'") quote = null
-      continue
-    }
-    if (quote === 'double') {
-      if (character === '\\') escaped = true
-      else if (character === '"') quote = null
-      continue
-    }
-    if (character === "'" || character === '"') { quote = character === "'" ? 'single' : 'double'; continue }
-    if (character === '$' && line[index + 1] === "'") { quote = 'ansi'; index += 1; continue }
-    if (character === '\\') { escaped = true; continue }
-    if (character === '#' && (index === 0 || /[\s;]/.test(previous ?? ''))) break
-    if (character === ';' || character === '|' || character === '&') {
-      const segment = line.slice(start, index).trim()
-      if (segment) segments.push(segment)
-      if (line[index + 1] === character || (character === '|' && line[index + 1] === '&')) index += 1
-      start = index + 1
-    }
-  }
-  const last = line.slice(start).trim()
-  if (last) segments.push(last)
-  return segments
+function commandName(value: string) {
+  return value.replace(/^.*[\\/]/, '').replace(/^@+/, '').replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase()
 }
 
-function riskCommandHead(segment: string) {
-  const tokens = shellWords(segment)
+function wordValue(word: ScannedShellWord) {
+  // Preserve native Windows paths; POSIX backslash decoding is not their syntax.
+  return /^[A-Za-z]:\\/.test(word.raw) ? word.raw : word.value
+}
+
+/** Only unwrap the same simple forms understood by the Agent allowlist. */
+function riskCommandIndex(words: ScannedShellWord[]) {
   let index = 0
-  while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(tokens[index])) index += 1
-  while (index < tokens.length && RISK_WRAPPER_COMMANDS.has(tokens[index].toLowerCase())) {
-    const wrapper = tokens[index].toLowerCase()
-    index += 1
-    if (wrapper === 'timeout') {
-      while (index < tokens.length && tokens[index].startsWith('-')) index += 1
-      if (/^\d+(?:\.\d+)?[smhd]?$/.test(tokens[index] ?? '')) index += 1
-    }
-  }
-  return (tokens[index] ?? '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat|ps1)$/i, '').toLowerCase()
-}
-
-function shellWords(value: string) {
-  const words: string[] = []
-  let word = ''
-  let quote: 'single' | 'double' | 'ansi' | null = null
-  let escaped = false
-  const finish = () => { if (word) words.push(word); word = '' }
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index]
-    if (escaped) { word += character; escaped = false; continue }
-    if (quote === 'single') { if (character === "'") quote = null; else word += character; continue }
-    if (quote === 'ansi') { if (character === '\\') escaped = true; else if (character === "'") quote = null; else word += character; continue }
-    if (quote === 'double') { if (character === '\\') escaped = true; else if (character === '"') quote = null; else word += character; continue }
-    if (character === "'" || character === '"') { quote = character === "'" ? 'single' : 'double'; continue }
-    if (character === '$' && value[index + 1] === "'") { quote = 'ansi'; index += 1; continue }
-    if (/\s/.test(character)) finish()
-    else word += character
-  }
-  finish()
-  return words
-}
-
-/**
- * Remove quoted literals and shell comments before applying risk rules. A
- * regex such as `rm -rf` must not flag `echo "rm -rf ..."`, while the actual
- * command `rm -rf "/tmp"` still retains its unquoted command and flags.
- * Escaped characters remain visible because they can change the command's
- * actual token (for example `\rm`).
- */
-function maskShellLiterals(line: string, preservePaths = false) {
-  let result = ''
-  let quote: 'single' | 'double' | 'ansi' | null = null
-  let escaped = false
-  let quotedValue = ''
-  let quoteStart = 0
-  const appendQuoted = () => {
-    const value = preservePaths && /^(?:\/?(?:etc|boot|usr|var|opt|tmp|home|root)(?:\/|$)|[A-Za-z]:[\\/]|[~.][\\/])/.test(quotedValue)
-      ? quotedValue
-      : ' '.repeat(Math.max(1, quotedValue.length))
-    result += value
-    quotedValue = ''
-  }
-
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index]
-    const previous = line[index - 1]
-    if (escaped) {
-      if (quote !== null) quotedValue += character
-      else result += character
-      escaped = false
-      continue
-    }
-    if (quote === 'single') {
-      if (character === "'") { quote = null; appendQuoted() }
-      else quotedValue += character
-      continue
-    }
-    if (quote === 'ansi') {
-      if (character === '\\') escaped = true
-      else if (character === "'") quote = null
-      if (character === "'") { quote = null; appendQuoted() }
-      else quotedValue += character
-      continue
-    }
-    if (quote === 'double') {
-      if (character === '\\') escaped = true
-      else if (character === '"') quote = null
-      if (character === '"') { quote = null; appendQuoted() }
-      else quotedValue += character
-      continue
-    }
-    if (character === "'" || character === '"') {
-      quote = character === "'" ? 'single' : 'double'
-      quoteStart = index
-      quotedValue = ''
-      result += ' '
-      continue
-    }
-    if (character === '$' && line[index + 1] === "'") {
-      quote = 'ansi'
-      quoteStart = index
-      quotedValue = ''
-      result += '  '
+  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(words[index].value)) index += 1
+  for (;;) {
+    const head = commandName(words[index]?.value ?? '')
+    if (head === 'command') {
       index += 1
-      continue
-    }
-    if (character === '#' && (index === 0 || /[\s;|&()]/.test(previous ?? ''))) break
-    result += character
+      while (['-p', '-v', '-V', '--'].includes(words[index]?.value)) index += 1
+    } else if (head === 'timeout') {
+      index += 1
+      while (words[index]?.value.startsWith('-')) {
+        index += ['-k', '-s', '--kill-after', '--signal'].includes(words[index].value) ? 2 : 1
+      }
+      if (/^\d+(?:\.\d+)?[smhd]?$/.test(words[index]?.value ?? '')) index += 1
+    } else return index
   }
-
-  if (quote !== null) result += ' '.repeat(Math.max(1, line.length - quoteStart))
-
-  return result
-}
-
-function normalizeRiskScanLine(line: string) {
-  return line
-    .trim()
-    .replace(/^@+/, '')
-    .replace(/^\$\s+/, '')
-    .replace(/^PS\s+[A-Z]:\\[^>]*>\s*/i, '')
-    .replace(/^[A-Z]:\\[^>]*>\s*/i, '')
-}
-
-function isCommentLine(text: string) {
-  return text.startsWith('#') || /^rem\b/i.test(text) || /^::/.test(text)
 }
 
 export function summarizeScriptRisks(risks: ScriptRiskMatch[]) {
@@ -299,7 +241,7 @@ export function riskClassForLine(risks: ScriptRiskMatch[]) {
 }
 
 export function riskLabelsForLine(risks: ScriptRiskMatch[]) {
-  return risks.map((risk) => risk.label).join(' / ')
+  return [...new Set(risks.map((risk) => risk.label))].join(' / ')
 }
 
 export function scriptRiskLevelForRisks(risks: ScriptRiskMatch[]): ScriptRiskLevel {

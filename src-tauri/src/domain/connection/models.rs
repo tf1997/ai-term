@@ -61,6 +61,12 @@ pub struct ConnectionProfile {
     pub jump_mode: JumpMode,
     pub menu_profile_id: String,
     pub file_transfer_mode: FileTransferMode,
+    #[serde(default = "enabled_by_default")]
+    pub shell_integration: bool,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

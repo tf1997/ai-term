@@ -25,6 +25,7 @@ fn valid_profile_passes() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert!(validate_profile(&profile).is_ok());
@@ -41,6 +42,7 @@ fn interactive_menu_profile_without_target_username_passes() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert!(validate_profile(&profile).is_ok());
@@ -57,6 +59,7 @@ fn direct_profile_without_target_username_fails() {
         jump_mode: JumpMode::Direct,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert_eq!(
@@ -75,6 +78,7 @@ fn empty_gateway_host_fails() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert_eq!(
@@ -94,6 +98,7 @@ fn direct_profile_without_gateway_passes() {
         jump_mode: JumpMode::Direct,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert!(validate_profile(&profile).is_ok());
@@ -110,6 +115,7 @@ fn interactive_profile_without_menu_id_fails() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     };
 
     assert_eq!(
@@ -129,6 +135,7 @@ fn sftp_gateway_profile_without_menu_id_passes() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::SftpGateway,
+        shell_integration: true,
     };
 
     assert!(validate_profile(&profile).is_ok());
@@ -145,6 +152,7 @@ fn sftp_gateway_profile_without_gateway_fails() {
         jump_mode: JumpMode::InteractiveMenu,
         menu_profile_id: "".into(),
         file_transfer_mode: FileTransferMode::SftpGateway,
+        shell_integration: true,
     };
 
     assert_eq!(

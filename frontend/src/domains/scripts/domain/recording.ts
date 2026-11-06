@@ -2,6 +2,7 @@
 
 
 export interface UpdateScript {
+  taskMetadata?: import('./taskScript').TaskScriptMetadata
   id: string
   /** Source connection only; saved scripts are globally visible. */
   connectionId: string

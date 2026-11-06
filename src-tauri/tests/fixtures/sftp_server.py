@@ -55,11 +55,28 @@ class Handle(paramiko.SFTPHandle):
         super().__init__(flags)
         self.path = path
         self.transport = transport
+        self.written = False
 
     def stat(self):
         return paramiko.SFTPAttributes.from_stat(os.fstat(self.readfile.fileno()))
 
+    def chattr(self, attr):
+        try:
+            fd = self.readfile.fileno()
+            if attr.st_size is not None:
+                os.ftruncate(fd, attr.st_size)
+            if attr.st_uid is not None and attr.st_gid is not None:
+                current = os.fstat(fd)
+                if (current.st_uid, current.st_gid) != (attr.st_uid, attr.st_gid):
+                    os.fchown(fd, attr.st_uid, attr.st_gid)
+            if attr.st_mode is not None:
+                os.fchmod(fd, attr.st_mode)
+            return paramiko.SFTP_OK
+        except OSError as error:
+            return paramiko.SFTPServer.convert_errno(error.errno or 13)
+
     def read(self, offset, length):
+        audit("read", path=self.path.name, offset=offset, length=length)
         if self.path.name == "stall-read.txt":
             audit("stall-read")
             while self.transport.is_active():
@@ -68,6 +85,7 @@ class Handle(paramiko.SFTPHandle):
         return super().read(offset, length)
 
     def write(self, offset, data):
+        self.written = True
         audit("write", path=self.path.name, length=len(data))
         if self.path.name == "stall-write.txt":
             audit("stall-write")
@@ -84,7 +102,7 @@ class Handle(paramiko.SFTPHandle):
     def close(self):
         result = super().close()
         audit("close", path=self.path.name)
-        if self.path.name == "fail-close.txt":
+        if self.path.name == "fail-close.txt" or (self.written and self.path.name == "fail-edit-close.txt"):
             # Paramiko ignores SFTPHandle.close's return code. Drop transport
             # before the close acknowledgement to simulate an unconfirmed close.
             self.transport.close()
@@ -105,7 +123,11 @@ class Files(paramiko.SFTPServerInterface):
         return path
 
     def canonicalize(self, path):
-        return posixpath.normpath("/" + path.lstrip("/"))
+        try:
+            relative = self.local(path).relative_to(ROOT).as_posix()
+            return "/" if relative == "." else "/" + relative
+        except OSError:
+            return posixpath.normpath("/" + path.lstrip("/"))
 
     def list_folder(self, path):
         audit("list-request", path=path)
@@ -117,7 +139,7 @@ class Files(paramiko.SFTPServerInterface):
         try:
             entries = []
             for child in self.local(path).iterdir():
-                entry = paramiko.SFTPAttributes.from_stat(child.stat())
+                entry = paramiko.SFTPAttributes.from_stat(child.lstat())
                 entry.filename = child.name
                 entries.append(entry)
             audit("list", path=path)
@@ -131,7 +153,24 @@ class Files(paramiko.SFTPServerInterface):
         except OSError as error:
             return paramiko.SFTPServer.convert_errno(error.errno or 13)
 
-    lstat = stat
+    def lstat(self, path):
+        try:
+            # Resolve parents while preserving the final symlink itself.
+            lexical = ROOT / path.lstrip("/")
+            if lexical == ROOT:
+                return paramiko.SFTPAttributes.from_stat(ROOT.lstat())
+            parent = lexical.parent.resolve()
+            if not parent.is_relative_to(ROOT):
+                return paramiko.SFTP_PERMISSION_DENIED
+            return paramiko.SFTPAttributes.from_stat((parent / lexical.name).lstat())
+        except OSError as error:
+            return paramiko.SFTPServer.convert_errno(error.errno or 13)
+
+    def readlink(self, path):
+        try:
+            return os.readlink(ROOT / path.lstrip("/"))
+        except OSError as error:
+            return paramiko.SFTPServer.convert_errno(error.errno or 13)
 
     def open(self, path, flags, attr):
         try:

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS connection_profiles (
   jump_mode TEXT NOT NULL,
   menu_profile_id TEXT NOT NULL,
   file_transfer_mode TEXT NOT NULL,
+  shell_integration INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS update_scripts (
   description TEXT NOT NULL DEFAULT '',
   content TEXT NOT NULL,
   source_commands_json TEXT NOT NULL DEFAULT '[]',
+  task_metadata_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -130,3 +132,31 @@ CREATE TABLE IF NOT EXISTS agent_command_allowlist (
   last_used_at TEXT,
   use_count INTEGER NOT NULL DEFAULT 0
 );
+-- Full pre/postimages are recorded before dispatch. This is a change journal,
+-- not a queue: reopening never grants approval or retries unfinished writes.
+CREATE TABLE IF NOT EXISTS agent_file_changes (
+    id TEXT PRIMARY KEY NOT NULL,
+    profile_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_file_changes_profile ON agent_file_changes(profile_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    workspace_session_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_runs_unfinished ON agent_runs(profile_id, workspace_session_id, status, updated_at);
+CREATE TABLE IF NOT EXISTS host_knowledge (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS host_knowledge_profile ON host_knowledge(profile_id, updated_at);

@@ -1,12 +1,10 @@
 import type { AgentAutoExecClassification } from './agent'
+import { scanCommand } from '../../../shared/security/shellCommandScan'
+import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 
 // Agent 自动执行判定器(任务 F7,规则来源:docs/ai-agent-mode-development.md 6.4)。
 //
-// 关于词法扫描的选择:scriptExecution.ts 的扫描器面向「多行脚本的独立注释行剥离」,
-// 按行推进、只维护引号/heredoc/算术状态,不产出 token 边界、分段位置、重定向与
-// 命令替换信息,且相关函数均为模块私有。若复用只能拿到引号状态推进这一小部分,
-// 分段、取词、否决检测仍需全部另写,反而把两个目标不同的模块耦在一起。
-// 因此本模块内实现自包含的引号感知分段器,不改动 scriptExecution.ts。
+// 与脚本风险检查复用 shared/security 的词法扫描；未支持的结构不自动授权。
 //
 // 判定总则(6.4):
 // 1. 整条命令按引号感知规则拆成段(| ; && || 与后台 &、换行为分隔;引号内不生效);
@@ -138,275 +136,16 @@ const DANGEROUS_ENV_RE = /^(PATH|IFS|ENV|BASH_ENV|SHELLOPTS|PS4|LD_[A-Z_]+|DYLD_
 /** timeout 的 DURATION 位置参数(数字,可带 s/m/h/d 单位)。 */
 const TIMEOUT_DURATION_RE = /^\d+(\.\d+)?[smhd]?$/
 
-type QuoteState = null | 'single' | 'double' | 'ansi' | 'backtick'
-
-interface CommandScan {
-  /** 各段的 token 列表(引号内容并入所在 token,引号本身移除)。 */
-  segments: string[][]
-  /** 存在写文件的输出重定向(目标 /dev/null 与 fd 复制 2>&1 等除外)。 */
-  redirectVeto: boolean
-  /** 存在命令替换 $(、反引号、进程替换 <( )( 或历史展开等注入结构(单引号内除外)。 */
-  substitutionVeto: boolean
-  historyExpansionVeto: boolean
-  /** 未建模的分组、子 shell 或函数语法，必须人工确认。 */
-  ambiguousSyntaxVeto: boolean
-  unclosedQuote: boolean
-  heredoc: boolean
-  /**
-   * 命令以分隔符/续行符结尾(后台 &、悬空 | && ||、行尾反斜杠),末尾无实际内容。
-   * 结尾 `;` 与换行不算——它们可以安全追加。哨兵包装用它判断能否追加 `; printf`。
-   */
-  trailingOperator: boolean
-}
-
-function isWordBoundary(ch: string | undefined): boolean {
-  return ch === undefined || /[\s;|&<>]/.test(ch)
-}
-
-/**
- * bash/zsh 交互终端的历史展开:`!` 后紧跟空白、行尾、= ( " 时为字面量,
- * 其余(!!、!字符串、!? 等)展开结果会原样插入命令行——等价于命令注入,按替换结构否决。
- * agent 命令写入的是用户的交互终端,histexpand 是激活的,双引号也挡不住。
- */
-function isHistoryExpansionTrigger(next: string | undefined): boolean {
-  return next !== undefined && !' \t\n=("'.includes(next)
-}
-
-/**
- * 引号感知扫描:把整条命令拆成段并取词,同时收集一票否决所需的结构信息。
- * 分隔符:|(含 || 与 |&)、;、&&、后台 &、换行;引号/转义内的分隔符不生效。
- */
-function scanCommand(command: string): CommandScan {
-  const text = command.replace(/\r\n?/g, '\n')
-  const segments: string[][] = []
-  let tokens: string[] = []
-  /** 进行中的词;null 表示当前无词。 */
-  let word: string | null = null
-  /** 进行中的词是否仍是「未经引号的纯数字」——用于识别 2>&1 / 2>/dev/null 的 fd 前缀。 */
-  let wordIsBareDigits = false
-  let quote: QuoteState = null
-  /** 反引号结束后应回到的引号状态(反引号可出现在双引号内)。 */
-  let backtickReturn: 'double' | null = null
-  /** 下一个完成的词是输出重定向目标(不进入 token 列表,仅校验是否 /dev/null)。 */
-  let awaitingRedirectTarget = false
-  let redirectVeto = false
-  let substitutionVeto = false
-  let historyExpansionVeto = false
-  let ambiguousSyntaxVeto = false
-  let heredoc = false
-  /** 最近一个未被实际内容跟随的分隔符;null 表示末尾有内容。 */
-  let danglingSeparator: string | null = null
-
-  const appendChar = (ch: string, quoted: boolean) => {
-    danglingSeparator = null
-    if (word === null) {
-      word = ch
-      wordIsBareDigits = !quoted && /^[0-9]$/.test(ch)
-      return
-    }
-    word += ch
-    if (quoted || !/^[0-9]$/.test(ch)) wordIsBareDigits = false
-  }
-  /** 进入引号即视为开始一个词(空引号 '' 也是一个空参数)。 */
-  const openQuotedWord = () => {
-    danglingSeparator = null
-    if (word === null) word = ''
-    wordIsBareDigits = false
-  }
-  const finishWord = () => {
-    if (word === null) return
-    const value = word
-    word = null
-    wordIsBareDigits = false
-    if (awaitingRedirectTarget) {
-      awaitingRedirectTarget = false
-      if (value !== '/dev/null') redirectVeto = true
-      return
-    }
-    tokens.push(value)
-  }
-  const finishSegment = () => {
-    finishWord()
-    if (awaitingRedirectTarget) {
-      // 悬空的 >(无目标),按不可靠结构否决。
-      redirectVeto = true
-      awaitingRedirectTarget = false
-    }
-    if (tokens.length) segments.push(tokens)
-    tokens = []
-  }
-
-  let index = 0
-  while (index < text.length) {
-    const ch = text[index]
-    const next: string | undefined = text[index + 1]
-
-    if (quote === 'single') {
-      if (ch === "'") { quote = null; index += 1; continue }
-      appendChar(ch, true)
-      index += 1
-      continue
-    }
-    if (quote === 'ansi') {
-      // $'…' 内反斜杠为转义;内容如何转义不影响判定,取字面字符即可。
-      if (ch === '\\') {
-        if (next !== undefined) appendChar(next, true)
-        index += 2
-        continue
-      }
-      if (ch === "'") { quote = null; index += 1; continue }
-      appendChar(ch, true)
-      index += 1
-      continue
-    }
-    if (quote === 'backtick') {
-      // 反引号出现本身已整体否决,内容只需跳过以正确找到闭合位置。
-      if (ch === '\\') { index += 2; continue }
-      if (ch === BACKTICK) { quote = backtickReturn; backtickReturn = null; index += 1; continue }
-      index += 1
-      continue
-    }
-    if (quote === 'double') {
-      if (ch === '\\') {
-        if (next !== undefined) appendChar(next, true)
-        index += 2
-        continue
-      }
-      if (ch === '"') { quote = null; index += 1; continue }
-      // 双引号内 $(、反引号、历史展开仍然生效。
-      if (ch === '$' && next === '(') { substitutionVeto = true; index += 2; continue }
-      if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = 'double'; quote = 'backtick'; index += 1; continue }
-      if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; historyExpansionVeto = true; index += 1; continue }
-      appendChar(ch, true)
-      index += 1
-      continue
-    }
-
-    // —— 常规(无引号)状态 ——
-    if (ch === '\\') {
-      // 行续接(\ + 换行)与行尾反斜杠直接跳过;其余为字符转义,取字面字符。
-      if (next === '\n' || next === undefined) { danglingSeparator = '\\'; index += 2; continue }
-      appendChar(next, true)
-      index += 2
-      continue
-    }
-    if (ch === "'") { openQuotedWord(); quote = 'single'; index += 1; continue }
-    if (ch === '"') { openQuotedWord(); quote = 'double'; index += 1; continue }
-    if (ch === '$' && next === "'") { openQuotedWord(); quote = 'ansi'; index += 2; continue }
-    if (ch === '$' && next === '(') { substitutionVeto = true; index += 2; continue }
-    if (ch === BACKTICK) { substitutionVeto = true; backtickReturn = null; quote = 'backtick'; index += 1; continue }
-    if (ch === '!' && isHistoryExpansionTrigger(next)) { substitutionVeto = true; historyExpansionVeto = true; index += 1; continue }
-    if (ch === '#' && (index === 0 || /[\s;]/.test(text[index - 1] ?? ''))) {
-      const newline = text.indexOf('\n', index)
-      if (newline < 0) break
-      index = newline
-      continue
-    }
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}') {
-      ambiguousSyntaxVeto = true
-      appendChar(ch, false)
-      index += 1
-      continue
-    }
-    if (ch === ' ' || ch === '\t') { finishWord(); index += 1; continue }
-    if (ch === '\n' || ch === ';') { finishSegment(); danglingSeparator = ';'; index += 1; continue }
-    if (ch === '|') {
-      // |、||、|& 均按段分隔(|& 等价 2>&1 |,无文件写入)。
-      finishSegment()
-      danglingSeparator = '|'
-      index += next === '|' || next === '&' ? 2 : 1
-      continue
-    }
-    if (ch === '&') {
-      if (next === '>') {
-        // &> / &>> :stdout+stderr 一并重定向,目标须为 /dev/null。
-        finishWord()
-        awaitingRedirectTarget = true
-        index += text[index + 2] === '>' ? 3 : 2
-        continue
-      }
-      // && 与后台 & 均按段分隔,后台的每个部分同样逐段判定。
-      finishSegment()
-      danglingSeparator = '&'
-      index += next === '&' ? 2 : 1
-      continue
-    }
-    if (ch === '<') {
-      if (next === '<') {
-        if (text[index + 2] === '<') {
-          // <<< herestring:无文件写入,后随词按普通 token 处理。
-          finishWord()
-          index += 3
-          continue
-        }
-        heredoc = true
-        index += 2
-        continue
-      }
-      // 进程替换 <(…) 内含命令执行,与命令替换同类否决。
-      if (next === '(') { substitutionVeto = true; index += 2; continue }
-      // 普通输入重定向只读文件,不否决;文件名按普通 token 处理。
-      finishWord()
-      index += 1
-      continue
-    }
-    if (ch === '>') {
-      // 进程替换 >(…) 同上。
-      if (next === '(') { substitutionVeto = true; index += 2; continue }
-      // fd 前缀(如 2> 的 2):未经引号的纯数字词属于重定向本身,不算命令 token。
-      if (word !== null) {
-        if (wordIsBareDigits) {
-          word = null
-          wordIsBareDigits = false
-        } else {
-          finishWord()
-        }
-      }
-      let cursor = index + 1
-      if (text[cursor] === '>') cursor += 1 // >>
-      if (text[cursor] === '&') {
-        cursor += 1
-        if (text[cursor] === '-') { index = cursor + 1; continue } // >&- 关闭 fd,无文件写入
-        let digitsEnd = cursor
-        while (/[0-9]/.test(text[digitsEnd] ?? '')) digitsEnd += 1
-        if (digitsEnd > cursor && isWordBoundary(text[digitsEnd])) {
-          // 2>&1 之类的 fd 复制,允许。
-          index = digitsEnd
-          continue
-        }
-        // >&word 形式:按重定向到文件处理,落到目标校验。
-      }
-      awaitingRedirectTarget = true
-      index = cursor
-      continue
-    }
-    appendChar(ch, false)
-    index += 1
-  }
-
-  const unclosedQuote = quote !== null
-  finishSegment()
-  return {
-    segments,
-    redirectVeto,
-    substitutionVeto,
-    historyExpansionVeto,
-    ambiguousSyntaxVeto,
-    unclosedQuote,
-    heredoc,
-    trailingOperator: danglingSeparator !== null && danglingSeparator !== ';'
-  }
-}
-
 /** Exposes the same quote-aware tokenization to privacy checks. */
 export function commandTokensForPrivacy(command: string) {
   return scanCommand(command).segments.flatMap((segment) => stripWrappers(segment).tokens)
 }
 
-/** Exact session grants can cover substitutions, but retain non-prefix safety gates. */
+/** An exact text grant cannot freeze substitutions, scripts or runtime input. */
 export function canGrantExactCommand(command: string) {
   const scan = scanCommand(command)
-  if (!scan.segments.length || scan.unclosedQuote || scan.heredoc || scan.trailingOperator || scan.redirectVeto || scan.historyExpansionVeto) return false
+  if (!scan.segments.length || scan.budgetExceeded || scan.unclosedQuote || scan.heredoc || scan.trailingOperator || scan.redirectVeto || scan.substitutionVeto || scan.ambiguousSyntaxVeto) return false
+  if (analyzeScriptRisks(command).length) return false
   return scan.segments.every(segment => {
     const { tokens, dangerousEnv } = stripWrappers(segment)
     return !dangerousEnv && !tokens.includes('sudo')
@@ -519,6 +258,8 @@ export function classifyForAutoExec(
   const scan = scanCommand(command)
   const rejected: AgentAutoExecClassification = { eligible: false, suggestedPatterns: [] }
 
+  // A saved prefix never overrides risk findings, including unsupported syntax.
+  if (analyzeScriptRisks(command).length) return rejected
   // 不可靠结构与全局一票否决:未闭合引号 / heredoc / 写重定向 / 命令替换类。
   if (scan.unclosedQuote || scan.heredoc || scan.trailingOperator) return rejected
   if (scan.redirectVeto || scan.substitutionVeto || scan.ambiguousSyntaxVeto) return rejected
@@ -566,6 +307,7 @@ export function isSuffixSafeForSentinel(command: string): { ok: boolean; reason?
   const value = command.trim()
   if (!value) return { ok: false, reason: '命令为空' }
   const scan = scanCommand(value)
+  if (scan.budgetExceeded) return { ok: false, reason: '命令超过分析长度上限，无法确认可安全追加哨兵标记' }
   if (scan.unclosedQuote) return { ok: false, reason: '命令含未闭合的引号' }
   if (scan.heredoc) return { ok: false, reason: '命令含 heredoc(<<),无法在同一行追加哨兵标记' }
   if (scan.trailingOperator) {

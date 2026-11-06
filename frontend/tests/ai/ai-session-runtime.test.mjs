@@ -6,6 +6,7 @@ import { useAiChat } from '../../src/domains/ai/application/useAiChat'
 import { useAgentSession } from '../../src/domains/ai/application/useAgentSession'
 import { hydrateAiMessagePayload } from '../../src/domains/ai/domain/workspaceSessions'
 import { aiStreamPartialText } from '../../src/domains/ai/domain/aiStreamError'
+import { commandRiskCases } from '../shared/command-risk-cases.mjs'
 import { agentDisplayTimeline, normalizeAgentTimeline } from '../../src/domains/ai/domain/agentTimeline'
 
 const renderer = createRenderer({
@@ -66,12 +67,16 @@ function mountRuntime(t, options = {}) {
   const scriptedResponses = options.responses?.slice() ?? [response()]
   const emit = (event, ...args) => {
     events.push([event, ...args])
-    if (event === 'updateMessage') props.messages[0] = args[0]
+    if (event === 'appendMessage') props.messages.push(args[0])
+    if (event === 'updateMessage') {
+      const index = props.messages.findIndex(message => message.id === args[0].id)
+      if (index >= 0) props.messages[index] = args[0]
+    }
   }
   const app = renderer.createApp({ setup() {
     answerState = useAiAnswerState()
     const common = {
-      props, emit, answerState, terminalContextMode: () => options.terminalContextMode ?? 'auto',
+      props, emit, answerState, hostKnowledgeContext: options.hostKnowledgeContext, terminalContextMode: () => options.terminalContextMode ?? 'auto',
       conversationContext: {
         aiCommandHistory: () => options.commandHistory ?? [], conversationContextParts: () => ({ unsummarized: [] }),
         maybeGenerateSessionTitle() {}, maybeCompactConversation: async () => {}
@@ -90,7 +95,7 @@ function mountRuntime(t, options = {}) {
       composerBusy: () => false, selectedTerminalContext: () => undefined,
       scrollMessagesToLatest() {}, closeAiCommandRiskConfirm() {}
     }, {
-      ...api, touchAgentCommandAllowlistEntry: async () => {},
+      ...api, ...options.checkpoints, touchAgentCommandAllowlistEntry: async () => {},
       aiAgentTurnStream: async (id, request) => {
         modelRequests.push({ id, request })
         const next = scriptedResponses.shift()
@@ -127,6 +132,55 @@ function mountRuntime(t, options = {}) {
     runChat: () => chat.runChatTurn(assistant, '检查状态', options.selection, 'question')
   }
 }
+
+function checkpointFixture() {
+  const saved = [], starts = [], released = []
+  let sequence = 0
+  const api = {
+    agentCheckpointTarget: async () => ({ sessionId: 'terminal', sessionInstance: 'instance', profileId: 'local', routeVersion: 0, contextVersion: 1, context: { shell: 'bash', workingDirectory: '/tmp', user: 'user', environmentScope: 'fixture' } }),
+    beginAgentRun: async (_target, start) => { starts.push(start); return { runId: start.runId, token: 'memory-owner', sequence: 0 } },
+    saveAgentCheckpoint: async (_lease, update) => { assert.equal(update.expectedSequence, sequence); saved.push(structuredClone(update)); return ++sequence },
+    releaseAgentRun: async lease => { released.push(lease.runId) },
+    listAgentCheckpoints: async () => []
+  }
+  return { api, saved, starts, released }
+}
+test('Agent session creates a separate checkpoint record with the original goal and persists all tool boundaries without provider settings', async t => {
+  const checkpoints = checkpointFixture()
+  const f = mountRuntime(t, { checkpoints: checkpoints.api, responses: [response(commandCall('one')), response()] })
+  const running = f.runAgent()
+  await until(() => Boolean(f.agent.agentPendingApproval.value))
+  assert.equal(checkpoints.starts[0].goal, '检查状态')
+  assert.equal(f.commands.length, 0)
+  f.agent.resolveAgentApproval('execute')
+  await running
+  assert.deepEqual(f.commands, ['printf status'])
+  assert.ok(checkpoints.saved.some(record => record.boundary === 'before-dispatch'))
+  assert.equal(checkpoints.saved.at(-1).boundary, 'finished')
+  assert.equal(checkpoints.saved.at(-1).state.steps[0].exitCode, 0)
+  assert.ok(!/apiKey|baseUrl|memory-owner|allowlistPatterns/.test(JSON.stringify(checkpoints.saved)))
+  assert.equal(checkpoints.released.length, 1)
+})
+test('checkpoint startup failure prevents both model requests and command execution', async t => {
+  const checkpoints = checkpointFixture()
+  checkpoints.api.beginAgentRun = async () => { throw Error('database unavailable') }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api })
+  await f.runAgent()
+  assert.equal(f.modelRequests.length, 0); assert.equal(f.commands.length, 0)
+  assert.match(f.props.messages[0].text, /database unavailable/)
+  assert.equal(JSON.parse(f.props.messages[0].payloadJson).payloadVersion, 2)
+})
+test('stopping while acquiring checkpoint ownership does not begin a late model request and releases the eventual owner', async t => {
+  const pending = deferred(), checkpoints = checkpointFixture()
+  const begin = checkpoints.api.beginAgentRun
+  checkpoints.api.beginAgentRun = async (...args) => { await pending.promise; return begin(...args) }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api })
+  const running = f.runAgent(); await until(() => f.agent.agentTaskPending())
+  await new Promise(resolve => setImmediate(resolve))
+  f.agent.stopAgentRun(); pending.resolve(); await running
+  assert.equal(f.modelRequests.length, 0); assert.equal(f.commands.length, 0)
+  assert.equal(checkpoints.released.length, 1)
+})
 
 for (const mode of ['auto', 'selection', 'none']) {
   for (const kind of ['chat', 'agent']) {
@@ -166,11 +220,11 @@ test('仅选区无选中内容时不退回终端快照，Agent 后续轮次保�
 })
 
 test('复合命令按整条内容授权，同会话相同命令自动执行，变化后重新确认', { timeout: 2000 }, async t => {
-  const command = String.raw`pw=$(tr -d '\r' < /srv/app/application.properties | grep '^server.datasource.password=' | cut -d= -f2-); mysql -h127.0.0.1 -uapp -p"$pw" app -N -e "SELECT COUNT(*) FROM CLUSTER_NODES; SELECT state, COUNT(*) FROM CLUSTER_NODES GROUP BY state;" 2>&1 | head -10`
+  const command = 'printf status; printf complete'
   const fixture = mountRuntime(t, { responses: [response(commandCall('first', command)), response(commandCall('same', command)), response(commandCall('changed', command + ' | head -1')), response(commandCall('reconnected', command))] })
   const running = fixture.runAgent()
   await until(() => fixture.agent.agentPendingApproval.value)
-  assert.equal(fixture.agent.agentPendingApproval.value.proposal.suggestedPatterns, undefined)
+  assert.deepEqual(fixture.agent.agentPendingApproval.value.proposal.suggestedPatterns, ['printf'])
   fixture.agent.resolveAgentApproval('execute-and-allow-exact')
   await until(() => fixture.agent.agentPendingApproval.value?.proposal.id === 'changed')
   assert.deepEqual(fixture.commands, [command, command])
@@ -193,7 +247,7 @@ test('复合命令按整条内容授权，同会话相同命令自动执行，�
 })
 
 test('撤销会话授权后相同命令需要重新确认', { timeout: 2000 }, async t => {
-  const command = 'echo $(date)'
+  const command = 'printf status; printf complete'
   const later = deferred()
   t.after(() => later.resolve(response()))
   const fixture = mountRuntime(t, { responses: [response(commandCall('first', command)), () => later.promise] })
@@ -278,6 +332,9 @@ test('失败命令重试复制响应式风险记录，执行时可停止且不�
     }
   }
   const retry = fixture.retryAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  assert.deepEqual(fixture.commands, [], '失败重试不能复用之前的批准')
+  fixture.agent.resolveAgentApproval('execute', true)
   await until(() => fixture.agent.agentRun.value?.steps[0].deadlineAt)
   assert.deepEqual(fixture.commands, ['systemctl restart nginx'])
   assert.equal(fixture.props.messages[0].agentSteps[0].status, 'running')
@@ -657,3 +714,298 @@ for (const withTool of [false, true]) {
     assert.equal(restored.text, question)
   })
 }
+
+for (const { name, command, patterns } of commandRiskCases) {
+  test(`Agent 实际审批入口不能被旧允许项绕过：${name}`, { timeout: 2000 }, async t => {
+    const fixture = mountRuntime(t, { responses: [response(commandCall('risk', command))] })
+    fixture.props.agentAllowlistPatterns = patterns
+    fixture.props.agentBuiltinReadonlyEnabled = true
+    const running = fixture.runAgent()
+    await until(() => fixture.agent.agentPendingApproval.value)
+    assert.ok(fixture.agent.agentPendingApproval.value.proposal.risks.length)
+    fixture.agent.resolveAgentApproval('execute-and-allow')
+    fixture.agent.resolveAgentApproval('execute-and-allow-exact')
+    await nextTick()
+    assert.ok(fixture.agent.agentPendingApproval.value)
+    assert.equal(fixture.agent.agentSessionGrantCount.value, 0)
+    assert.deepEqual(fixture.saves, [])
+    assert.deepEqual(fixture.commands, [])
+    fixture.agent.stopAgentRun()
+    await running
+  })
+}
+
+function policyIntent(source, decision = 'ask') {
+  return { source, operation: 'command', reference: { id: 'runtime-only-ticket', target: { sessionId: 'original' } },
+    capture: { kind: 'sentinel', nonce: 'backend_nonce', internal: false }, terminalInput: 'backend transport\r',
+    analysis: { decision, analysisStatus: decision === 'allow' ? 'complete' : 'unknown', risks: [],
+      unknownReasons: decision === 'allow' ? [] : [{ message: '当前环境需要复核', range: { startLine: 1 } }] } }
+}
+
+for (const [change, mutate] of [
+  ['directory', intent => { intent.reference.target.context.workingDirectory = '/srv/other' }],
+  ['account', intent => { intent.reference.target.context.user = 'other-user' }],
+  ['container', intent => { intent.reference.target.context.environmentScope = 'other-container' }],
+  ['shell', intent => { intent.reference.target.context.shell = 'posix' }],
+  ['route', intent => { intent.reference.target.routeVersion++ }],
+  ['native session', intent => { intent.reference.target.sessionInstance = 'replacement-instance' }],
+  ['profile', intent => { intent.reference.target.profileId = 'other-profile' }],
+  ['unknown context', intent => { intent.reference.target.context.workingDirectory = null }],
+  ['policy', intent => { intent.reference.policyVersion = intent.analysis.policyVersion = 'new-policy' }]
+]) {
+  test(`exact command grants expire on changed ${change} and do not return with the old environment`, async t => {
+    const command = 'printf status'
+    const f = mountRuntime(t, { responses: [
+      response(commandCall('first', command)), response(commandCall('same', command)),
+      response(commandCall('changed', command)), response(commandCall('restored', command)), response()
+    ] })
+    const target = await checkpointFixture().api.agentCheckpointTarget()
+    let prepared = 0
+    const approvals = []
+    f.props.agentCommandPolicy = {
+      prepare: async (_id, _generation, source) => {
+        const number = ++prepared
+        const intent = { ...policyIntent(source, 'allow'), reference: {
+          id: `grant-ticket-${number}`, operation: 'command', policyVersion: 'policy-v1',
+          target: { ...structuredClone(target), contextVersion: number }
+        } }
+        intent.analysis.policyVersion = 'policy-v1'
+        if (number === 3) mutate(intent)
+        return intent
+      },
+      approve: async intent => { approvals.push(intent.reference.id) }, cancel: async () => {}
+    }
+    const running = f.runAgent()
+    await until(() => f.agent.agentPendingApproval.value?.proposal.id === 'first')
+    f.agent.resolveAgentApproval('execute-and-allow-exact')
+    await until(() => f.agent.agentPendingApproval.value?.proposal.id === 'changed')
+    assert.deepEqual(f.commands, [command, command], 'fresh unchanged context may reuse only the exact command')
+    assert.equal(f.props.messages[0].agentSteps[1].autoApproved, true)
+    assert.equal(f.agent.agentSessionGrantCount.value, 0)
+    f.agent.resolveAgentApproval('execute')
+    await until(() => f.agent.agentPendingApproval.value?.proposal.id === 'restored')
+    assert.deepEqual(f.commands, [command, command, command], 'returning to an old environment must not restore its grant')
+    assert.deepEqual(approvals, ['grant-ticket-1', 'grant-ticket-3'])
+    assert.deepEqual(f.saves, [])
+    f.agent.stopAgentRun(); await running
+  })
+}
+
+test('native sensitivity redacts history and links the exact live intent before command dispatch', async t => {
+  const checkpoints = checkpointFixture(), command = "export APP_PASSWORD='PRIVATE_FIXTURE_VALUE'"
+  const fixture = mountRuntime(t, { checkpoints: checkpoints.api, responses: [response(commandCall('credential', command)), response()] })
+  const prepared = { ...policyIntent(command), sourceSensitive: true, reference: { id: 'live-script-source', operation: 'command', target: await checkpoints.api.agentCheckpointTarget(), policyVersion: 'command-policy-v1' } }
+  const approvals = []
+  fixture.props.agentCommandPolicy = { prepare: async () => prepared, approve: async intent => { approvals.push(intent.reference.id) }, cancel: async () => {} }
+  fixture.props.agentCommandRunner = (_terminal, actual, options) => {
+    assert.equal(actual, command)
+    assert.equal(options.intent.reference.id, prepared.reference.id)
+    assert.deepEqual(approvals, ['live-script-source'])
+    const before = checkpoints.saved.find(item => item.boundary === 'before-dispatch')
+    assert.equal(before.scriptIntent.id, prepared.reference.id)
+    return { result: Promise.resolve({ status: 'completed', exitCode: 0, output: 'PRIVATE_FIXTURE_VALUE', durationMs: 1, truncated: false }), peekOutput: () => '', cancel() {} }
+  }
+  const running = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  assert.equal(fixture.agent.agentPendingApproval.value.proposal.sensitive, true)
+  assert.equal(checkpoints.saved.find(item => item.boundary === 'prepared').scriptIntent.id, 'live-script-source')
+  fixture.agent.resolveAgentApproval('execute', true)
+  await running
+  assert.equal(fixture.props.messages[0].agentStatus, 'done')
+  assert.ok(!JSON.stringify(checkpoints.saved).includes('PRIVATE_FIXTURE_VALUE'))
+  assert.ok(!fixture.props.messages[0].payloadJson.includes('PRIVATE_FIXTURE_VALUE'))
+  assert.ok(checkpoints.saved.filter(item => !['prepared', 'before-dispatch'].includes(item.boundary)).every(item => !item.scriptIntent))
+})
+
+test('后端 ask 覆盖只读自动允许，批准精确记录后派发且不持久化票据', async t => {
+  const fixture = mountRuntime(t, { responses: [response(commandCall('policy')), response()] })
+  const prepared = policyIntent('printf status')
+  const approved = [], dispatched = [], cancelled = []
+  fixture.props.agentBuiltinReadonlyEnabled = true
+  fixture.props.agentCommandPolicy = {
+    prepare: async (id, generation, source) => { assert.equal(id, 'terminal'); assert.equal(generation, 1); assert.equal(source, prepared.source); return prepared },
+    approve: async intent => { approved.push(intent.reference.id) },
+    cancel: async intent => { cancelled.push(intent.reference.id) }
+  }
+  fixture.props.agentCommandRunner = (_id, command, options) => {
+    assert.deepEqual(approved, ['runtime-only-ticket'])
+    assert.equal(options.intent.reference.id, prepared.reference.id)
+    assert.equal(options.intent.source, command)
+    dispatched.push(command)
+    return { result: Promise.resolve({ status: 'completed', exitCode: 0, output: 'ok', durationMs: 0, truncated: false }), peekOutput: () => '', cancel() {} }
+  }
+  const task = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  assert.equal(dispatched.length, 0)
+  assert.ok(fixture.agent.agentPendingApproval.value.proposal.risks.some(risk => risk.message.includes('环境需要复核')))
+  fixture.agent.resolveAgentApproval('execute-and-allow-exact')
+  assert.equal(approved.length, 0)
+  fixture.agent.resolveAgentApproval('execute', true)
+  await task
+  assert.deepEqual(dispatched, ['printf status'])
+  assert.equal(cancelled.length, 1)
+  assert.ok(!JSON.stringify(fixture.props.messages[0]).includes('runtime-only-ticket'))
+})
+
+for (const scenario of ['deny', 'analysis-error', 'approval-error']) {
+  test(`后端 ${scenario} 时不得回退到前端派发`, async t => {
+    const fixture = mountRuntime(t, { responses: [response(commandCall('blocked'))] })
+    fixture.props.agentBuiltinReadonlyEnabled = true
+    fixture.props.agentCommandPolicy = {
+      prepare: async source => { if (scenario === 'analysis-error') throw Error('analysis unavailable'); return policyIntent('printf status', scenario === 'deny' ? 'deny' : 'ask') },
+      approve: async () => { throw Error('stale target') }, cancel: async () => {}
+    }
+    const task = fixture.runAgent()
+    if (scenario === 'approval-error') {
+      await until(() => fixture.agent.agentPendingApproval.value)
+      fixture.agent.resolveAgentApproval('execute', true)
+    }
+    await task
+    assert.equal(fixture.props.messages[0].agentStatus, 'error')
+    assert.deepEqual(fixture.commands, [])
+  })
+}
+
+test('分析尚未返回时停止，迟到的后端记录被取消', async t => {
+  const prepared = deferred(), cancelled = []
+  let requested = false
+  const fixture = mountRuntime(t, { responses: [response(commandCall('late'))] })
+  fixture.props.agentCommandPolicy = {
+    prepare: async () => { requested = true; return prepared.promise },
+    approve: async () => { assert.fail('stopped run cannot approve') },
+    cancel: async intent => { cancelled.push(intent.reference.id) }
+  }
+  const task = fixture.runAgent()
+  await until(() => requested)
+  fixture.agent.stopAgentRun()
+  await task
+  prepared.resolve(policyIntent('printf status'))
+  await until(() => cancelled.length === 1)
+  assert.deepEqual(fixture.commands, [])
+})
+
+test('restart recovery reuses the original run and goal, collects new evidence and persists human observations without old authority', async t => {
+  const checkpoints = checkpointFixture(), target = await checkpoints.api.agentCheckpointTarget()
+  const record = { runId: 'original-run', messageId: 'answer', workspaceSessionId: 'session', goal: '恢复原始任务', target, lastTarget: target, routeKey: 'local-route-v1', sequence: 4, boundary: 'before-dispatch', state: { status: 'executing', steps: [{ id: 'old-command', command: 'old unknown write', reason: 'old', toolName: 'run_command', sensitive: false, status: 'running', executionPhase: 'dispatching', output: null, outputTruncated: false, exitCode: null, fileRead: null, fileEdits: [] }], plan: null, verifications: [], finalText: '', error: null, stopReason: null } }
+  let sequence = 4, recovery, begins = 0
+  checkpoints.api.beginAgentRun = async () => { begins++; throw Error('recovery must not start another run') }
+  checkpoints.api.recoverAgentRun = async (current, runId, expected) => {
+    assert.equal(runId, record.runId); assert.equal(expected, sequence)
+    recovery = { phase: 'inspecting', sourceSequence: sequence, sourceStepIds: ['old-command'], requiredStepIds: ['old-command'], originalTarget: target, currentTarget: current, resolutions: [] }
+    return { lease: { runId, token: 'new-owner', sequence: ++sequence }, checkpoint: { ...record, recovery, sequence } }
+  }
+  checkpoints.api.saveAgentCheckpoint = async (lease, update) => { assert.equal(lease.runId, record.runId); assert.equal(update.expectedSequence, sequence); checkpoints.saved.push(structuredClone(update)); return ++sequence }
+  checkpoints.api.confirmAgentRecovery = async (_lease, _target, expected, resolutions) => { assert.equal(expected, sequence); recovery = { ...recovery, phase: 'continuing', resolutions }; return { ...record, recovery, sequence: ++sequence } }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api, responses: [response(commandCall('fresh-check', 'whoami')), response(), response(commandCall('new-command', 'whoami')), response()] })
+  f.props.agentBuiltinReadonlyEnabled = true
+  const running = f.agent.startAgentRecovery(record)
+  await until(() => Boolean(f.agent.agentPendingRecovery.value))
+  assert.deepEqual(f.commands, ['whoami']); assert.equal(begins, 0); assert.equal(f.modelRequests[0].request.goal, record.goal)
+  f.agent.resolveAgentRecovery({ action: 'continue', resolutions: [{ stepId: 'old-command', evidenceStepIds: ['fresh-check'], observation: '已检查当前账号与现场，继续原目标' }] })
+  await until(() => Boolean(f.agent.agentPendingApproval.value))
+  assert.equal(f.commands.length, 1); assert.equal(f.agent.agentPendingApproval.value.proposal.id, 'new-command')
+  assert.equal(f.agent.agentPendingApproval.value.proposal.suggestedPatterns, undefined)
+  f.agent.resolveAgentApproval('execute'); await running
+  const payload = JSON.parse(f.props.messages[0].payloadJson)
+  assert.equal(payload.agentSteps[0].exitCode, undefined); assert.equal(payload.agentSteps[0].executionPhase, 'dispatching')
+  assert.equal(payload.agentRecovery.resolutions[0].observation, '已检查当前账号与现场，继续原目标')
+  assert.ok(!JSON.stringify(payload).includes('new-owner')); assert.equal(checkpoints.saved.at(-1).boundary, 'finished')
+  assert.equal(f.modelRequests.at(-1).request.taskContext.includes('已检查当前账号与现场'), true)
+})
+
+test('backend target mismatch during recovery prevents model and terminal work', async t => {
+  const checkpoints = checkpointFixture(), target = await checkpoints.api.agentCheckpointTarget()
+  checkpoints.api.recoverAgentRun = async () => { throw Error('当前账号或容器环境与原任务不同') }
+  checkpoints.api.confirmAgentRecovery = async () => { throw Error('must not confirm') }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api })
+  await f.agent.startAgentRecovery({ runId: 'original', messageId: 'answer', workspaceSessionId: 'session', goal: '原目标', target, sequence: 1, state: { steps: [], plan: null, verifications: [] } })
+  assert.equal(f.modelRequests.length, 0); assert.equal(f.commands.length, 0)
+  assert.match(f.props.messages[0].text, /账号或容器/)
+})
+
+function waitingCheckpoint(target) {
+  return { runId: 'waiting-run', messageId: 'answer', workspaceSessionId: 'session', goal: '部署并验证原始目标', target, lastTarget: target, routeKey: 'local-route-v1', sequence: 4, boundary: 'finished', userInputs: [], state: {
+    status: 'waiting-input', steps: [{ id: 'old-inspect', command: 'inspect original', reason: '已检查', toolName: 'run_command', sensitive: false, status: 'completed', executionPhase: 'finished', output: 'A and B', outputTruncated: false, exitCode: 0, fileRead: null, fileEdits: [] }],
+    plan: { version: 2, reason: '等待选择', items: [{ id: 'inspect', description: '检查', status: 'completed', stepIds: ['old-inspect'] }, { id: 'select', description: '按用户选择继续', status: 'waiting', stepIds: [] }], changes: [] }, verifications: [], finalText: '选择 A 还是 B？', error: null, stopReason: null } }
+}
+function replyReceipt(record, current, reply) {
+  return { lease: { runId: record.runId, token: 'reply-owner', sequence: record.sequence + 1 }, checkpoint: { ...structuredClone(record), sequence: record.sequence + 1, messageId: reply.assistantMessageId,
+    userInputs: [...record.userInputs, { messageId: reply.messageId, question: record.state.finalText, text: reply.text, redacted: false, createdAt: 1 }],
+    recovery: { phase: 'continuing', sourceSequence: record.sequence, sourceStepIds: record.state.steps.map(step => step.id), requiredStepIds: [], originalTarget: record.target, currentTarget: current, resolutions: [] } } }
+}
+
+test('answering a waiting task keeps its run, original goal, question, plan and completed evidence with fresh command approval', async t => {
+  const checkpoints = checkpointFixture(), target = await checkpoints.api.agentCheckpointTarget(), record = waitingCheckpoint(target)
+  let sequence = record.sequence
+  checkpoints.api.beginAgentRun = async () => { assert.fail('reply must not create another run') }
+  checkpoints.api.recoverAgentRun = async () => { assert.fail('same-session reply has its own native transition') }
+  checkpoints.api.confirmAgentRecovery = async () => { assert.fail('no unknown effects in this fixture') }
+  checkpoints.api.replyAgentRun = async (current, runId, expected, reply) => {
+    assert.equal(runId, record.runId); assert.equal(expected, sequence); sequence++
+    assert.notEqual(reply.assistantMessageId, record.messageId)
+    return replyReceipt(record, current, reply)
+  }
+  checkpoints.api.saveAgentCheckpoint = async (lease, update) => { assert.equal(lease.runId, record.runId); assert.equal(update.expectedSequence, sequence); checkpoints.saved.push(structuredClone(update)); return ++sequence }
+  const changedPlan = { expectedVersion: 2, reason: '用户选择 B', items: [...record.state.plan.items.map(item => ({ ...item, status: item.id === 'select' ? 'in-progress' : item.status }))] }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api, responses: [response({ id: 'plan', name: 'update_plan', arguments: JSON.stringify(changedPlan) }), response(commandCall('new-command', 'whoami')), response()] })
+  f.props.agentBuiltinReadonlyEnabled = true
+  f.props.messages[0].agentStatus = 'waiting-input'; f.props.messages[0].text = record.state.finalText
+  const running = f.agent.replyToAgentTask(record, '选择 B，保留先前检查')
+  await until(() => Boolean(f.agent.agentPendingApproval.value))
+  assert.deepEqual(f.commands, [])
+  assert.equal(f.agent.agentPendingApproval.value.proposal.id, 'new-command')
+  assert.equal(JSON.parse(f.modelRequests[0].request.taskContext).plan.version, 2)
+  assert.equal(JSON.parse(f.modelRequests[1].request.taskContext).plan.version, 3)
+  assert.ok(f.modelRequests.every(item => item.request.goal.startsWith(record.goal) && item.request.goal.includes('选择 A 还是 B') && item.request.goal.includes('选择 B，保留先前检查')))
+  assert.ok(f.modelRequests[0].request.turns.some(turn => JSON.stringify(turn).includes('old-inspect')))
+  f.agent.resolveAgentApproval('execute'); await running
+  assert.deepEqual(f.commands, ['whoami'])
+  assert.equal(f.props.messages[0].text, '选择 A 还是 B？')
+  assert.equal(f.props.messages[1].role, 'user')
+  assert.equal(f.props.messages[2].agentPlan.version, 3)
+  assert.deepEqual(f.props.messages[2].agentSteps.map(step => step.id), ['old-inspect', 'new-command'])
+})
+
+test('a failed or stopped reply save cannot call the model, dispatch, or create a replacement task', async t => {
+  const checkpoints = checkpointFixture(), target = await checkpoints.api.agentCheckpointTarget(), record = waitingCheckpoint(target)
+  const pending = deferred()
+  checkpoints.api.recoverAgentRun = async () => { assert.fail('must not recover silently') }
+  checkpoints.api.confirmAgentRecovery = async () => { assert.fail('must not confirm silently') }
+  checkpoints.api.beginAgentRun = async () => { assert.fail('must not create replacement') }
+  let current, submitted
+  checkpoints.api.replyAgentRun = async (expected, _id, _sequence, reply) => { current = expected; submitted = reply; return pending.promise }
+  const f = mountRuntime(t, { checkpoints: checkpoints.api, responses: [] })
+  const running = f.agent.replyToAgentTask(record, '选择 B')
+  await until(() => Boolean(submitted)); f.agent.stopAgentRun(); await running
+  assert.equal(f.modelRequests.length, 0); assert.deepEqual(f.commands, [])
+  pending.resolve(replyReceipt(record, current, submitted))
+  await until(() => checkpoints.released.includes(record.runId))
+  assert.equal(f.modelRequests.length, 0)
+})
+
+
+test('chat forwards fresh host knowledge separately from conversation and stops before sending a cancelled lookup', async t => {
+  let received
+  const f = mountRuntime(t, { hostKnowledgeContext: async query => `facts for ${query}`, chatResponse: async (_id, request) => { received = request; return { answer: 'done' } } })
+  await f.runChat(); assert.equal(received.hostKnowledgeContext, 'facts for 检查状态'); assert.deepEqual(received.conversationMessages, [])
+})
+
+test('agent reloads host knowledge between tool results and sends no cached deleted fact', async t => {
+  let count = 0
+  const f = mountRuntime(t, { hostKnowledgeContext: async () => ++count === 1 ? 'first fact' : 'empty current snapshot', responses: [response(commandCall('read')), response()] })
+  const pending = f.runAgent(); await until(() => f.agent.agentPendingApproval.value)
+  f.agent.resolveAgentApproval('execute'); await pending
+  assert.equal(f.modelRequests[0].request.hostKnowledgeContext, 'first fact')
+  assert.equal(f.modelRequests[1].request.hostKnowledgeContext, 'empty current snapshot')
+})
+
+test('stopping while host knowledge is loading prevents model dispatch in chat and agent', async t => {
+  for (const kind of ['chat', 'agent']) {
+    const lookup = deferred(); let entered = false, sent = false
+    const f = mountRuntime(t, { hostKnowledgeContext: () => { entered = true; return lookup.promise }, chatResponse: async () => { sent = true; return { answer: 'should not send' } } })
+    const pending = kind === 'chat' ? f.runChat() : f.runAgent(); await until(() => entered)
+    if (kind === 'chat') f.chat.stopCurrentAnswer(); else f.agent.stopAgentRun()
+    lookup.resolve('late fact'); await pending
+    assert.equal(sent, false); assert.equal(f.modelRequests.length, 0)
+  }
+})

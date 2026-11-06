@@ -43,6 +43,7 @@ fn profile(jump_mode: JumpMode) -> ConnectionProfile {
         jump_mode,
         menu_profile_id: "company-default".into(),
         file_transfer_mode: FileTransferMode::Auto,
+        shell_integration: true,
     }
 }
 

@@ -2,6 +2,7 @@
 name = "ai-term"
 version = "0.3.4"
 edition = "2021"
+rust-version = "1.90"
 license = "Apache-2.0"
 
 [lib]
@@ -24,6 +25,10 @@ tauri = { version = "1", features = ["shell-open"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 portable-pty = "0.9"
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
+base64 = "0.22.1"
+sha2 = "0.10.9"
 
 [target.'cfg(windows)'.dependencies]
 ssh2 = "0.9.6"
@@ -36,6 +41,7 @@ ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 tauri-build = { version = "1", features = [] }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
