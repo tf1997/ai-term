@@ -5,11 +5,11 @@ import { computed, ref } from 'vue'
 import type { AgentCommandPolicy, ApplicationCommandExecutor } from '../../shared/security/commandPolicy'
 import type { AiProviderConfig } from '../../domains/ai/types'
 import type { ConnectionProfile } from '../../domains/connections/types'
-import type { AiContextStatus, AiMessage, WorkspaceSession } from '../../domains/ai/types'
+import type { AiContextStatus, AiMessage, WorkspaceSession, AiSessionActivity, AiTerminalContext } from '../../domains/ai/types'
 import type { CommandHistoryEntry, TerminalOutputDeltaEvent, TerminalSelectionEvent } from '../../domains/terminal/types'
 import type { TaskScriptImport, TaskScriptDraft, ScriptRecording } from '../../domains/scripts/types'
 import type { AgentCommandHandle, AgentCommandRunOptions, AiPanelMode } from '../../domains/ai/types'
-import { AiPanel } from '../../domains/ai/views'
+import { AiSessionPanels } from '../../domains/ai/views'
 import { CommandHistoryPanel } from '../../domains/terminal/views'
 import { ScriptPanel } from '../../domains/scripts/views'
 import UiIcon from '../../shared/ui/UiIcon.vue'
@@ -41,12 +41,15 @@ const props = defineProps<{
   terminalSelection?: TerminalSelectionEvent
   commandHistory: CommandHistoryEntry[]
   aiMessages: AiMessage[]
+  aiMessagesBySession?: Record<string, AiMessage[]>
+  aiContextBySession?: Record<string, AiContextStatus>
+  aiTerminalContexts?: Record<string, AiTerminalContext>
   aiContextStatus?: AiContextStatus
   scriptRecording: ScriptRecording
   agentAvailabilityCheck?: () => string
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
-  agentTakeoverChange?: (terminalId: string, active: boolean) => void
+  agentTakeoverChange?: (terminalId: string, active: boolean) => boolean | void
   agentAllowlistPatterns?: string[]
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
   agentAllowPatterns?: (patterns: string[], sourceCommand: string) => Promise<void>
@@ -55,6 +58,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  aiSessionActivity: [activity: AiSessionActivity]
   selectAiConfig: [configId: string]
   configureAi: []
   clearTerminalSelection: []
@@ -139,9 +143,12 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       @fill="emit('fillCommand', $event)"
       @pin="emit('pinQuickCommand', $event)"
     />
-    <AiPanel
+    <AiSessionPanels
       v-if="visitedTabs.has('ai')"
-      v-show="activeWorkspaceTab === 'ai'"
+      :active="activeWorkspaceTab === 'ai' && !collapsed"
+      :messages-by-session="aiMessagesBySession"
+      :context-by-session="aiContextBySession"
+      :terminal-contexts="aiTerminalContexts"
       :terminal-id="terminalId"
       :terminal-connection-generation="terminalConnectionGeneration"
       :connection-id="connectionId"
@@ -174,6 +181,7 @@ function selectWorkspaceTab(tab: 'history' | 'ai' | 'scripts') {
       :agent-builtin-readonly-enabled="agentBuiltinReadonlyEnabled"
       :agent-command-timeout-ms="agentCommandTimeoutMs"
       @create-script-draft="openTaskScript"
+      @activity-change="emit('aiSessionActivity', $event)"
       @select-session="emit('selectWorkspaceSession', $event)"
       @select-config="emit('selectAiConfig', $event)"
       @configure-ai="emit('configureAi')"

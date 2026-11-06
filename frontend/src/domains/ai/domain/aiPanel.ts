@@ -7,7 +7,22 @@ import type { AgentCommandPolicy, ApplicationCommandExecutor } from '../../../sh
 import type { AgentFileToolService } from '../../transfer/index'
 import type { SshTaskService } from '../../terminal/types'
 
+export interface AiSessionActivity {
+  sessionId: string
+  terminalId: string
+  mode: AiPanelMode
+  terminalLabel: string
+  status: 'idle' | 'preparing' | 'running' | 'waiting-approval' | 'waiting-input'
+  label: string
+}
+
+export type AiTerminalContext = Pick<AiPanelProps, 'terminalId' | 'terminalConnectionGeneration' | 'connectionId'
+  | 'executionTargetLabel' | 'executionTargetTitle' | 'executionTargetConnectionIds' | 'terminalSnapshot'
+  | 'terminalSelection' | 'commandHistory' | 'agentAvailabilityCheck' | 'agentAvailabilityConfirm' | 'sshTasks'>
+
 export interface AiPanelProps {
+  active?: boolean
+  sessionActivities?: Record<string, AiSessionActivity>
   sshTasks?: SshTaskService
   agentFileTools?: AgentFileToolService
   agentCommandPolicy?: AgentCommandPolicy
@@ -35,7 +50,7 @@ export interface AiPanelProps {
   agentAvailabilityConfirm?: () => Promise<string>
   agentCommandRunner?: (terminalId: string, command: string, options?: AgentCommandRunOptions) => AgentCommandHandle
   /** Agent 任务接管目标终端时通知宿主，任务结束后传入 false 释放。 */
-  agentTakeoverChange?: (terminalId: string, active: boolean) => void
+  agentTakeoverChange?: (terminalId: string, active: boolean) => boolean | void
   agentAllowlistPatterns?: string[]
   /** Resolves only after the allowlist entry is saved; rejection prevents dispatch. */
   agentAllowPattern?: (pattern: string, sourceCommand: string) => Promise<void>
@@ -47,6 +62,7 @@ export interface AiPanelProps {
 }
 
 export interface AiPanelEvents {
+  activityChange: [activity: AiSessionActivity]
   createScriptDraft: [draft: import('../../scripts/types').TaskScriptDraft]
   selectConfig: [configId: string]
   configureAi: []
@@ -67,3 +83,9 @@ export interface AiPanelEvents {
 }
 
 export type AiPanelEmit = <Event extends keyof AiPanelEvents>(event: Event, ...args: AiPanelEvents[Event]) => void
+
+export interface AiSessionPanelsProps extends AiPanelProps {
+  messagesBySession?: Record<string, AiMessage[]>
+  contextBySession?: Record<string, AiContextStatus>
+  terminalContexts?: Record<string, AiTerminalContext>
+}

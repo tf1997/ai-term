@@ -35,7 +35,7 @@ import type { CommandRecordedEvent, TerminalOutputDeltaEvent, TerminalOutputEven
 
 import { deleteAgentCommandAllowlistEntry, listAgentCommandAllowlist, saveAgentCommandAllowlistEntries } from '../../domains/ai/infrastructure/api'
 import { listConnectionProfiles, saveConnectionProfile } from '../../domains/connections/infrastructure/api'
-import type { AgentAllowlistEntry, AgentCommandHandle, AgentCommandRunOptions } from '../../domains/ai/types'
+import type { AgentAllowlistEntry, AgentCommandHandle, AgentCommandRunOptions, AiSessionActivity, AiTerminalContext } from '../../domains/ai/types'
 import { createReadyAgentCommand } from '../../domains/terminal'
 
 import { createStableRefRegistry } from '../../domains/terminal/index'
@@ -69,8 +69,9 @@ const {
   pausedTerminalSyncIds, toggleTerminalTarget, setTerminalTargets, selectAllTerminalTargets,
   resetTerminalTargetsToActive
 } = terminalTabState
-/** Agent 当前接管的终端标签。任务运行期间只保护这一个启动时绑定的终端。 */
-const agentTakeoverTerminalId = ref('')
+/** Each running conversation owns its original terminal, including background conversations. */
+const agentTakeoverTerminalIds = ref(new Set<string>())
+const aiSessionActivities = ref<Record<string, AiSessionActivity>>({})
 const { activeView, selectView } = useSessionView({ activeTerminalId, terminalTabs })
 const visitedFileTerminals = ref<string[]>([])
 const filePanelTabs = computed(() => terminalTabs.value.filter(tab => visitedFileTerminals.value.includes(tab.id)))
@@ -122,14 +123,14 @@ const policyReview = useCommandPolicyReview()
 provide(commandReviewerKey, policyReview.review)
 const { execute: applicationCommandExecutor, agentPolicy: agentCommandPolicy } = createApplicationCommandExecutor({
   panes: terminalRefs, tabs: () => terminalTabs.value, targets: () => [...targetTerminalIds.value],
-  isAgentControlled: id => agentTakeoverTerminalId.value === id, review: policyReview.review
+  isAgentControlled: id => agentTakeoverTerminalIds.value.has(id), review: policyReview.review
 })
 const { executeCommandOnTargetTerminals, fillHistoryCommandOnActiveTerminal, pinQuickCommandOnActiveTerminal, writeInputToTargetTerminals, syncTerminalInputToTargets, handleTerminalInputWriteFailure } = useTerminalInputRouter({
   tabs: terminalTabState,
   applicationCommandExecutor,
   terminalRefs,
   showToast,
-  isTerminalAgentControlled: terminalId => agentTakeoverTerminalId.value === terminalId
+  isTerminalAgentControlled: terminalId => agentTakeoverTerminalIds.value.has(terminalId)
 })
 const { profiles, selectedProfileId, profileStoreStatus, connectionError, connectionSaveState, connectionSaveError, connectionEditorOpen, connectionEditorMode, connectionDraft, selectedProfile, sidebarProfile, connectionLabels, selectProfile, createProfile, editSelectedProfile, copySelectedProfile, closeConnectionEditor, loadProfiles, saveSelectedProfile, deleteSelectedProfile } = useConnectionProfiles({ openConnectionsPanel, showToast })
 const { aiConfigs, selectedAiConfigId, aiConfigSaveState, aiConfigSaveError, aiConfigEditorOpen, aiConfigEditorMode, aiConfigDraft, aiConfig, settingsAiConfig, activeAiRuntimeApiKey, createAiConfig, selectAiConfig, editAiConfig, closeAiConfigEditor, saveAiConfig, deleteSelectedAiConfig, loadAiConfig } = useAiConfigs({ profileStoreStatus, openSettingsPanel, showToast })
@@ -360,7 +361,7 @@ function openAiConfigContextMenu(event: MouseEvent, configId: string) {
 function openTerminalTabContextMenu(event: MouseEvent, tab: TerminalTab) {
   const menu = terminalContextMenu({
     tabs: terminalTabs.value, tabId: tab.id, activeId: activeTerminalId.value, targetIds: targetTerminalIds.value,
-    protectedIds: agentTakeoverTerminalId.value ? [agentTakeoverTerminalId.value] : [],
+    protectedIds: [...agentTakeoverTerminalIds.value],
     select: id => { selectTerminalTab(id); focusActiveTerminalFromWorkspace() },
     toggleTarget: toggleTerminalTarget,
     create: () => { openLocalTerminal(); focusActiveTerminalFromWorkspace() },
@@ -462,8 +463,12 @@ async function createWorkspaceSession(connectionId = activeConnectionId.value, n
 
 
 async function createWorkspaceSessionForActiveConnection() {
+  const origin = activeTerminal.value
+  const mode = workspaceSessionById(activeAiSessionId.value)?.aiMode ?? 'chat'
   try {
-    const session = await createWorkspaceSession(activeConnectionId.value)
+    const session = await createWorkspaceSession(origin?.connectionId ?? activeConnectionId.value)
+    await setWorkspaceSessionMode(session.id, mode)
+    if (origin && agentTakeoverTerminalIds.value.has(origin.id)) createTerminalTab(origin.profile)
     selectWorkspaceSession(session.id)
   } catch (error) {
     connectionError.value = formatError(error)
@@ -600,16 +605,13 @@ const agentFileTools = createAgentFileToolService({
 })
 
 function handleAgentTakeoverChange(terminalId: string, active: boolean) {
-  if (active) {
-    agentTakeoverTerminalId.value = terminalId
-    return
-  }
-  if (agentTakeoverTerminalId.value === terminalId) agentTakeoverTerminalId.value = ''
+  if (active) agentTakeoverTerminalIds.value.add(terminalId)
+  else agentTakeoverTerminalIds.value.delete(terminalId)
 }
 
 /** Agent 模式可用性快检(同步):返回空串表示可用,否则为不可用原因。 */
-function agentAvailabilityCheck(): string {
-  const pane = terminalRefs.value[activeTerminalId.value]
+function agentAvailabilityCheck(terminalId = activeTerminalId.value): string {
+  const pane = terminalRefs.value[terminalId]
   if (!pane) return '当前终端不可用'
   if (!pane.agentCapturePreparing()) {
     const readiness = pane.commandExecutionReadiness()
@@ -627,8 +629,8 @@ function agentAvailabilityCheck(): string {
  * 可用性确认(异步):无语义标记的终端会跑一次哨兵探针。
  * 返回空串表示可用,否则为不可用原因。
  */
-async function agentAvailabilityConfirm(): Promise<string> {
-  const pane = terminalRefs.value[activeTerminalId.value]
+async function agentAvailabilityConfirm(terminalId = activeTerminalId.value): Promise<string> {
+  const pane = terminalRefs.value[terminalId]
   if (!pane) return '当前终端不可用'
   const mode = await pane.ensureAgentCapture()
   if (mode === 'unsupported') {
@@ -637,8 +639,24 @@ async function agentAvailabilityConfirm(): Promise<string> {
   return ''
 }
 
+const aiTerminalContexts = computed<Record<string, AiTerminalContext>>(() => Object.fromEntries(terminalTabs.value.map(tab => [tab.id, {
+  terminalId: tab.id, terminalConnectionGeneration: tab.connectionGeneration, connectionId: tab.connectionId,
+  executionTargetLabel: tab.title, executionTargetTitle: tab.title, executionTargetConnectionIds: [tab.connectionId],
+  terminalSnapshot: terminalSnapshots.value[tab.id] ?? '', terminalSelection: terminalSelections.value[tab.id],
+  commandHistory: commandHistoryForTab(tab),
+  sshTasks: tab.profile && tab.status === 'remote' && !tab.profile.menuProfileId ? sshTasks : undefined,
+  agentAvailabilityCheck: () => agentAvailabilityCheck(tab.id), agentAvailabilityConfirm: () => agentAvailabilityConfirm(tab.id)
+}])))
+
+function handleAiSessionActivity(activity: AiSessionActivity) {
+  aiSessionActivities.value = { ...aiSessionActivities.value, [activity.sessionId]: activity }
+}
 
 async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
+  if (aiSessionActivities.value[sessionId]?.status && aiSessionActivities.value[sessionId].status !== 'idle') {
+    showToast('warning', '会话任务尚未结束', '请先切回该会话停止任务，再删除会话。')
+    return
+  }
   const sessions = workspaceSessions.value
   if (sessions.length <= 1) {
     window.alert('至少保留一个会话')
@@ -649,6 +667,7 @@ async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
   if (!window.confirm(`删除 AI 会话 ${session.name}？该会话中的 AI 消息会被删除，命令历史不受影响。`)) return
   try {
     if (!await deleteAiSession(sessionId)) return
+    delete aiSessionActivities.value[sessionId]
     const remaining = workspaceSessions.value
     if (activeWorkspaceSessionId.value === sessionId) {
       selectWorkspaceSession(remaining[0].id)
@@ -660,8 +679,22 @@ async function deleteWorkspaceSessionForActiveConnection(sessionId: string) {
 
 function selectWorkspaceSession(sessionId: string) {
   if (!workspaceSessionById(sessionId)) return
+  const activity = aiSessionActivities.value[sessionId]
+  if (activity?.mode === 'agent' && terminalTabs.value.some(tab => tab.id === activity.terminalId)) selectTerminalTab(activity.terminalId)
   activeAiSessionId.value = sessionId
   void loadAiSessionState(sessionId)
+}
+
+function focusAiTerminal() {
+  const activity = aiSessionActivities.value[activeAiSessionId.value]
+  if (activity?.mode === 'agent' && terminalTabs.value.some(tab => tab.id === activity.terminalId)) selectTerminalTab(activity.terminalId)
+  focusActiveTerminalFromWorkspace()
+}
+
+function clearAiTerminalSelection() {
+  const activity = aiSessionActivities.value[activeAiSessionId.value]
+  const terminalId = activity?.mode === 'agent' ? activity.terminalId : activeTerminalId.value
+  delete terminalSelections.value[terminalId]
 }
 
 function createTerminalTab(profile?: ConnectionProfile) {
@@ -670,7 +703,7 @@ function createTerminalTab(profile?: ConnectionProfile) {
 }
 
 function closeTerminalTab(tabId: string) {
-  if (agentTakeoverTerminalId.value === tabId) {
+  if (agentTakeoverTerminalIds.value.has(tabId)) {
     showToast('warning', '终端正在被 Agent 使用', '任务结束后才能关闭此终端；你可以切换到其他终端。')
     return
   }
@@ -695,7 +728,7 @@ function cleanUpClosedTerminal(tabId: string) {
 function closeOtherTerminalTabs(tabId: string) {
   if (!terminalTabs.value.some(tab => tab.id === tabId)) return
   const ids = terminalTabs.value
-    .filter(tab => tab.id !== tabId && tab.id !== agentTakeoverTerminalId.value)
+    .filter(tab => tab.id !== tabId && !agentTakeoverTerminalIds.value.has(tab.id))
     .map(tab => tab.id)
   if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
   const closedIds = removeTerminalTabs(ids, tabId)
@@ -706,7 +739,7 @@ function closeTerminalTabsToRight(tabId: string) {
   const index = terminalTabs.value.findIndex(tab => tab.id === tabId)
   if (index < 0) return
   const ids = terminalTabs.value.slice(index + 1)
-    .filter(tab => tab.id !== agentTakeoverTerminalId.value)
+    .filter(tab => !agentTakeoverTerminalIds.value.has(tab.id))
     .map(tab => tab.id)
   if (ids.some(id => filePanelRegistry.values[id]?.confirmClose() === false)) return
   const closedIds = removeTerminalTabs(ids, tabId)
@@ -812,10 +845,6 @@ function updateTerminalSelection(event: TerminalSelectionEvent) {
   }
 }
 
-function clearTerminalSelection() {
-  delete terminalSelections.value[activeTerminalId.value]
-}
-
 function recordCommand(event: CommandRecordedEvent) {
   const tab = terminalTabs.value.find((item) => item.id === event.terminalId)
   if (!tab) return
@@ -895,7 +924,7 @@ onBeforeUnmount(() => {
         :active-terminal-id="activeTerminalId"
         :target-terminal-ids="targetTerminalIds"
         :paused-terminal-ids="pausedTerminalSyncIds"
-        :agent-controlled-terminal-ids="agentTakeoverTerminalId ? [agentTakeoverTerminalId] : []"
+        :agent-controlled-terminal-ids="[...agentTakeoverTerminalIds]"
         :terminal-target-title="terminalTargetTitle"
         @select="selectTerminalTab"
         @close="closeTerminalTab"
@@ -1076,7 +1105,7 @@ onBeforeUnmount(() => {
         :aria-labelledby="`terminal-tab-${tab.id}`"
         :terminal-id="tab.id"
         :active="tab.id === activeTerminalId && activeView === 'terminal'"
-        :agent-controlled="tab.id === agentTakeoverTerminalId"
+        :agent-controlled="agentTakeoverTerminalIds.has(tab.id)"
         :profile="tab.profile"
         :connect-request="tab.connectRequest"
         :command-history="commandHistoryForTab(tab)"
@@ -1153,6 +1182,9 @@ onBeforeUnmount(() => {
       :terminal-selection="activeTerminalSelection"
       :command-history="activeCommandHistory"
       :ai-messages="activeAiMessages"
+      :ai-messages-by-session="aiMessagesBySession"
+      :ai-context-by-session="aiContextBySession"
+      :ai-terminal-contexts="aiTerminalContexts"
       :ai-context-status="activeAiContextStatus"
       :script-recording="activeScriptRecording"
       :agent-availability-check="agentAvailabilityCheck"
@@ -1169,8 +1201,9 @@ onBeforeUnmount(() => {
       :agent-builtin-readonly-enabled="appSettings.agentAutoExecReadonly"
       :agent-command-timeout-ms="appSettings.agentCommandTimeoutSec * 1000"
       @select-ai-config="selectAiConfig"
+      @ai-session-activity="handleAiSessionActivity"
       @configure-ai="editAiConfig()"
-      @clear-terminal-selection="clearTerminalSelection"
+      @clear-terminal-selection="clearAiTerminalSelection"
       @select-workspace-session="selectWorkspaceSession"
       @create-workspace-session="createWorkspaceSessionForActiveConnection"
       @rename-workspace-session="renameWorkspaceSession"
@@ -1186,7 +1219,7 @@ onBeforeUnmount(() => {
       @execute-command="executeCommandOnTargetTerminals"
       @ai-error="showToast('error', 'AI 请求失败', $event)"
       @write-terminal-input="writeInputToTargetTerminals"
-      @focus-terminal="focusActiveTerminalFromWorkspace"
+      @focus-terminal="focusAiTerminal"
       @start-script-recording="startScriptRecording"
       @stop-script-recording="stopScriptRecording"
       @clear-script-recording="clearScriptRecording"

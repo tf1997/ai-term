@@ -133,7 +133,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     else sessionGrantEnvironments.delete(scope)
     activeGrantScope = environment ? scope : ''
   }
-  watch([() => props.connectionId, () => props.workspaceSessionId, () => props.terminalId, () => props.terminalConnectionGeneration], revokeSessionCommandGrants)
+  watch([() => props.connectionId, () => props.workspaceSessionId, () => props.terminalId, () => props.terminalConnectionGeneration], () => {
+    revokeSessionCommandGrants()
+    cancelAgentPreparation()
+    agentStopHandle?.()
+  })
 
   const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
 
@@ -308,7 +312,9 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const takeoverChange = props.agentTakeoverChange
     // Lock the selected terminal before the asynchronous capability probe so
     // manual input cannot race with the probe command.
-    takeoverChange?.(target.terminalId, true)
+    if (takeoverChange?.(target.terminalId, true) === false) {
+      return { cancelled: false, blocked: '此终端正在被其他会话的 Agent 使用，请切换空闲终端或新建会话' }
+    }
     agentPreparing.value = true
     try {
       let blocked = ''
@@ -746,8 +752,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     // command promise has settled. The host uses this signal to block manual
     // input and protect the tab from being closed while the task is running.
     const takeoverChange = props.agentTakeoverChange
-    if (!takeoverAlreadyAcquired) takeoverChange?.(boundTerminalId, true)
-    let takeoverAcquired = true
+    let takeoverAcquired = takeoverAlreadyAcquired
     let setupCancelled = false
     let stopSetup!: () => void
     const setupStopped = new Promise<void>(resolve => { stopSetup = resolve })
@@ -764,6 +769,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       finally { clearTimeout(timer) }
     }
     try {
+      if (!takeoverAcquired) {
+        if (takeoverChange?.(boundTerminalId, true) === false) throw new Error('此终端正在被其他会话的 Agent 使用')
+        takeoverAcquired = true
+      }
       if (source.beginAgentRun) {
         if (!source.agentCheckpointTarget || !source.saveAgentCheckpoint || !source.releaseAgentRun) throw new Error('任务检查点通道不完整')
         const expected = await waitForSetup(policy?.target?.(boundTerminalId, boundConnectionGeneration) ?? source.agentCheckpointTarget(boundTerminalId))

@@ -1009,3 +1009,29 @@ test('stopping while host knowledge is loading prevents model dispatch in chat a
     assert.equal(sent, false); assert.equal(f.modelRequests.length, 0)
   }
 })
+
+test('a terminal owned by another session blocks preparation and direct run without releasing its lock', async t => {
+  const f = mountRuntime(t)
+  const ownership = [], probes = []
+  f.props.agentTakeoverChange = (terminalId, active) => { ownership.push([terminalId, active]); return false }
+  f.props.agentAvailabilityConfirm = async () => { probes.push('probe'); return '' }
+  const preparation = await f.agent.prepareAgentAction(f.agent.currentAgentTarget())
+  assert.match(preparation.blocked, /其他会话/)
+  assert.deepEqual(probes, [])
+  await f.runAgent()
+  assert.deepEqual(f.modelRequests, [])
+  assert.deepEqual(f.commands, [])
+  assert.ok(ownership.every(([, active]) => active), 'Rejected acquisition cannot release another session’s terminal')
+  assert.equal(f.answerState.isAsking.value, false)
+})
+
+test('a real terminal reconnect cancels the pending approval rather than dispatching to the replacement', async t => {
+  const f = mountRuntime(t, { responses: [response(commandCall('before-reconnect'))] })
+  const running = f.runAgent()
+  await until(() => Boolean(f.agent.agentPendingApproval.value))
+  f.props.terminalConnectionGeneration++
+  await nextTick(); await running
+  assert.equal(f.agent.agentPendingApproval.value, null)
+  assert.deepEqual(f.commands, [])
+  assert.equal(f.props.messages[0].agentStatus, 'stopped')
+})

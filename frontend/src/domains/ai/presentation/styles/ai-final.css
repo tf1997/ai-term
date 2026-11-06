@@ -61,6 +61,8 @@
 .chat-head .session-history-list { max-height: min(340px, 50vh); }
 .chat-head .session-history-row { border-radius: 4px; }
 .chat-head .session-history-main strong { font-size: var(--ai-font-body); font-weight: var(--ai-weight-medium); line-height: var(--ai-leading-body); }
+.session-activity { display: inline-flex; align-items: center; gap: 4px; color: var(--chat-accent); font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
+.session-activity.is-waiting { color: var(--chat-warning); }
 .chat-head .session-history-main small, .chat-head .session-history-time, .chat-head .empty-state { font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
 .chat-head .session-search input { font-size: var(--ai-font-body); line-height: var(--ai-leading-body); }
 .chat-response-preview { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

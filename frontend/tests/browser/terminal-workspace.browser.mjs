@@ -98,7 +98,8 @@ async function press(key, modifiers = 0) {
 
 async function replaceText(selector, value) {
   await click(selector)
-  await press('a', await evaluate('/Mac/.test(navigator.platform)') ? 4 : 2)
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', commands: ['selectAll'] })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' })
   if (value) await send('Input.insertText', { text: value })
   else await press('Delete')
   await waitFor(`document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(value)}`)
@@ -265,6 +266,7 @@ async function assertSessionViews() {
   await click('#session-view-files')
   await waitFor('document.querySelector(".files-panel") && document.querySelector("#session-view-files").getAttribute("aria-selected") === "true"')
   await evaluate('window.__filePanel = document.querySelector(".files-panel")')
+  await waitFor('document.querySelector(".right-panel").getBoundingClientRect().width === 0')
   assert.equal(await evaluate('document.querySelector(".right-panel").getBoundingClientRect().width'), 0)
   assert.equal(await evaluate('Boolean(document.querySelector(".workspace-resizer"))'), false)
 
@@ -382,7 +384,7 @@ async function assertNestedMenu() {
 }
 
 async function openHistory() {
-  if (!await evaluate('Boolean(document.querySelector(".session-history-popover"))')) await click('[title="会话列表"]')
+  if (!await evaluate('Boolean(document.querySelector(".session-history-popover"))')) await click('.ai-chat-panel:not([style*="display: none"]) [title="会话列表"]')
   await waitFor('Boolean(document.querySelector(".session-history-row"))')
 }
 
@@ -629,8 +631,8 @@ try {
 
   await openHistory()
   assert.equal(await evaluate('document.querySelectorAll(".session-history-row").length'), 1)
-  await click('[title="会话列表"]')
-  await click('[title="新建会话"]')
+  await click('.ai-chat-panel:not([style*="display: none"]) [title="会话列表"]')
+  await click('.ai-chat-panel:not([style*="display: none"]) [title="新建会话"]')
   await openHistory()
   await waitFor('document.querySelectorAll(".session-history-row").length === 2')
   await click('.session-history-row.active button[title="编辑会话"]')
@@ -648,7 +650,7 @@ try {
   await openHistory()
   await waitFor('document.querySelectorAll(".session-history-row").length === 1')
   assert.ok(dialogs.some(text => text.includes('命令历史不受影响')))
-  await click('[title="会话列表"]')
+  await click('.ai-chat-panel:not([style*="display: none"]) [title="会话列表"]')
 
   const activeBeforeBackgroundClose = await activeId()
   await evaluate('window.__activeTab = document.querySelector(".tab.active"); window.__activeXterm = Array.from(document.querySelector(".terminal-stack").children).find(element => getComputedStyle(element).display !== "none").querySelector(".xterm")')

@@ -53,7 +53,7 @@ import UiIcon from '../../../../shared/ui/UiIcon.vue'
 const LONG_MESSAGE_CHARS = 1400
 const LONG_MESSAGE_LINES = 18
 
-const props = defineProps<AiPanelProps>()
+const props = withDefaults(defineProps<AiPanelProps>(), { active: true })
 
 const emit = defineEmits<AiPanelEvents>()
 const { terminalContextMode, terminalContext } = useAiTerminalContext(props)
@@ -189,6 +189,19 @@ const activityLabel = computed(() => {
   }
   return activeAnswer.value?.text ? '正在回复' : '正在思考'
 })
+watch(() => [composerBusy.value, agentPreparing.value, needsAgentDecision.value, activityLabel.value, panelMode.value, props.terminalId, props.executionTargetLabel] as const, () => {
+  emit('activityChange', {
+    sessionId: props.workspaceSessionId, terminalId: props.terminalId, mode: panelMode.value,
+    terminalLabel: props.executionTargetLabel,
+    status: !composerBusy.value ? 'idle' : agentPreparing.value ? 'preparing' : needsAgentDecision.value ? 'waiting-approval' : 'running',
+    label: composerBusy.value ? activityLabel.value : ''
+  })
+}, { immediate: true, flush: 'sync' })
+function sessionActivityLabel(sessionId: string) {
+  const activity = props.sessionActivities?.[sessionId]
+  return activity && activity.status !== 'idle'
+    ? ({ preparing: '准备中', running: '运行中', 'waiting-approval': '待确认', 'waiting-input': '等待回复' })[activity.status] : ''
+}
 const activityStepLabel = computed(() => {
   const steps = agentRun.value?.steps
   if (!agentRunActive.value || !steps?.length) return ''
@@ -473,9 +486,9 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
 function focusComposer() {
   historyOpen.value = false
-  if (!canSendMessage.value) return
+  if (!canSendMessage.value || props.active === false) return
   void nextTick(() => {
-    composerInput.value?.focus()
+    if (props.active !== false) composerInput.value?.focus()
   })
 }
 
@@ -496,7 +509,7 @@ function followMessageContent() {
   void nextTick(() => {
     requestAnimationFrame(() => {
       const list = messageList.value
-      if (!list || !followingLatest.value) return
+      if (!list || !followingLatest.value || props.active === false) return
       list.scrollTop = list.scrollHeight
     })
   })
@@ -751,19 +764,17 @@ function handleDocumentPointerDown(event: PointerEvent) {
 }
 
 function selectSession(sessionId: string) {
-  if (sessionId !== props.workspaceSessionId && composerBusy.value) stopActiveAiWork()
   emit('selectSession', sessionId)
   historyOpen.value = false
 }
 
 function createSession() {
-  if (composerBusy.value) stopActiveAiWork()
   emit('createSession')
   historyOpen.value = false
 }
 
 function deleteSession(sessionId: string) {
-  if (sessionId === props.workspaceSessionId && composerBusy.value) stopActiveAiWork()
+  if (sessionActivityLabel(sessionId)) return
   emit('deleteSession', sessionId)
 }
 
@@ -811,6 +822,10 @@ watch(
 )
 
 watch(() => props.workspaceSessionId, scrollMessagesToLatest, { flush: 'post' })
+watch(() => props.active, active => {
+  historyOpen.value = false
+  if (active !== false) { followMessageContent(); void nextTick(resizeComposer) }
+})
 watch(askText, resizeComposer, { flush: 'post' })
 
 onMounted(() => {
@@ -839,6 +854,7 @@ watch(
   },
   { flush: 'post' }
 )
+defineExpose({ stopActiveAiWork })
 </script>
 
 <template>
@@ -860,6 +876,7 @@ watch(
             :key="session.id"
             class="session-history-row"
             :class="{ active: session.id === workspaceSessionId }"
+            :data-session-id="session.id"
             role="button"
             tabindex="0"
             @click="selectSession(session.id)"
@@ -867,12 +884,14 @@ watch(
           >
             <span class="session-history-main">
               <strong>{{ formatSessionDisplayTitle(session.name) }}</strong>
-              <small>{{ session.summary ? `${session.summary} · 来源 ${sessionSourceLabel(session)}` : `来源 · ${sessionSourceLabel(session)}` }}</small>
+              <span v-if="sessionActivityLabel(session.id)" class="session-activity" :class="{ 'is-waiting': sessionActivities?.[session.id]?.status === 'waiting-approval' }" :title="sessionActivities?.[session.id]?.label" role="status"><span aria-hidden="true">●</span> {{ sessionActivityLabel(session.id) }}</span>
+              <small v-if="sessionActivities?.[session.id]?.mode === 'agent'" :title="sessionActivities[session.id].terminalLabel">终端 · {{ sessionActivities[session.id].terminalLabel }}</small>
+              <small v-else>{{ session.summary ? `${session.summary} · 来源 ${sessionSourceLabel(session)}` : `来源 · ${sessionSourceLabel(session)}` }}</small>
             </span>
             <span class="session-history-time">{{ sessionTimeLabel(session) }}</span>
             <span class="session-history-actions">
               <button class="icon-button" type="button" title="编辑会话" aria-label="编辑会话" @click.stop="openRenameSessionDialog(session)"><UiIcon name="edit" /></button>
-              <button class="icon-button danger" type="button" title="删除会话" aria-label="删除会话" @click.stop="deleteSession(session.id)"><UiIcon name="trash" /></button>
+              <button class="icon-button danger" type="button" :disabled="Boolean(sessionActivityLabel(session.id))" :title="sessionActivityLabel(session.id) ? '请先停止该会话的任务' : '删除会话'" aria-label="删除会话" @click.stop="deleteSession(session.id)"><UiIcon name="trash" /></button>
             </span>
           </article>
           <p v-if="filteredSessions.length === 0" class="empty-state">暂无会话</p>

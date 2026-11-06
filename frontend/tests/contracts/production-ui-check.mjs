@@ -1115,7 +1115,7 @@ assert(
 )
 
 assert(
-  aiPanel.includes('if (!list || !followingLatest.value) return') &&
+  aiPanel.includes('if (!list || !followingLatest.value || props.active === false) return') &&
     aiPanel.includes('if (!followingLatest.value) hasNewContent.value = true') &&
     aiPanel.includes('v-if="!followingLatest"') &&
     aiPanel.includes('contentResizeObserver = new ResizeObserver(() =>') &&
@@ -2407,7 +2407,8 @@ assert(
     workspacePanel.includes('<ScriptPanel') &&
     workspacePanel.includes('visitedTabs.value.add(tab)') &&
     workspacePanel.includes(`v-if="visitedTabs.has('scripts')"`) &&
-    workspacePanel.includes(`v-show="activeWorkspaceTab === 'ai'"`) &&
+    workspacePanel.includes('<AiSessionPanels') &&
+    workspacePanel.includes(`:active="activeWorkspaceTab === 'ai' && !collapsed"`) &&
     !workspacePanel.includes('"-if=') &&
     workspacePanel.includes(`v-show="activeWorkspaceTab === 'scripts'"`) &&
     !workspacePanel.includes(`v-else-if="activeWorkspaceTab === 'scripts'"`) &&
