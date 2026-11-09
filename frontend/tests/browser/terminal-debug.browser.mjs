@@ -289,6 +289,30 @@ try {
     assert.equal((await state()).readiness, 'ready')
     await evaluate('window.__terminalDebugFixture.promptDelayMs = 0')
   })
+  await check('terminal focus reports cannot reveal a pending internal probe or invalidate capture', async () => {
+    const before = await state()
+    const count = (await diagnostics()).length
+    await evaluate(`window.__terminalDebugFixture.diagnosticDelayMs = 500;
+      window.__focusProbe = window.__debugBrowser.pane().exposed.runCommandAndCapture('', { probe: { kind: 'capture' } }).result;
+      true`)
+    await waitFor(`window.__terminalDebugFixture.diagnostics.length > ${count}`)
+    assert.equal((await state()).internalOutputActive, true)
+    await evaluate(`(async () => {
+      const terminal = window.__debugBrowser.pane().setupState.terminal;
+      await new Promise(resolve => terminal.write('\\x1b[?1004h\\x1b[c\\x1b[>c\\x1b[5n\\x1b[?6n\\x1b[?2004$p', resolve));
+      terminal.blur(); terminal.focus();
+    })()`)
+    assert.equal((await state()).internalOutputActive, true, 'Focus notifications must not resume user output')
+    const result = await evaluate('window.__focusProbe')
+    assert.equal(result.status, 'completed')
+    assert.equal(result.exitCode, 7)
+    await settleTerminal()
+    const after = await state()
+    assertHidden((await diagnostics()).slice(count), after)
+    assert.deepEqual(after.visibleLines, before.visibleLines)
+    await evaluate(`window.__terminalDebugFixture.diagnosticDelayMs = 0;
+      new Promise(resolve => window.__debugBrowser.pane().setupState.terminal.write('\\x1b[?1004l', resolve))`)
+  })
   await check('Zsh parse errors without preexec settle the real pane capture and release command readiness', async () => {
     const result = await evaluate(`(async () => {
       const pane = window.__debugBrowser.pane().exposed;
@@ -302,6 +326,25 @@ try {
     assert.match(result.output, /parse error near/)
     await settleTerminal()
     assert.equal((await state()).readiness, 'ready')
+  })
+  await check('slow internal file operations stay hidden beyond the capability probe timeout', async () => {
+    const before = await state()
+    const count = (await diagnostics()).length
+    const result = await evaluate(`(async () => {
+      const api = await import('/src/domains/terminal/infrastructure/commandPolicy.ts');
+      const pane = window.__debugBrowser.pane();
+      const target = await api.commandExecutionTarget(pane.setupState.sessionId);
+      const intent = await api.prepareTerminalProbe(target, { kind: 'file-snapshot', paths: ['/srv/atlas/file.txt'], nonce: 'slow_file' });
+      window.__terminalDebugFixture.diagnosticDelayMs = 8500;
+      try { return await pane.exposed.runCommandAndCapture(intent.source, { intent, internal: true }).result; }
+      finally { window.__terminalDebugFixture.diagnosticDelayMs = 0; }
+    })()`)
+    assert.equal(result.status, 'completed')
+    assert.equal(result.exitCode, 0)
+    await settleTerminal()
+    const after = await state()
+    assertHidden((await diagnostics()).slice(count), after)
+    assert.deepEqual(after.visibleLines, before.visibleLines)
   })
   const original = await state()
   await check('automatic SFTP identification consumes raw protocol while hiding echoed commands and identity fields', async () => {

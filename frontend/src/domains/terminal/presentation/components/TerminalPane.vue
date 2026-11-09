@@ -15,6 +15,7 @@ import type { AuthEndpoint, ConnectionProfile } from '../../../connections/types
 import type { CommandHistoryEntry, CommandRecordedEvent, TerminalInputEvent, TerminalInputSyncState, TerminalInputWriteFailureEvent, TerminalInputWriteSource, TerminalOutputDeltaEvent, TerminalOutputEvent, TerminalSelectionEvent } from '../../domain/events'
 import { createInternalTerminalOutputFilter } from '../../domain/internalTerminalOutput'
 import { createSentinelDisplayFilter } from '../../domain/sentinelDisplayFilter'
+import { isTerminalProtocolResponse } from '../../domain/terminalProtocolResponse'
 import { isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../domain/internalTerminalCommand'
 import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
 import { attachShellIntegration } from '../../domain/shellIntegration'
@@ -197,7 +198,8 @@ const { agentCaptureMode, agentCapturePreparing, agentCaptureSupported, ensureAg
   commandExecutionReadiness,
   // Native production capture only accepts backend-owned operations.
   executeCommand: () => false,
-  dispatchIntent: dispatchPreparedCommand,
+  dispatchIntent: (intent, failed, timeoutMs) => dispatchPreparedCommand(intent, failed, undefined, timeoutMs),
+  finishInternalOutput: intent => finishFileInput(intent.terminalInput),
   prepareProbe: async probe => commandPolicy.prepareTerminalProbe(await commandPolicy.commandExecutionTarget(sessionId), probe),
   cancelIntent: intent => commandPolicy.cancelCommandIntent(intent.reference),
   enableShellIntegration: () => shellIntegrationInjectionEnabled() && activeSessionProfile.value?.shellIntegration !== false
@@ -1167,7 +1169,9 @@ function terminalBackendInputReady() {
 }
 
 function handleTerminalProtocolResponse(data: string) {
-  if (!/^\x1b\[\d{1,4};\d{1,4}R$/.test(data)) return false
+  // Automatic terminal reports must not cancel hidden output, invalidate capture
+  // capability, enter command history or synchronize as user keystrokes.
+  if (!isTerminalProtocolResponse(data)) return false
   pendingTerminalProtocolResponses.push(data)
   flushTerminalProtocolResponses()
   return true
@@ -2446,7 +2450,7 @@ async function executeCommand(command: string) {
   } finally { if (intent) void commandPolicy.cancelCommandIntent(intent.reference).catch(() => {}) }
 }
 
-function dispatchPreparedCommand(intent: CommandIntent, onWriteFailed?: (error: unknown) => void, onWritten?: () => void) {
+function dispatchPreparedCommand(intent: CommandIntent, onWriteFailed?: (error: unknown) => void, onWritten?: () => void, internalOutputTimeoutMs = 60_000) {
   if (intent.reference.target.sessionId !== sessionId || !terminalBackendInputReady()) return false
   if (applicationPromptPending || internalOutputFilter.active()) return false
   if (intent.capture.kind === 'bracketed' && !terminal?.modes.bracketedPasteMode) return false
@@ -2456,8 +2460,8 @@ function dispatchPreparedCommand(intent: CommandIntent, onWriteFailed?: (error: 
   closeCompletion()
   const dispatched = intent.terminalInput.replace(/\r$/, '')
   if (intent.capture.internal) {
-    internalOutputFilter.begin(dispatched, { debug: props.terminalSettings?.debugMode === true, timeoutMs: 8000, restorePrefix: internalPromptRestorePrefix() })
-    scheduleInternalOutputFlush(8010)
+    internalOutputFilter.begin(dispatched, { debug: props.terminalSettings?.debugMode === true, timeoutMs: internalOutputTimeoutMs, restorePrefix: internalPromptRestorePrefix() })
+    scheduleInternalOutputFlush(internalOutputTimeoutMs + 10)
   } else if (intent.capture.kind === 'sentinel') {
     const remaining = sentinelDisplayFilter.begin(intent.capture.nonce, intent.terminalInput, intent.source, props.terminalSettings?.debugMode === true)
     if (remaining) { appendTerminalOutput(remaining); writeTerminalView(remaining) }

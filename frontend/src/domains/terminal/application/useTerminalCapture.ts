@@ -15,14 +15,15 @@ interface TerminalCaptureOptions {
   getShellIntegration: () => AttachedShellIntegration | undefined
   commandExecutionReadiness: TerminalPaneHandle['commandExecutionReadiness']
   executeCommand: (command: string, options?: { historyCommand?: string; internal?: boolean; onWriteFailed?: (error: unknown) => void; allowDuringAgentTakeover?: boolean }) => boolean
-  dispatchIntent?: (intent: CommandIntent, onWriteFailed: (error: unknown) => void) => boolean
+  dispatchIntent?: (intent: CommandIntent, onWriteFailed: (error: unknown) => void, internalOutputTimeoutMs?: number) => boolean
+  finishInternalOutput?: (intent: CommandIntent) => void
   prepareProbe?: (probe: TerminalProbe) => Promise<CommandIntent>
   cancelIntent?: (intent: CommandIntent) => Promise<unknown>
   enableShellIntegration?: () => boolean
   bracketedPasteEnabled?: () => boolean
 }
 
-export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand, dispatchIntent, prepareProbe, cancelIntent, enableShellIntegration, bracketedPasteEnabled }: TerminalCaptureOptions) {
+export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand, dispatchIntent, finishInternalOutput, prepareProbe, cancelIntent, enableShellIntegration, bracketedPasteEnabled }: TerminalCaptureOptions) {
   let disposed = false
   let activeAgentCaptureAbort: ((reason: string) => void) | undefined
 
@@ -211,7 +212,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
   function captureWithSentinel(
     command: string,
     maxOutputChars: number,
-    options?: { skipHistory?: boolean; intent?: CommandIntent }
+    options?: { skipHistory?: boolean; intent?: CommandIntent; internalOutputTimeoutMs?: number }
   ): AgentCommandHandle {
     const safety = isSuffixSafeForSentinel(command)
     if (!options?.intent && !safety.ok) {
@@ -237,6 +238,9 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
       if (sentinelSink === feed) sentinelSink = undefined
       scanner?.dispose()
       scanner = undefined
+    }
+    const releaseInternalOutput = () => {
+      if (options?.intent?.capture.internal) finishInternalOutput?.(options.intent)
     }
 
     scanner = createSentinelScanner({
@@ -265,6 +269,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
       settled = true
       detach()
       clearActiveCapture()
+      releaseInternalOutput()
       resolveResult({
         status: 'dispatch-failed',
         output: '',
@@ -277,7 +282,10 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     const failWrite = (error: unknown) => abortCapture(`命令写入终端失败:${formatError(error)}`)
 
     sentinelSink = feed
-    if (!(options?.intent && dispatchIntent ? dispatchIntent(options.intent, failWrite) : executeCommand(wrapped, {
+    // File inspections/edits can run longer than the eight-second capability
+    // probe. Keep their frame hidden until END or explicit cancellation.
+    const internalOutputTimeoutMs = options?.internalOutputTimeoutMs ?? 60_000
+    if (!(options?.intent && dispatchIntent ? dispatchIntent(options.intent, failWrite, internalOutputTimeoutMs) : executeCommand(wrapped, {
       historyCommand: options?.skipHistory ? '' : command,
       internal: options?.skipHistory === true,
       onWriteFailed: failWrite,
@@ -286,6 +294,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
       settled = true
       detach()
       clearActiveCapture()
+      releaseInternalOutput()
       return agentDispatchFailure('命令未能写入终端(就绪状态在派发瞬间发生变化)')
     }
 
@@ -298,6 +307,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
         const partial = scanner?.peekOutput() ?? ''
         detach()
         clearActiveCapture()
+        releaseInternalOutput()
         resolveResult({
           status: 'cancelled',
           output: partial,
@@ -430,7 +440,7 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     }, () => {
       started = true
       if (probe.kind === 'capture' || probe.kind === 'bracketed-capture') verification = createShellCaptureVerification(prepared!.capture.nonce, probe.kind === 'bracketed-capture')
-      return captureWithSentinel(prepared!.source, maxOutputChars, { intent: prepared, skipHistory: true })
+      return captureWithSentinel(prepared!.source, maxOutputChars, { intent: prepared, skipHistory: true, internalOutputTimeoutMs: SENTINEL_PROBE_TIMEOUT_MS })
     })
     void handle.result.finally(() => { if (prepared && !started) void cancelIntent?.(prepared).catch(() => {}) })
     return handle

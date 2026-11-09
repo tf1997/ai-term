@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRenderer } from 'vue'
 import { useTerminalCapture } from '../../src/domains/terminal/application/useTerminalCapture'
+import { createInternalTerminalOutputFilter } from '../../src/domains/terminal/domain/internalTerminalOutput'
 
 globalThis.window ??= globalThis
 const renderer = createRenderer({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null })
@@ -100,4 +101,51 @@ test('disabling paste while the native probe is prepared prevents its dispatch',
     f.disablePaste(); release(); assert.equal(await pending, false)
     assert.deepEqual(f.writes.map(i => i.source), ['capture'])
   } finally { f.close() }
+})
+
+function internalCaptureFixture() {
+  let capture, now = 0, failed
+  const filter = createInternalTerminalOutputFilter({ now: () => now })
+  const nonce = 'internal_file_1'
+  const begin = `AI_TERM_PROBE_BEGIN_${nonce}`, end = `AI_TERM_PROBE_END_${nonce}`
+  const intent = { source: 'file helper', capture: { kind: 'sentinel', nonce, internal: true }, terminalInput: `printf '${begin}'; file-helper; printf '${end}'\r` }
+  const app = renderer.createApp({ setup() {
+    capture = useTerminalCapture({
+      getSessionId: () => 'session', getShellIntegration: () => undefined, commandExecutionReadiness: () => 'ready',
+      executeCommand: () => { throw Error('native bypass') },
+      dispatchIntent: (sent, fail, timeoutMs) => { failed = fail; filter.begin(sent.terminalInput, { debug: false, timeoutMs }); return true },
+      finishInternalOutput: sent => filter.finish(sent.terminalInput),
+    })
+    return () => null
+  } })
+  app.mount({})
+  const handle = capture.runCommandAndCapture(intent.source, { intent, internal: true })
+  return { capture, filter, handle, nonce, begin, end, advance: time => { now = time }, failed: () => failed(Error('write failed')),
+    push: data => { capture.ingestCaptureOutput(data); return filter.push(data) }, close: () => app.unmount() }
+}
+
+test('slow internal file output stays hidden beyond the capability probe deadline until the outer END', async () => {
+  const f = internalCaptureFixture()
+  try {
+    assert.equal(f.push('internal command echo\r\n'), '')
+    f.advance(11_000)
+    assert.equal(f.push(`${f.begin}\r\n__AI_TERM_${f.nonce}B__\r\nfile contents\r\n__AI_TERM_${f.nonce}E__:0\r\n`), '')
+    assert.equal((await f.handle.result).output, 'file contents')
+    assert.equal(f.filter.active(), true, 'Raw capture completion must not release the outer diagnostic frame')
+    assert.equal(f.push(`${f.end}\r\nprompt$ `), '\r\x1b[2Kprompt$ ')
+    assert.equal(f.filter.active(), false)
+  } finally { f.close() }
+})
+
+test('cancelling or failing an internal capture releases display suppression immediately', async () => {
+  for (const stop of [f => f.handle.cancel(), f => f.capture.abortActiveCapture('disconnected'), f => f.failed()]) {
+    const f = internalCaptureFixture()
+    try {
+      f.push(`${f.begin}\r\npartial internal output\r\n`)
+      stop(f)
+      assert.notEqual((await f.handle.result).status, 'completed')
+      assert.equal(f.filter.active(), false)
+      assert.equal(f.push('visible user output\r\n'), '\r\x1b[2Kvisible user output\r\n')
+    } finally { f.close() }
+  }
 })

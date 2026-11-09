@@ -16,6 +16,7 @@ export function installTerminalDebugFixture() {
     rawChunks: [],
     pendingChunks: 0,
     promptDelayMs: 0,
+    diagnosticDelayMs: 0,
     waitingForPrompt: 0,
     fileBody: `${btoa('fixture-file-payload')}\r\nstatus=0`,
     localWrites: [],
@@ -173,6 +174,10 @@ export function installTerminalDebugFixture() {
     if (payload.cmd !== 'terminal_write') return originalIpc(payload)
     const { cmd, callback, error, ...args } = payload
     fixture.calls.push({ cmd, ...args })
+    // The PTY consumes terminal reports; they are not shell command text.
+    if (/^(?:\x1b\[(?:[IO]|\??\d+;\d+R|0n|[?>][\d;]+c|\??\d+;\d+\$y))+$/.test(args.data)) {
+      reply(null); return
+    }
     const profileId = profileFor(args.sessionId)
     const identity = fixture.identities[profileId]
     if (args.fixtureCaptureKind === 'bracketed' && !args.fixtureProbeKind) {
@@ -210,6 +215,7 @@ export function installTerminalDebugFixture() {
           ])
         } else {
           void enqueueChunks(args.sessionId, mode === 'echo-only' ? transportChunks(echo) : [
+            { delay: debug.diagnosticDelayMs },
             ...transportChunks(`${echo}\r\n${begin}\r\n${body}\r\n${end}\r\n`),
             { delay: debug.promptDelayMs },
             ...transportChunks(prompt(profileId, ['capture', 'bracketed-capture'].includes(args.fixtureProbeKind) ? 7 : 0)),

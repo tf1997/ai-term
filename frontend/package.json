@@ -22,7 +22,7 @@
     "test:routing": "tsx --test tests/integration/workspace-routing.test.mjs tests/integration/session-view.test.mjs",
     "test:transfer": "tsx --test tests/transfer/*.test.mjs",
     "test:sftp-browser": "node tests/browser/sftp-workspace.browser.mjs",
-    "test:terminal-debug": "tsx --test tests/terminal/internal-terminal-output.test.mjs tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs",
+    "test:terminal-debug": "tsx --test tests/terminal/internal-terminal-output.test.mjs tests/terminal/terminal-protocol-response.test.mjs tests/terminal/terminal-capture-capability.test.mjs tests/settings/user-settings.test.mjs tests/settings/app-preferences.test.mjs",
     "test:terminal-debug-browser": "node tests/browser/terminal-debug.browser.mjs",
     "test:terminal-reconnect-browser": "node tests/browser/terminal-reconnect.browser.mjs",
     "test:terminal-selection-browser": "node tests/browser/terminal-selection.browser.mjs",
