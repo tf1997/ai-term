@@ -1,8 +1,14 @@
 import type { AppUserSettings } from './settings'
+import type { DesktopPlatform } from '../../../shared/platform/platform'
+
+// Boolean callers retain the historical Windows / system defaults.
+export type SettingsPlatform = DesktopPlatform | boolean
 
 export const SYSTEM_TERMINAL_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
 export const WINDOWS_TERMINAL_FONT_FAMILY = '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace'
 export const LEGACY_WINDOWS_TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, monospace'
+export const LINUX_TERMINAL_FONT_FAMILY = 'JetBrains Mono, Consolas, monospace'
+export const LINUX_SYSTEM_TERMINAL_FONT_FAMILY = '"Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", monospace'
 export const DEFAULT_TERMINAL_FONT_SIZE = 13
 export const WINDOWS_DEFAULT_TERMINAL_FONT_SIZE = 14
 export const MIN_TERMINAL_FONT_SIZE = 11
@@ -11,10 +17,11 @@ export const DEFAULT_AGENT_COMMAND_TIMEOUT_SEC = 120
 export const MIN_AGENT_COMMAND_TIMEOUT_SEC = 15
 export const MAX_AGENT_COMMAND_TIMEOUT_SEC = 600
 
-export function createDefaultUserSettings(windowsPlatform: boolean): AppUserSettings {
+export function createDefaultUserSettings(platform: SettingsPlatform): AppUserSettings {
+  const windowsPlatform = platform === true || platform === 'windows'
   return {
     debugMode: false,
-    terminalFontFamily: windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY,
+    terminalFontFamily: windowsPlatform ? WINDOWS_TERMINAL_FONT_FAMILY : platform === 'linux' ? LINUX_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY,
     terminalFontSize: windowsPlatform ? WINDOWS_DEFAULT_TERMINAL_FONT_SIZE : DEFAULT_TERMINAL_FONT_SIZE,
     terminalTheme: 'midnight',
     defaultShell: 'system',
@@ -37,8 +44,8 @@ export function clampAgentCommandTimeoutSec(value: unknown): number {
   return clampBudget(value, MIN_AGENT_COMMAND_TIMEOUT_SEC, MAX_AGENT_COMMAND_TIMEOUT_SEC, DEFAULT_AGENT_COMMAND_TIMEOUT_SEC)
 }
 
-export function normalizeUserSettings(value: unknown, windowsPlatform: boolean): AppUserSettings {
-  const defaults = createDefaultUserSettings(windowsPlatform)
+export function normalizeUserSettings(value: unknown, platform: SettingsPlatform): AppUserSettings {
+  const defaults = createDefaultUserSettings(platform)
   if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults
   const settings = value as Record<string, unknown>
   const terminalFontFamily = typeof settings.terminalFontFamily === 'string' ? settings.terminalFontFamily.trim() : ''

@@ -49,6 +49,10 @@
   color: #eef4ff;
   padding: 8px 9px;
 }
+:root[data-platform="linux"] .settings-field select {
+  /* WebKitGTK adds native control insets; vertical padding clips the font label. */
+  padding-block: 0;
+}
 .settings-field small {
   color: #7f8da4;
   font-size: var(--font-xs);

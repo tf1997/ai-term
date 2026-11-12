@@ -5,8 +5,9 @@
  * 的 --font-mono 兜底管不到终端正文。设置里的预设与用户自定义值都只列 Latin 等宽字体,
  * 而等宽字体基本都没有中文字形,中文会穿透整条栈落到 generic 关键字、由系统挑脸:
  * Windows 挑到 SimSun(衬线点阵脸,与 Cascadia 完全不搭),macOS 挑到 PingFang SC。
- * 显式兜底才能让两端观感一致。
+ * Linux 还必须确保缺失桌面字体时先匹配内置等宽字体，再匹配 CJK 字体。
  */
+import type { DesktopPlatform } from '../../../shared/platform/platform'
 
 /**
  * CSS generic family 关键字。这类关键字一定能解析成功,排在它后面的字体永远轮不到,
@@ -58,3 +59,13 @@ export function withCjkFallback(fontFamily: string, fallbacks: readonly string[]
 /** Windows 上 Noto 由 main.ts 打包加载(font-display: swap),首帧未就绪时垫系统自带的雅黑。 */
 export const WINDOWS_TERMINAL_CJK_FALLBACK = ['Noto Sans SC Variable', 'Microsoft YaHei UI'] as const
 export const SYSTEM_TERMINAL_CJK_FALLBACK = ['PingFang SC'] as const
+export const LINUX_TERMINAL_CJK_FALLBACK = ['Noto Sans SC Variable', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei'] as const
+
+export function resolveTerminalFontFamily(fontFamily: string, platform: DesktopPlatform): string {
+  if (platform !== 'linux') return withCjkFallback(fontFamily, platform === 'windows' ? WINDOWS_TERMINAL_CJK_FALLBACK : SYSTEM_TERMINAL_CJK_FALLBACK)
+  // On Linux, a missing desktop font must reach a bundled monospace face before
+  // any CJK face with proportional Latin glyphs. Generic aliases can otherwise
+  // short-circuit the stack, especially ui-monospace on older WebKitGTK builds.
+  const namedFamilies = fontFamily.split(',').map(part => part.trim()).filter(part => part && !CSS_GENERIC_FONT_FAMILIES.has(unquote(part).toLowerCase()))
+  return withCjkFallback([...namedFamilies, 'monospace'].join(', '), ['JetBrains Mono', ...LINUX_TERMINAL_CJK_FALLBACK])
+}

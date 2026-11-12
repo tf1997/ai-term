@@ -3,13 +3,14 @@ import type { AppUserSettings } from '../domain/settings'
 import { loadUserSettings, persistUserSettings } from '../infrastructure/storage/settingsStorage'
 import type { SettingsStorage } from '../infrastructure/storage/settingsStorage'
 import { normalizeUserSettings } from '../domain/userSettings'
-import { isWindowsPlatform } from '../../../shared/platform/platform'
+import type { SettingsPlatform } from '../domain/userSettings'
+import { desktopPlatform } from '../../../shared/platform/platform'
 
-export function useUserSettings(windowsPlatform = isWindowsPlatform(), storage?: SettingsStorage) {
-  const appSettings = ref<AppUserSettings>(loadUserSettings(windowsPlatform, storage))
+export function useUserSettings(platform: SettingsPlatform = desktopPlatform(), storage?: SettingsStorage) {
+  const appSettings = ref<AppUserSettings>(loadUserSettings(platform, storage))
 
   function updateUserSettings(settings: AppUserSettings): boolean {
-    appSettings.value = normalizeUserSettings(settings, windowsPlatform)
+    appSettings.value = normalizeUserSettings(settings, platform)
     return persistUserSettings(appSettings.value, storage)
   }
 

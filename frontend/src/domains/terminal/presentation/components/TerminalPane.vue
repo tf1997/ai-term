@@ -25,8 +25,9 @@ import type { AttachedShellIntegration } from '../../domain/shellIntegration'
 
 
 
-import { isWindowsPlatform } from '../../../../shared/platform/platform'
-import { SYSTEM_TERMINAL_CJK_FALLBACK, WINDOWS_TERMINAL_CJK_FALLBACK, withCjkFallback } from '../../domain/terminalFont'
+import { desktopPlatform, isWindowsPlatform } from '../../../../shared/platform/platform'
+import { resolveTerminalFontFamily } from '../../domain/terminalFont'
+import { loadTerminalFonts } from '../../application/terminalFontLoading'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
 import type { CommandIntent, CommandIntentReference, ExecutionTarget } from '../../../../shared/security/commandPolicy'
@@ -36,15 +37,13 @@ import { createReadyAgentCommand } from '../../domain/deferredAgentCommand'
 import { parseCommandContext } from '../../domain/commandContext'
 
 const reviewCommand = inject(commandReviewerKey, undefined)
-const defaultTerminalSettings = createDefaultUserSettings(isWindowsPlatform())
+const platform = desktopPlatform()
+const defaultTerminalSettings = createDefaultUserSettings(platform)
 const terminalTypographyOptions = isWindowsPlatform()
   ? { lineHeight: 1.25, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
-  : { lineHeight: 1.15, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
-
-// 终端正文的 CJK 兜底见 lib/terminalFont.ts —— xterm 用 JS 传字体族,吃不到 CSS 变量上的兜底。
-const TERMINAL_CJK_FALLBACK = isWindowsPlatform()
-  ? WINDOWS_TERMINAL_CJK_FALLBACK
-  : SYSTEM_TERMINAL_CJK_FALLBACK
+  : platform === 'linux'
+    ? { lineHeight: 1, letterSpacing: 0, fontWeight: '400' as const, fontWeightBold: '600' as const }
+    : { lineHeight: 1.15, letterSpacing: 0, fontWeight: 'normal' as const, fontWeightBold: 'bold' as const }
 
 type TerminalRuntimeStatus = 'idle' | 'connecting' | 'local' | 'remote' | 'sftp' | 'preview' | 'error'
 type TerminalSessionKind = 'local' | 'remote' | 'sftp' | 'preview'
@@ -139,6 +138,8 @@ const terminalBodyWrap = ref<HTMLDivElement | null>(null)
 const terminalCompletion = ref<HTMLDivElement | null>(null)
 const quickCommandSettingsButton = ref<HTMLButtonElement | null>(null)
 let terminal: Terminal | undefined
+let terminalDisposed = false
+let terminalAppearanceVersion = 0
 let fitAddon: FitAddon | undefined
 let sessionId = ''
 const { attachTerminalEvents, detachTerminalEvents } = useTerminalEvents({
@@ -794,10 +795,6 @@ function scheduleTerminalSizeSync(forcePtyResize = false) {
     forcePtyResizeOnNextFit = false
     syncTerminalSize(force)
   })
-}
-
-function scheduleTerminalSizeSyncAfterFonts() {
-  void document.fonts.ready.then(() => scheduleTerminalSizeSync(true))
 }
 
 function emitTerminalSnapshot() {
@@ -1797,9 +1794,9 @@ function skipInputControlSequence(char: string) {
 
 function resolvedTerminalSettings() {
   return {
-    terminalFontFamily: withCjkFallback(
+    terminalFontFamily: resolveTerminalFontFamily(
       props.terminalSettings?.terminalFontFamily || defaultTerminalSettings.terminalFontFamily,
-      TERMINAL_CJK_FALLBACK
+      platform
     ),
     terminalFontSize: Math.max(11, Math.min(22, Number(props.terminalSettings?.terminalFontSize) || defaultTerminalSettings.terminalFontSize)),
     terminalTheme: props.appTheme === 'light' ? 'light' : props.terminalSettings?.terminalTheme || 'midnight'
@@ -1893,20 +1890,24 @@ const terminalSurfaceStyle = computed(() => {
   return { '--terminal-background': theme.background, '--terminal-foreground': theme.foreground }
 })
 
-function applyTerminalAppearance() {
-  if (!terminal) return
+async function applyTerminalAppearance() {
+  const version = ++terminalAppearanceVersion
+  if (!terminal || terminalDisposed) return
   const settings = resolvedTerminalSettings()
   const familyChanged = terminal.options.fontFamily !== settings.terminalFontFamily
   const sizeChanged = terminal.options.fontSize !== settings.terminalFontSize
-  if (familyChanged) terminal.options.fontFamily = settings.terminalFontFamily
-  if (sizeChanged) terminal.options.fontSize = settings.terminalFontSize
   if (appliedTerminalTheme !== settings.terminalTheme) {
     terminal.options.theme = terminalThemeOptions(settings.terminalTheme)
     appliedTerminalTheme = settings.terminalTheme
   }
   if (familyChanged || sizeChanged) {
-    scheduleTerminalSizeSync()
-    if (familyChanged) scheduleTerminalSizeSyncAfterFonts()
+    await loadTerminalFonts(settings.terminalFontFamily, settings.terminalFontSize, [terminalTypographyOptions.fontWeight, terminalTypographyOptions.fontWeightBold])
+    if (terminalDisposed || version !== terminalAppearanceVersion) return
+    // Changing options now invalidates xterm's measurements with the loaded font,
+    // rather than fitting the stale cell width after a font-display swap.
+    if (familyChanged) terminal.options.fontFamily = settings.terminalFontFamily
+    if (sizeChanged) terminal.options.fontSize = settings.terminalFontSize
+    scheduleTerminalSizeSync(true)
   }
 }
 
@@ -1927,6 +1928,9 @@ function handleTerminalKeyEvent(event: KeyboardEvent) {
 
 onMounted(async () => {
   if (!terminalHost.value) return
+  const initialSettings = resolvedTerminalSettings()
+  await loadTerminalFonts(initialSettings.terminalFontFamily, initialSettings.terminalFontSize, [terminalTypographyOptions.fontWeight, terminalTypographyOptions.fontWeightBold])
+  if (terminalDisposed || !terminalHost.value) return
 
   terminal = new Terminal({
     cursorBlink: true,
@@ -1937,13 +1941,13 @@ onMounted(async () => {
     // ANSI/256-color/truecolor output can set its own background (for example TUI menus).
     // Keep text readable against each cell's background in every terminal theme.
     minimumContrastRatio: 4.5,
-    fontFamily: resolvedTerminalSettings().terminalFontFamily,
-    fontSize: resolvedTerminalSettings().terminalFontSize,
+    fontFamily: initialSettings.terminalFontFamily,
+    fontSize: initialSettings.terminalFontSize,
     ...terminalTypographyOptions,
-    theme: terminalThemeOptions(resolvedTerminalSettings().terminalTheme)
+    theme: terminalThemeOptions(initialSettings.terminalTheme)
   })
   terminal.attachCustomKeyEventHandler(handleTerminalKeyEvent)
-  appliedTerminalTheme = resolvedTerminalSettings().terminalTheme
+  appliedTerminalTheme = initialSettings.terminalTheme
   writeParsedDisposable = terminal.onWriteParsed(afterTerminalWriteParsed)
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
@@ -1957,6 +1961,7 @@ onMounted(async () => {
   })
   terminal.open(terminalHost.value)
   syncTerminalSize()
+  void applyTerminalAppearance()
   if (props.active) terminal.focus()
 
   dataDisposable = terminal.onData((data) => {
@@ -2001,7 +2006,6 @@ onMounted(async () => {
   // the host stays the same size. Refit after xterm updates its actual grid.
   const terminalScreen = terminalHost.value.querySelector('.xterm-screen')
   if (terminalScreen) resizeObserver.observe(terminalScreen)
-  scheduleTerminalSizeSyncAfterFonts()
 
   if (isSftpProfile(props.profile)) {
     enterSftpProfileMode()
@@ -2666,6 +2670,8 @@ function focusTerminalUnlessNavigatingTabs() {
 }
 
 onBeforeUnmount(() => {
+  terminalDisposed = true
+  terminalAppearanceVersion++
   terminalHost.value?.removeEventListener('pointerdown', handleTerminalPointerDown, true)
   terminalHost.value?.removeEventListener('contextmenu', handleTerminalContextMenu, true)
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)

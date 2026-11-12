@@ -238,7 +238,7 @@ assert(
     main.includes("import('@fontsource/jetbrains-mono/600.css')") &&
     terminalPane.includes('lineHeight: 1.25') &&
     userSettings.includes('const DEFAULT_TERMINAL_FONT_SIZE = 13') &&
-    settingsSidebar.includes('createDefaultUserSettings(windowsPlatform)') &&
+    settingsSidebar.includes('createDefaultUserSettings(platform)') &&
     terminalPane.includes("fontWeight: '400' as const") &&
     terminalPane.includes("fontWeightBold: '600' as const"),
   'macOS must keep native typography while Windows uses native UI fonts without enlarging the shared UI scale, balanced terminal line spacing, and real bundled terminal weights.'
@@ -3045,7 +3045,7 @@ assert(
     settingsSidebar.includes('defaultShell') &&
     settingsSidebar.includes('terminal-settings-panel') &&
     settingsSidebar.includes('terminal-settings-form') &&
-    settingsSidebar.includes('影响终端正文、命令补全和脚本输出。') &&
+    settingsSidebar.includes('切换后立即生效。内置字体无需安装。') &&
     !settingsSidebar.includes('proxyUrl') &&
     settingsSidebar.includes('\u7ec8\u7aef\u5916\u89c2') &&
     !settingsSidebar.includes('\u7f51\u7edc\u4e0e\u4ee3\u7406') &&
@@ -3360,9 +3360,9 @@ assert(
     /commandTimeoutMs: props\.agentCommandTimeoutMs/.test(agentSession) &&
     !workspacePanel.includes(':agent-step-limit') &&
     // 三处夹取:旧配置/脏数据、输入框、唯一来源兜底
-    settingsStorage.includes('normalizeUserSettings(parsed, windowsPlatform)') &&
-    settingsSidebar.includes('normalizeUserSettings(draft, windowsPlatform)') &&
-    userSettingsState.includes('normalizeUserSettings(settings, windowsPlatform)') &&
+    settingsStorage.includes('normalizeUserSettings(parsed, platform)') &&
+    settingsSidebar.includes('normalizeUserSettings(draft, platform)') &&
+    userSettingsState.includes('normalizeUserSettings(settings, platform)') &&
     !userSettings.includes('agentStepLimit:') &&
     userSettings.includes('agentCommandTimeoutSec: clampAgentCommandTimeoutSec(settings.agentCommandTimeoutSec)') &&
     styles.includes('.agent-budget-block'),

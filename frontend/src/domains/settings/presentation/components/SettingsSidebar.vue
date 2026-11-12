@@ -3,15 +3,17 @@ import { computed, reactive, ref, watch } from 'vue'
 import type { AiProviderConfig } from '../../../ai/types'
 import type { AgentAllowlistEntry } from '../../../ai/types'
 import { BUILTIN_READONLY_COMMANDS, validateAllowlistPattern } from '../../../ai/index'
-import { isWindowsPlatform } from '../../../../shared/platform/platform'
+import { desktopPlatform } from '../../../../shared/platform/platform'
 import type { AppUserSettings } from '../../domain/settings'
-import { createDefaultUserSettings, MAX_AGENT_COMMAND_TIMEOUT_SEC, MAX_TERMINAL_FONT_SIZE, MIN_AGENT_COMMAND_TIMEOUT_SEC, MIN_TERMINAL_FONT_SIZE, normalizeUserSettings } from '../../domain/userSettings'
+import { createDefaultUserSettings, LINUX_SYSTEM_TERMINAL_FONT_FAMILY, MAX_AGENT_COMMAND_TIMEOUT_SEC, MAX_TERMINAL_FONT_SIZE, MIN_AGENT_COMMAND_TIMEOUT_SEC, MIN_TERMINAL_FONT_SIZE, normalizeUserSettings, SYSTEM_TERMINAL_FONT_FAMILY } from '../../domain/userSettings'
 import { AiConfigPanel } from '../../../ai/views'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
 type SettingsSection = 'ai' | 'terminal' | 'agent' | 'application'
-const windowsPlatform = isWindowsPlatform()
-const defaultUserSettings = createDefaultUserSettings(windowsPlatform)
+const platform = desktopPlatform()
+const windowsPlatform = platform === 'windows'
+const linuxPlatform = platform === 'linux'
+const defaultUserSettings = createDefaultUserSettings(platform)
 
 const props = defineProps<{
   aiConfigs: AiProviderConfig[]
@@ -42,6 +44,9 @@ const emit = defineEmits<{
 const activeSection = ref<SettingsSection>('ai')
 const aiConfigSearch = ref('')
 const draft = reactive<AppUserSettings>({ ...props.settings })
+const savedLinuxFont = computed(() => linuxPlatform && ![
+  LINUX_SYSTEM_TERMINAL_FONT_FAMILY, 'JetBrains Mono, Consolas, monospace', 'Fira Code, Consolas, monospace'
+].includes(draft.terminalFontFamily))
 
 const settingsGroups: Array<{
   key: SettingsSection
@@ -114,7 +119,7 @@ function closeAiConfig() {
 }
 
 function saveSettings() {
-  emit('updateSettings', normalizeUserSettings(draft, windowsPlatform))
+  emit('updateSettings', normalizeUserSettings(draft, platform))
 }
 
 function resetTerminalAppearance() {
@@ -217,20 +222,21 @@ function agentEntryMeta(entry: AgentAllowlistEntry) {
         <div class="terminal-settings-form">
           <label class="settings-field">
             <span>字体</span>
-            <select v-model="draft.terminalFontFamily" aria-label="选择终端字体">
+            <select v-model="draft.terminalFontFamily" aria-label="选择终端字体" @change="saveSettings">
               <option v-if="windowsPlatform" value="&quot;Cascadia Mono&quot;, &quot;Cascadia Code&quot;, &quot;JetBrains Mono&quot;, Consolas, monospace">Windows 优化 Cascadia Mono（推荐）</option>
-              <option value="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">系统等宽</option>
-              <option value="Cascadia Mono, Cascadia Code, Consolas, monospace">Cascadia Mono</option>
-              <option value="Consolas, Lucida Console, monospace">Consolas</option>
-              <option value="JetBrains Mono, Consolas, monospace">JetBrains Mono</option>
-              <option value="Fira Code, Consolas, monospace">Fira Code</option>
-              <option value="Menlo, Monaco, Consolas, monospace">Menlo / Monaco</option>
+              <option :value="linuxPlatform ? LINUX_SYSTEM_TERMINAL_FONT_FAMILY : SYSTEM_TERMINAL_FONT_FAMILY">系统等宽</option>
+              <option v-if="!linuxPlatform" value="Cascadia Mono, Cascadia Code, Consolas, monospace">Cascadia Mono</option>
+              <option v-if="!linuxPlatform" value="Consolas, Lucida Console, monospace">Consolas</option>
+              <option value="JetBrains Mono, Consolas, monospace">JetBrains Mono（内置）</option>
+              <option value="Fira Code, Consolas, monospace">Fira Code（内置）</option>
+              <option v-if="!linuxPlatform" value="Menlo, Monaco, Consolas, monospace">Menlo / Monaco</option>
+              <option v-if="savedLinuxFont" :value="draft.terminalFontFamily">{{ draft.terminalFontFamily.split(',')[0] }}（已保存，需系统安装）</option>
             </select>
-            <small>影响终端正文、命令补全和脚本输出。</small>
+            <small>切换后立即生效。内置字体无需安装。</small>
           </label>
           <label class="settings-field inline">
             <span>字号</span>
-            <input v-model.number="draft.terminalFontSize" type="number" :min="MIN_TERMINAL_FONT_SIZE" :max="MAX_TERMINAL_FONT_SIZE" />
+            <input v-model.number="draft.terminalFontSize" type="number" :min="MIN_TERMINAL_FONT_SIZE" :max="MAX_TERMINAL_FONT_SIZE" @change="saveSettings" />
           </label>
           <label class="settings-field">
             <span>默认 Shell 偏好</span>

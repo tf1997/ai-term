@@ -4,6 +4,8 @@ import {
   clampAgentCommandTimeoutSec,
   createDefaultUserSettings,
   LEGACY_WINDOWS_TERMINAL_FONT_FAMILY,
+  LINUX_TERMINAL_FONT_FAMILY,
+  LINUX_SYSTEM_TERMINAL_FONT_FAMILY,
   normalizeUserSettings,
   SYSTEM_TERMINAL_FONT_FAMILY,
   WINDOWS_TERMINAL_FONT_FAMILY
@@ -28,6 +30,20 @@ function createStorage(initial = {}) {
     setItem: (key, value) => { values.set(key, value) }
   }
 }
+
+test('Linux 新安装和旧系统字体迁移使用内置等宽字体，保留字号和显式字体选择', () => {
+  assert.equal(createDefaultUserSettings('linux').terminalFontFamily, LINUX_TERMINAL_FONT_FAMILY)
+  const old = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontFamily: SYSTEM_TERMINAL_FONT_FAMILY, terminalFontSize: 16 }) })
+  assert.equal(loadUserSettings('linux', old).terminalFontFamily, LINUX_TERMINAL_FONT_FAMILY)
+  assert.equal(loadUserSettings('linux', old).terminalFontSize, 16)
+  for (const terminalFontFamily of [LINUX_SYSTEM_TERMINAL_FONT_FAMILY, 'Fira Code, Consolas, monospace', 'Custom Mono, monospace']) {
+    const saved = createStorage({ [USER_SETTINGS_STORAGE_KEY]: JSON.stringify({ terminalFontFamily }) })
+    assert.equal(loadUserSettings('linux', saved).terminalFontFamily, terminalFontFamily)
+    assert.equal(normalizeUserSettings({ terminalFontFamily }, 'linux').terminalFontFamily, terminalFontFamily)
+  }
+  assert.equal(createDefaultUserSettings('macos').terminalFontFamily, SYSTEM_TERMINAL_FONT_FAMILY)
+  assert.equal(createDefaultUserSettings('windows').terminalFontFamily, WINDOWS_TERMINAL_FONT_FAMILY)
+})
 
 test('平台默认值保持字体、字号和 Agent 预算兼容，默认对象互不共享', () => {
   const windows = createDefaultUserSettings(true)

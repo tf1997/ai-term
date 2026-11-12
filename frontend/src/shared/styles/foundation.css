@@ -50,6 +50,11 @@ body {
   text-rendering: auto;
 }
 
+:root[data-platform="linux"] {
+  --font-sans: Ubuntu, "Noto Sans SC Variable", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "DejaVu Sans Mono", "Noto Sans SC Variable", monospace;
+}
+
 :root[data-platform="windows"] input:focus,
 :root[data-platform="windows"] select:focus,
 :root[data-platform="windows"] textarea:focus {

@@ -1,4 +1,5 @@
 import type { AppTheme, AppUserSettings } from '../../domain/settings'
+import type { SettingsPlatform } from '../../domain/userSettings'
 import { createDefaultUserSettings, LEGACY_WINDOWS_TERMINAL_FONT_FAMILY, normalizeUserSettings, SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY } from '../../domain/userSettings'
 import { DEFAULT_WORKSPACE_WIDTH, parseWorkspaceWidth, parseWorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
 import type { WorkspaceLayoutPreferences } from '../../domain/workspaceLayout'
@@ -31,8 +32,8 @@ function writeStoredValue(key: string, value: string, storage?: SettingsStorage)
   }
 }
 
-export function loadUserSettings(windowsPlatform: boolean, storage?: SettingsStorage): AppUserSettings {
-  const defaults = createDefaultUserSettings(windowsPlatform)
+export function loadUserSettings(platform: SettingsPlatform, storage?: SettingsStorage): AppUserSettings {
+  const defaults = createDefaultUserSettings(platform)
   const raw = readStoredValue(USER_SETTINGS_STORAGE_KEY, storage)
   if (!raw) return defaults
 
@@ -42,7 +43,7 @@ export function loadUserSettings(windowsPlatform: boolean, storage?: SettingsSto
   } catch {
     return defaults
   }
-  const settings = normalizeUserSettings(parsed, windowsPlatform)
+  const settings = normalizeUserSettings(parsed, platform)
   if ([SYSTEM_TERMINAL_FONT_FAMILY, WINDOWS_TERMINAL_FONT_FAMILY, LEGACY_WINDOWS_TERMINAL_FONT_FAMILY].includes(settings.terminalFontFamily)) {
     settings.terminalFontFamily = defaults.terminalFontFamily
   }

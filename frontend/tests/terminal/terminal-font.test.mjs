@@ -3,8 +3,50 @@ import test from 'node:test'
 import {
   SYSTEM_TERMINAL_CJK_FALLBACK,
   WINDOWS_TERMINAL_CJK_FALLBACK,
+  resolveTerminalFontFamily,
   withCjkFallback
 } from "../../src/domains/terminal/domain/terminalFont"
+import { loadTerminalFonts } from '../../src/domains/terminal/application/terminalFontLoading'
+
+test('Linux 缺失的桌面字体先回落内置等宽字体，避免 CJK 的比例 Latin 字形撑宽单元格', () => {
+  for (const preset of [...SETTINGS_PRESETS, 'monospace', '"Missing Font", ui-monospace']) {
+    const result = familyList(resolveTerminalFontFamily(preset, 'linux'))
+    const mono = result.findIndex(name => /jetbrains mono/i.test(name))
+    const cjk = result.indexOf('"Noto Sans SC Variable"')
+    assert.ok(mono >= 0 && mono < cjk)
+    assert.equal(result.at(-1), 'monospace')
+    assert.equal(result.includes('ui-monospace'), false)
+    assert.equal(result.filter(name => /jetbrains mono/i.test(name)).length, 1)
+  }
+})
+
+test('Linux 保留指定等宽字体优先级，macOS 和 Windows 的字体策略保持兼容', () => {
+  assert.match(resolveTerminalFontFamily('Fira Code, monospace', 'linux'), /^Fira Code, "JetBrains Mono",/)
+  assert.match(resolveTerminalFontFamily('"Ubuntu Mono", "DejaVu Sans Mono", monospace', 'linux'), /^"Ubuntu Mono", "DejaVu Sans Mono", "JetBrains Mono",/)
+  for (const preset of SETTINGS_PRESETS) {
+    assert.equal(resolveTerminalFontFamily(preset, 'windows'), withCjkFallback(preset, WINDOWS_TERMINAL_CJK_FALLBACK))
+    assert.equal(resolveTerminalFontFamily(preset, 'macos'), withCjkFallback(preset, SYSTEM_TERMINAL_CJK_FALLBACK))
+  }
+})
+
+test('字体加载等到普通与粗体就绪，不会只等待此前已经完成的 fonts.ready', async () => {
+  const calls = [], releases = []
+  const fonts = { load(font, sample) { calls.push({ font, sample }); return new Promise(resolve => releases.push(resolve)) } }
+  let ready = false
+  const loading = loadTerminalFonts('"Fira Code", monospace', 15, ['normal', 'bold', 'normal'], fonts).then(() => { ready = true })
+  assert.deepEqual(calls.map(call => call.font), ['normal 15px "Fira Code", monospace', 'bold 15px "Fira Code", monospace'])
+  assert.ok(calls.every(call => call.sample.includes('W') && call.sample.includes('汉')))
+  releases[0]([])
+  await Promise.resolve()
+  assert.equal(ready, false)
+  releases[1]([])
+  await loading
+  assert.equal(ready, true)
+})
+
+test('字体资源失败仍允许终端通过后备字体打开', async () => {
+  await loadTerminalFonts('Missing, monospace', 13, ['normal'], { load: async () => { throw new Error('font unavailable') } })
+})
 
 /** 设置面板里的全部终端字体预设(SettingsSidebar.vue 的 option value)。 */
 const SETTINGS_PRESETS = [
