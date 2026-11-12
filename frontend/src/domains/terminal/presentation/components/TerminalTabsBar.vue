@@ -32,7 +32,7 @@ const emit = defineEmits<{
 }>()
 
 const {
-  sessionTabStrip, sessionTabOverflow, sessionTabCanScrollLeft, sessionTabCanScrollRight,
+  sessionTabStrip, sessionTabOverflow, sessionTabCanScrollLeft, sessionTabCanScrollRight, sessionTabCompact,
   setSessionTabButton, handleSessionTabScroll, handleSessionTabWheel, scrollSessionTabs
 } = useTerminalTabScroll({
   terminalTabs: toRef(props, 'terminalTabs'),
@@ -268,7 +268,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <nav class="session-tabs" aria-label="终端会话">
+  <nav class="session-tabs" :class="{ 'is-compact': sessionTabCompact }" aria-label="终端会话">
     <div class="session-tab-scrollarea" :class="{ 'can-scroll-left': sessionTabCanScrollLeft, 'can-scroll-right': sessionTabCanScrollRight }">
       <div
         ref="sessionTabStrip" class="session-tab-strip" :class="{ 'is-dragging': draggedTabId }"

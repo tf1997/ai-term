@@ -27,6 +27,9 @@ export function useTerminalTabScroll(options: TerminalTabScrollOptions) {
   const sessionTabOverflow = computed(() => sessionTabClientWidth.value > 0 && sessionTabMaxScrollLeft.value > SCROLL_EPSILON)
   const sessionTabCanScrollLeft = computed(() => sessionTabOverflow.value && sessionTabScrollLeft.value > SCROLL_EPSILON)
   const sessionTabCanScrollRight = computed(() => sessionTabOverflow.value && sessionTabScrollLeft.value < sessionTabMaxScrollLeft.value - SCROLL_EPSILON)
+  const sessionTabCompact = computed(() => sessionTabClientWidth.value > 0
+    && options.terminalTabs.value.length > 1
+    && sessionTabClientWidth.value / options.terminalTabs.value.length < 160)
 
   function updateSessionTabScrollMetrics() {
     if (disposed) return
@@ -163,7 +166,7 @@ export function useTerminalTabScroll(options: TerminalTabScrollOptions) {
   })
 
   return {
-    sessionTabStrip, sessionTabOverflow, sessionTabCanScrollLeft, sessionTabCanScrollRight,
+    sessionTabStrip, sessionTabOverflow, sessionTabCanScrollLeft, sessionTabCanScrollRight, sessionTabCompact,
     setSessionTabButton, scrollSessionTabs,
     handleSessionTabScroll: updateSessionTabScrollMetrics, handleSessionTabWheel
   }

@@ -11,8 +11,8 @@ createApp({ setup() {
   const reviewer = useCommandPolicyReview()
   const pane = {
     async prepareCommandIntent(source, operation) {
-      return { reference: { id: `ticket-${++fixture.sequence}`, target: { sessionId: 'session', context: { user: 'operator', workingDirectory: '/srv/project', environmentScope: 'container:fixture-app' } } },
-        source, operation, analysis: { decision: fixture.nextDecision, highestSeverity: 'high', analysisStatus: 'complete', risks: [{ kind: 'execution', severity: 'high', message: '完整命令需要本次确认', range: { startLine: 71 } }], unknownReasons: [] } }
+      return { reference: { id: `ticket-${++fixture.sequence}`, target: { sessionId: 'session', context: { user: 'operator', workingDirectory: '/srv/project', environmentScope: 'container:fixture-app', ...fixture.options.context } } },
+        source, operation, analysis: { highestSeverity: 'high', analysisStatus: 'complete', risks: [{ kind: 'execution', severity: 'high', message: '完整命令需要本次确认', range: { startLine: 71 } }], unknownReasons: [], ...fixture.options.analysis, decision: fixture.nextDecision } }
     },
     dispatchPreparedCommand(intent, _failed, written) { fixture.writes.push(intent.source); written(); return true }
   }
@@ -20,10 +20,14 @@ createApp({ setup() {
     async approveCommandIntent(ref, source) { fixture.approvals.push({ id: ref.id, source }) },
     async cancelCommandIntent(ref) { fixture.cancellations.push(ref.id) }
   })
-  fixture.start = () => {
+  fixture.start = (options = {}) => {
+    fixture.options = options
     fixture.outcome = null; fixture.error = ''
-    void execute(source, 'bash-script').then(value => { fixture.outcome = value }).catch(error => { fixture.error = String(error) })
+    void execute(options.source ?? source, options.operation ?? 'bash-script').then(value => { fixture.outcome = value }).catch(error => { fixture.error = String(error) })
   }
   fixture.reconnect = () => { tab.connectionGeneration++ }
-  return () => reviewer.pending.value ? h(CommandPolicyReview, { ...reviewer.pending.value, onResolve: reviewer.resolve }) : h('button', { onClick: fixture.start }, '审查脚本')
+  return () => [
+    h('button', { class: 'policy-fixture-trigger', onClick: () => fixture.start() }, '审查脚本'),
+    reviewer.pending.value ? h(CommandPolicyReview, { ...reviewer.pending.value, onResolve: reviewer.resolve }) : null
+  ]
 } }).mount('#fixture')

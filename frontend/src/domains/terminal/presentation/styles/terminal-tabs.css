@@ -92,7 +92,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 108px;
   max-width: 232px;
   height: 32px;
@@ -227,6 +227,8 @@
   color: var(--workbench-danger);
 }
 .session-tabs .tab.agent-controlled {
+  /* Keep the takeover badge readable when ordinary tabs compress. */
+  flex-shrink: 0;
   max-width: 288px;
   border-color: var(--terminal-agent-line);
   background: var(--terminal-agent-surface);
@@ -259,6 +261,13 @@
   cursor: not-allowed;
   opacity: .38;
 }
+
+/* Compact only when the available space per tab is limited. */
+.session-tabs.is-compact .session-tab-strip { gap: 2px; }
+.session-tabs.is-compact .tab { min-width: 104px; }
+.session-tabs.is-compact .tab-select { gap: 5px; padding: 0 4px 0 6px; }
+.session-tabs.is-compact .tab-close { margin-right: 2px; }
+.session-tabs.is-compact .tab.active::after { left: 6px; right: 6px; }
 
 .session-tab-actions,
 .session-tab-navigation,

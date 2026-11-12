@@ -107,9 +107,8 @@ function inferCommandShellLabel(command: string) {
 .chat-code-risk .ui-icon { display: block; width: 12px; height: 12px; flex: 0 0 12px; }
 .chat-code-risk.is-medium { color: var(--chat-warning, #996015); }
 .chat-code-risk.is-high { color: var(--chat-danger, #c24150); }
-.chat-code-run { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 7px; background: var(--workbench-action-bg); color: var(--workbench-action-text); border: 0; border-radius: 4px; cursor: pointer; font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
-.chat-code-run:hover:not(:disabled) { background: var(--workbench-action-hover); }
+.chat-code-run { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; min-height: 28px; padding: 0 9px; margin-left: 4px; background: var(--workbench-action-bg); color: var(--workbench-action-text); border: 1px solid var(--workbench-action-border); border-radius: 6px; cursor: pointer; font-size: var(--ai-font-ui); font-weight: 500; line-height: var(--ai-leading-ui); }
+.chat-code-run:hover:not(:disabled) { border-color: var(--workbench-accent); background: var(--workbench-action-hover); }
 .chat-code-run:active:not(:disabled) { background: var(--workbench-action-active); }
 .chat-code-run:focus-visible { outline: 2px solid var(--chat-accent, var(--workbench-accent)); outline-offset: 2px; }
-.chat-code-run:hover { filter: brightness(.94); }
 </style>
