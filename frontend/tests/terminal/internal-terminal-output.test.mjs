@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import xterm from '@xterm/xterm'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { createInternalTerminalOutputFilter } from '../../src/domains/terminal/domain/internalTerminalOutput'
 import { frameInternalProbe, isInternalTerminalCommand, wrapInternalTerminalCommand } from '../../src/domains/terminal/domain/internalTerminalCommand'
@@ -17,6 +17,109 @@ const identity = (id = '1789443510475_1m3nzxpct') => {
   return { begin, end, command, frame }
 }
 const feedCharacters = (filter, value) => [...value].map(character => filter.push(character)).join('')
+
+test('real Bash wrapped probe echoes remain hidden after cancellation at every split', () => {
+  const { records } = JSON.parse(readFileSync(new URL('./fixtures/internal-probe-echo.json', import.meta.url), 'utf8'))
+  for (const record of records) {
+    for (let split = 0; split <= record.output.length; split++) {
+      const filter = createInternalTerminalOutputFilter({ now: () => 0 })
+      filter.begin(record.command, { debug: false }); filter.finish(record.command)
+      assert.equal(filter.push(record.output.slice(0, split)) + filter.push(record.output.slice(split)), CLEAR_PROMPT + '\r\ndebug-fixture# ', `${record.cols} columns / split ${split}`)
+    }
+    const debug = createInternalTerminalOutputFilter()
+    debug.begin(record.command, { debug: true }); debug.finish(record.command)
+    assert.equal(feedCharacters(debug, record.output), record.output)
+  }
+})
+
+test('a cancelled probe hides its delayed exact command echo without hiding ordinary output', () => {
+  const nonce = '5b75989450854d7f8285e5b87dfafaf3'
+  const command = wrapInternalTerminalCommand(frameInternalProbe(wrapCommandWithSentinel("(printf 'AI_TERM_CAPTURE_OK\\n'; exit 7)", nonce), nonce), nonce)
+  const filter = createInternalTerminalOutputFilter({ now: () => 0 })
+  filter.begin(command, { debug: false })
+  filter.finish(command)
+  assert.equal(filter.active(), false)
+  assert.equal(filter.push('ordinary status\r\n'), 'ordinary status\r\n')
+  assert.equal(feedCharacters(filter, `${command}\r\nAI_TERM_PROBE_BEGIN_${nonce}\r\nAI_TERM_CAPTURE_OK\r\nAI_TERM_PROBE_END_${nonce}\r\n${prompt}`), prompt)
+})
+
+test('timeout cleanup still hides a delayed wrapped echo at every chunk boundary', () => {
+  const probe = identity('timeout_echo')
+  const wrapped = wrapInternalTerminalCommand(probe.command, 'timeout_echo')
+  const stream = `\x1b[?2004l${wrapped}\r\n${probe.frame}${prompt}`
+  for (let split = 0; split <= stream.length; split++) {
+    let time = 0
+    const filter = createInternalTerminalOutputFilter({ now: () => time })
+    filter.begin(probe.command, { debug: false, echo: wrapped, timeoutMs: 20 })
+    time = 21
+    assert.equal(filter.active(), false)
+    assert.equal(filter.push(stream.slice(0, split)) + filter.push(stream.slice(split)), CLEAR_PROMPT + '\r\n' + prompt, `split ${split}`)
+  }
+})
+
+test('similar commands and user-resumed input are not swallowed by delayed echo matching', () => {
+  const probe = identity('similar_echo'), wrapped = wrapInternalTerminalCommand(probe.command, 'similar_echo')
+  const filter = createInternalTerminalOutputFilter()
+  filter.begin(wrapped, { debug: false }); filter.finish(wrapped)
+  const different = wrapped.replace('user=', 'user input=') + '\r\n'
+  assert.equal(feedCharacters(filter, different), different)
+  filter.resume()
+  assert.equal(feedCharacters(filter, wrapped + '\r\n'), wrapped + '\r\n')
+})
+
+test('a cancelled probe with no earlier echo preserves output and leaves one prompt in xterm', async () => {
+  const { records } = JSON.parse(readFileSync(new URL('./fixtures/internal-probe-echo.json', import.meta.url), 'utf8'))
+  for (const record of records) {
+    const terminal = new xterm.Terminal({ cols: record.cols, rows: 10, allowProposedApi: true })
+    const write = value => new Promise(resolve => terminal.write(value, resolve))
+    try {
+      await write('KEEP THIS OUTPUT\r\ndebug-fixture# ')
+      const filter = createInternalTerminalOutputFilter()
+      filter.begin(record.command, { debug: false }); filter.finish(record.command)
+      await write(filter.push(record.output))
+      const buffer = terminal.buffer.active
+      const lines = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index).translateToString(true)).filter(line => line.trim())
+      assert.deepEqual(lines, ['KEEP THIS OUTPUT', 'debug-fixture# '])
+    } finally { terminal.dispose() }
+  }
+})
+
+test('disabling debug before delayed output applies to the already-dispatched probe', () => {
+  let debug = true
+  const probe = identity('debug_delayed'), filter = createInternalTerminalOutputFilter({ debug: () => debug })
+  filter.begin(probe.command, { debug: true })
+  debug = false
+  assert.equal(feedCharacters(filter, probe.command + probe.frame + prompt), CLEAR_PROMPT + prompt)
+})
+
+test('disabling debug mid-response hides the remainder without erasing visible diagnostics', () => {
+  let debug = true
+  const probe = identity('debug_midstream'), filter = createInternalTerminalOutputFilter({ debug: () => debug })
+  filter.begin(probe.command, { debug: true })
+  const first = `${probe.command}\r\n${probe.begin}\r\nuser=root`
+  assert.equal(filter.push(first), first)
+  debug = false
+  assert.equal(feedCharacters(filter, `\r\nhidden identity\r\n${probe.end}\r\n${prompt}`), '\r\n' + prompt)
+})
+
+test('a debug toggle never repeats an already-visible undecided echo prefix', () => {
+  let debug = true
+  const probe = identity('debug_prefix'), filter = createInternalTerminalOutputFilter({ debug: () => debug })
+  filter.begin(probe.command, { debug: true }); filter.finish(probe.command)
+  assert.equal(filter.push('printf '), 'printf ')
+  debug = false
+  assert.equal(filter.push('ordinary text\r\n'), 'ordinary text\r\n')
+})
+
+test('showing a cancelled echo invalidates its saved prompt position before debug is disabled again', () => {
+  let debug = false
+  const probe = identity('late_debug_toggle'), filter = createInternalTerminalOutputFilter({ debug: () => debug })
+  filter.begin(probe.command, { debug: false }); filter.finish(probe.command)
+  debug = true
+  assert.equal(filter.push(probe.command), probe.command)
+  debug = false
+  assert.equal(filter.push(`${probe.begin}\r\nbody\r\n${probe.end}\r\n${prompt}`), prompt)
+})
 
 test('Agent probe frames obey debug visibility while the capture consumer receives exit status', () => {
   const nonce = 'a1b2c3d4'

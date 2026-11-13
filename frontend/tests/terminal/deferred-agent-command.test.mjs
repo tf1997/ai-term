@@ -42,6 +42,24 @@ test('探针期间停止后不执行真实命令', async () => {
   assert.equal(result.status, 'cancelled')
 })
 
+test('中断不会穿透准备阶段，派发后才转给绑定的命令句柄', async () => {
+  const gate = deferred(), result = deferred()
+  let interrupts = 0
+  const handle = createDeferredAgentCommand(() => gate.promise, () => ({
+    result: result.promise, peekOutput: () => '', cancel() {},
+    interrupt: () => { interrupts++; return true }
+  }))
+  assert.equal(handle.interrupt(), false)
+  gate.resolve('')
+  await Promise.resolve()
+  assert.equal(handle.interrupt(), true)
+  handle.cancel()
+  assert.equal(handle.interrupt(), false)
+  assert.equal(interrupts, 1)
+  result.resolve({ status: 'cancelled' })
+  await handle.result
+})
+
 test('探针成功后代理真实句柄及取消和部分输出', async () => {
   const gate = deferred()
   const command = deferred()

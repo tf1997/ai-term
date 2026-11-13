@@ -50,7 +50,7 @@ export function updateAgentPlan(raw: string, previous: AgentTaskPlan | undefined
     // Model arguments cannot supply user confirmation. Preserve it only for
     // the same recorded item and statement received from the native reply.
     const userConfirmation = previous?.items.find(old => old.id === itemId && old.description === description)?.userConfirmation
-    if (item.status === 'completed' && !userConfirmation && (!evidence.length || evidence.some(step => step?.status !== 'completed' || step.executionPhase !== 'finished' || ((!step.toolName || step.toolName === 'run_command' || step.toolName === 'run_ssh_task') && step.exitCode !== 0) || step.sshResult?.status === 'unknown' || step.sshResult?.exitSignal || step.fileEdits?.some(item => item.status !== 'applied')))) throw new Error('完成计划项需要关联已成功完成的实际步骤或已记录的用户确认')
+    if (item.status === 'completed' && !userConfirmation && (!evidence.length || evidence.some(step => step?.status !== 'completed' || step.interruption || step.executionPhase !== 'finished' || ((!step.toolName || step.toolName === 'run_command' || step.toolName === 'run_ssh_task') && step.exitCode !== 0) || step.sshResult?.status === 'unknown' || step.sshResult?.exitSignal || step.fileEdits?.some(item => item.status !== 'applied')))) throw new Error('完成计划项需要关联已成功完成的实际步骤或已记录的用户确认')
     return { id: itemId, description, status: item.status as PlanItemStatus, stepIds, ...(userConfirmation ? { userConfirmation: { ...userConfirmation } } : {}) }
   })
   if (new Set(items.map(item => item.id)).size !== items.length) throw new Error('计划项 ID 不能重复')
@@ -85,6 +85,7 @@ export function recordAgentVerification(raw: string, previous: AgentVerification
     if (!step) throw new Error('验证引用了不存在的执行步骤')
     item.status = 'unavailable'; item.actual = '尚无可确定的完成结果'
     if (index < latestPossibleWrite(steps)) item.actual = '此证据之后又执行了可能修改状态的操作，需要重新验证'
+    else if (step.interruption) item.actual = '用户中断了检查，需要改用有界命令重新验证'
     else if (step.status === 'completed' && step.executionPhase === 'finished' && (!step.sshResult || step.sshResult.status === 'completed')) {
       if (check.kind === 'exit-code') {
         if (step.exitCode !== undefined) { item.status = step.exitCode === Number(expected) ? 'passed' : 'failed'; item.actual = `exit ${step.exitCode}（仅证明该进程的退出结果）` }

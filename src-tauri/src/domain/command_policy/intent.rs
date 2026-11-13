@@ -195,6 +195,7 @@ impl IntentStore {
             operation: OperationKind::Command,
             target,
             analysis: CommandAnalysis {
+                commands: vec![],
                 analysis_status: AnalysisStatus::Complete,
                 decision: Decision::Allow,
                 risks: vec![],
@@ -224,6 +225,7 @@ impl IntentStore {
             operation: OperationKind::Command,
             target,
             analysis: CommandAnalysis {
+                commands: vec![],
                 analysis_status: AnalysisStatus::Complete,
                 decision: Decision::Allow,
                 risks: vec![],

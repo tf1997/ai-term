@@ -1,4 +1,5 @@
 import type { AgentAutoExecClassification } from './agent'
+import type { CommandIntent } from '../../../shared/security/commandPolicy'
 import { scanCommand } from '../../../shared/security/shellCommandScan'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 
@@ -38,11 +39,17 @@ const GIT_OUTPUT_FLAG = /^--output(=|$)/
 /**
  * 内置只读命令集(文档 6.4 清单的收紧版)。
  * 刻意不收录:less/more/top/watch/tail -f 等常驻或分页命令(会挂住循环)、
- * curl/wget(网络副作用)、echo(无价值)、cd(改变会话状态)。
+ * curl/wget(网络副作用)、cd(改变会话状态)。
  * 标注「额外收紧」的条目是在任务规格之上封堵的写/执行漏洞,见各自注释。
  */
 export const BUILTIN_READONLY_COMMANDS: BuiltinReadonlyEntry[] = [
   // —— 单 token 只读命令 ——
+  { pattern: 'pwd' },
+  { pattern: 'true' },
+  { pattern: 'false' },
+  { pattern: ':' },
+  { pattern: 'echo' },
+  { pattern: 'printf' },
   { pattern: 'ls' },
   { pattern: 'cat' },
   { pattern: 'head' },
@@ -292,6 +299,22 @@ export function classifyForAutoExec(
 
   if (missing.length) return { eligible: false, suggestedPatterns: missing }
   return { eligible: true, matched: firstMatched, suggestedPatterns: [] }
+}
+
+/** Use AST command boundaries only when the whole source passed backend policy.
+ * In particular, parentheses are syntax, while substitutions and writes still
+ * require review. Older backends retain the conservative lexical fallback.
+ */
+export function classifyIntentForAutoExec(intent: CommandIntent, sources: { userPatterns: string[]; includeBuiltin: boolean }): AgentAutoExecClassification {
+  const { analysis } = intent
+  if (intent.capture?.internal || intent.sourceSensitive || analysis.decision !== 'allow' || analysis.analysisStatus !== 'complete' || analysis.risks.length || analysis.unknownReasons.length) {
+    return { eligible: false, suggestedPatterns: [] }
+  }
+  if (!analysis.commands?.length) return classifyForAutoExec(intent.source, sources)
+  const results = analysis.commands.map(command => classifyForAutoExec(command, sources))
+  if (results.some(result => !result.eligible && !result.suggestedPatterns.length)) return { eligible: false, suggestedPatterns: [] }
+  const suggestedPatterns = [...new Set(results.flatMap(result => result.suggestedPatterns))]
+  return { eligible: results.every(result => result.eligible), matched: results[0]?.matched, suggestedPatterns }
 }
 
 /** 「总是允许」按钮的建议 pattern;多段命令简化为始终取第一段。 */

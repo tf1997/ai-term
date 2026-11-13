@@ -77,6 +77,8 @@ const followingLatest = ref(true)
 const hasNewContent = ref(false)
 const messageContent = ref<HTMLElement | null>(null)
 let contentResizeObserver: ResizeObserver | undefined
+let lastMessageScrollTop = 0
+let messageScrollFrame: number | undefined
 const historyPopover = ref<HTMLElement | null>(null)
 const historyButton = ref<HTMLButtonElement | null>(null)
 const composerInput = ref<HTMLTextAreaElement | null>(null)
@@ -112,7 +114,7 @@ async function prepareTaskScript(message: AiMessage) {
 onBeforeUnmount(() => { taskScriptEpoch++ })
 function openTaskScript(draft: TaskScriptDraft) { emit('createScriptDraft', draft); taskScriptSource.value = null; taskScriptMessageId.value = '' }
 
-const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   hostKnowledgeContext: hostKnowledge.context,
   canSendMessage: () => canSendMessage.value,
@@ -495,24 +497,49 @@ function focusComposer() {
 function scrollMessagesToLatest() {
   followingLatest.value = true
   hasNewContent.value = false
+  lastMessageScrollTop = messageList.value?.scrollTop ?? 0
   followMessageContent()
 }
 
 function handleMessageScroll() {
   const list = messageList.value
-  if (!list) return
-  followingLatest.value = list.scrollHeight - list.scrollTop - list.clientHeight < 48
+  if (!list || props.active === false) return
+  const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
+  if (maxScrollTop - list.scrollTop < 48) followingLatest.value = true
+  // Layout growth and delayed programmatic scroll events must not cancel follow.
+  // Ignore upward clamping when content shrinks; detach only when scrolling back.
+  else if (list.scrollTop < Math.min(lastMessageScrollTop, maxScrollTop) - 1) followingLatest.value = false
+  lastMessageScrollTop = list.scrollTop
   if (followingLatest.value) hasNewContent.value = false
 }
 
 function followMessageContent() {
   void nextTick(() => {
-    requestAnimationFrame(() => {
+    if (!messageList.value || messageScrollFrame !== undefined) return
+    messageScrollFrame = requestAnimationFrame(() => {
+      messageScrollFrame = undefined
       const list = messageList.value
       if (!list || !followingLatest.value || props.active === false) return
       list.scrollTop = list.scrollHeight
+      lastMessageScrollTop = list.scrollTop
     })
   })
+}
+
+function revealMessageElement(element: HTMLElement) {
+  const list = messageList.value
+  if (!list) return
+  // Scroll only the message list, accounting for the app's UI zoom.
+  const viewport = list.getBoundingClientRect()
+  const scale = viewport.height / list.offsetHeight || 1
+  const bounds = element.getBoundingClientRect()
+  const top = (bounds.top - viewport.top) / scale - list.clientTop
+  const bottom = (bounds.bottom - viewport.top) / scale - list.clientTop
+  if (top < 12) list.scrollTop += top - 12
+  else if (bottom > list.clientHeight - 12) list.scrollTop += bottom - list.clientHeight + 12
+  lastMessageScrollTop = list.scrollTop
+  followingLatest.value = list.scrollHeight - list.scrollTop - list.clientHeight < 48
+  if (followingLatest.value) hasNewContent.value = false
 }
 
 function resizeComposer() {
@@ -525,16 +552,19 @@ function resizeComposer() {
 function revealActiveStep() {
   if (agentPendingRecovery.value) {
     const review = messageList.value?.querySelector<HTMLElement>('.agent-recovery-review')
-    review?.scrollIntoView({ block: 'start', behavior: 'instant' })
-    review?.querySelector<HTMLElement>('select, input')?.focus({ preventScroll: true })
+    const input = review?.querySelector<HTMLElement>('select, input')
+    if (review) revealMessageElement(input ?? review)
+    input?.focus({ preventScroll: true })
     return
   }
   const stepId = agentPendingApproval.value?.proposal.id || agentPendingTimeout.value?.step.id
   const step = Array.from(messageList.value?.querySelectorAll<HTMLElement>('[data-step-id]') ?? [])
     .find(element => element.dataset.stepId === stepId)
   if (!step) return scrollMessagesToLatest()
-  step.scrollIntoView({ block: 'start', behavior: 'instant' })
-  step.querySelector<HTMLButtonElement>('.tool-step-decision button:not(:disabled)')?.focus({ preventScroll: true })
+  const decision = step.querySelector<HTMLElement>('.tool-step-decision, .file-tool-actions, .file-edit-actions')
+  const button = decision?.querySelector<HTMLButtonElement>('button:not(:disabled)')
+  revealMessageElement(decision ?? step)
+  if (button) { revealMessageElement(button); button.focus({ preventScroll: true }) }
 }
 
 async function revealAgentFileStep(message: AiMessage, stepId: string) {
@@ -836,6 +866,7 @@ onMounted(() => {
     if (isAsking.value || agentRunActive.value) followMessageContent()
   })
   if (messageContent.value) contentResizeObserver.observe(messageContent.value)
+  if (messageList.value) contentResizeObserver.observe(messageList.value)
   scrollMessagesToLatest()
   resizeComposer()
 })
@@ -843,6 +874,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown, true)
   contentResizeObserver?.disconnect()
+  if (messageScrollFrame !== undefined) cancelAnimationFrame(messageScrollFrame)
   if (aiCommandNoticeTimer) window.clearTimeout(aiCommandNoticeTimer)
   stopAnswerTimer()
 })
@@ -1077,6 +1109,7 @@ defineExpose({ stopActiveAiWork })
                 @stop="agentPendingApproval ? resolveAgentApproval('stop') : stopAgentRun()"
                 @wait="resolveAgentTimeout('wait')"
                 @timeout-stop="resolveAgentTimeout('stop')"
+                @interrupt="interruptAgentCommand(message, entry.step)"
                 @restore="(changeId, path) => startFileRestore(changeId, path)"
                 @retry="retryMessage(message)"
                 @focus-terminal="emit('focusTerminal')"

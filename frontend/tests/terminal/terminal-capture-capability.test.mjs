@@ -39,6 +39,36 @@ function fixture({ markers = true, load = false, prepare, paste = false } = {}) 
   return { capture, writes, disablePaste: () => { paste = false }, close: () => app.unmount(), reconnect: () => { session = 'new'; capture.abortActiveCapture('reconnected') } }
 }
 
+test('Ctrl+C 只发送一次，完成、取消或重连后的句柄不能影响后续命令', async () => {
+  for (const ending of ['completed', 'cancelled', 'reconnected']) {
+    let capture, session = 'original', interrupts = 0
+    const app = renderer.createApp({ setup() {
+      capture = useTerminalCapture({
+        getSessionId: () => session, getShellIntegration: () => undefined,
+        commandExecutionReadiness: () => 'ready', executeCommand: () => true,
+        dispatchIntent: () => true, interruptCommand: () => { interrupts++; return true }
+      })
+      return () => null
+    } })
+    app.mount({})
+    try {
+      const handle = capture.runCommandAndCapture('tail -f app.log', { intent: {
+        source: 'tail -f app.log', capture: { kind: 'sentinel', nonce: 'interrupt', internal: false }
+      } })
+      capture.ingestCaptureOutput('\n__AI_TERM_interruptB__\npartial\n')
+      if (ending === 'completed') {
+        assert.equal(handle.interrupt(), true)
+        assert.equal(handle.interrupt(), false)
+        capture.ingestCaptureOutput('\n__AI_TERM_interruptE__:130\n')
+        assert.equal((await handle.result).exitCode, 130)
+      } else if (ending === 'cancelled') handle.cancel()
+      else { session = 'new'; capture.abortActiveCapture('reconnected') }
+      assert.equal(handle.interrupt(), false, ending)
+      assert.equal(interrupts, ending === 'completed' ? 1 : 0)
+    } finally { app.unmount() }
+  }
+})
+
 test('历史 sawMarkers 不启用捕获，原始探针验证后才缓存能力', async () => {
   const f = fixture()
   try {

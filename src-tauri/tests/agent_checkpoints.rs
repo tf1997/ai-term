@@ -27,6 +27,33 @@ fn start() -> AgentRunStart {
 fn update(sequence: u64, boundary: &str, phase: &str) -> AgentCheckpointUpdate {
     serde_json::from_value(json!({"expectedSequence":sequence,"boundary":boundary,"stepId":"write","state":{"status":"executing","steps":[{"id":"write","toolName":"run_command","command":"fixture-only-command","reason":"test boundary","sensitive":false,"status":"running","executionPhase":phase,"output":null,"outputTruncated":false,"exitCode":null,"failureReason":null,"workingDirectory":null,"fileRead":null,"fileEdits":[]}],"plan":null,"verifications":[],"finalText":"","error":null,"stopReason":null}})).unwrap()
 }
+
+#[test]
+fn interruption_observations_survive_checkpoint_serialization_and_are_validated() {
+    let mut value = update(0, "result", "finished");
+    value.state.steps[0].interruption = Some(CommandInterruption {
+        requested_by: "user".into(),
+        waited_ms: 125_000,
+        silent_ms: 110_000,
+        had_output: true,
+        output_growing: false,
+    });
+    value.sanitize().unwrap();
+    let serialized = serde_json::to_value(&value).unwrap();
+    let restored: AgentCheckpointUpdate = serde_json::from_value(serialized).unwrap();
+    let info = restored.state.steps[0].interruption.as_ref().unwrap();
+    assert_eq!(info.waited_ms, 125_000);
+    assert_eq!(info.silent_ms, 110_000);
+    assert!(update(0, "result", "finished").state.steps[0]
+        .interruption
+        .is_none());
+    value.state.steps[0]
+        .interruption
+        .as_mut()
+        .unwrap()
+        .silent_ms = 126_000;
+    assert!(value.sanitize().is_err());
+}
 async fn app(path: &str) -> (AppState, ExecutionTarget) {
     let state = AppState::with_profile_store(SqliteConfigStore::new(path));
     state

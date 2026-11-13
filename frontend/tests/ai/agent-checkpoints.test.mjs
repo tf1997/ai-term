@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runAgentTask } from '../../src/domains/ai/application/agent/agentLoop'
-import { agentGoalWithInputs, checkpointState, checkpointStepEffect } from '../../src/domains/ai/domain/agentCheckpoints'
+import { agentGoalWithInputs, checkpointState, checkpointStepEffect, recoveredAgentSteps } from '../../src/domains/ai/domain/agentCheckpoints'
 import { createAgentCheckpointJournal } from '../../src/domains/ai/application/agent/agentCheckpointJournal'
 import { proposal, record, id, deferred, tick } from '../transfer/file-edit-fixture.mjs'
 
@@ -17,6 +17,14 @@ test('user replies preserve the original goal and question while missing or reda
   assert.throws(() => agentGoalWithInputs('goal', [], { messageId: 'missing', text: 'input' }), /未取得/)
 })
 const step = values => ({ id: 'command', command: 'fixture command', reason: 'fixture', sensitive: false, risks: [], status: 'running', executionPhase: 'dispatching', ...values })
+
+test('检查点恢复保留用户中断原因和等待现场，不保存临时按钮状态', () => {
+  const interruption = { requestedBy: 'user', waitedMs: 125000, silentMs: 110000, hadOutput: true, outputGrowing: false }
+  const saved = checkpointState(state([step({ status: 'completed', executionPhase: 'finished', exitCode: 130, interruption, canInterrupt: false, interruptRequested: true })]))
+  assert.deepEqual(saved.steps[0].interruption, interruption)
+  assert.equal(saved.steps[0].interruptRequested, undefined)
+  assert.deepEqual(recoveredAgentSteps({ state: saved })[0].interruption, interruption)
+})
 const response = calls => ({ text: calls.length ? '' : 'done', toolCalls: calls, contextCompressed: false, contextChars: 0 })
 function fixture(overrides = {}) {
   const events = [], checkpoints = []

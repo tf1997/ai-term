@@ -23,6 +23,8 @@ export interface PolicySourceRange {
   endColumn: number
 }
 export interface CommandPolicyAnalysis {
+  /** Executable nodes from a completely allowed backend syntax tree. */
+  commands?: string[]
   analysisStatus: 'complete' | 'unknown'
   decision: 'allow' | 'ask' | 'deny'
   risks: Array<{

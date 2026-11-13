@@ -687,7 +687,9 @@ test('超时后选择继续等待:命令完成后任务继续', async () => {
   const state = await runAgentTask('测试', deps, { commandTimeoutMs: 10 }).done
 
   assert.equal(state.status, 'done')
-  assert.deepEqual(waited, [['c1', 'running', 10]])
+  assert.equal(waited.length, 1)
+  assert.deepEqual(waited[0].slice(0, 2), ['c1', 'running'])
+  assert.ok(waited[0][2] >= 9, 'elapsed wall time includes scheduler delays')
   assert.equal(state.steps[0].status, 'completed')
   assert.equal(state.steps[0].output, '慢结果')
   assert.ok(states.some((snapshot) => snapshot.status === 'awaiting-user'))
@@ -947,6 +949,192 @@ function makePendingHandle(peekOutput = () => '') {
   }
   return handle
 }
+
+test('停止等待无需等超时，保留已有输出且不发送中断', async () => {
+  const handle = makePendingHandle(() => 'latest log lines')
+  handle.interrupt = () => { throw Error('stop must only stop observing') }
+  const { callModel } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')])])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle })
+  const run = runAgentTask('观察日志', deps)
+  await tick()
+  run.stop()
+  const state = await run.done
+  assert.equal(state.status, 'stopped')
+  assert.equal(state.steps[0].output, 'latest log lines')
+  assert.equal(handle.cancelCalls, 1)
+})
+
+test('中断仅针对当前步骤发送一次，确认结束后携已有输出继续', async () => {
+  let interrupts = 0
+  const handle = makePendingHandle(() => 'log data')
+  handle.interrupt = () => { interrupts++; return true }
+  const { callModel, calls } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')]), turnResponse('已取得日志')])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle })
+  const run = runAgentTask('观察日志', deps)
+  assert.equal(run.interruptCommand('c1'), false, 'not dispatched yet')
+  await tick()
+  assert.equal(run.interruptCommand('old-step'), false)
+  assert.equal(run.interruptCommand('c1'), true)
+  assert.equal(run.interruptCommand('c1'), false)
+  assert.equal(calls.length, 1, 'do not continue before exit evidence')
+  handle.finish({ output: 'log data', exitCode: 130 })
+  const state = await run.done
+  assert.equal(state.status, 'done')
+  assert.equal(interrupts, 1)
+  assert.equal(handle.cancelCalls, 0)
+  const result = JSON.parse(calls[1].turns.find(turn => turn.kind === 'toolResult').content)
+  assert.equal(result.interrupted, true)
+  assert.equal(result.status, 'interrupted_by_user')
+  assert.match(result.note, /继续原任务.*不要原样重跑/)
+  assert.equal(result.exitCode, 130)
+  assert.equal(result.output, 'log data')
+  assert.equal(state.steps[0].canInterrupt, undefined)
+  assert.equal(state.steps[0].interruptRequested, undefined)
+  assert.equal(run.interruptCommand('c1'), false)
+})
+
+test('中断反馈保留长时间等待与静默，Ctrl+C 输出不重置中断时的现场', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000 })
+  let output = ''
+  const handle = makePendingHandle(() => output)
+  handle.interrupt = () => { output += '^C'; return true }
+  const { callModel, calls } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')]), turnResponse('改用有界查询')])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle, requestTimeoutDecision: () => new Promise(() => {}) })
+  const run = runAgentTask('继续排查', deps, { outputSampleIntervalMs: 15000 })
+  await new Promise(resolve => setImmediate(resolve))
+  output = 'initial log'
+  t.mock.timers.tick(15000)
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(110000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(run.interruptCommand('c1'), true)
+  handle.finish({ output, exitCode: 130, durationMs: 125100 })
+  const state = await run.done
+  const result = JSON.parse(calls[1].turns.find(turn => turn.kind === 'toolResult').content)
+  assert.deepEqual(result.interruption, { requestedBy: 'user', waitedMs: 125000, silentMs: 110000, hadOutput: true, outputGrowing: false })
+  assert.match(result.note, /已等待 125 秒.*110 秒未观察到新输出/)
+  assert.deepEqual(state.steps[0].interruption, result.interruption)
+
+  const resumed = scriptedModel([turnResponse('继续原任务')])
+  await runAgentTask('继续排查', makeDeps({ callModel: resumed.callModel }).deps, { initialSteps: state.steps }).done
+  const restored = JSON.parse(resumed.calls[0].turns.find(turn => turn.kind === 'toolResult').content)
+  assert.deepEqual(restored.interruption, result.interruption)
+  assert.equal(restored.status, 'interrupted_by_user')
+})
+
+test('中断无输出命令与仍有输出的命令，如实区分等待状态', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000 })
+  for (const activeOutput of [false, true]) {
+    let output = ''
+    const handle = makePendingHandle(() => output)
+    handle.interrupt = () => true
+    const { callModel, calls } = scriptedModel([turnResponse('', [toolCall('c1', 'check')]), turnResponse('继续')])
+    const { deps } = makeDeps({ callModel, startCommand: () => handle })
+    const run = runAgentTask('检查', deps)
+    await new Promise(resolve => setImmediate(resolve))
+    t.mock.timers.tick(30000)
+    if (activeOutput) output = 'new output immediately before interrupt'
+    assert.equal(run.interruptCommand('c1'), true)
+    handle.finish({ exitCode: 130, output: '^C' })
+    await run.done
+    const result = JSON.parse(calls[1].turns.find(turn => turn.kind === 'toolResult').content)
+    assert.equal(result.interruption.waitedMs, 30000)
+    assert.equal(result.interruption.hadOutput, activeOutput)
+    assert.equal(result.interruption.outputGrowing, activeOutput)
+    assert.equal(result.interruption.silentMs, activeOutput ? 0 : 30000)
+    assert.match(result.note, activeOutput ? /仍观察到新输出/ : /等待期间未观察到命令输出/)
+  }
+})
+
+test('多次压缩旧输出仍保留用户中断及长时间静默的反馈', () => {
+  const interruption = { requestedBy: 'user', waitedMs: 125000, silentMs: 110000, hadOutput: true, outputGrowing: false }
+  const note = '用户中断；继续原任务，避免原样重跑'
+  const turns = [
+    { kind: 'assistant', text: '', toolCalls: [toolCall('c1', 'tail -f app.log')] },
+    { kind: 'toolResult', toolCallId: 'c1', content: JSON.stringify({ status: 'interrupted_by_user', interrupted: true, interruption, note, output: 'log'.repeat(1000) }) },
+    ...Array.from({ length: 6 }, () => ({ kind: 'assistant', text: 'recent context'.repeat(40), toolCalls: [] }))
+  ]
+  const compacted = compressAgentTurns(compressAgentTurns(turns, 100), 100)
+  const result = JSON.parse(compacted[1].content)
+  assert.deepEqual(result.interruption, interruption)
+  assert.equal(result.status, 'interrupted_by_user')
+  assert.equal(result.interruptionNote, note)
+  assert.ok(result.output.length < 3000)
+})
+
+test('中断未确认时最多观察五秒，不再派发后续命令', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000 })
+  const handle = makePendingHandle(() => 'partial')
+  handle.interrupt = () => true
+  const { callModel, calls } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')])])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle })
+  const run = runAgentTask('观察日志', deps)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(run.interruptCommand('c1'), true)
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(5000)
+  const state = await run.done
+  assert.equal(state.status, 'stopped')
+  assert.match(state.stopReason, /Ctrl\+C.*未确认命令结束/)
+  assert.equal(state.steps[0].output, 'partial')
+  assert.equal(state.steps[0].exitCode, undefined)
+  assert.equal(calls.length, 1)
+})
+
+test('用户查看超时提示期间命令结束，无需额外点击继续等待', async () => {
+  const handle = makePendingHandle()
+  const { callModel, calls } = scriptedModel([turnResponse('', [toolCall('c1', 'ls')]), turnResponse('完成')])
+  let resolveDecision
+  const { deps } = makeDeps({ callModel, startCommand: () => handle,
+    requestTimeoutDecision: () => {
+      queueMicrotask(() => handle.finish({ output: 'done' }))
+      return new Promise(resolve => { resolveDecision = resolve })
+    }
+  })
+  const run = runAgentTask('检查', deps, { commandTimeoutMs: 5 })
+  const state = await run.done
+  assert.equal(state.status, 'done')
+  assert.equal(state.steps[0].output, 'done')
+  resolveDecision('stop')
+  await tick()
+  assert.equal(calls.length, 2, 'late decisions cannot restart or stop a new step')
+})
+
+test('截断后的输出长度不变但内容更新，仍视为持续输出', async () => {
+  let version = 0, seen
+  const handle = makePendingHandle(() => String(++version).padStart(10, '0'))
+  const { callModel } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')])])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle,
+    requestTimeoutDecision: async (_step, info) => { seen = info; return 'stop' }
+  })
+  await runAgentTask('观察', deps, { commandTimeoutMs: 20, outputSampleIntervalMs: 500 }).done
+  assert.equal(seen.outputGrowing, true)
+  assert.equal(seen.partialOutput.length, 10)
+})
+
+test('超时提示期间仍可中断，关闭旧提示不会重置中断确认时限', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 1000 })
+  const handle = makePendingHandle(() => 'partial')
+  handle.interrupt = () => true
+  let pending
+  const { callModel } = scriptedModel([turnResponse('', [toolCall('c1', 'tail -f app.log')])])
+  const { deps } = makeDeps({ callModel, startCommand: () => handle,
+    requestTimeoutDecision: () => new Promise(resolve => { pending = resolve }),
+    onStateChange: state => { if (state.status === 'executing' && pending) { pending('wait'); pending = undefined } }
+  })
+  const run = runAgentTask('观察', deps, { commandTimeoutMs: 10 })
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(10)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(pending)
+  assert.equal(run.interruptCommand('c1'), true)
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(4999)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(handle.cancelCalls, 0)
+  t.mock.timers.tick(1)
+  assert.equal((await run.done).status, 'stopped')
+})
 
 test('deadlineAt:派发即置位、完成后清除、不进入终态快照', async () => {
   const { callModel } = scriptedModel([

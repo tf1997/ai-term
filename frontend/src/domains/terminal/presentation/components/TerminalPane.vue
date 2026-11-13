@@ -165,7 +165,7 @@ let selectionDisposable: IDisposable | undefined
 let selectionRenderDisposable: IDisposable | undefined
 let terminalSelectionNormalizing = false
 let terminalOutputBuffer = ''
-const internalOutputFilter = createInternalTerminalOutputFilter()
+const internalOutputFilter = createInternalTerminalOutputFilter({ debug: () => props.terminalSettings?.debugMode === true })
 const sentinelDisplayFilter = createSentinelDisplayFilter()
 let internalOutputTimer: number | undefined
 let terminalProtocolSequence = 0
@@ -203,6 +203,9 @@ const { agentCaptureMode, agentCapturePreparing, agentCaptureSupported, ensureAg
   finishInternalOutput: intent => finishFileInput(intent.terminalInput),
   prepareProbe: async probe => commandPolicy.prepareTerminalProbe(await commandPolicy.commandExecutionTarget(sessionId), probe),
   cancelIntent: intent => commandPolicy.cancelCommandIntent(intent.reference),
+  // Queue behind the command dispatch, bound to this session and never synced
+  // to other terminals. The capture keeps observing actual completion.
+  interruptCommand: () => terminalBackendInputReady() && enqueueTerminalInput('\x03', 'direct'),
   enableShellIntegration: () => shellIntegrationInjectionEnabled() && activeSessionProfile.value?.shellIntegration !== false
 })
 let pendingInputControlSequence = ''
@@ -2555,8 +2558,10 @@ function writeFileInput(data: string): Promise<boolean> {
   if (props.agentControlled) return Promise.resolve(false)
   if (!data || !terminalBackendInputReady() || commandExecutionReadiness() !== 'ready') return Promise.resolve(false)
   const timeoutMs = data.includes('AI_TERM_IDENT_BEGIN_') ? 12_000 : 60_000
+  const wrapped = `${wrapInternalTerminalCommand(data)}\n`
   const token = internalOutputFilter.begin(data, {
     debug: props.terminalSettings?.debugMode === true,
+    echo: wrapped,
     timeoutMs,
     restorePrefix: internalPromptRestorePrefix()
   })
@@ -2567,7 +2572,7 @@ function writeFileInput(data: string): Promise<boolean> {
   closeCompletion()
   return new Promise((resolve, reject) => {
     const fail = (error: unknown) => { finishFileInput(data); reject(error) }
-    const dispatched = token ? `${wrapInternalTerminalCommand(data)}\n` : data
+    const dispatched = token ? wrapped : data
     if (!enqueueTerminalInput(dispatched, 'direct', [() => resolve(true)], [fail])) {
       finishFileInput(data)
       resolve(false)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { canGrantExactCommand } from '../../../domain/agentAutoApprove'
+import { commandInterruptionSummary, commandWaitHint } from '../../../domain/agentCommandWait'
 import { computed, ref, watch } from 'vue'
 import type { AgentStep, AgentStepProposal, AgentTimeoutInfo } from '../../../domain/agent'
 import { formatAiDuration } from '../../../domain/aiTiming'
@@ -38,6 +39,7 @@ const emit = defineEmits<{
   stop: []
   wait: []
   timeoutStop: []
+  interrupt: []
   retry: []
   restore: [changeId: string, path: string]
   focusTerminal: []
@@ -46,9 +48,12 @@ const emit = defineEmits<{
 const { copyFeedback, copyText } = useCopyFeedback()
 const explicitlyExpanded = ref<boolean | null>(null)
 const isSsh = computed(() => props.step.toolName === 'run_ssh_task')
+const waitHint = computed(() => commandWaitHint(props.step.command))
+const isInterrupted = computed(() => props.step.status === 'completed' && Boolean(props.step.interruption))
+const interruptionSummary = computed(() => props.step.interruption ? commandInterruptionSummary(props.step.interruption) : '')
 const resolvedTargetLabel = computed(() => props.step.sshTarget ? sshTaskTargetLabel(props.step.sshTarget) : props.targetLabel)
 const nonzeroExit = computed(() => Boolean(props.step.sshResult?.exitSignal) || (props.step.exitCode !== undefined && props.step.exitCode !== 0))
-const isFailed = computed(() => props.step.status === 'failed' || (props.step.status === 'completed' && nonzeroExit.value))
+const isFailed = computed(() => props.step.status === 'failed' || (props.step.status === 'completed' && nonzeroExit.value && !isInterrupted.value))
 const didNotStart = computed(() => props.step.executionPhase === 'not-started')
 const stoppedWhileWaiting = computed(() => props.observationStopped && (props.step.status === 'running' || props.step.status === 'timeout' || props.step.status === 'pending'))
 const resultUnknown = computed(() => props.step.status === 'failed' && !didNotStart.value && props.step.executionPhase !== 'finished' && props.step.exitCode === undefined)
@@ -56,17 +61,19 @@ const needsDecision = computed(() => (props.awaitingApproval || props.awaitingTi
 const isBusy = computed(() => (props.step.status === 'running' || props.approvalSaving) && !needsDecision.value && !props.observationStopped)
 const canCollapse = computed(() => !props.awaitingApproval && !props.awaitingTimeout && (stoppedWhileWaiting.value || (props.step.status !== 'running' && props.step.status !== 'pending')))
 const collapsed = computed(() => canCollapse.value && (explicitlyExpanded.value === null
-  ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)
+  ? props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value && !isInterrupted.value)
   : !explicitlyExpanded.value))
 const compactSummary = computed(() => collapsed.value && (props.step.status === 'skipped' || (props.step.status === 'completed' && !nonzeroExit.value)))
-const compactRow = computed(() => canCollapse.value && props.step.status === 'completed' && !nonzeroExit.value)
+const compactRow = computed(() => canCollapse.value && props.step.status === 'completed' && !nonzeroExit.value && !isInterrupted.value)
 const statusLabel = computed(() => {
   if (props.approvalSaving) return '正在保存授权'
+  if (props.step.interruptRequested) return '正在中断命令'
   if (stoppedWhileWaiting.value) return didNotStart.value || props.step.status === 'pending' ? '未执行' : '已停止等待'
   if (props.awaitingTimeout) return '等待超时处理'
   if (props.awaitingApproval) return '等待确认'
   if (props.step.status === 'failed' && didNotStart.value) return '未执行'
   if (resultUnknown.value) return '结果未知'
+  if (isInterrupted.value) return '已中断'
   if (isFailed.value) return '执行异常'
   return { pending: '待执行', running: '执行中', completed: '已完成', skipped: '已跳过', timeout: '等待已停止', failed: '执行异常' }[props.step.status]
 })
@@ -74,6 +81,7 @@ const statusIcon = computed(() => {
   if (stoppedWhileWaiting.value) return 'history'
   if (props.approvalSaving) return 'refresh'
   if (needsDecision.value) return 'history'
+  if (isInterrupted.value) return 'stop'
   if (isFailed.value) return 'alert'
   if (props.step.status === 'running') return 'refresh'
   if (props.step.status === 'timeout') return 'history'
@@ -138,7 +146,7 @@ function toggleDetails() {
 <template>
   <AgentFileStepCard v-if="step.toolName === 'read_file' || step.toolName === 'list_directory'" :step="step" :awaiting-approval="awaitingApproval" :approval-saving="approvalSaving" :now-ms="nowMs" :target-label="targetLabel" :observation-stopped="observationStopped" :can-retry="canRetry" :retry-disabled-reason="retryDisabledReason" @execute="emit('execute')" @skip="emit('skip')" @stop="emit('stop')" @retry="emit('retry')" />
   <AgentFileEditStepCard v-else-if="step.fileEdits" :step="step" :awaiting-approval="awaitingApproval" :approval-saving="approvalSaving" :target-label="targetLabel" :observation-stopped="observationStopped" :can-restore="canRestore" @execute="emit('execute')" @skip="emit('skip')" @stop="emit('stop')" @restore="(changeId, path) => emit('restore', changeId, path)" />
-  <article v-else class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit, 'is-compact': compactRow, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
+  <article v-else class="tool-step" :class="{ 'is-error': isFailed, 'is-running': isBusy, 'is-awaiting-decision': needsDecision, 'is-success': step.status === 'completed' && !nonzeroExit && !isInterrupted, 'is-compact': compactRow, 'is-collapsed': collapsed }" :data-step-id="step.id" :data-status="step.status" :data-execution-phase="step.executionPhase">
     <header class="tool-step-header">
       <button v-if="canCollapse" type="button" class="tool-step-toggle" :class="{ 'is-compact': compactRow }" :aria-expanded="!collapsed" :aria-label="collapsed ? '展开执行步骤' : '收起执行步骤'" :title="`${step.reason || '终端命令'} · ${statusLabel}`" @click="toggleDetails">
         <UiIcon :name="statusIcon" size="15" class="tool-step-state-icon" />
@@ -163,6 +171,15 @@ function toggleDetails() {
       <SshTaskContext v-if="isSsh && step.sshRequest && step.sshTarget" :request="step.sshRequest" :target="step.sshTarget" :environment="step.sshEnvironment" />
       <div v-else-if="resolvedTargetLabel && (awaitingApproval || awaitingTimeout)" class="tool-step-target" :title="resolvedTargetLabel"><UiIcon name="terminal" size="13" /><span>执行目标 · {{ resolvedTargetLabel }}</span></div>
       <div v-if="isSsh && step.status === 'running' && !observationStopped" class="tool-step-decision"><button type="button" class="tool-step-action" aria-label="停止观察独立任务" @click="emit('stop')">停止观察</button><p class="tool-step-timeout-hint">停止观察不代表远端进程已终止。</p></div>
+      <div v-if="!isSsh && step.status === 'running' && !observationStopped && !awaitingTimeout" class="tool-step-decision">
+        <p v-if="step.interruptRequested || waitHint" class="tool-step-timeout-hint">{{ step.interruptRequested ? '已发送 Ctrl+C，正在确认命令是否结束。' : waitHint }}</p>
+        <div class="tool-step-actions">
+          <button v-if="step.canInterrupt || step.interruptRequested" type="button" class="tool-step-action" :disabled="step.interruptRequested" title="发送 Ctrl+C，把等待时长和已有输出交给 AI，确认结束后继续原任务" @click="emit('interrupt')"><UiIcon name="stop" size="12" />中断并继续</button>
+          <button type="button" class="tool-step-action" title="结束 AI 任务并保留已有输出；命令可能仍在终端运行" @click="emit('stop')">停止等待</button>
+          <button type="button" class="tool-step-action" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
+        </div>
+      </div>
+      <p v-if="isInterrupted" class="tool-step-target">{{ interruptionSummary }}</p>
       <p v-if="step.sshResult?.truncated" class="tool-step-target">输出超过 64 KiB，已截断显示；通道仍持续读取至任务结束。</p>
       <div v-if="riskLabels.length || step.sensitive" class="tool-step-risk-row">
         <span v-for="label in riskLabels" :key="label" class="tool-step-risk" :class="{ 'is-high': hasHighRisk }"><UiIcon name="shield" size="12" />{{ label }}</span>
@@ -196,9 +213,11 @@ function toggleDetails() {
       </div>
 
       <div v-if="awaitingTimeout" class="tool-step-decision">
+        <p v-if="waitHint" class="tool-step-timeout-hint">{{ waitHint }}</p>
         <p v-if="timeoutInfo?.hint" class="tool-step-timeout-hint">{{ timeoutInfo.hint }}</p>
         <div class="tool-step-actions">
           <button type="button" class="tool-step-action is-primary" @click="emit('wait')"><UiIcon name="history" size="13" />继续等待</button>
+          <button v-if="step.canInterrupt" type="button" class="tool-step-action" @click="emit('interrupt')"><UiIcon name="stop" size="12" />中断并继续</button>
           <button type="button" class="tool-step-action" @click="emit('timeoutStop')"><UiIcon name="stop" size="12" />停止等待</button>
           <button type="button" class="tool-step-action" @click="emit('focusTerminal')"><UiIcon name="terminal" size="13" />查看终端</button>
         </div>

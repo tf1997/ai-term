@@ -1,6 +1,8 @@
 export interface InternalTerminalOutputOptions {
-  /** Capture the setting when the command is sent; later commands can use a different value. */
+  /** Initial setting; a live debug getter can override it for subsequent output. */
   debug: boolean
+  /** Actual PTY input when a legacy operation is wrapped after registration. */
+  echo?: string
   timeoutMs?: number
   /** Replace the old idle prompt when the hidden command's next prompt arrives. */
   restorePrefix?: string
@@ -17,13 +19,14 @@ export interface InternalTerminalOutputFilter {
 
 type Markers = { token: string; end: string; kind: 'IDENT' | 'FILE' | 'PROBE' }
 type Operation = Markers & {
+  echo: string
   deadline: number
   restorePrefix: string
   began: boolean
   hidden: boolean
   late: boolean
 }
-type RetiredOperation = Markers & { deadline: number; hideBody: boolean }
+type RetiredOperation = Markers & { echo: string; deadline: number; hideBody: boolean; restorePrefix: string }
 
 const RESTORE_PROMPT = '\r\x1b[2K'
 const LATE_OUTPUT_GRACE_MS = 2_000
@@ -31,6 +34,7 @@ const MAX_TIMEOUT_MS = 65_000
 const MAX_RETIRED_OPERATIONS = 8
 const MAX_MARKER_LINE_CHARS = 512
 const MAX_LOOKAHEAD_CHARS = 2_048
+const MAX_ECHO_CHARS = 16_384
 
 function markersFor(commandOrToken: string): Markers | undefined {
   const match = /AI_TERM_(IDENT|FILE|PROBE)_BEGIN_([A-Za-z0-9_]{1,160})(?![A-Za-z0-9_])/.exec(commandOrToken)
@@ -85,11 +89,14 @@ function createControlSequenceReader() {
  * Deadlines and fixed lookahead bounds guarantee a missing marker cannot hide output forever.
  */
 export function createInternalTerminalOutputFilter(
-  { now = Date.now }: { now?: () => number } = {},
+  { now = Date.now, debug }: { now?: () => number; debug?: () => boolean } = {},
 ): InternalTerminalOutputFilter {
+  let initialDebug = false
+  const debugEnabled = () => debug?.() ?? initialDebug
   let operation: Operation | undefined
   let retired: RetiredOperation[] = []
   let line = ''
+  let echoCarriageReturn = false
   let longLine = false
   let lookahead = ''
   let ordinaryLine = false
@@ -102,6 +109,7 @@ export function createInternalTerminalOutputFilter(
 
   function resetLine() {
     line = ''
+    echoCarriageReturn = false
     longLine = false
     lookahead = ''
     ordinaryLine = false
@@ -110,7 +118,7 @@ export function createInternalTerminalOutputFilter(
   function retire(current: Operation, at: number, { complete = false, preserveControls = false } = {}) {
     // The original idle prompt can be replaced only once. A late response may arrive
     // after visible output has moved the cursor, so it must never replay that movement.
-    if (current.hidden && !current.late) {
+    if (current.hidden && !current.late && !debugEnabled()) {
       restore = current.restorePrefix
       restoreAfterEnd = complete
     }
@@ -118,7 +126,8 @@ export function createInternalTerminalOutputFilter(
     const deadline = current.late ? current.deadline : Math.min(at, current.deadline) + LATE_OUTPUT_GRACE_MS
     retired = retired.filter(item => item.token !== current.token && item.deadline > at)
     if (deadline > at) {
-      retired.push({ token: current.token, end: current.end, kind: current.kind, deadline, hideBody: true })
+      retired.push({ token: current.token, end: current.end, kind: current.kind, echo: current.echo, deadline, hideBody: true,
+        restorePrefix: !current.hidden && !current.late && !debugEnabled() ? current.restorePrefix : '' })
       retired = retired.slice(-MAX_RETIRED_OPERATIONS)
     }
     operation = undefined
@@ -144,6 +153,7 @@ export function createInternalTerminalOutputFilter(
   }
 
   function reset() {
+    initialDebug = false
     operation = undefined
     retired = []
     restore = ''
@@ -161,8 +171,8 @@ export function createInternalTerminalOutputFilter(
       if (!markers || !new RegExp(`${markers.end}(?![A-Za-z0-9_])`).test(command)) return undefined
       if (options.debug) {
         reset()
-        return markers.token
       }
+      initialDebug = options.debug
       const at = now()
       expire(at)
       if (operation) retire(operation, at)
@@ -176,8 +186,15 @@ export function createInternalTerminalOutputFilter(
       const timeout = options.timeoutMs === undefined || !Number.isFinite(options.timeoutMs)
         ? defaultTimeout
         : Math.max(1, Math.min(options.timeoutMs, MAX_TIMEOUT_MS))
+      const echoControls = createControlSequenceReader()
+      let echo = ''
+      for (const character of options.echo ?? command) {
+        echo += echoControls.read(character)
+        if (echo.length > MAX_ECHO_CHARS) { echo = ''; break }
+      }
       operation = {
         ...markers,
+        echo: echo.trim(),
         deadline: at + timeout,
         restorePrefix: options.restorePrefix ?? RESTORE_PROMPT,
         began: false,
@@ -187,11 +204,18 @@ export function createInternalTerminalOutputFilter(
       return markers.token
     },
     push(chunk) {
+      const showDebug = debugEnabled()
+      if (showDebug) {
+        restore = ''; restoreAfterEnd = false
+        retired.forEach(item => { item.restorePrefix = '' })
+      }
       const at = now()
       expire(at)
       const visible: string[] = []
       function emit(value: string) {
         if (!value) return
+        // Any visible output invalidates a retired operation's old cursor position.
+        retired.forEach(item => { item.restorePrefix = '' })
         if (restore) { visible.push(restore); restore = ''; restoreAfterEnd = false }
         visible.push(value)
       }
@@ -199,7 +223,7 @@ export function createInternalTerminalOutputFilter(
       deferredVisible = ''
       if (!operation && !retired.length && !closingLineDeadline) {
         emit(chunk)
-        return visible.join('')
+        return showDebug ? chunk : visible.join('')
       }
 
       for (const character of chunk) {
@@ -222,7 +246,11 @@ export function createInternalTerminalOutputFilter(
           continue
         }
         if (operation) {
-          operation.hidden = true
+          if (showDebug) {
+            // Once any diagnostic text was visible, never move back to the old
+            // prompt and erase it if the setting changes before the next chunk.
+            operation.restorePrefix = '\r\n'
+          } else operation.hidden = true
           if (text === '\n') {
             const marker = longLine ? '' : line.trimEnd()
             if (marker === operation.token) operation.began = true
@@ -235,21 +263,35 @@ export function createInternalTerminalOutputFilter(
           continue
         }
 
-        // After cancellation or completion, only exact recently owned standalone markers
-        // can start another hidden span. Other terminal text is emitted as soon as it differs.
+        // Cancellation may precede the PTY echo. Match the registered input too;
+        // otherwise its wrapper leaks even though the subsequent frame is hidden.
         if (ordinaryLine) {
           emit(character)
           if (text === '\n') resetLine()
           continue
         }
         lookahead += character
+        // Readline pads the last cell before wrapping with " \r". Wait for the
+        // following printable character so actual spaces before CRLF survive.
+        if (echoCarriageReturn && text) {
+          if (text !== '\n' && line.endsWith(' ')) line = line.slice(0, -1)
+          echoCarriageReturn = false
+        }
+        if (character === '\r' && line.endsWith(' ')) echoCarriageReturn = true
         if (text === '\n') {
           const marker = line.trimEnd()
           const match = retired.find(item => item.token === marker || item.end === marker)
+          const echoMatch = retired.find(item => item.echo && item.echo === line.trim())
           if (match) {
             if (match.token === marker && match.hideBody) {
               operation = { ...match, restorePrefix: '', began: true, hidden: true, late: true }
             }
+          } else if (echoMatch) {
+            // Suppress only a complete known echo, never a similar user command.
+            if (echoMatch.restorePrefix) { restore = echoMatch.restorePrefix; echoMatch.restorePrefix = '' }
+          } else if (line.trim() && retired.some(item => item.echo.startsWith(line.trimStart() + '\n'))) {
+            line += '\n'
+            continue
           } else emit(lookahead)
           resetLine()
           continue
@@ -258,11 +300,21 @@ export function createInternalTerminalOutputFilter(
         const possible = retired.some(item => [item.token, item.end].some(marker =>
           marker.startsWith(line) || (line.startsWith(marker) && /^[\t ]*$/.test(line.slice(marker.length))),
         ))
-        if (!possible || lookahead.length > MAX_LOOKAHEAD_CHARS) {
+        const echoCandidate = line.trimStart()
+        const possibleEcho = retired.some(item => item.echo && (item.echo.startsWith(echoCandidate)
+          || (echoCandidate.endsWith(' ') && item.echo.startsWith(echoCandidate.slice(0, -1)))
+          || (echoCandidate.startsWith(item.echo) && !echoCandidate.slice(item.echo.length).trim())))
+        if ((!possible && !possibleEcho) || lookahead.length > (possibleEcho ? MAX_ECHO_CHARS : MAX_LOOKAHEAD_CHARS)) {
           emit(lookahead)
           resetLine()
           ordinaryLine = true
         }
+      }
+      if (showDebug) {
+        // These bytes have already been shown. Keep comparison state, but never
+        // replay a buffered prefix if debug is disabled between two chunks.
+        lookahead = ''; closingLookahead = ''
+        return chunk
       }
       return visible.join('')
     },
@@ -286,7 +338,7 @@ export function createInternalTerminalOutputFilter(
       }
       // User input owns the PTY now. Known late marker lines can still be omitted,
       // but their bodies may contain user output and must not start a hidden span.
-      retired.forEach(item => { item.hideBody = false })
+      retired.forEach(item => { item.hideBody = false; item.echo = ''; item.restorePrefix = '' })
       // A completed response still owes its next prompt one replacement. Cancellation
       // leaves the old prompt on screen, so user echo must continue there without erasing it.
       if (!restoreAfterEnd) restore = ''
@@ -298,7 +350,7 @@ export function createInternalTerminalOutputFilter(
     reset,
     active() {
       expire(now())
-      return Boolean(operation)
+      return Boolean(operation) && !debugEnabled()
     },
   }
 }

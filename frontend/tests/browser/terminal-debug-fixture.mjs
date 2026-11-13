@@ -135,8 +135,11 @@ export function installTerminalDebugFixture() {
       const source = internal ? `fixture ${payload.probe.kind}` : payload.source
       const kind = internal ? payload.probe.kind === 'bracketed-capture' ? 'bracketed' : 'sentinel' : (payload.capture ?? 'none')
       const probeKind = payload.probe?.kind
+      const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`
+      const guard = `if [ -n "\${BASH_VERSION-}" ]; then case "$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)" in *'AI_TERM_INTERNAL_${nonce}'*) builtin history -d "$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')" 2>/dev/null || : ;; esac; fi`
+      const body = `printf '\\nAI_TERM_PROBE_BEGIN_${nonce}\\n'; printf '\\n__AI_TERM_%s__\\n' ${nonce}B; ${source}; printf '\\n__AI_TERM_%s__:%d\\n' ${nonce}E $?; printf '\\nAI_TERM_PROBE_END_${nonce}\\n'`
       let terminalInput = internal
-        ? ` : 'AI_TERM_INTERNAL_${nonce}'; printf 'AI_TERM_PROBE_BEGIN_${nonce}'; printf '__AI_TERM_%s__' ${nonce}B; ${source}; printf '__AI_TERM_%s__:%d' ${nonce}E $?; printf 'AI_TERM_PROBE_END_${nonce}'\r`
+        ? ` ${guard}; eval ${quote(body)}\r`
         : `${source}\r`
       if (kind === 'bracketed') terminalInput = `\x1b[200~${terminalInput.replace(/\r$/, '')}\x1b[201~\r`
       const intent = { reference: { id: nonce, target: payload.expected, operation: 'command', policyVersion: 'fixture' }, source, operation: 'command',

@@ -110,6 +110,10 @@ pub struct AnalysisIssue {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandAnalysis {
+    /// Executable command nodes from the fully allowed syntax tree. This is
+    /// allowlist input, never separate execution authority or a partial verdict.
+    #[serde(default)]
+    pub commands: Vec<String>,
     pub analysis_status: AnalysisStatus,
     pub decision: Decision,
     pub risks: Vec<CommandRisk>,

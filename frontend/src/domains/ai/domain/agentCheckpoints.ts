@@ -10,6 +10,7 @@ export interface AgentUserInput { messageId: string; question: string; text: str
 /** Memory-only ownership; never a command or file approval. */
 export interface AgentRunLease { runId: string; token: string; sequence: number }
 export interface AgentCheckpointStep {
+  interruption?: AgentStep['interruption'] | null
   scriptSource?: CommandScriptSource | null
   executionTarget?: ExecutionTarget | null
   recoveryInspection?: boolean
@@ -101,6 +102,7 @@ export function checkpointState(state: AgentRunState): AgentCheckpointState {
   return {
     status: state.status,
     steps: state.steps.map(step => ({
+      interruption: step.interruption ? { ...step.interruption } : undefined,
       id: step.id, toolName: step.toolName ?? 'run_command', command: step.sensitive ? '[敏感命令未存储]' : step.command,
       reason: step.sensitive ? '[敏感步骤说明未存储]' : step.reason, sensitive: step.sensitive, status: step.status, executionPhase: step.executionPhase ?? 'not-started',
       output: step.sensitive ? null : step.output ?? null, outputTruncated: step.outputTruncated ?? false, exitCode: step.exitCode ?? null,
@@ -122,6 +124,7 @@ export function checkpointState(state: AgentRunState): AgentCheckpointState {
 
 export function recoveredAgentSteps(record: AgentCheckpoint): AgentStep[] {
   return record.state.steps.map(saved => ({
+    interruption: saved.interruption ?? undefined,
     id: saved.id, toolName: saved.toolName, command: saved.command, reason: saved.reason, sensitive: saved.sensitive, risks: [],
     status: ['pending', 'running', 'timeout'].includes(saved.status) ? 'failed' : saved.status,
     executionPhase: saved.executionPhase, exitCode: saved.exitCode ?? undefined,

@@ -43,6 +43,7 @@ export function createDeferredAgentCommand(
   return {
     result,
     peekOutput: () => active?.peekOutput() ?? '',
+    interrupt: () => !cancelled && (active?.interrupt?.() ?? false),
     cancel: () => {
       cancelled = true
       active?.cancel()

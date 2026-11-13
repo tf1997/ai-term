@@ -73,6 +73,8 @@ export interface AgentCommandHandle {
   /** 当前已捕获的输出(截断规则同最终输出),用于超时时上报部分输出。 */
   peekOutput(): string
   cancel(): void
+  /** Send Ctrl+C to this capture's terminal only; true means queued, not exited. */
+  interrupt?(): boolean
 }
 
 export interface AgentCommandRunOptions {
@@ -104,7 +106,17 @@ export type AgentErrorKind = 'model' | 'tool' | 'protocol'
 
 export type AgentExecutionPhase = 'not-started' | 'dispatching' | 'running' | 'finished'
 
+/** Observations frozen before sending Ctrl+C, independent of the exit result. */
+export interface AgentCommandInterruption {
+  requestedBy: 'user'
+  waitedMs: number
+  silentMs: number
+  hadOutput: boolean
+  outputGrowing: boolean
+}
+
 export interface AgentStep {
+  interruption?: AgentCommandInterruption
   checkpointHistory?: AgentCheckpointStep
   fileAbsence?: { path: string; resolvedPath: string; environmentScope: string }
   /** Missing on old records means run_command. File steps never execute command. */
@@ -145,6 +157,9 @@ export interface AgentStep {
    * 仅 running 期间有值,步骤结算时清除,因此不会进入持久化 payload。
    */
   deadlineAt?: number
+  /** Runtime controls, cleared when observation ends. */
+  canInterrupt?: boolean
+  interruptRequested?: boolean
 }
 
 export type AgentRunStatus =

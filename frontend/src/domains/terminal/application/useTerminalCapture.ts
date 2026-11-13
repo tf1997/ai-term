@@ -19,11 +19,12 @@ interface TerminalCaptureOptions {
   finishInternalOutput?: (intent: CommandIntent) => void
   prepareProbe?: (probe: TerminalProbe) => Promise<CommandIntent>
   cancelIntent?: (intent: CommandIntent) => Promise<unknown>
+  interruptCommand?: () => boolean
   enableShellIntegration?: () => boolean
   bracketedPasteEnabled?: () => boolean
 }
 
-export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand, dispatchIntent, finishInternalOutput, prepareProbe, cancelIntent, enableShellIntegration, bracketedPasteEnabled }: TerminalCaptureOptions) {
+export function useTerminalCapture({ getSessionId, getShellIntegration, commandExecutionReadiness, executeCommand, dispatchIntent, finishInternalOutput, prepareProbe, cancelIntent, interruptCommand, enableShellIntegration, bracketedPasteEnabled }: TerminalCaptureOptions) {
   let disposed = false
   let activeAgentCaptureAbort: ((reason: string) => void) | undefined
 
@@ -131,6 +132,8 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     if (!tracker) return agentDispatchFailure('终端未启用 shell integration')
     if (activeAgentCaptureAbort) return agentDispatchFailure('已有 Agent 命令正在等待终端结果')
     const dispatchedAt = Date.now()
+    const boundSession = getSessionId()
+    let interrupted = false
     let settled = false
     let abortCapture!: (reason: string) => void
     let resolveResult!: (result: AgentCommandResult) => void
@@ -188,6 +191,11 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     return {
       result,
       peekOutput: () => (settled ? '' : armed.peekOutput()),
+      interrupt: () => {
+        if (settled || disposed || interrupted || getSessionId() !== boundSession) return false
+        interrupted = interruptCommand?.() ?? false
+        return interrupted
+      },
       cancel: () => {
         if (settled) return
         settled = true
@@ -223,6 +231,8 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     const nonce = options?.intent?.capture.nonce ?? createSentinelNonce()
     const wrapped = wrapCommandWithSentinel(command, nonce)
     const dispatchedAt = Date.now()
+    const boundSession = getSessionId()
+    let interrupted = false
     let settled = false
     let abortCapture!: (reason: string) => void
     let scanner: SentinelScanner | undefined
@@ -301,6 +311,11 @@ export function useTerminalCapture({ getSessionId, getShellIntegration, commandE
     return {
       result,
       peekOutput: () => (settled ? '' : (scanner?.peekOutput() ?? '')),
+      interrupt: () => {
+        if (settled || disposed || interrupted || options?.intent?.capture.internal || getSessionId() !== boundSession) return false
+        interrupted = interruptCommand?.() ?? false
+        return interrupted
+      },
       cancel: () => {
         if (settled) return
         settled = true

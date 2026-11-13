@@ -607,6 +607,7 @@ pub(super) fn analyze_words(analyzer: &mut Analyzer<'_>, words: &[Word], depth: 
             | "ls"
             | "cat"
             | "head"
+            | "tail"
             | "stat"
             | "file"
             | "wc"

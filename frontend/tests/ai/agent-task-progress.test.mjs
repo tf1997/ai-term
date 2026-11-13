@@ -11,6 +11,14 @@ const plan = (version, status, stepIds = []) => JSON.stringify({ expectedVersion
 const tool = (id, name, args) => ({ id, name, arguments: typeof args === 'string' ? args : JSON.stringify(args) })
 const response = calls => ({ text: calls.length ? '' : '模型已结束回复', toolCalls: calls, contextCompressed: false, contextChars: 0 })
 
+test('中断命令即使被兜底为 exit 0，也不能当作检查成功', () => {
+  const interrupted = step('health', { interruption: { requestedBy: 'user', waitedMs: 120000, silentMs: 110000, hadOutput: true, outputGrowing: false } })
+  assert.throws(() => updateAgentPlan(plan(0, 'completed', ['health']), undefined, [interrupted]), /完成计划项需要/)
+  const records = recordAgentVerification(verification('health'), [], [interrupted])
+  assert.equal(records[0].status, 'unavailable')
+  assert.match(records[0].actual, /用户中断/)
+})
+
 test('zero reload exit followed by failed health response reports verification failure, even when model finishes', async () => {
   const replies = [
     [tool('plan-1', 'update_plan', plan(0, 'in-progress'))],

@@ -5,6 +5,7 @@ import {
   canGrantExactCommand,
   isSuffixSafeForSentinel,
   classifyForAutoExec,
+  classifyIntentForAutoExec,
   suggestPatternForCommand,
   validateAllowlistPattern
 } from "../../src/domains/ai/domain/agentAutoApprove"
@@ -268,7 +269,7 @@ test('suggestedPatterns 覆盖多段命令的每一段', () => {
   // 回归:只建议第一段会让「总是允许」点了也不生效
   const piped = classify("memory_pressure | tail -n 8; printf 'x'")
   assert.equal(piped.eligible, false)
-  assert.deepEqual(piped.suggestedPatterns, ['memory_pressure', 'printf'], 'tail 已被内置集覆盖,不再列出')
+  assert.deepEqual(piped.suggestedPatterns, ['memory_pressure'], 'tail 和 printf 已被内置集覆盖,不再列出')
 
   // 补齐全部建议后应当放行
   const allowed = classifyForAutoExec("memory_pressure | tail -n 8; printf 'x'", {
@@ -367,10 +368,45 @@ test('内置集数据完整性', () => {
     assert.equal(validateAllowlistPattern(entry.pattern).ok, true, `${entry.pattern} 应通过同源校验`)
   }
   const firstTokens = new Set(BUILTIN_READONLY_COMMANDS.map((entry) => entry.pattern.split(' ')[0]))
-  for (const excluded of ['less', 'more', 'top', 'watch', 'curl', 'wget', 'echo', 'cd']) {
+  for (const excluded of ['less', 'more', 'top', 'watch', 'curl', 'wget', 'cd']) {
     assert.equal(firstTokens.has(excluded), false, `${excluded} 刻意不收录`)
   }
   // 条目 pattern 互不重复
   const patterns = BUILTIN_READONLY_COMMANDS.map((entry) => entry.pattern)
   assert.equal(new Set(patterns).size, patterns.length)
+})
+
+test('只读命令的管道、条件执行与兜底分支逐段自动放行', () => {
+  for (const command of [
+    'grep error app.log || true',
+    'tail -n 100 app.log 2>/dev/null || echo missing',
+    "pwd && ls | head -n 20 || printf '%s\\n' unavailable",
+    'false || true && :',
+    "echo 'rm -rf /tmp/example || $(reboot)'"
+  ]) assert.equal(classify(command).eligible, true, command)
+  for (const command of [
+    'ls || rm -rf /tmp/data', 'false && reboot || true',
+    'tail -n 10 app.log || echo missing > result.txt',
+    "ls || printf -v PATH '%s' /tmp", "printf '%n' state || true",
+    'echo $(reboot) || true', "sh -c 'rm -rf /tmp/data' || true"
+  ]) assert.equal(classify(command).eligible, false, command)
+  assert.equal(classifyForAutoExec('ls || true', { userPatterns: [], includeBuiltin: false }).eligible, false)
+})
+
+test('后端完整语法树支持嵌套只读组合，不把部分分析当作放行依据', () => {
+  const intent = {
+    source: '(grep error app.log || true) | head -n 20',
+    capture: { kind: 'sentinel', internal: false },
+    analysis: { decision: 'allow', analysisStatus: 'complete', risks: [], unknownReasons: [], commands: ['grep error app.log', 'true', 'head -n 20'] }
+  }
+  const sources = { userPatterns: [], includeBuiltin: true }
+  assert.equal(classifyIntentForAutoExec(intent, sources).eligible, true)
+  assert.equal(classifyIntentForAutoExec(intent, { ...sources, includeBuiltin: false }).eligible, false)
+  for (const change of [
+    { decision: 'ask' }, { decision: 'deny' }, { analysisStatus: 'unknown' },
+    { risks: [{ kind: 'edit' }] }, { unknownReasons: [{ code: 'dynamic-word' }] },
+    { commands: ['grep error app.log', 'rm -rf /tmp/data', 'head -n 20'] },
+    { commands: undefined }
+  ]) assert.equal(classifyIntentForAutoExec({ ...intent, analysis: { ...intent.analysis, ...change } }, sources).eligible, false, JSON.stringify(change))
+  assert.equal(classifyIntentForAutoExec({ ...intent, sourceSensitive: true }, sources).eligible, false)
 })

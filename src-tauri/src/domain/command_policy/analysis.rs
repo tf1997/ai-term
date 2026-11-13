@@ -54,6 +54,7 @@ pub fn analyze_command(
     let mut analyzer = Analyzer {
         root: source,
         result: CommandAnalysis {
+            commands: Vec::new(),
             analysis_status: AnalysisStatus::Complete,
             decision: Decision::Allow,
             risks: Vec::new(),
@@ -126,6 +127,11 @@ pub fn analyze_command(
             "命令分析超时，结果不完整。",
             SourceRange::new(source, 0, source.len()),
         );
+    }
+    if analyzer.result.decision != Decision::Allow
+        || analyzer.result.analysis_status != AnalysisStatus::Complete
+    {
+        analyzer.result.commands.clear();
     }
     analyzer.result
 }
@@ -253,6 +259,7 @@ impl Analyzer<'_> {
         }
         match node.kind() {
             "command" => {
+                self.result.commands.push(source[node.byte_range()].into());
                 let mut parts = Vec::new();
                 if let Some(name) = node.child_by_field_name("name") {
                     parts.push(name);

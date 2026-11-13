@@ -68,6 +68,8 @@ pub struct PlanUserConfirmation {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentCheckpointStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interruption: Option<CommandInterruption>,
     #[serde(default)]
     pub script_source: Option<CommandScriptSource>,
     #[serde(default)]
@@ -88,6 +90,16 @@ pub struct AgentCheckpointStep {
     pub working_directory: Option<String>,
     pub file_read: Option<CheckpointFileRead>,
     pub file_edits: Vec<CheckpointFileEdit>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CommandInterruption {
+    pub requested_by: String,
+    pub waited_ms: u64,
+    pub silent_ms: u64,
+    pub had_output: bool,
+    pub output_growing: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -292,6 +304,13 @@ impl AgentCheckpointUpdate {
                 .contains(&step.status.as_str())
             {
                 bail!("检查点步骤类型或阶段无效")
+            }
+            if step.interruption.as_ref().is_some_and(|info| {
+                info.requested_by != "user"
+                    || info.silent_ms > info.waited_ms
+                    || (info.output_growing && !info.had_output)
+            }) {
+                bail!("命令中断记录无效")
             }
             if step.file_edits.len() > 8
                 || step.command.len() > 65536

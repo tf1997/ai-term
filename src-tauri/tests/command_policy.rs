@@ -147,6 +147,44 @@ fn literals_and_comments_are_data_not_nested_commands() {
 }
 
 #[test]
+fn safe_compound_commands_check_every_executable_branch() {
+    for command in [
+        "grep error app.log || true",
+        "tail -n 100 app.log 2>/dev/null || echo missing",
+        "pwd && ls | head -n 20 || printf '%s\\n' unavailable",
+        "false || true && :",
+        "(grep error app.log || true) | head -n 20",
+        "{ tail -n 100 app.log || echo missing; } | head -n 20",
+    ] {
+        let result = analyze(command);
+        assert_eq!(result.decision, Decision::Allow, "{command}: {result:?}");
+        assert_eq!(result.analysis_status, AnalysisStatus::Complete);
+    }
+    for command in [
+        "ls || rm -rf /tmp/data",
+        "false && reboot || true",
+        "tail -n 10 app.log || echo missing > result.txt",
+        "ls || printf -v PATH '%s' /tmp",
+        "echo $(reboot) || true",
+        "sh -c 'rm -rf /tmp/data' || true",
+        "tail /etc/shadow || true",
+        "(ls || rm -rf /tmp/data) | head",
+        "{ ls; }; function ls() { rm -rf /tmp/data; }; ls",
+    ] {
+        let result = analyze(command);
+        assert_ne!(result.decision, Decision::Allow, "{command}");
+        assert!(
+            result.commands.is_empty(),
+            "partial AST must not authorize: {command}"
+        );
+    }
+    assert_eq!(
+        analyze("(grep error app.log || true) | head -n 20").commands,
+        vec!["grep error app.log", "true", "head -n 20"]
+    );
+}
+
+#[test]
 fn nested_shell_risks_map_to_original_utf8_bytes_and_utf16_columns() {
     let source = "printf '中文😀'; bash -lc \"r'm' -rf /tmp/example\"";
     let result = analyze(source);

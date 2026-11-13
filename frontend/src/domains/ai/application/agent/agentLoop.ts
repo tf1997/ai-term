@@ -20,6 +20,7 @@ import type { AgentCheckpointBoundary } from '../../domain/agentCheckpoints'
 import type { AgentRecovery, AgentRecoveryReview, AgentRecoveryDecision, RecoveryResolution } from '../../domain/agentCheckpoints'
 import { agentRunContext } from '../../domain/agentCheckpoints'
 import { classifyForAutoExec } from '../../domain/agentAutoApprove'
+import { commandInterruptionFeedback } from '../../domain/agentCommandWait'
 
 // Agent 循环编排器(任务 F3)。纯逻辑模块,不依赖 Vue/Tauri,全部外部能力经 AgentLoopDeps 注入。
 // 状态机与数据流见 docs/ai-agent-mode-development.md 4.2/4.3,职责边界见 6.3;
@@ -82,10 +83,11 @@ export interface AgentLoopOptions {
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
+const COMMAND_INTERRUPT_GRACE_MS = 5_000
 // Each user-started continuation gets a fresh allowance; reaching it preserves
 // the checkpoint and requires an explicit continuation, never an automatic retry.
 export const AGENT_RUN_BUDGET = Object.freeze({ modelTurns: 64, toolCalls: 128 })
-/** 采样只比对字符串长度,周期可以密一些而不影响性能。 */
+/** Sample bounded output periodically without adding a timer per UI card. */
 const DEFAULT_OUTPUT_SAMPLE_INTERVAL_MS = 2_000
 /** 超时提示里展示的部分输出尾部长度。 */
 const TIMEOUT_PARTIAL_OUTPUT_CHARS = 500
@@ -121,15 +123,16 @@ function toolCallFromStep(step: AgentStep): AiToolCall {
 function rebuildTurnsFromSteps(steps: AgentStep[]): AiAgentTurn[] {
   return steps.flatMap((step): AiAgentTurn[] => {
     const toolCall = toolCallFromStep(step)
-    const content = step.toolName && isFileEditTool(step.toolName) ? fileEditModelResult(step.toolName, step.fileEdits ?? []) : step.checkpointHistory ? JSON.stringify({ historyOnly: true, status: step.status, executionPhase: step.executionPhase, exitCode: step.exitCode, outputExcerpt: step.sensitive ? undefined : step.output?.slice(-1000), fileRead: step.checkpointHistory.fileRead ? { pathExcerpt: step.checkpointHistory.fileRead.path.slice(0, 500), revision: step.checkpointHistory.fileRead.revision, complete: false, contextTruncated: true } : null, note: '中断前记录，不是待执行操作；不能重放未知效果的操作，文件正文也不是当前基线。' }) : step.sshResult ? sshTaskModelResult(step.sshResult, step.sshTarget) : step.toolName && isFileTool(step.toolName)
+    const content = step.toolName && isFileEditTool(step.toolName) ? fileEditModelResult(step.toolName, step.fileEdits ?? []) : step.checkpointHistory ? JSON.stringify({ historyOnly: true, status: step.status, executionPhase: step.executionPhase, exitCode: step.exitCode, interrupted: step.interruption ? true : undefined, interruption: step.interruption, outputExcerpt: step.sensitive ? undefined : step.output?.slice(-1000), fileRead: step.checkpointHistory.fileRead ? { pathExcerpt: step.checkpointHistory.fileRead.path.slice(0, 500), revision: step.checkpointHistory.fileRead.revision, complete: false, contextTruncated: true } : null, note: '中断前记录，不是待执行操作；不能重放未知效果的操作，文件正文也不是当前基线。' }) : step.sshResult ? sshTaskModelResult(step.sshResult, step.sshTarget) : step.toolName && isFileTool(step.toolName)
       ? step.fileResult ? fileToolModelResult(step.fileResult) : JSON.stringify({ status: step.status, error: step.failureReason })
       : step.status === 'skipped'
       ? JSON.stringify({ status: 'skipped_by_user' })
       : JSON.stringify({
           exitCode: step.exitCode,
           durationMs: step.durationMs,
-          truncated: false,
-          output: step.output ?? ''
+          truncated: step.outputTruncated ?? false,
+          output: step.output ?? '',
+          ...commandInterruptionFeedback(step.interruption)
         })
     return [
       { kind: 'assistant', text: '', toolCalls: [toolCall] },
@@ -181,6 +184,13 @@ function compressToolResultContent(content: string): string {
     return JSON.stringify(payload)
   }
   if (typeof record.status === 'string') payload.status = record.status
+  if (record.interrupted === true) {
+    payload.interrupted = true
+    payload.interruption = record.interruption
+    // Keep the interruption context even when old output is compacted.
+    if (typeof record.interruptionNote === 'string') payload.interruptionNote = record.interruptionNote
+    else if (typeof record.note === 'string') payload.interruptionNote = record.note
+  }
   if (typeof record.exitCode === 'number') payload.exitCode = record.exitCode
   if (typeof record.output === 'string') {
     if (record.output.length > COMPRESSED_OUTPUT_TAIL_CHARS) {
@@ -307,6 +317,7 @@ type CommandWaitOutcome =
   | { kind: 'error'; error: unknown }
   | { kind: 'timeout' }
   | { kind: 'stopped' }
+  | { kind: 'interrupt' }
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
@@ -321,7 +332,7 @@ export function runAgentTask(
   goal: string,
   deps: AgentLoopDeps,
   options: AgentLoopOptions = {}
-): { done: Promise<AgentRunState>; stop(): void } {
+): { done: Promise<AgentRunState>; stop(): void; interruptCommand(stepId: string): boolean } {
   // goal 由 callModel 的实现方在请求构造时携带(6.3),循环本身不消费
   void goal
 
@@ -366,6 +377,7 @@ export function runAgentTask(
   let finished = false
   let stopRequested = false
   let activeHandle: AgentCommandHandle | undefined
+  let activeInterrupt: ((stepId: string) => boolean) | undefined
   let activeFileOperation: FileOperation | undefined
   let activeFileEdits: FileEditProposal[] = []
   const liveFileBaselines = new Map<string, string>()
@@ -406,6 +418,8 @@ export function runAgentTask(
     for (const step of state.steps) {
       step.startedAt = undefined
       step.deadlineAt = undefined
+      step.canInterrupt = undefined
+      step.interruptRequested = undefined
       if (state.status === 'stopped' || state.status === 'error') for (const item of step.fileEdits ?? []) {
         if (item.status === 'review') item.status = 'not-started'
         if (item.status === 'dispatching') { item.status = 'unknown'; item.error = '观察结束，写入效果仍需核对'; step.status = 'failed' }
@@ -476,10 +490,10 @@ export function runAgentTask(
   }
 
   /** 用 setTimeout 实现循环侧超时,与命令结果、stop() 三方竞速;超时不终止命令。 */
-  const raceCommandResult = async (handle: AgentCommandHandle): Promise<CommandWaitOutcome> => {
+  const raceCommandResult = async (handle: AgentCommandHandle, waitMs = commandTimeoutMs, interrupt?: Promise<CommandWaitOutcome>): Promise<CommandWaitOutcome> => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<CommandWaitOutcome>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'timeout' }), commandTimeoutMs)
+      timer = setTimeout(() => resolve({ kind: 'timeout' }), waitMs)
     })
     try {
       return await Promise.race([
@@ -488,6 +502,7 @@ export function runAgentTask(
           (error): CommandWaitOutcome => ({ kind: 'error', error })
         ),
         timeout,
+        ...(interrupt ? [interrupt] : []),
         stopPromise.then((): CommandWaitOutcome => ({ kind: 'stopped' }))
       ])
     } finally {
@@ -548,6 +563,7 @@ export function runAgentTask(
 
   /** 执行单个步骤:'continue' = 结果已回传可继续,'ended' = 任务已收尾。 */
   const executeStep = async (step: AgentStep, toolCallId: string): Promise<'continue' | 'ended'> => {
+    step.interruption = undefined
     setStatus('executing')
     step.status = 'running'
     step.executionPhase = 'not-started'
@@ -591,11 +607,40 @@ export function runAgentTask(
     const handle = startOutcome.value
     activeHandle = handle
     if (!await checkpoint('observing', step)) return 'ended'
+    let resolveInterrupt!: (outcome: CommandWaitOutcome) => void
+    const interruptPromise = new Promise<CommandWaitOutcome>(resolve => { resolveInterrupt = resolve })
+    step.canInterrupt = Boolean(handle.interrupt)
+    activeInterrupt = stepId => {
+      if (finished || stopRequested || step.id !== stepId || step.status !== 'running' || step.interruptRequested) return false
+      // Snapshot BEFORE Ctrl+C: its echo/exit output must not erase the silence
+      // that caused the user to stop waiting.
+      sampleOutput()
+      const requestedAt = Date.now()
+      const interruption = {
+        requestedBy: 'user' as const,
+        waitedMs: Math.max(0, requestedAt - step.startedAt!),
+        silentMs: Math.max(0, requestedAt - lastOutputAt),
+        hadOutput,
+        outputGrowing: hadOutput && requestedAt - lastOutputAt <= outputSampleIntervalMs
+      }
+      let accepted = false
+      try { accepted = handle.interrupt?.() ?? false } catch { /* Keep observing on write failure. */ }
+      if (!accepted) return false
+      step.interruption = interruption
+      step.interruptRequested = true
+      step.canInterrupt = false
+      step.deadlineAt = Date.now() + COMMAND_INTERRUPT_GRACE_MS
+      setStatus('executing')
+      notify()
+      resolveInterrupt({ kind: 'interrupt' })
+      return true
+    }
 
-    // 输出静默采样(文档 10.3):只比对 peekOutput 的长度,超时时据此说明卡在哪。
+    // Compare content too: bounded output can change without growing in length.
     // 派发瞬间先取一次基线,否则"静默的旧输出"会在超时那一刻被误判成刚刚增长。
-    let lastOutputLength = -1
+    let lastOutput: string | undefined
     let lastOutputAt = Date.now()
+    let hadOutput = false
     const sampleOutput = (): string => {
       let partial = ''
       try {
@@ -604,9 +649,12 @@ export function runAgentTask(
         // 捕获侧异常不应中断循环:按"无新输出"处理
         return ''
       }
-      if (partial.length !== lastOutputLength) {
-        lastOutputLength = partial.length
+      if (partial) hadOutput = true
+      if (partial !== lastOutput) {
+        lastOutput = partial
         lastOutputAt = Date.now()
+        step.output = partial.slice(-TIMEOUT_PARTIAL_OUTPUT_CHARS)
+        notify()
       }
       if (partial && step.executionPhase === 'dispatching') {
         step.executionPhase = 'running'
@@ -617,13 +665,15 @@ export function runAgentTask(
     sampleOutput()
     const sampler = setInterval(sampleOutput, outputSampleIntervalMs)
 
-    step.deadlineAt = Date.now() + commandTimeoutMs
+    if (!step.interruptRequested) step.deadlineAt = Date.now() + commandTimeoutMs
     notify()
 
     try {
-      let waitedMs = 0
       while (true) {
-        const outcome = await raceCommandResult(handle)
+        let outcome = await raceCommandResult(handle,
+          step.interruptRequested ? Math.max(0, (step.deadlineAt ?? Date.now()) - Date.now()) : commandTimeoutMs,
+          step.interruptRequested ? undefined : interruptPromise)
+        if (outcome.kind === 'interrupt') continue
         if (outcome.kind === 'stopped') {
           // stop() 已 cancel 句柄;命令仍留在终端,由用户接管
           step.deadlineAt = undefined
@@ -638,15 +688,22 @@ export function runAgentTask(
           return 'ended'
         }
         if (outcome.kind === 'timeout') {
-          waitedMs += commandTimeoutMs
           const partial = sampleOutput()
           const partialOutput = partial.length > TIMEOUT_PARTIAL_OUTPUT_CHARS
             ? partial.slice(partial.length - TIMEOUT_PARTIAL_OUTPUT_CHARS)
             : partial
+          if (step.interruptRequested) {
+            step.output = partial
+            step.durationMs = Date.now() - step.startedAt!
+            step.status = 'timeout'
+            handle.cancel()
+            finishStopped('已发送 Ctrl+C，但未确认命令结束；已保留输出并停止后续操作，请查看终端。')
+            return 'ended'
+          }
           const silentMs = Date.now() - lastOutputAt
           const outputGrowing = silentMs <= outputSampleIntervalMs
           const facts = {
-            waitedMs,
+            waitedMs: Date.now() - step.startedAt!,
             silentMs,
             partialOutput,
             outputGrowing,
@@ -654,7 +711,17 @@ export function runAgentTask(
           }
           const info: AgentTimeoutInfo = { ...facts, hint: describeTimeoutHint(facts) }
           setStatus('awaiting-user')
-          const decision = await raceWithStop(deps.requestTimeoutDecision(structuredClone(step), info))
+          // Completion must keep racing while the user reviews a timeout.
+          // Otherwise a finished command remains stuck behind a stale dialog.
+          const decision = await Promise.race([
+            raceWithStop(deps.requestTimeoutDecision(structuredClone(step), info)),
+            handle.result.then(
+              result => ({ kind: 'result' as const, result }),
+              error => ({ kind: 'error' as const, error })
+            ),
+            interruptPromise
+          ])
+          if (decision.kind === 'interrupt' || (step.interruptRequested && decision.kind === 'value')) continue
           if (decision.kind === 'stopped') {
             step.deadlineAt = undefined
             finishStopped()
@@ -665,24 +732,28 @@ export function runAgentTask(
             finishError(`超时决策异常:${errorMessage(decision.error)}`, 'tool')
             return 'ended'
           }
-          if (decision.value === 'wait') {
+          if (decision.kind === 'result') {
+            outcome = decision
+            setStatus('executing')
+          } else if (decision.kind === 'value' && decision.value === 'wait') {
             // 继续等待:回到 executing 并重新计时(倒计时随 deadlineAt 一起复位)
             step.deadlineAt = Date.now() + commandTimeoutMs
             setStatus('executing')
             notify()
             continue
+          } else {
+            // 用户选择停止:放弃等待(不终止命令),任务收尾为 stopped
+            handle.cancel()
+            step.status = 'timeout'
+            step.deadlineAt = undefined
+            step.output = partialOutput
+            notify()
+            finishStopped('已停止等待命令结果；命令可能仍在终端运行。')
+            return 'ended'
           }
-          // 用户选择停止:放弃等待(不终止命令),任务收尾为 stopped
-          handle.cancel()
-          step.status = 'timeout'
-          step.deadlineAt = undefined
-          // 已捕获的部分输出留在卡片上,否则超时步骤只剩一条命令
-          if (!step.output && partialOutput) step.output = partialOutput
-          notify()
-          finishStopped('已停止等待命令结果；命令可能仍在终端运行。')
-          return 'ended'
         }
 
+        if (outcome.kind !== 'result') continue
         const result = outcome.result
         step.deadlineAt = undefined
         if (result.status === 'cancelled') {
@@ -727,6 +798,9 @@ export function runAgentTask(
         step.exitCode = result.exitCode
         step.durationMs = result.durationMs
         step.startedAt = undefined
+        step.canInterrupt = undefined
+        step.interruptRequested = undefined
+        activeInterrupt = undefined
         if (!await checkpoint('result', step)) return 'ended'
         if (transaction) {
           // The write is complete. A stopped/failed read leaves the result explicitly unknown.
@@ -745,7 +819,8 @@ export function runAgentTask(
             exitCode: result.exitCode,
             durationMs: result.durationMs,
             truncated: result.truncated,
-            output: result.output
+            output: result.output,
+            ...commandInterruptionFeedback(step.interruption)
           })
         })
         return 'continue'
@@ -753,6 +828,9 @@ export function runAgentTask(
     } finally {
       clearInterval(sampler)
       activeHandle = undefined
+      activeInterrupt = undefined
+      step.canInterrupt = undefined
+      step.interruptRequested = undefined
     }
   }
 
@@ -1307,6 +1385,14 @@ export function runAgentTask(
     if (finished || stopRequested) return
     stopRequested = true
     signal.cancelled = true
+    const step = state.steps.find(step => step.status === 'running' && (!step.toolName || step.toolName === 'run_command'))
+    if (step && activeHandle) {
+      try {
+        const partial = activeHandle.peekOutput()
+        if (partial) step.output = partial
+      } catch { /* Retain any previous output. */ }
+      if (step.startedAt !== undefined) step.durationMs = Date.now() - step.startedAt
+    }
     activeHandle?.cancel()
     activeSshHandle?.cancel()
     if (activeSshIntent) void deps.cancelSshTask?.(activeSshIntent).catch(() => {})
@@ -1317,5 +1403,5 @@ export function runAgentTask(
 
   void run()
 
-  return { done, stop }
+  return { done, stop, interruptCommand: (stepId: string) => activeInterrupt?.(stepId) ?? false }
 }

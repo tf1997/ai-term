@@ -1,7 +1,7 @@
 // Synthetic native boundary for real AiPanel interactions. No model, shell or database is contacted.
 export function installAiRuntimeFixture(props) {
   const listeners = new Map()
-  const runtime = { requests: [], commands: [], pendingCommands: [], pendingSaves: [], snapshotReads: 0, checkpoints: new Map(), checkpointEvents: [], checkpointOwners: new Map() }
+  const runtime = { requests: [], commands: [], pendingCommands: [], pendingSaves: [], snapshotReads: 0, interrupts: 0, output: '', checkpoints: new Map(), checkpointEvents: [], checkpointOwners: new Map() }
   const accept = (call, value) => window[`_${call.callback}`]?.(value)
   const reject = (call, error) => window[`_${call.error}`]?.(String(error))
   let listenerId = 0
@@ -97,7 +97,8 @@ export function installAiRuntimeFixture(props) {
     runtime.commands.push(command)
     runtime.pendingCommands.push({ finish, startedAt })
     return {
-      result, peekOutput: () => '',
+      result, peekOutput: () => runtime.output,
+      interrupt: () => { runtime.interrupts++; return true },
       cancel: () => finish({ status: 'cancelled', durationMs: Date.now() - startedAt, output: '', truncated: false })
     }
   }
@@ -141,6 +142,8 @@ export function installAiRuntimeFixture(props) {
     if (runtime.requests.length || runtime.pendingSaves.length) throw Error('Finish the previous runtime before resetting')
     runtime.commands = []
     runtime.snapshotReads = 0
+    runtime.interrupts = 0
+    runtime.output = ''
     runtime.pendingCommands = []
   }
   return runtime

@@ -482,6 +482,36 @@ try {
     assert.deepEqual(after.visibleLines, before.visibleLines)
     assertVisible((await diagnostics())[0], after)
   })
+  await check('disabling debug hides output from a probe that was already dispatched', async () => {
+    await setDebug(true)
+    const before = await state()
+    const count = (await diagnostics()).length
+    await evaluate(`window.__terminalDebugFixture.diagnosticDelayMs = 1800;
+      window.__liveDebugProbe = window.__debugBrowser.pane().exposed.runCommandAndCapture('', { probe: { kind: 'context' } }); true`)
+    await waitFor(`window.__terminalDebugFixture.diagnostics.length > ${count}`)
+    await setDebug(false, true)
+    assert.equal((await evaluate('window.__liveDebugProbe.result')).status, 'completed')
+    await settleTerminal()
+    assertHidden((await diagnostics()).slice(count), await state())
+    assert.deepEqual((await state()).visibleLines, before.visibleLines)
+    await evaluate('window.__terminalDebugFixture.diagnosticDelayMs = 0')
+  })
+  await check('a cancelled probe cannot leak its delayed history guard and quoted echo', async () => {
+    const count = (await diagnostics()).length
+    const before = await state()
+    await evaluate(`window.__terminalDebugFixture.diagnosticDelayMs = 300;
+      window.__lateEchoProbe = window.__debugBrowser.pane().exposed.runCommandAndCapture('', { probe: { kind: 'context' } }); true`)
+    await waitFor(`window.__terminalDebugFixture.diagnostics.length > ${count}`)
+    await evaluate('window.__lateEchoProbe.cancel()')
+    assert.equal((await evaluate('window.__lateEchoProbe.result')).status, 'cancelled')
+    await settleTerminal()
+    assertHidden((await diagnostics()).slice(count), await state())
+    assert.deepEqual((await state()).visibleLines, before.visibleLines, 'Late echo cleanup leaves exactly the existing prompt')
+    await evaluate('window.__terminalDebugFixture.diagnosticDelayMs = 0')
+    await userCommand('echo visible-after-late-probe')
+    assert.ok((await state()).text.includes('visible-after-late-probe'))
+    await screenshot('terminal-debug-off-late-probe.png')
+  })
   await check('cancelled identification cannot leave subsequent user output suppressed', async () => {
     await showFiles()
     await readyFiles()

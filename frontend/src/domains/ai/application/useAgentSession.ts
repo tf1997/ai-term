@@ -13,7 +13,7 @@ import { runAgentTask } from './agent/agentLoop'
 import { createAgentFileSnapshotReader, createBoundAgentFileSnapshotReader } from './agent/readAgentFileSnapshots'
 import { normalizeAgentFileChanges } from '../domain/agentFileSnapshots'
 import type { AgentLoopDeps } from './agent/agentLoop'
-import { canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
+import { classifyIntentForAutoExec, canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { createAgentRunSnapshot } from '../domain/agentRunSnapshot'
@@ -149,6 +149,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   let agentClockTimer: number | undefined
 
   let agentStopHandle: (() => void) | null = null
+  let agentInterruptHandle: ((stepId: string) => boolean) | null = null
 
   let agentPreparationSequence = 0
 
@@ -164,6 +165,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function stopAgentRun() {
     agentStopHandle?.()
+  }
+
+  function interruptAgentCommand(message: AiMessage, step: AgentStep) {
+    if (message.id !== agentRunMessageId.value || !agentRunActive.value) return
+    if (!agentInterruptHandle?.(step.id)) agentModeNotice.value = '未发送中断：命令可能已结束或终端尚未就绪，请查看终端。'
   }
 
   function agentStatusFromRun(state: AgentRunState): NonNullable<AiMessage['agentStatus']> {
@@ -245,6 +251,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function persistableAgentSteps(steps: AgentStep[]) {
     return steps.map((step) => {
+      const { canInterrupt: _canInterrupt, interruptRequested: _interruptRequested, ...persisted } = step
+      step = persisted
       if (step.sensitive && ['run_command', 'run_ssh_task'].includes(step.toolName ?? 'run_command')) {
         step = { ...step, command: '[敏感命令未存储]', commandRedacted: true, reason: '[敏感步骤说明未存储]',
           failureReason: step.failureReason ? '[敏感失败详情未存储]' : undefined,
@@ -682,10 +690,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         observeGrantEnvironment(grantScope, preparedIntent)
         const risks = preparedIntent ? commandPolicyRisks(preparedIntent) : analyzeScriptRisks(command)
         const sensitive = Boolean(preparedIntent?.sourceSensitive) || isSensitiveAgentCommand(command)
-        const autoExec = classifyForAutoExec(command, {
+        const sources = {
           userPatterns: allowlistPatterns,
           includeBuiltin: builtinReadonlyEnabled
-        })
+        }
+        const autoExec = preparedIntent ? classifyIntentForAutoExec(preparedIntent, sources) : classifyForAutoExec(command, sources)
         if (preparedIntent?.analysis.decision === 'deny') return { risks, sensitive, autoExec, denied: '命令被后端策略阻止，请修改操作后重新发起任务' }
         if (preparedIntent && preparedIntent.analysis.decision !== 'allow') return { risks, sensitive, autoExec: { ...autoExec, eligible: false, suggestedPatterns: [] } }
         if (!sensitive && risks.length === 0 && canGrantExactCommand(command) && sessionCommandGrants.value.get(grantScope)?.has(command.trim())) {
@@ -735,6 +744,11 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       },
       onStateChange: (state) => {
         agentRun.value = state
+        if (state.status !== 'awaiting-user' && agentPendingTimeout.value) {
+          const pending = agentPendingTimeout.value
+          agentPendingTimeout.value = null
+          pending.resolve('wait')
+        }
         if (state.status !== 'awaiting-approval') {
           agentPendingApproval.value = null
           agentApprovalSaving.value = false
@@ -816,6 +830,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         retryStep: retryStep ? snapshotAgentStep(retryStep) : undefined
       })
       agentStopHandle = task.stop
+      agentInterruptHandle = task.interruptCommand
       const finalState = await task.done
       agentRun.value = finalState
       syncAgentRunToMessage(finalState)
@@ -875,6 +890,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         takeoverChange?.(boundTerminalId, false)
       }
       agentStopHandle = null
+      agentInterruptHandle = null
       agentPendingApproval.value = null
       agentApprovalSaving.value = false
       agentPendingTimeout.value = null
@@ -921,5 +937,5 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, refreshAgentCheckpoints, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, refreshAgentCheckpoints, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

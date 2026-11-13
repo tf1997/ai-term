@@ -348,7 +348,8 @@ try {
   assert.ok(reducedAppearance.borderDuration > activeAppearance.borderDuration, 'Reduced motion slows the border')
   await waitFor(`(${activityAppearance}).borderTransform !== ${JSON.stringify(reducedAppearance.borderTransform)}`)
   await waitFor('document.querySelector(".chat-activity-time").textContent !== "0 秒"')
-  await evaluate('aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: "printf status" }])')
+  const longApprovalCommand = `printf '${'status '.repeat(180)}'`
+  await evaluate(`aiFixture.runtime.reply("先检查状态", [{ id: "runtime-first", command: ${JSON.stringify(longApprovalCommand)} }])`)
   await waitFor('Boolean(document.querySelector("[data-step-id=runtime-first] .tool-step-decision"))')
   const waitingAppearance = await evaluate(activityAppearance)
   assert.equal(waitingAppearance.waiting, true)
@@ -364,7 +365,22 @@ try {
   assert.ok(await evaluate('document.querySelector(".chat-message-content > :last-child .chat-progress").textContent.includes("等待确认命令")'), 'Agent progress remains visible after tool steps appear')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-first] .is-allow").disabled'), false, 'Always allow is an enabled button for an eligible command')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-first] .tool-step-allow").textContent.includes("所有会话")'), 'Approval explains the scope of saved permission')
+  const approvalActionVisible = `(() => {
+    const button = document.querySelector('[data-step-id=runtime-first] .is-primary');
+    const bounds = button.getBoundingClientRect();
+    const viewport = document.querySelector('.chat-message-list').getBoundingClientRect();
+    return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom && button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })()`
+  assert.ok(await evaluate(approvalActionVisible), 'Long approval automatically brings the confirmation action into view without user scrolling')
+  await evaluate(`document.querySelector('.ai-browser-fixture').style.height = '700px'`)
+  await waitFor(approvalActionVisible)
+  await evaluate(`document.querySelector('.ai-browser-fixture').style.height = '850px'`)
+  await waitFor(approvalActionVisible)
   await evaluate('document.querySelector(".chat-message-list").scrollTop = 0')
+  await waitFor('Boolean(document.querySelector(".chat-latest"))')
+  await evaluate(`aiFixture.state.props.messages[0].text += '\\n查看历史期间仍有新内容。'.repeat(20)`)
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  assert.equal(await evaluate('document.querySelector(".chat-message-list").scrollTop'), 0, 'A pending approval does not pull the user back after manually scrolling into history')
   const sticky = await evaluate(`(() => {
     const panel = document.querySelector('.ai-chat-panel').getBoundingClientRect();
     const bar = document.querySelector('.chat-activity').getBoundingClientRect();
@@ -373,6 +389,8 @@ try {
   assert.ok(sticky, 'Live task status stays visible while reading earlier messages')
   await click('.chat-activity-jump')
   assert.ok(await evaluate('document.activeElement.closest("[data-step-id=runtime-first]") !== null'), 'Pending-decision shortcut transfers keyboard focus to the right step')
+  assert.ok(await evaluate(approvalActionVisible), 'Pending-decision shortcut reveals the action below a long command, not just the card header')
+  checks.push('Long approvals reveal usable actions at 360px and 125% zoom, follow viewport resizing, and preserve deliberate history scrolling')
   const approvalScreenshot = await screenshot('ai-approval-light-360-125.png')
   await evaluate('aiFixture.configure({ theme: "dark" })')
   const darkApprovalScreenshot = await screenshot('ai-approval-dark-360-125.png')
@@ -396,7 +414,7 @@ try {
   await waitFor('aiFixture.runtime.requests.length === 1 && document.querySelector(".chat-activity-stage").textContent.includes("正在分析执行结果")')
   await evaluate('aiFixture.runtime.reply("继续检查", [{ id: "runtime-second", command: "printf finished", files: ["/workspace/fixture-file.txt"] }])')
   await waitFor('aiFixture.runtime.commands.length === 2')
-  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=runtime-second] .tool-step-decision"))'), false, 'A later command with the saved prefix runs without another approval')
+  assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=runtime-second] .is-allow"))'), false, 'A later command with the saved prefix runs without another approval')
   assert.ok(await evaluate('document.querySelector("[data-step-id=runtime-second] .tool-step-auto").textContent.includes("自动执行")'))
   await evaluate('aiFixture.runtime.finishCommand()')
   await waitFor('aiFixture.runtime.requests.length === 1')
@@ -500,7 +518,7 @@ try {
   await click('.chat-send')
   await waitFor('aiFixture.runtime.requests.length === 1')
   await evaluate('aiFixture.runtime.reply("运行长命令", [{ id: "runtime-timeout", command: "printf waiting" }])')
-  await waitFor('Boolean(document.querySelector("[data-step-id=runtime-timeout] .tool-step-decision"))')
+  await waitFor('Boolean(document.querySelector("[data-step-id=runtime-timeout] .tool-step-decision .is-primary"))')
   await click('[data-step-id="runtime-timeout"] .is-primary')
   await waitFor('document.querySelector(".chat-activity-stage").textContent.includes("等待超时处理")')
   assert.equal(await evaluate('document.querySelector("[data-step-id=runtime-timeout]").classList.contains("is-awaiting-decision")'), true)
@@ -536,16 +554,22 @@ try {
   await evaluate(`(() => { const input = document.querySelector('.chat-composer textarea'); input.value = '检查复合命令'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   await click('.chat-send')
   await waitFor('aiFixture.runtime.requests.length === 1')
-  await evaluate('aiFixture.runtime.reply("查看日期", [{ id: "exact-first", command: "echo $(date)" }])')
+  const longRiskCommand = `echo '${'status '.repeat(180)}' $(date)`
+  await evaluate(`aiFixture.runtime.reply("查看日期", [{ id: "exact-first", command: ${JSON.stringify(longRiskCommand)} }])`)
   await waitFor('Boolean(document.querySelector("[data-step-id=exact-first] .tool-step-decision"))')
   assert.equal(await evaluate('Boolean(document.querySelector(".is-allow-exact"))'), false)
   await click('[data-step-id="exact-first"] .is-primary')
   await waitFor('Boolean(document.querySelector(".agent-risk-modal"))')
+  assert.ok(await evaluate(`(() => {
+    const button = document.querySelector('.agent-risk-modal .script-risk-actions button:last-child');
+    const bounds = button.getBoundingClientRect();
+    return bounds.top >= 0 && bounds.bottom <= innerHeight && button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })()`), 'A long risk command leaves the modal confirmation button visible without scrolling its content')
   await click('.agent-risk-modal .script-risk-actions button:last-child')
   await waitFor('aiFixture.runtime.commands.length === 1')
   await evaluate('aiFixture.runtime.finishCommand()')
   await waitFor('aiFixture.runtime.requests.length === 1')
-  await evaluate('aiFixture.runtime.reply("再次查看", [{ id: "exact-second", command: "echo $(date)" }])')
+  await evaluate(`aiFixture.runtime.reply("再次查看", [{ id: "exact-second", command: ${JSON.stringify(longRiskCommand)} }])`)
   await waitFor('Boolean(document.querySelector("[data-step-id=exact-second] .tool-step-decision"))')
   assert.equal(await evaluate('aiFixture.runtime.commands.length'), 1, 'Same dynamic text still requires approval')
   assert.equal(await evaluate('Boolean(document.querySelector(".is-allow-exact"))'), false)
@@ -686,6 +710,9 @@ try {
   assert.ok(await evaluate('document.querySelector("[data-step-id=file-secret]").textContent.includes("当前 AI 模型")'))
   assert.equal(await evaluate('Boolean(document.querySelector("[data-step-id=file-secret] .is-allow"))'), false)
   assert.ok(await evaluate('(() => { const card = document.querySelector("[data-step-id=file-secret]"); return card.scrollWidth <= card.clientWidth + 1 })()'), 'Long file paths fit the narrow card')
+  await evaluate('document.querySelector(".chat-message-list").scrollTop = 0')
+  await click('.chat-activity-jump')
+  assert.ok(await evaluate('document.activeElement.matches("[data-step-id=file-secret] .file-tool-actions button")'), 'Sensitive file approval focuses its confirmation control')
   const fileToolScreenshot = await screenshot('ai-file-sensitive-dark-360.png')
   await click('[data-step-id=file-secret] .file-tool-actions button:first-child')
   await waitFor('aiFixture.fileRecords.reads === 1 && aiFixture.runtime.requests.length === 1')
@@ -754,9 +781,8 @@ try {
   await waitFor('Boolean(document.querySelector("[data-plan-id=health]")) && aiFixture.runtime.requests.length === 1')
   assert.equal(await evaluate('JSON.parse(aiFixture.runtime.requests[0].request.taskContext).plan.version'), 1)
   await evaluate(`aiFixture.runtime.reply('检查响应', [{ id: 'health', command: 'printf health' }])`)
-  await waitFor('Boolean(document.querySelector("[data-step-id=health] .tool-step-decision .is-primary"))')
-  await click('[data-step-id=health] .tool-step-decision .is-primary')
   await waitFor('aiFixture.runtime.pendingCommands.length === 1')
+  assert.ok(await evaluate('aiFixture.state.props.messages.at(-1).agentSteps.find(step => step.id === "health").autoApproved'), 'Plain printf runs automatically when built-in read-only commands are enabled')
   await evaluate('aiFixture.runtime.finishCommand({ output: "HTTP 503 unhealthy", exitCode: 0 })')
   await waitFor('aiFixture.runtime.requests.length === 1')
   await evaluate(`aiFixture.runtime.reply('核对预期响应', [{ id: 'verify', name: 'record_verification', arguments: JSON.stringify({ id: 'service-health', purpose: '服务应返回 HTTP 200', required: true, check: { kind: 'output-contains', expected: 'HTTP 200', stepId: 'health' } }) }])`)

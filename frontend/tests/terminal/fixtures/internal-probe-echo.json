@@ -1,0 +1,20 @@
+{
+  "description": "Real /bin/bash --noprofile --norc -i PTY echoes on macOS, TERM=xterm-256color, PS1=debug-fixture# . Probe commands only print fixed fixture markers.",
+  "records": [
+    {
+      "cols": 40,
+      "command": " if [ -n \"${BASH_VERSION-}\" ]; then case \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)\" in *'AI_TERM_INTERNAL_late_echo_real_40'*) builtin history -d \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/dev/null || : ;; esac; fi; eval 'printf '\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_real_40\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTURE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE_END_late_echo_real_40\\n'\"'\"''",
+      "output": " if [ -n \"${BASH_VERSION- \r}\" ]; then case \"$(HISTTIMEFORMAT= built \rin history 1 2>/dev/null)\" in *'AI_TERM_ \rINTERNAL_late_echo_real_40'*) builtin hi \rstory -d \"$(HISTTIMEFORMAT= builtin hist \rory 1 2>/dev/null | command awk 'NR == 1 \r && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/d \rev/null || : ;; esac; fi; eval 'printf ' \r\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_real \r_40\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTUR \rE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE \r_END_late_echo_real_40\\n'\"'\"''\r\n\r\nAI_TERM_PROBE_BEGIN_late_echo_real_40\r\n\r\nAI_TERM_CAPTURE_OK\r\n\r\nAI_TERM_PROBE_END_late_echo_real_40\r\ndebug-fixture# "
+    },
+    {
+      "cols": 80,
+      "command": " if [ -n \"${BASH_VERSION-}\" ]; then case \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)\" in *'AI_TERM_INTERNAL_late_echo_real_80'*) builtin history -d \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/dev/null || : ;; esac; fi; eval 'printf '\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_real_80\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTURE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE_END_late_echo_real_80\\n'\"'\"''",
+      "output": " if [ -n \"${BASH_VERSION-}\" ]; then case \"$(HISTTIMEFORMAT= built \rin history 1 2>/dev/null)\" in *'AI_TERM_INTERNAL_late_echo_real_80'*) builtin hi \rstory -d \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 \r && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/dev/null || : ;; esac; fi; eval 'printf ' \r\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_real_80\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTUR \rE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE_END_late_echo_real_80\\n'\"'\"''\r\n\r\nAI_TERM_PROBE_BEGIN_late_echo_real_80\r\n\r\nAI_TERM_CAPTURE_OK\r\n\r\nAI_TERM_PROBE_END_late_echo_real_80\r\ndebug-fixture# "
+    },
+    {
+      "cols": 120,
+      "command": " if [ -n \"${BASH_VERSION-}\" ]; then case \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)\" in *'AI_TERM_INTERNAL_late_echo_real_120'*) builtin history -d \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/dev/null || : ;; esac; fi; eval 'printf '\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_real_120\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTURE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE_END_late_echo_real_120\\n'\"'\"''",
+      "output": " if [ -n \"${BASH_VERSION-}\" ]; then case \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null)\" in *'AI_TERM_ \rINTERNAL_late_echo_real_120'*) builtin history -d \"$(HISTTIMEFORMAT= builtin history 1 2>/dev/null | command awk 'NR ==  \r1 && $1 ~ /^[0-9]+$/ { print $1 }')\" 2>/dev/null || : ;; esac; fi; eval 'printf '\"'\"'\\nAI_TERM_PROBE_BEGIN_late_echo_rea \rl_120\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_CAPTURE_OK\\n'\"'\"'; printf '\"'\"'\\nAI_TERM_PROBE_END_late_echo_real_120\\n'\"'\"''\r\n\r\nAI_TERM_PROBE_BEGIN_late_echo_real_120\r\n\r\nAI_TERM_CAPTURE_OK\r\n\r\nAI_TERM_PROBE_END_late_echo_real_120\r\ndebug-fixture# "
+    }
+  ]
+}
