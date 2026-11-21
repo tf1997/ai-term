@@ -134,12 +134,9 @@ const SUBCOMMAND_TOOLS = new Set([
 
 /** 前缀环境变量赋值(含 VAR+=v 形式)。 */
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
-/**
- * 额外收紧:能改变「后续命令实际执行什么代码」的环境变量前缀
- * (PATH 换程序、LD_PRELOAD/DYLD_* 注入动态库、BASH_ENV/ENV/PS4 注入脚本等),
- * 即使赋值本身被剥离,也要否决整段。
- */
-const DANGEROUS_ENV_RE = /^(PATH|IFS|ENV|BASH_ENV|SHELLOPTS|PS4|LD_[A-Z_]+|DYLD_[A-Z_]+)\+?=/
+/** Only literal locale prefixes have modeled, non-executable effects. */
+const SAFE_ENV_PREFIX_RE = /^(LANG|LC_ALL|LC_CTYPE|LC_MESSAGES)=[A-Za-z0-9_.@-]+$/
+const SHELL_STATE_MUTATORS = new Set(['alias', 'declare', 'export', 'local', 'readonly', 'set', 'shopt', 'trap', 'typeset', 'unalias', 'unset'])
 /** timeout 的 DURATION 位置参数(数字,可带 s/m/h/d 单位)。 */
 const TIMEOUT_DURATION_RE = /^\d+(\.\d+)?[smhd]?$/
 
@@ -155,19 +152,24 @@ export function canGrantExactCommand(command: string) {
   if (analyzeScriptRisks(command).length) return false
   return scan.segments.every(segment => {
     const { tokens, dangerousEnv } = stripWrappers(segment)
-    return !dangerousEnv && !tokens.includes('sudo')
+    return !dangerousEnv && !tokens.includes('sudo') && !isShellStateMutation(tokens)
   })
+}
+
+function isShellStateMutation(tokens: string[]) {
+  const command = tokens[0] === 'builtin' ? tokens[1] : tokens[0]
+  return SHELL_STATE_MUTATORS.has(command ?? '')
 }
 
 /**
  * 剥离前缀环境变量赋值与 timeout/command 透明包装,返回内层命令 token。
- * 命中危险环境变量(PATH/LD_PRELOAD 等,见 DANGEROUS_ENV_RE)时单独上报。
+ * 仅字面量 locale 前缀不触发环境变量 veto；其余赋值均要求复核。
  */
 function stripWrappers(tokens: string[]): { tokens: string[]; dangerousEnv: boolean } {
   const rest = [...tokens]
   let dangerousEnv = false
   while (rest.length && ENV_ASSIGNMENT_RE.test(rest[0])) {
-    if (DANGEROUS_ENV_RE.test(rest[0])) dangerousEnv = true
+    if (!SAFE_ENV_PREFIX_RE.test(rest[0])) dangerousEnv = true
     rest.shift()
   }
   for (;;) {
@@ -279,7 +281,7 @@ export function classifyForAutoExec(
 
   for (const segment of scan.segments) {
     const { tokens, dangerousEnv } = stripWrappers(segment)
-    if (dangerousEnv) return rejected
+    if (dangerousEnv || isShellStateMutation(tokens)) return rejected
     // 纯赋值段(无命令)或剥离后为空:无从匹配,不放行。
     if (!tokens.length) return rejected
     // sudo 一票否决,允许来源无效。
@@ -301,12 +303,28 @@ export function classifyForAutoExec(
   return { eligible: true, matched: firstMatched, suggestedPatterns: [] }
 }
 
+/** Backend "ask" codes that only mean "not on the read-only list". */
+const GRANTABLE_UNKNOWN_CODES = new Set(['unmodeled-command', 'git-operation', 'resource-operation'])
+
+/**
+ * The backend asks solely because the command is not modeled as read-only: no
+ * risk rule matched and nothing dynamic was found. Only then may the user's
+ * allowlist or an exact session grant stand in for a per-run confirmation.
+ */
+export function intentAskIsGrantable(intent: CommandIntent) {
+  const { analysis } = intent
+  return !intent.capture?.internal && !intent.sourceSensitive && analysis.decision === 'ask' && !analysis.risks.length
+    && analysis.unknownReasons.length > 0 && analysis.unknownReasons.every(reason => GRANTABLE_UNKNOWN_CODES.has(reason.code))
+}
+
 /** Use AST command boundaries only when the whole source passed backend policy.
  * In particular, parentheses are syntax, while substitutions and writes still
  * require review. Older backends retain the conservative lexical fallback.
  */
 export function classifyIntentForAutoExec(intent: CommandIntent, sources: { userPatterns: string[]; includeBuiltin: boolean }): AgentAutoExecClassification {
   const { analysis } = intent
+  // No backend AST is published for an ask; the lexical scan applies its own vetoes.
+  if (intentAskIsGrantable(intent)) return classifyForAutoExec(intent.source, sources)
   if (intent.capture?.internal || intent.sourceSensitive || analysis.decision !== 'allow' || analysis.analysisStatus !== 'complete' || analysis.risks.length || analysis.unknownReasons.length) {
     return { eligible: false, suggestedPatterns: [] }
   }

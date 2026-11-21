@@ -1,11 +1,38 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CommandReviewItem } from '../../application/useCommandPolicyReview'
-import { commandPolicyRisks } from '../../../../shared/security/commandPolicyPresentation'
+import type { CommandReviewItem, CommandRiskExplainer } from '../../application/useCommandPolicyReview'
+import { commandPolicyRisks, POLICY_RISK_KIND_LABELS } from '../../../../shared/security/commandPolicyPresentation'
 import UiIcon from '../../../../shared/ui/UiIcon.vue'
 
-const props = defineProps<{ items: CommandReviewItem[]; note?: string }>()
-const emit = defineEmits<{ resolve: [approved: boolean] }>()
+/** One confirmation surface for chat commands, scripts, quick commands and Agent steps. */
+const props = defineProps<{
+  items: CommandReviewItem[]
+  note?: string
+  /** Agent steps can also be skipped or end the task. */
+  agent?: boolean
+  explain?: CommandRiskExplainer
+  explainUnavailable?: string
+  confirmHint?: string
+}>()
+const emit = defineEmits<{ resolve: [approved: boolean]; skip: []; stop: [] }>()
+const explanations = ref<Record<string, { text: string; error: string; loading: boolean }>>({})
+let explainEpoch = 0
+async function explainItem(item: CommandReviewItem) {
+  const id = item.intent.reference.id
+  if (!props.explain || explanations.value[id]?.loading) return
+  const epoch = explainEpoch
+  const update = (patch: Partial<{ text: string; error: string; loading: boolean }>) => {
+    if (epoch !== explainEpoch) return
+    explanations.value = { ...explanations.value, [id]: { ...(explanations.value[id] ?? { text: '', error: '', loading: false }), ...patch } }
+  }
+  update({ text: '', error: '', loading: true })
+  try {
+    const answer = await props.explain(item, text => update({ text }))
+    update({ text: answer.trim() || 'AI 未返回风险说明。', loading: false })
+  } catch (error) {
+    update({ error: error instanceof Error ? error.message : String(error), loading: false })
+  }
+}
 const dialog = ref<HTMLElement | null>(null)
 const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
 const reviewed = ref(false)
@@ -15,11 +42,15 @@ const reviewItems = computed(() => props.items.map(item => ({
   ...item,
   lines: item.intent.source.split('\n'),
   risks: commandPolicyRisks(item.intent),
+  kinds: [...new Map(item.intent.analysis.risks.map(risk => [risk.kind, risk] as const)
+    .sort((a, b) => Number(a[1].severity === 'high') - Number(b[1].severity === 'high'))).values()],
   tone: item.intent.analysis.highestSeverity === 'high' || item.intent.analysis.decision === 'deny' ? 'high' : 'medium'
 })))
 
 watch(() => props.items, items => {
   reviewed.value = false
+  explainEpoch += 1
+  explanations.value = {}
   // Short commands can be reviewed immediately; long scripts remain expandable in full.
   expanded.value = new Set(items.filter(item => item.intent.source.split('\n').length <= 8 && item.intent.source.length <= 1200).map(item => item.intent.reference.id))
 }, { immediate: true })
@@ -48,7 +79,7 @@ function handleKey(event: KeyboardEvent) {
   }
 }
 onMounted(() => dialog.value?.focus({ preventScroll: true }))
-onBeforeUnmount(() => { if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }) })
+onBeforeUnmount(() => { explainEpoch += 1; if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true }) })
 </script>
 
 <template>
@@ -58,15 +89,16 @@ onBeforeUnmount(() => { if (returnFocus?.isConnected) returnFocus.focus({ preven
         <span class="policy-heading-icon" :class="{ 'is-blocked': blocked }"><UiIcon :name="blocked ? 'shield' : 'terminal'" size="20" /></span>
         <div class="policy-heading">
           <h2>{{ blocked ? '命令已被阻止' : '执行前确认' }}</h2>
-          <p id="policy-review-description">{{ blocked ? '此命令不符合执行策略，无法继续。' : '请核对执行目标与命令，本次授权仅生效一次。' }}</p>
+          <p id="policy-review-description">{{ blocked ? '此命令不符合执行策略，无法继续。' : agent ? 'Agent 提议执行以下命令，请核对目标与风险，本次授权仅生效一次。' : '请核对执行目标与命令，本次授权仅生效一次。' }}</p>
         </div>
         <button type="button" class="policy-close" aria-label="关闭" title="关闭（Esc）" @click="emit('resolve', false)"><UiIcon name="close" size="18" /></button>
       </header>
 
       <div class="policy-review-body">
         <p v-if="note" class="policy-note"><UiIcon name="info" size="15" /><span>{{ note }}</span></p>
+        <slot name="context" />
         <article v-for="item in reviewItems" :key="item.intent.reference.id" class="policy-item">
-          <div class="policy-target">
+          <div v-if="!item.hideTarget" class="policy-target">
             <div class="policy-section-label">执行目标</div>
             <div class="policy-target-heading">
               <UiIcon name="terminal" size="16" />
@@ -99,7 +131,11 @@ onBeforeUnmount(() => { if (returnFocus?.isConnected) returnFocus.focus({ preven
               <strong class="policy-summary">{{ item.intent.analysis.highestSeverity === 'high' ? '最高风险：高风险' : item.intent.analysis.highestSeverity === 'medium' ? '最高风险：中风险' : item.intent.analysis.analysisStatus === 'unknown' ? '风险尚未确认' : '无已识别风险' }}</strong>
               <span v-if="item.intent.analysis.risks.length" class="policy-risk-count">{{ item.intent.analysis.risks.length }} 处风险</span>
             </div>
+            <div v-if="item.kinds.length" class="policy-kinds" aria-label="风险类型">
+              <span v-for="risk in item.kinds" :key="risk.kind" class="policy-kind" :class="`is-${risk.severity}`">{{ POLICY_RISK_KIND_LABELS[risk.kind] }}</span>
+            </div>
             <p v-if="item.intent.analysis.analysisStatus === 'unknown'" class="policy-analysis-note">分析未完成，需逐次确认。</p>
+            <p v-if="item.sensitive" class="policy-analysis-note policy-sensitive"><UiIcon name="shield" size="13" />该命令包含敏感路径或数据，请确认没有不应暴露或执行的内容。</p>
             <ul v-if="item.risks.length" class="policy-risk-list">
               <li v-for="(risk, index) in item.risks" :key="index">
                 <a :href="`#policy-${item.intent.reference.id}-${risk.line}`" :aria-label="`查看第 ${risk.line} 行：${risk.severity === 'high' ? '高风险' : '中风险'}，${risk.message}`" @click.prevent="showLine(item.intent.reference.id, risk.line)">第 {{ risk.line }} 行<UiIcon name="arrow-up" size="11" /></a>
@@ -107,13 +143,30 @@ onBeforeUnmount(() => { if (returnFocus?.isConnected) returnFocus.focus({ preven
               </li>
             </ul>
           </div>
+
+          <div v-if="explain && !blocked && (item.risks.length || item.sensitive)" class="policy-explain">
+            <div class="policy-explain-head">
+              <div><strong>不确定原因？</strong><span>让 AI 根据命中的风险行解释影响和执行前检查项。</span></div>
+              <button type="button" class="policy-cancel policy-explain-button" :disabled="explanations[item.intent.reference.id]?.loading || Boolean(explainUnavailable)" :title="explainUnavailable" @click="explainItem(item)">
+                <UiIcon name="ai" size="13" />{{ explanations[item.intent.reference.id]?.loading ? '正在分析...' : '借助 AI 分析风险' }}
+              </button>
+            </div>
+            <div v-if="explanations[item.intent.reference.id]" class="policy-explain-output" :class="{ 'is-error': explanations[item.intent.reference.id].error }" aria-live="polite">
+              <p v-if="explanations[item.intent.reference.id].error">{{ explanations[item.intent.reference.id].error }}</p>
+              <slot v-else-if="explanations[item.intent.reference.id].text" name="explanation" :text="explanations[item.intent.reference.id].text"><pre>{{ explanations[item.intent.reference.id].text }}</pre></slot>
+              <p v-else class="policy-explain-thinking"><span /><span /><span />AI 正在分析风险...</p>
+            </div>
+          </div>
         </article>
       </div>
 
       <footer class="modal-footer">
         <label v-if="!blocked" class="policy-acknowledgement"><input v-model="reviewed" type="checkbox"><span>我已核对完整命令和执行目标</span></label>
+        <p v-if="confirmHint && !blocked" class="policy-confirm-hint">{{ confirmHint }}</p>
         <div class="policy-actions">
-          <button type="button" class="policy-cancel" @click="emit('resolve', false)">{{ blocked ? '关闭' : '取消' }}</button>
+          <button v-if="agent" type="button" class="policy-cancel policy-stop" @click="emit('stop')"><UiIcon name="stop" size="12" />停止任务</button>
+          <button v-if="agent" type="button" class="policy-cancel" @click="emit('skip')">跳过命令</button>
+          <button type="button" class="policy-cancel" @click="emit('resolve', false)">{{ blocked ? '关闭' : agent ? '返回' : '取消' }}</button>
           <button v-if="!blocked" type="button" class="primary-button" :disabled="!reviewed" @click="emit('resolve', true)"><UiIcon name="play" size="14" />仅执行这一次</button>
         </div>
       </footer>
@@ -207,10 +260,34 @@ summary::-webkit-details-marker { display: none; }
 .policy-risk-list li > span { color: var(--policy-text); }
 .policy-risk-list a { display: inline-flex; align-items: center; gap: 2px; flex: none; color: inherit; text-decoration: none; font-size: 11px; }
 .policy-risk-list a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.policy-kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.policy-kind { padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--policy-warning) 32%, transparent); border-radius: 999px; color: var(--policy-warning); font-size: 11px; line-height: 1.7; }
+.policy-kind.is-high { border-color: color-mix(in srgb, var(--policy-danger) 32%, transparent); color: var(--policy-danger); }
+.policy-sensitive { display: flex; align-items: flex-start; gap: 6px; }
+.policy-sensitive .ui-icon { flex: none; margin-top: 3px; }
+.policy-explain { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--policy-line); border-radius: 8px; }
+.policy-explain-head { display: flex; align-items: center; gap: 12px; }
+.policy-explain-head > div { min-width: 0; flex: 1; display: grid; }
+.policy-explain-head strong { font-size: 12px; font-weight: 600; }
+.policy-explain-head span { color: var(--policy-muted); font-size: 11px; }
+.policy-explain-button { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 30px; padding: 0 11px; border-radius: 7px; font-size: 12px; }
+.policy-explain-button:disabled { color: var(--policy-muted); cursor: default; }
+.policy-explain-output { max-height: 220px; padding: 10px 12px; overflow: auto; scrollbar-width: thin; border-radius: 6px; background: var(--policy-subtle); font-size: 12px; user-select: text; }
+.policy-explain-output.is-error { color: var(--policy-danger); }
+.policy-explain-output p, .policy-explain-output pre { margin: 0; }
+.policy-explain-output pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.policy-explain-thinking { display: flex; align-items: center; gap: 4px; color: var(--policy-muted); }
+.policy-explain-thinking span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: policy-thinking 1.2s infinite ease-in-out; }
+.policy-explain-thinking span:nth-child(2) { animation-delay: .15s; }
+.policy-explain-thinking span:nth-child(3) { margin-right: 4px; animation-delay: .3s; }
+@keyframes policy-thinking { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .policy-explain-thinking span { animation: none; } }
+.policy-confirm-hint { margin: 0; color: var(--policy-muted); font-size: 11px; overflow-wrap: anywhere; }
+.policy-stop { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--policy-danger); }
 .modal-footer { display: grid; gap: 16px; padding: 16px 24px 20px; border-top: 1px solid var(--policy-line); background: var(--policy-surface); }
 .policy-acknowledgement { display: flex; align-items: center; gap: 8px; width: fit-content; font-size: 12px; cursor: pointer; }
 .policy-acknowledgement input { width: 15px; height: 15px; margin: 0; padding: 0; flex: none; accent-color: var(--workbench-accent); cursor: pointer; }
-.policy-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.policy-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .policy-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 34px; padding: 0 14px; font-size: 12px; font-weight: 500; border-radius: 7px; }
 .policy-cancel { min-width: 76px; border: 1px solid var(--policy-line); background: var(--policy-surface); color: var(--policy-text); }
 .policy-cancel:hover { border-color: var(--policy-muted); background: var(--policy-subtle); }

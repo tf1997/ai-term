@@ -1,4 +1,4 @@
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, computed, watch, onBeforeUnmount } from 'vue'
 import type { Ref } from 'vue'
 import type { AiPanelProps, AiPanelEmit } from '../domain/aiPanel'
 import type { AiMessage, AgentTimelineEntry } from '../domain/conversation'
@@ -13,7 +13,7 @@ import { runAgentTask } from './agent/agentLoop'
 import { createAgentFileSnapshotReader, createBoundAgentFileSnapshotReader } from './agent/readAgentFileSnapshots'
 import { normalizeAgentFileChanges } from '../domain/agentFileSnapshots'
 import type { AgentLoopDeps } from './agent/agentLoop'
-import { classifyIntentForAutoExec, canGrantExactCommand, classifyForAutoExec } from '../domain/agentAutoApprove'
+import { classifyIntentForAutoExec, canGrantExactCommand, classifyForAutoExec, intentAskIsGrantable } from '../domain/agentAutoApprove'
 import { analyzeScriptRisks } from '../../../shared/security/scriptRisk'
 import { createAiStreamErrorMessage } from '../domain/aiStreamError'
 import { createAgentRunSnapshot } from '../domain/agentRunSnapshot'
@@ -117,7 +117,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     if (intent) {
       const { target, policyVersion, operation } = intent.reference
       const context = target.context
-      environment = intent.analysis.analysisStatus === 'complete' && intent.analysis.decision === 'allow'
+      environment = ((intent.analysis.analysisStatus === 'complete' && intent.analysis.decision === 'allow') || intentAskIsGrantable(intent))
         && policyVersion && policyVersion === intent.analysis.policyVersion
         && target.sessionInstance && context?.shell !== 'unknown'
         && context?.workingDirectory && context.user && context.environmentScope
@@ -140,6 +140,8 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
   })
 
   const agentPendingApproval = ref<{ proposal: AgentStepProposal; resolve: (decision: AgentApprovalDecision) => void } | null>(null)
+  /** Backend analysis of the step awaiting approval, for the review dialog only. */
+  const agentPendingIntent = shallowRef<CommandIntent | undefined>()
 
   const agentPendingTimeout = ref<{ step: AgentStep; info: AgentTimeoutInfo; resolve: (decision: AgentTimeoutDecision) => void } | null>(null)
 
@@ -456,6 +458,7 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
     const boundConnectionGeneration = assistantMessage.terminalConnectionGeneration ?? props.terminalConnectionGeneration
     const policy = props.agentCommandPolicy
     let preparedIntent: CommandIntent | undefined
+    let grantApproved = false
     let policyDisposed = false
     const grantScope = JSON.stringify([requestConnectionId, requestWorkspaceSessionId, boundTerminalId, boundConnectionGeneration])
     activeGrantScope = ''
@@ -688,7 +691,10 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
           preparedIntent = intent
         }
         observeGrantEnvironment(grantScope, preparedIntent)
-        const risks = preparedIntent ? commandPolicyRisks(preparedIntent) : analyzeScriptRisks(command)
+        // "Not modeled as read-only" is a reason to ask, not a risk finding.
+        const grantable = Boolean(preparedIntent && intentAskIsGrantable(preparedIntent))
+        grantApproved = false
+        const risks = grantable ? [] : preparedIntent ? commandPolicyRisks(preparedIntent) : analyzeScriptRisks(command)
         const sensitive = Boolean(preparedIntent?.sourceSensitive) || isSensitiveAgentCommand(command)
         const sources = {
           userPatterns: allowlistPatterns,
@@ -696,10 +702,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
         }
         const autoExec = preparedIntent ? classifyIntentForAutoExec(preparedIntent, sources) : classifyForAutoExec(command, sources)
         if (preparedIntent?.analysis.decision === 'deny') return { risks, sensitive, autoExec, denied: '命令被后端策略阻止，请修改操作后重新发起任务' }
-        if (preparedIntent && preparedIntent.analysis.decision !== 'allow') return { risks, sensitive, autoExec: { ...autoExec, eligible: false, suggestedPatterns: [] } }
+        if (preparedIntent && preparedIntent.analysis.decision !== 'allow' && !grantable) return { risks, sensitive, autoExec: { ...autoExec, eligible: false, suggestedPatterns: [] } }
         if (!sensitive && risks.length === 0 && canGrantExactCommand(command) && sessionCommandGrants.value.get(grantScope)?.has(command.trim())) {
+          grantApproved = grantable
           return { risks, sensitive, autoExec: { ...autoExec, eligible: true, matched: undefined } }
         }
+        // The saved allowlist entry or session grant is the user's standing approval.
+        grantApproved = grantable && autoExec.eligible && !sensitive
         // 命中计数只在真正会自动执行时记录(镜像循环的判定顺序:风险/敏感门在前)
         if (autoExec.eligible && autoExec.matched && !sensitive && risks.length === 0) {
           void touchAgentCommandAllowlistEntry(autoExec.matched).catch(() => {})
@@ -708,12 +717,13 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
       },
       authorizeStep: policy ? async (command, manuallyApproved) => {
         if (!preparedIntent || preparedIntent.source !== command) throw new Error('执行内容与分析记录不一致')
-        if (manuallyApproved) await policy.approve(preparedIntent)
+        if (manuallyApproved || (grantApproved && intentAskIsGrantable(preparedIntent))) await policy.approve(preparedIntent)
         else if (preparedIntent.analysis.decision !== 'allow') throw new Error('该命令必须逐次确认')
       } : undefined,
       requestApproval: (proposal) =>
         new Promise<AgentApprovalDecision>((resolve) => {
           agentHighRiskArmed.value = false
+          agentPendingIntent.value = preparedIntent?.source === proposal.command ? preparedIntent : undefined
           agentPendingApproval.value = { proposal, resolve }
           scrollMessagesToLatest()
         }),
@@ -937,5 +947,5 @@ export function useAgentSession(options: AgentSessionOptions, source: AgentSessi
 
   function agentTaskPending() { return agentStopHandle !== null }
 
-  return { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, refreshAgentCheckpoints, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
+  return { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, refreshAgentCheckpoints, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentStreamText, agentReasoningText, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingIntent, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation }
 }

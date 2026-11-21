@@ -8,6 +8,7 @@ export { useTerminalTabScroll } from './application/useTerminalTabScroll'
 export { useTerminalTabs } from './application/useTerminalTabs'
 
 export { useCommandPolicyReview, commandReviewerKey } from './application/useCommandPolicyReview'
+export type { CommandReviewItem, CommandRiskExplainer, CommandReviewer } from './application/useCommandPolicyReview'
 export { createApplicationCommandExecutor } from './application/useApplicationCommandExecutor'
 export { createSshTaskService } from './application/sshTasks'
 export { sshTaskResult, sshTaskTargetLabel, sshTaskOutput } from './domain/sshTasks'

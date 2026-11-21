@@ -6,6 +6,7 @@ import {
   isSuffixSafeForSentinel,
   classifyForAutoExec,
   classifyIntentForAutoExec,
+  intentAskIsGrantable,
   suggestPatternForCommand,
   validateAllowlistPattern
 } from "../../src/domains/ai/domain/agentAutoApprove"
@@ -131,8 +132,10 @@ test('timeout/command 包装与环境变量前缀剥离', () => {
   assert.equal(wrapped.eligible, true)
   assert.equal(wrapped.matched, 'df')
   assert.equal(classify('timeout -k 3 10s df -h').eligible, true, '-k 带参选项与时长均剥离')
-  assert.equal(classify('FOO=1 df -h').eligible, true)
-  assert.equal(classify('FOO=1 BAR=2 timeout 30 df -h').eligible, true)
+  assert.equal(classify('LC_ALL=C df -h').eligible, true)
+  assert.equal(classify('LANG=en_US.UTF-8 LC_ALL=C timeout 30 df -h').eligible, true)
+  assert.equal(classify('FOO=1 df -h').eligible, false)
+  assert.equal(classify('FOO=1 BAR=2 timeout 30 df -h').eligible, false)
   assert.equal(classify('command df -h').eligible, true)
 
   // 反例:包装剥离后按内层命令判定
@@ -353,8 +356,19 @@ test('规格之外的额外收紧(写/执行漏洞封堵)', () => {
   assert.equal(classify('journalctl --rotate').eligible, false)
   // 危险环境变量前缀能改变实际执行的代码
   assert.equal(classify('LC_ALL=C ls').eligible, true)
+  assert.equal(classify('LANG=en_US.UTF-8 ls').eligible, true)
   assert.equal(classify('PATH=/tmp ls').eligible, false)
   assert.equal(classify('LD_PRELOAD=/tmp/e.so cat /tmp/f').eligible, false)
+  assert.equal(classify("GIT_PAGER='sh -c id' git log").eligible, false)
+  assert.equal(classify("PROMPT_COMMAND='id'; ls").eligible, false)
+  assert.equal(classify('CUSTOM_HOOK=id ls').eligible, false)
+  const shellStateAllowlist = { userPatterns: ['export', 'builtin export', 'declare', 'ls'], includeBuiltin: true }
+  for (const command of ['export PROMPT_COMMAND=id; ls', 'builtin export PROMPT_COMMAND=id; ls', 'declare -x PROMPT_COMMAND=id; ls']) {
+    assert.equal(classifyForAutoExec(command, shellStateAllowlist).eligible, false, command)
+    assert.equal(canGrantExactCommand(command), false, command)
+  }
+  assert.equal(canGrantExactCommand("GIT_PAGER='sh -c id' git log"), false)
+  assert.equal(canGrantExactCommand("PROMPT_COMMAND='id'; ls"), false)
   // 交互终端的历史展开(!!、!字符串)会插入历史命令文本,按注入结构否决
   assert.equal(classify('ls !!').eligible, false)
   assert.equal(classify('find . ! -name x').eligible, true, '! 后随空格为字面量')
@@ -409,4 +423,47 @@ test('后端完整语法树支持嵌套只读组合，不把部分分析当作�
     { commands: undefined }
   ]) assert.equal(classifyIntentForAutoExec({ ...intent, analysis: { ...intent.analysis, ...change } }, sources).eligible, false, JSON.stringify(change))
   assert.equal(classifyIntentForAutoExec({ ...intent, sourceSensitive: true }, sources).eligible, false)
+})
+
+test('后端放行的 echo/printf 参数读取在词法层同样自动执行', () => {
+  const allowed = (source, commands) => ({
+    source, capture: { kind: 'sentinel', internal: false },
+    analysis: { decision: 'allow', analysisStatus: 'complete', risks: [], unknownReasons: [], commands }
+  })
+  for (const intent of [
+    allowed('ls -l /tmp/ai-term-note.txt 2>&1; echo "exit=$?"', ['ls -l /tmp/ai-term-note.txt', 'echo "exit=$?"']),
+    allowed('echo "$HOME: ${USER}" $?', ['echo "$HOME: ${USER}" $?']),
+    allowed(`printf 'exit=%s\\n' "$?"`, [`printf 'exit=%s\\n' "$?"`])
+  ]) assert.equal(classifyIntentForAutoExec(intent, builtinOnly).eligible, true, intent.source)
+})
+
+test('仅因未建模而询问的命令可由允许列表放行，风险与动态内容不可', () => {
+  const ask = (source, unknownReasons, extra = {}) => ({
+    source, capture: { kind: 'sentinel', internal: false },
+    analysis: { decision: 'ask', analysisStatus: 'unknown', risks: [], unknownReasons, ...extra }
+  })
+  const unmodeled = [{ code: 'unmodeled-command' }]
+  const sources = { userPatterns: ['make', 'git fetch'], includeBuiltin: true }
+  const make = ask('make build', unmodeled)
+  assert.equal(intentAskIsGrantable(make), true)
+  assert.equal(classifyIntentForAutoExec(make, sources).eligible, true)
+  assert.deepEqual(classifyIntentForAutoExec(make, { userPatterns: [], includeBuiltin: true }), { eligible: false, suggestedPatterns: ['make'] })
+  assert.equal(classifyIntentForAutoExec(ask('git fetch origin', [{ code: 'git-operation' }]), sources).eligible, true)
+  assert.equal(classifyIntentForAutoExec(ask('make build | head -n 5', unmodeled), sources).eligible, true)
+
+  for (const intent of [
+    ask('make build', [{ code: 'unmodeled-command' }, { code: 'dynamic-word' }]),
+    ask('find . {-delete,-name} x', [{ code: 'unmodeled-command' }, { code: 'brace-expansion' }], { risks: [{ kind: 'execution', severity: 'high' }] }),
+    ask('make build', [{ code: 'target-context' }]),
+    ask('make build', unmodeled, { risks: [{ kind: 'edit' }] }),
+    ask('make build', unmodeled, { decision: 'deny' }),
+    ask('make build', []),
+    { ...make, sourceSensitive: true },
+    { ...make, capture: { kind: 'sentinel', internal: true } }
+  ]) {
+    assert.equal(intentAskIsGrantable(intent), false)
+    assert.equal(classifyIntentForAutoExec(intent, sources).eligible, false)
+  }
+  // 词法一票否决仍然生效：允许前缀不能覆盖写重定向。
+  assert.equal(classifyIntentForAutoExec(ask('make build > out.log', unmodeled), sources).eligible, false)
 })

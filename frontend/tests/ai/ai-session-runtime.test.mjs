@@ -847,6 +847,28 @@ test('后端 ask 覆盖只读自动允许，批准精确记录后派发且不持
   assert.ok(!JSON.stringify(fixture.props.messages[0]).includes('runtime-only-ticket'))
 })
 
+test('仅因未建模而询问的命令：命中允许列表时自动批准后端记录，未命中时不显示为风险', { timeout: 2000 }, async t => {
+  const fixture = mountRuntime(t, { responses: [response(commandCall('build')), response(commandCall('again')), response()] })
+  const approved = []
+  const unmodeled = () => { const intent = policyIntent('printf status'); intent.analysis.unknownReasons = [{ code: 'unmodeled-command', message: '尚未纳入自动允许策略', range: { startLine: 1 } }]; return intent }
+  fixture.props.agentCommandPolicy = { prepare: async () => unmodeled(), approve: async intent => { approved.push(intent.source) }, cancel: async () => {} }
+  fixture.props.agentCommandRunner = (_id, command) => {
+    fixture.commands.push(command)
+    return { result: Promise.resolve({ status: 'completed', exitCode: 0, output: 'ok', durationMs: 0, truncated: false }), peekOutput: () => '', cancel() {} }
+  }
+  const task = fixture.runAgent()
+  await until(() => fixture.agent.agentPendingApproval.value)
+  const { proposal } = fixture.agent.agentPendingApproval.value
+  assert.deepEqual(proposal.risks, [])
+  assert.deepEqual(proposal.suggestedPatterns, ['printf'])
+  assert.deepEqual(fixture.commands, [])
+  fixture.agent.resolveAgentApproval('execute-and-allow')
+  await task
+  assert.deepEqual(fixture.commands, ['printf status', 'printf status'])
+  assert.deepEqual(approved, ['printf status', 'printf status'], 'the backend record is approved for the manual run and for the allowlisted run')
+  assert.equal(fixture.props.messages[0].agentSteps[1].autoApproved, true)
+})
+
 for (const scenario of ['deny', 'analysis-error', 'approval-error']) {
   test(`后端 ${scenario} 时不得回退到前端派发`, async t => {
     const fixture = mountRuntime(t, { responses: [response(commandCall('blocked'))] })

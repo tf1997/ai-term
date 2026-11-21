@@ -1,10 +1,48 @@
-use super::analysis::{Analyzer, Word};
+use super::analysis::{Analyzer, Reads, Word};
 use super::{Decision, RiskKind as K, RiskSeverity as S};
 
 pub(super) fn is_system_path(path: &str) -> bool {
     ["/etc", "/boot", "/usr", "/var", "/opt", "/dev", "/root"]
         .iter()
         .any(|root| path == *root || path.starts_with(&format!("{root}/")))
+}
+
+pub(super) fn is_sensitive_path(path: &str) -> bool {
+    path == "/etc/shadow"
+        || path.contains("/.ssh/id_") && !path.ends_with(".pub")
+        || path.contains("/.aws/credentials")
+        || path.contains("/.kube/config")
+        || path.ends_with("/.env")
+        || path.ends_with(".pem")
+}
+
+/// `echo` and `printf` only print their operands, so a parameter read placed
+/// there cannot choose a program, an option or a file. Returns the first such
+/// operand and the widest read it may hold: numeric `printf` conversions
+/// evaluate text as arithmetic in zsh and ksh, while digits stay digits.
+pub(super) fn printed_operands(words: &[Word]) -> Option<(usize, Reads)> {
+    let name = words.first()?.value.as_deref()?;
+    match name.rsplit('/').next().unwrap_or(name) {
+        "echo" => Some((1, Reads::Text)),
+        "printf" => {
+            let mut index = 1;
+            let mut format = words.get(index)?.value.as_deref()?;
+            if format == "--" {
+                index += 1;
+                format = words.get(index)?.value.as_deref()?;
+            } else if format.starts_with('-') {
+                // `-v name` assigns; nothing after it is known to be printed.
+                return None;
+            }
+            let widest = if printf_prints_text(format) {
+                Reads::Text
+            } else {
+                Reads::Number
+            };
+            Some((index + 1, widest))
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn analyze_words(analyzer: &mut Analyzer<'_>, words: &[Word], depth: usize) {
@@ -44,13 +82,7 @@ pub(super) fn analyze_words(analyzer: &mut Analyzer<'_>, words: &[Word], depth: 
 
     for word in &words[1..] {
         if let Some(value) = &word.value {
-            if value == "/etc/shadow"
-                || value.contains("/.ssh/id_") && !value.ends_with(".pub")
-                || value.contains("/.aws/credentials")
-                || value.contains("/.kube/config")
-                || value.ends_with("/.env")
-                || value.ends_with(".pem")
-            {
+            if is_sensitive_path(value) {
                 analyzer.risk(
                     "permission.sensitive-path",
                     K::Permission,
@@ -534,15 +566,139 @@ pub(super) fn analyze_words(analyzer: &mut Analyzer<'_>, words: &[Word], depth: 
                     range,
                     targets(),
                 );
-            } else if !matches!(args.first(), Some(&"status" | &"log" | &"show" | &"diff"))
-                || options
-                    .iter()
-                    .any(|a| matches!(*a, "--ext-diff" | "--textconv"))
+            } else if options
+                .iter()
+                .any(|a| matches!(*a, "--ext-diff" | "--textconv"))
             {
-                analyzer.unknown(
-                    "git-operation",
-                    "Git 选项或子命令可能改变状态或执行外部程序。",
+                analyzer.unknown("git-external", "Git 选项会执行外部程序。", range);
+            } else if args.first() == Some(&"branch") {
+                // A bare name creates a branch; write flags rename, copy or retarget.
+                let write = args[1..].iter().any(|a| {
+                    !a.starts_with('-')
+                        || matches!(*a, "-m" | "-M" | "-c" | "-C" | "-f" | "-u")
+                        || [
+                            "--move",
+                            "--copy",
+                            "--force",
+                            "--set-upstream-to",
+                            "--unset-upstream",
+                            "--edit-description",
+                        ]
+                        .iter()
+                        .any(|flag| a.starts_with(flag))
+                });
+                if write {
+                    analyzer.unknown("git-operation", "Git 分支操作可能改变仓库状态。", range);
+                }
+            } else if !matches!(args.first(), Some(&"status" | &"log" | &"show" | &"diff")) {
+                analyzer.unknown("git-operation", "Git 子命令或选项可能改变仓库状态。", range);
+            }
+            return;
+        }
+        "hostname" => {
+            if args.iter().any(|a| {
+                !matches!(
+                    *a,
+                    "-s" | "-f"
+                        | "-i"
+                        | "-I"
+                        | "-A"
+                        | "-d"
+                        | "-y"
+                        | "--short"
+                        | "--fqdn"
+                        | "--long"
+                        | "--ip-address"
+                        | "--all-ip-addresses"
+                        | "--all-fqdns"
+                        | "--domain"
+                        | "--yp"
+                        | "--nis"
+                )
+            }) {
+                analyzer.risk(
+                    "edit.hostname",
+                    K::Edit,
+                    S::Medium,
+                    "可能修改主机名。",
                     range,
+                    targets(),
+                );
+            }
+            return;
+        }
+        "date" => {
+            // `date -s`, `--set` and a bare positional (BSD) set the clock.
+            let mut value_follows = false;
+            let mut sets = false;
+            for arg in &args {
+                if value_follows {
+                    value_follows = false;
+                } else if matches!(*arg, "-d" | "--date" | "-r" | "--reference" | "-f" | "-v") {
+                    value_follows = true;
+                } else if arg.starts_with("--set")
+                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.ends_with('s'))
+                    || !(arg.starts_with('-') || arg.starts_with('+'))
+                {
+                    sets = true;
+                }
+            }
+            if sets {
+                analyzer.risk(
+                    "edit.date",
+                    K::Edit,
+                    S::Medium,
+                    "可能修改系统时间。",
+                    range,
+                    vec![],
+                );
+            }
+            return;
+        }
+        "ss" => {
+            if short_flag('K') || options.iter().any(|a| a.starts_with("--kill")) {
+                analyzer.risk(
+                    "network.ss-kill",
+                    K::Network,
+                    S::High,
+                    "将强制关闭匹配的连接。",
+                    range,
+                    targets(),
+                );
+            } else if short_flag('D') || options.iter().any(|a| a.starts_with("--diag")) {
+                analyzer.risk(
+                    "edit.ss-dump",
+                    K::Edit,
+                    S::Medium,
+                    "ss 将把结果写入文件。",
+                    range,
+                    targets(),
+                );
+            }
+            return;
+        }
+        "journalctl" => {
+            if options.iter().any(|a| {
+                [
+                    "--vacuum",
+                    "--rotate",
+                    "--flush",
+                    "--relinquish-var",
+                    "--smart-relinquish-var",
+                    "--setup-keys",
+                    "--update-catalog",
+                    "--sync",
+                ]
+                .iter()
+                .any(|flag| a.starts_with(flag))
+            }) {
+                analyzer.risk(
+                    "delete.journal",
+                    K::Delete,
+                    S::Medium,
+                    "将清理、轮转或改写系统日志。",
+                    range,
+                    targets(),
                 );
             }
             return;
@@ -615,8 +771,12 @@ pub(super) fn analyze_words(analyzer: &mut Analyzer<'_>, words: &[Word], depth: 
             | "df"
             | "free"
             | "uptime"
+            | "w"
             | "who"
             | "whoami"
+            | "printenv"
+            | "which"
+            | "type"
             | "id"
             | "uname"
             | "ps"
@@ -659,6 +819,25 @@ fn printf_assigns_variable(format: &str) -> bool {
         }
     }
     false
+}
+
+/// Every conversion prints its operand as text: none reads it as a number, a
+/// width or a variable name.
+fn printf_prints_text(format: &str) -> bool {
+    let mut characters = format.chars();
+    while let Some(character) = characters.next() {
+        if character != '%' {
+            continue;
+        }
+        let mut conversion = characters.next();
+        while conversion.is_some_and(|c| c.is_ascii_digit() || matches!(c, '-' | '.')) {
+            conversion = characters.next();
+        }
+        if !matches!(conversion, Some('s' | 'b' | 'q' | '%')) {
+            return false;
+        }
+    }
+    true
 }
 
 fn analyze_inner(analyzer: &mut Analyzer<'_>, words: &[Word], index: usize, depth: usize) {

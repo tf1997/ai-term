@@ -15,4 +15,4 @@ pub use reusable::{
 pub use transport::{CaptureKind, CaptureTransport, InternalProbe};
 pub use types::*;
 
-pub const POLICY_VERSION: &str = "command-policy-v2";
+pub const POLICY_VERSION: &str = "command-policy-v3";

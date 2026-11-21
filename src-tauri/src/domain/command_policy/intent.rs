@@ -112,9 +112,16 @@ impl IntentStore {
             target.context.shell
         };
         let mut analysis = analyze_command(&source, shell, AnalysisBudget::default());
-        if target.context.working_directory.is_none()
-            || target.context.user.is_none()
-            || target.context.environment_scope.is_none()
+        // A complete, risk-free analysis only contains modeled read-only
+        // commands; those stay allowed while the directory, identity or
+        // environment is still unconfirmed. Everything else keeps asking.
+        let readonly = operation == OperationKind::Command
+            && analysis.decision == Decision::Allow
+            && analysis.analysis_status == AnalysisStatus::Complete;
+        if (!readonly
+            && (target.context.working_directory.is_none()
+                || target.context.user.is_none()
+                || target.context.environment_scope.is_none()))
             || (operation == OperationKind::BashScript
                 && !matches!(
                     target.context.shell,

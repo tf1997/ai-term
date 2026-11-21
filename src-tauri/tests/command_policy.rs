@@ -147,6 +147,154 @@ fn literals_and_comments_are_data_not_nested_commands() {
 }
 
 #[test]
+fn printed_parameter_reads_are_data_not_dynamic_execution() {
+    for command in [
+        "ls -l /tmp/ai-term-note.txt 2>&1; echo \"exit=$?\"",
+        "echo $?",
+        "echo \"pid=$$ args=$# home=${HOME}\" pre$USER/post",
+        "echo \"$a $b\" $1 \"$@\" \"done! $x\"",
+        "grep -c error app.log || echo \"rc=$?\"",
+        "(false; echo \"exit=$?\") 2>&1 | tail -n 5",
+        "printf 'exit=%s\\n' \"$?\"",
+        "printf 'exit=%d\\n' $?",
+        "printf -- '%-10s|%.3s|%%|%b\\n' \"$USER\" $HOME \"$x\"",
+    ] {
+        let result = analyze(command);
+        assert_eq!(result.decision, Decision::Allow, "{command}: {result:?}");
+        assert_eq!(result.analysis_status, AnalysisStatus::Complete);
+        assert!(result.risks.is_empty() && result.unknown_reasons.is_empty());
+    }
+    assert_eq!(
+        analyze("ls /tmp; echo \"exit=$?\"").commands,
+        vec!["ls /tmp", "echo \"exit=$?\""]
+    );
+    // A printed read neither hides nor inflates what the rest of the line does.
+    let result = analyze("echo \"exit=$?\"; rm notes.txt");
+    assert_eq!(result.analysis_status, AnalysisStatus::Complete);
+    assert_eq!(result.highest_severity, Some(RiskSeverity::Medium));
+    assert_eq!(result.risks.len(), 1, "{result:?}");
+    assert_eq!(result.risks[0].kind, RiskKind::Delete);
+
+    for command in [
+        // The value picks the program, an option or a file.
+        "$? arg",
+        "\"$cmd\" arg",
+        "cat \"$file\"",
+        "ls $?",
+        "rm -rf \"$dir\"",
+        "builtin echo \"$?\"",
+        "echo \"exit=$?\" > \"$file\"",
+        "echo hi <<< \"$x\"",
+        "X=$? echo hi",
+        // Evaluating the expansion runs code, changes state or reads history.
+        "echo \"$(id) $?\"",
+        "echo ${x:=y}",
+        "echo ${x@P}",
+        "echo ${!x}",
+        "echo ${#x}",
+        "echo \"${arr[0]}\"",
+        "echo $((i++))",
+        "echo $x*",
+        "echo \"last !$x\"",
+        "echo $!",
+        "echo \"$ $?\"",
+        // printf reads these operands as a format, a variable, a number or a width.
+        "printf \"$format\" x",
+        "printf -- \"$format\"",
+        "printf -v out '%s' \"$?\"",
+        "printf '%s %n' \"$?\" count",
+        "printf '%d\\n' \"$x\"",
+        "printf '%*s' \"$width\" x",
+    ] {
+        let result = analyze(command);
+        assert_ne!(result.decision, Decision::Allow, "{command}: {result:?}");
+        assert_eq!(result.analysis_status, AnalysisStatus::Unknown, "{command}");
+        assert!(result.commands.is_empty(), "{command}");
+    }
+
+    // Zsh indexes or modifies a bare `$name` and may glob its unquoted value.
+    for shell in [ShellDialect::Zsh, ShellDialect::Unknown] {
+        for command in [
+            "ls /tmp 2>&1; echo \"exit=$?\"",
+            "echo $? \"$HOME: ${USER}[1] $PATH:/usr/bin\"",
+        ] {
+            let result = analyze_in(command, shell);
+            assert_eq!(result.decision, Decision::Allow, "{command}: {result:?}");
+        }
+        for command in [
+            "echo $HOME",
+            "echo ${HOME}",
+            "echo \"$x[1]\"",
+            "echo \"$x:h\"",
+            "echo \"$?[1]\"",
+            "echo \"$#name\"",
+            "printf '%s\\n' $x",
+        ] {
+            let result = analyze_in(command, shell);
+            assert_ne!(result.decision, Decision::Allow, "{command}: {result:?}");
+        }
+    }
+    for command in ["echo $HOME", "echo \"$x[1] $x:h\""] {
+        assert_eq!(analyze(command).decision, Decision::Allow, "{command}");
+    }
+}
+
+#[test]
+fn environment_hooks_and_brace_expansions_cannot_be_granted_as_readonly() {
+    for source in [
+        "GIT_PAGER='sh -c id' git log",
+        "PROMPT_COMMAND='id'; ls",
+        "CUSTOM_HOOK='id' ls",
+        "LC_ALL=C; ls",
+    ] {
+        let result = analyze(source);
+        assert_eq!(result.decision, Decision::Ask, "{source}: {result:?}");
+        assert!(
+            result.risks.iter().any(|risk| {
+                risk.kind == RiskKind::Execution && risk.severity == RiskSeverity::High
+            }),
+            "{source}: {result:?}"
+        );
+    }
+
+    for source in ["LC_ALL=C ls", "LANG=en_US.UTF-8 ls"] {
+        let result = analyze(source);
+        assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+        assert!(result.risks.is_empty() && result.unknown_reasons.is_empty());
+    }
+
+    for (source, kind) in [
+        ("find . {-delete,-name} x", RiskKind::Execution),
+        ("cat /etc/shado{w,}", RiskKind::Permission),
+        ("cat < /etc/shadow", RiskKind::Permission),
+        ("cat < /etc/shado{w,}", RiskKind::Permission),
+        ("cat < \"$TARGET\"", RiskKind::Permission),
+    ] {
+        let result = analyze(source);
+        assert_eq!(result.decision, Decision::Ask, "{source}: {result:?}");
+        assert!(
+            result
+                .risks
+                .iter()
+                .any(|risk| risk.kind == kind && risk.severity == RiskSeverity::High),
+            "{source}: {result:?}"
+        );
+    }
+
+    for source in [
+        "echo {one,two}",
+        "find . -name file{one,two}.log",
+        "cat < /tmp/ai-term-note.txt",
+        "find . -name 'file{one,two}.log'",
+        r"find . -name file\{one,two\}.log",
+    ] {
+        let result = analyze(source);
+        assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+        assert!(result.risks.is_empty() && result.unknown_reasons.is_empty());
+    }
+}
+
+#[test]
 fn safe_compound_commands_check_every_executable_branch() {
     for command in [
         "grep error app.log || true",
@@ -274,12 +422,7 @@ fn an_argument_that_looks_like_a_wrapper_flag_is_not_a_wrapper_flag() {
 
 #[test]
 fn unknown_shells_invalid_syntax_and_dynamic_parameters_do_not_allow() {
-    for dialect in [
-        ShellDialect::Zsh,
-        ShellDialect::Powershell,
-        ShellDialect::Cmd,
-        ShellDialect::Unknown,
-    ] {
+    for dialect in [ShellDialect::Powershell, ShellDialect::Cmd] {
         let result = analyze_command("echo safe", dialect, AnalysisBudget::default());
         assert_eq!(result.analysis_status, AnalysisStatus::Unknown);
         assert_eq!(result.decision, Decision::Ask);
@@ -436,4 +579,200 @@ fn bash_script_wrapper_preserves_exact_source_without_readline_control_bytes() {
         source.as_bytes()
     );
     assert!(IntentStore::prepare(source.into(), OperationKind::Command, target).is_err());
+}
+
+fn analyze_in(
+    source: &str,
+    shell: ShellDialect,
+) -> ai_term_lib::domain::command_policy::CommandAnalysis {
+    analyze_command(
+        source,
+        shell,
+        AnalysisBudget {
+            timeout: Duration::from_secs(2),
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn zsh_and_unprobed_shells_allow_plain_readonly_commands_only() {
+    for shell in [ShellDialect::Zsh, ShellDialect::Unknown] {
+        for source in [
+            "ls -la /var/log",
+            "git status",
+            "ps aux | grep nginx | head -n 5",
+            "df -h && free -m",
+        ] {
+            let result = analyze_in(source, shell);
+            assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+            assert_eq!(result.analysis_status, AnalysisStatus::Complete);
+        }
+        for source in [
+            "ls *(e:'rm -rf /tmp/x':)",
+            "cat =(reboot)",
+            "echo =ls",
+            "ls ^keep",
+            "ls file#1",
+            "rm -rf /tmp/x",
+            "echo hi > out.txt",
+            "echo $(reboot)",
+            "deploy --now",
+        ] {
+            let result = analyze_in(source, shell);
+            assert_ne!(result.decision, Decision::Allow, "{source}");
+            assert!(result.commands.is_empty(), "{source}");
+        }
+    }
+    for source in ["echo %PATH%", "echo @(Get-Date)", "echo a & del b"] {
+        assert_ne!(
+            analyze_in(source, ShellDialect::Unknown).decision,
+            Decision::Allow,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn zsh_and_unprobed_shells_ask_where_the_typed_line_runs_differently() {
+    // Each of these runs the hidden text, or splits the value, when typed into
+    // an interactive zsh, while the Bourne tree shows one read-only command.
+    let cases = [
+        ("echo hi # ; rm -rf /tmp/x", "interactive-comment"),
+        ("ls -la /var/log # newest first", "interactive-comment"),
+        (
+            "echo \"a!\" \"; rm -rf /tmp/x; echo \" \"x\"",
+            "history-expansion",
+        ),
+        ("echo \"done!\"", "history-expansion"),
+        ("cat <<'EOF'\nsee !! here\nEOF", "history-expansion"),
+        ("find /tmp/x \"$=x\"", "foreign-expansion"),
+        ("ls \"$~x\"", "foreign-expansion"),
+        ("ls \"$+x\"", "foreign-expansion"),
+        ("PROMPT='$(id)'; ls", "variable-assignment"),
+        ("GIT_PAGER='sh -c id' git log", "variable-assignment"),
+    ];
+    for shell in [ShellDialect::Zsh, ShellDialect::Unknown] {
+        for (source, code) in cases {
+            let result = analyze_in(source, shell);
+            assert_eq!(result.decision, Decision::Ask, "{source}: {result:?}");
+            assert!(result.commands.is_empty(), "{source}");
+            assert!(
+                result.unknown_reasons.iter().any(|r| r.code == code),
+                "{source}: {result:?}"
+            );
+        }
+        // Single quotes switch history expansion off, and `!` before a blank
+        // or `=` never starts it.
+        for source in [
+            "grep -c '!important' style.css",
+            "echo 'done!'",
+            "echo \"wow! a != b\"",
+            "grep 'a$=b' notes.txt",
+        ] {
+            let result = analyze_in(source, shell);
+            assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+        }
+    }
+    // Bash and POSIX sh keep their modeled behaviour.
+    for source in [
+        "ls -la /var/log # newest first",
+        "echo \"done!\"",
+        "LC_ALL=C ls",
+    ] {
+        for shell in [ShellDialect::Bash, ShellDialect::Posix] {
+            let result = analyze_in(source, shell);
+            assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+        }
+    }
+    assert_eq!(
+        analyze_in("LC_ALL=C ls", ShellDialect::Unknown).decision,
+        Decision::Ask
+    );
+}
+
+#[test]
+fn builtin_readonly_set_is_allowed_and_its_write_forms_are_not() {
+    for source in [
+        "w",
+        "printenv HOME",
+        "which python3",
+        "type ls",
+        "env",
+        "hostname",
+        "hostname -f",
+        "date",
+        "date -u +%s",
+        "date -d yesterday +%F",
+        "ss -tlnp",
+        "journalctl -u nginx -n 50 --no-pager",
+        "find /var/log -name app.log -mtime -1",
+        "systemctl status nginx",
+        "docker ps -a",
+        "docker logs --tail 50 web",
+        "kubectl get pods -n prod",
+        "git status",
+        "git log --oneline -5",
+        "git diff HEAD",
+        "git branch",
+        "git branch -a -vv",
+        "ip addr show",
+        "timeout 5 ls /tmp",
+    ] {
+        let result = analyze(source);
+        assert_eq!(result.decision, Decision::Allow, "{source}: {result:?}");
+    }
+    for source in [
+        "hostname web-2",
+        "date -s 12:00",
+        "date --set=12:00",
+        "date 010112002026",
+        "ss -K dst 10.0.0.1",
+        "journalctl --vacuum-time=1d",
+        "journalctl --rotate",
+        "git branch feature",
+        "git branch -m old new",
+        "git branch -D old",
+        "git branch --set-upstream-to=origin/main",
+        "git diff --ext-diff",
+        "git commit -m x",
+        "env rm notes.txt",
+        "printenv > out",
+        "docker exec web ls",
+        "systemctl restart nginx",
+    ] {
+        assert_ne!(analyze(source).decision, Decision::Allow, "{source}");
+    }
+}
+
+#[test]
+fn unconfirmed_context_keeps_readonly_allowed_and_asks_for_everything_else() {
+    let unknown = ExecutionTarget::new("session".into(), "profile".into());
+    let prepared =
+        IntentStore::prepare("ls -la".into(), OperationKind::Command, unknown.clone()).unwrap();
+    let mut store = IntentStore::default();
+    let intent = store.insert(prepared, &unknown).unwrap();
+    assert_eq!(intent.analysis.decision, Decision::Allow);
+    assert_eq!(intent.analysis.analysis_status, AnalysisStatus::Complete);
+
+    for source in ["make build", "rm notes.txt", "echo $HOME"] {
+        let prepared =
+            IntentStore::prepare(source.into(), OperationKind::Command, unknown.clone()).unwrap();
+        let intent = store.insert(prepared, &unknown).unwrap();
+        assert_eq!(intent.analysis.decision, Decision::Ask, "{source}");
+        assert!(
+            intent
+                .analysis
+                .unknown_reasons
+                .iter()
+                .any(|r| r.code == "target-context"),
+            "{source}"
+        );
+    }
+    let script =
+        IntentStore::prepare("ls -la".into(), OperationKind::BashScript, unknown.clone()).unwrap();
+    assert_eq!(
+        store.insert(script, &unknown).unwrap().analysis.decision,
+        Decision::Ask
+    );
 }

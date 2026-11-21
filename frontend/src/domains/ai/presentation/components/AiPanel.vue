@@ -24,7 +24,6 @@ import type { AiMessage, WorkspaceSession } from '../../domain/conversation'
 import type { AiMessageUsage } from '../../domain/tokenUsage'
 import { formatMessageUsageLabel, formatMessageUsageTitle, mergeMessageUsage } from '../../domain/tokenUsage'
 
-import { chatWithAiProviderStream, onAiChatStream } from '../../infrastructure/api'
 
 
 import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
@@ -32,7 +31,11 @@ import { isSensitiveCommand } from '../../../../shared/security/commandPrivacy'
 
 
 import type { AiPanelMode } from '../../domain/agent'
-import { analyzeScriptRisks, buildScriptRiskPreviewLines, riskLabelsForLine, summarizeScriptRisks } from '../../../../shared/security/scriptRisk'
+import { analyzeScriptRisks } from '../../../../shared/security/scriptRisk'
+import { commandPolicyRisks, reviewIntentFromRisks } from '../../../../shared/security/commandPolicyPresentation'
+import { CommandPolicyReview } from '../../../terminal/views'
+import type { CommandReviewItem, CommandRiskExplainer } from '../../../terminal/index'
+import { explainCommandRisk } from '../../application/explainCommandRisk'
 
 import { aiStreamPartialText } from '../../domain/aiStreamError'
 
@@ -114,7 +117,7 @@ async function prepareTaskScript(message: AiMessage) {
 onBeforeUnmount(() => { taskScriptEpoch++ })
 function openTaskScript(draft: TaskScriptDraft) { emit('createScriptDraft', draft); taskScriptSource.value = null; taskScriptMessageId.value = '' }
 
-const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
+const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecoverySaving, resolveAgentRecovery, interruptedAgentRuns, checkpointLoadError, agentSessionGrantCount, revokeSessionCommandGrants, agentTaskPending, agentRun, agentRunMessageId, agentModeNotice, agentPreparing, agentHighRiskArmed, agentApprovalSaving, agentPendingApproval, agentPendingIntent, agentPendingTimeout, agentNowMs, agentRunActive, stopAgentRun, interruptAgentCommand, agentStatusFromRun, proposalHasHighRisk, resolveAgentApproval, resolveAgentTimeout, isAwaitingApprovalStep, isAwaitingTimeoutStep, agentRunStatusLabel, messageHasAgentBody, persistableAgentSteps, ensureAgentReady, currentAgentTarget, prepareAgentAction, startAgentTask, startFileRestore, runAgentTurn, agentTargetIsCurrent, cancelAgentPreparation } = useAgentSession({
   props, emit, askText, pendingAgentRiskReview, answerState, conversationContext,
   hostKnowledgeContext: hostKnowledge.context,
   canSendMessage: () => canSendMessage.value,
@@ -123,34 +126,34 @@ const { replyToAgentTask, startAgentRecovery, agentPendingRecovery, agentRecover
   terminalContextMode: () => terminalContextMode.value,
   scrollMessagesToLatest, closeAiCommandRiskConfirm
 })
-const aiRiskExplanation = ref('')
-const aiRiskExplanationError = ref('')
-const aiRiskExplanationLoading = ref(false)
-const aiRiskExplanationRequestId = ref('')
 const aiCommandExecutionNotice = ref('')
 const aiCommandExecutionNoticeTitle = ref('')
 let aiCommandNoticeTimer: number | undefined
 
 const pendingAiCommandRisks = computed(() => pendingAgentRiskReview.value && agentPendingApproval.value ? agentPendingApproval.value.proposal.risks : analyzeScriptRisks(pendingAiCommandExecution.value))
 const aiCommandRiskConfirmOpen = computed(() => pendingAiCommandExecution.value.trim().length > 0)
-const pendingAiCommandRiskSummary = computed(() => summarizeScriptRisks(pendingAiCommandRisks.value))
-const pendingAiCommandRiskLines = computed(() => buildScriptRiskPreviewLines(pendingAiCommandExecution.value, pendingAiCommandRisks.value))
-const pendingAiCommandSensitive = computed(() => (pendingAgentRiskReview.value && agentPendingApproval.value?.proposal.sensitive) || isSensitiveAgentCommand(pendingAiCommandExecution.value))
 const pendingAiCommandCrossConnection = computed(() => {
   return executionTargetsDifferFromSource(pendingAiCommandSourceConnectionId.value)
 })
 const agentRiskReviewOpen = computed(() => pendingAgentRiskReview.value && Boolean(agentPendingApproval.value))
-const pendingAiCommandDialogTitle = computed(() => {
-  if (agentRiskReviewOpen.value) return '确认 Agent 风险命令'
-  if (pendingAiCommandCrossConnection.value && pendingAiCommandRisks.value.length) return '确认跨连接风险命令'
-  if (pendingAiCommandCrossConnection.value) return '确认跨连接执行'
-  return '检测到风险命令'
+/** Chat commands and Agent steps are confirmed in the shared command review dialog. */
+const commandReviewItems = computed<CommandReviewItem[]>(() => {
+  if (!aiCommandRiskConfirmOpen.value) return []
+  const pending = agentRiskReviewOpen.value ? agentPendingApproval.value : null
+  if (pending) {
+    const { proposal } = pending
+    const intent = agentPendingIntent.value?.source === proposal.command ? agentPendingIntent.value
+      : reviewIntentFromRisks(proposal.id, proposal.command, proposal.risks, proposal.sshRequest ? { shell: 'posix', workingDirectory: proposal.sshRequest.workingDirectory, user: proposal.sshTarget?.user ?? null } : {})
+    return [{ intent, label: props.executionTargetLabel, sensitive: proposal.sensitive, hideTarget: Boolean(proposal.sshRequest && proposal.sshTarget) }]
+  }
+  const command = pendingAiCommandExecution.value
+  return [{ intent: reviewIntentFromRisks('ai-command', command, pendingAiCommandRisks.value), label: props.executionTargetLabel, sensitive: isSensitiveAgentCommand(command) }]
 })
-const pendingAiCommandDialogDescription = computed(() => {
-  if (agentRiskReviewOpen.value) return 'Agent 提议执行以下命令，请检查风险和目标后再继续。'
-  if (pendingAiCommandCrossConnection.value) return '命令生成时的连接与当前执行目标不同，请核对来源和目标。'
-  return '执行前请确认命中的命令行'
-})
+const commandReviewNote = computed(() => !agentRiskReviewOpen.value && pendingAiCommandCrossConnection.value
+  ? `命令来源：${connectionLabel(pendingAiCommandSourceConnectionId.value)}；当前目标：${props.executionTargetLabel}。来源连接与执行目标不同，请核对。` : undefined)
+const commandReviewHint = computed(() => agentRiskReviewOpen.value
+  ? agentPendingApproval.value?.proposal.sshRequest ? '确认后在上述登录目标启动独立 SSH 任务' : '确认后继续 Agent 任务，并在任务绑定的终端执行'
+  : `确认后发送到：${props.executionTargetLabel}`)
 
 const hasUsableConfig = computed(() => {
   return Boolean(props.config.baseUrl.trim() && props.config.model.trim() && (props.config.apiKey?.trim() || props.apiKey.trim()))
@@ -599,86 +602,16 @@ function taskSummary(message: AiMessage) {
   return `${label}${message.agentSteps?.length ? ` · ${message.agentSteps.length} 个步骤` : ''}`
 }
 
-function buildAiRiskExplanationPrompt(command: string) {
-  const riskLines = pendingAiCommandRisks.value
-    .map((risk) => `- 第 ${risk.line} 行：${risk.label}（${risk.severity === 'high' ? '高风险' : '中风险'}）${risk.message}；命令：${risk.text.trim()}`)
-    .join('\n')
-  return [
-    '你是 AI Term 的命令安全助手。请用中文解释下面命令为什么存在风险。',
-    '要求：',
-    '1. 先用 2-4 条说明风险原因。',
-    '2. 给出执行前必须确认的目标、路径、服务、权限或备份。',
-    '3. 如果可以，给出更安全的替代命令或 dry-run/只读检查方式。',
-    '4. 不要替用户确认执行，不要输出夸张恐吓文案。',
-    '',
-    '风险命中：',
-    riskLines || '- 未提供风险摘要',
-    '',
-    '待执行命令：',
-    '```shell',
-    command,
-    '```'
-  ].join('\n')
-}
+const explainPendingAiCommandRisk: CommandRiskExplainer = (item, onText) => explainCommandRisk({
+  config: props.config,
+  apiKey: props.apiKey,
+  requestId: `${props.connectionId}-${props.workspaceSessionId}-${props.terminalId}-risk-${Date.now()}`,
+  command: item.intent.source,
+  risks: commandPolicyRisks(item.intent),
+  terminalSnapshot: terminalContext.value.terminalSnapshot,
+  commandHistory: terminalContextMode.value === 'auto' ? aiCommandHistory() : []
+}, onText).catch((error) => { throw new Error(formatAiError(error)) })
 
-async function explainPendingAiCommandRisk() {
-  const command = pendingAiCommandExecution.value.trim()
-  if (!command || aiRiskExplanationLoading.value) return
-  if (!hasUsableConfig.value) {
-    aiRiskExplanationError.value = '暂无可用 AI 配置，请先在左侧设置中心完善配置。'
-    return
-  }
-  const apiKey = props.config.apiKey?.trim() || props.apiKey.trim()
-  if (!apiKey) {
-    aiRiskExplanationError.value = '请先保存 API Key 后再使用 AI 分析。'
-    return
-  }
-  aiRiskExplanationLoading.value = true
-  aiRiskExplanation.value = ''
-  aiRiskExplanationError.value = ''
-  let streamedAnswer = ''
-  let unlisten: (() => void) | undefined
-  const requestId = `${props.connectionId}-${props.workspaceSessionId}-${props.terminalId}-risk-${Date.now()}`
-  aiRiskExplanationRequestId.value = requestId
-  try {
-    unlisten = await onAiChatStream(requestId, (event) => {
-      if (aiRiskExplanationRequestId.value !== requestId) return
-      if (event.kind === 'chunk') {
-        streamedAnswer += event.delta
-        aiRiskExplanation.value = streamedAnswer
-      }
-      if (event.kind === 'error' && event.error) {
-        aiRiskExplanationError.value = `模型流式调用失败：${event.error}`
-      }
-    })
-    const response = await chatWithAiProviderStream(requestId, {
-      config: props.config,
-      apiKey,
-      question: buildAiRiskExplanationPrompt(command),
-      terminalSnapshot: terminalContext.value.terminalSnapshot,
-      commandHistory: terminalContextMode.value === 'auto' ? aiCommandHistory() : [],
-      conversationMessages: []
-    })
-    if (aiRiskExplanationRequestId.value !== requestId) return
-    aiRiskExplanation.value = (streamedAnswer || response.answer).trim() || 'AI 未返回风险说明。'
-  } catch (error) {
-    if (aiRiskExplanationRequestId.value !== requestId) return
-    aiRiskExplanationError.value = formatAiError(error)
-  } finally {
-    unlisten?.()
-    if (aiRiskExplanationRequestId.value === requestId) {
-      aiRiskExplanationLoading.value = false
-      aiRiskExplanationRequestId.value = ''
-    }
-  }
-}
-
-function clearAiRiskExplanation() {
-  aiRiskExplanation.value = ''
-  aiRiskExplanationError.value = ''
-  aiRiskExplanationLoading.value = false
-  aiRiskExplanationRequestId.value = ''
-}
 function shouldCollapseMessage(message: AiMessage) {
   return message.text.length > LONG_MESSAGE_CHARS || message.text.split('\n').length > LONG_MESSAGE_LINES
 }
@@ -712,7 +645,6 @@ async function executeGeneratedCommand(command: string, message?: AiMessage) {
   if (risks.length > 0 || isSensitiveAgentCommand(value) || executionTargetsDifferFromSource(sourceConnectionId)) {
     pendingAiCommandExecution.value = value
     pendingAiCommandSourceConnectionId.value = sourceConnectionId
-    clearAiRiskExplanation()
     clearAiCommandNotice()
     return
   }
@@ -726,7 +658,6 @@ function openAgentRiskReview() {
   pendingAgentRiskReview.value = true
   pendingAiCommandExecution.value = pending.proposal.command
   pendingAiCommandSourceConnectionId.value = props.messages.find((message) => message.id === agentRunMessageId.value)?.connectionId || props.connectionId
-  clearAiRiskExplanation()
   clearAiCommandNotice()
 }
 
@@ -777,7 +708,10 @@ function closeAiCommandRiskConfirm() {
   pendingAiCommandExecution.value = ''
   pendingAiCommandSourceConnectionId.value = ''
   pendingAgentRiskReview.value = false
-  clearAiRiskExplanation()
+}
+function resolveCommandReview(approved: boolean) {
+  if (approved) confirmPendingAiCommandExecution()
+  else closeAiCommandRiskConfirm()
 }
 function toggleHistory() {
   historyOpen.value = !historyOpen.value
@@ -952,93 +886,24 @@ defineExpose({ stopActiveAiWork })
     </div>
     </Transition>
     <Transition name="dialog-motion">
-    <div v-if="aiCommandRiskConfirmOpen" class="modal-backdrop script-risk-backdrop" role="presentation">
-      <section class="modal script-risk-modal" :class="{ 'agent-risk-modal': agentRiskReviewOpen }" role="dialog" aria-modal="true" :aria-label="pendingAiCommandDialogTitle">
-        <div class="modal-head">
-          <div>
-            <strong>{{ pendingAiCommandDialogTitle }}</strong>
-            <span>{{ pendingAiCommandDialogDescription }}</span>
-          </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeAiCommandRiskConfirm"><UiIcon name="close" /></button>
-        </div>
-        <div class="script-risk-body">
-          <SshTaskContext v-if="agentRiskReviewOpen && agentPendingApproval?.proposal.sshRequest && agentPendingApproval.proposal.sshTarget" :request="agentPendingApproval.proposal.sshRequest" :target="agentPendingApproval.proposal.sshTarget" />
-          <div v-if="pendingAiCommandCrossConnection && !agentRiskReviewOpen" class="script-risk-ai" role="note" aria-label="命令来源与当前目标">
-            <div>
-              <strong>命令来源：{{ connectionLabel(pendingAiCommandSourceConnectionId) }}</strong>
-              <span :title="executionTargetTitle">当前目标：{{ executionTargetLabel }}</span>
-            </div>
-          </div>
-          <div v-if="pendingAiCommandRiskSummary.length" class="script-risk-summary" aria-label="风险类型">
-            <span
-              v-for="risk in pendingAiCommandRiskSummary"
-              :key="risk.kind"
-              class="script-risk-chip"
-              :class="[`risk-${risk.kind}`, risk.severity]"
-            >
-              <strong>{{ risk.label }}</strong>
-              <small>{{ risk.message }}</small>
-            </span>
-          </div>
-          <div v-if="pendingAiCommandSensitive" class="script-risk-sensitive" role="note">
-            <UiIcon name="shield" size="14" />
-            <span>该命令包含敏感路径或数据，请确认命令中没有不应暴露或执行的内容。</span>
-          </div>
-          <div v-if="pendingAiCommandRisks.length || pendingAiCommandSensitive" class="script-risk-ai">
-            <div>
-              <strong>不确定原因？</strong>
-              <span>让 AI 根据命中的风险行解释影响和执行前检查项。</span>
-            </div>
-            <button class="text-button" type="button" :disabled="aiRiskExplanationLoading || !hasUsableConfig" @click="explainPendingAiCommandRisk">
-              {{ aiRiskExplanationLoading ? '正在分析...' : '借助 AI 分析风险' }}
-            </button>
-            <div
-              v-if="aiRiskExplanationLoading || aiRiskExplanationError || aiRiskExplanation"
-              class="script-risk-ai-output"
-              :class="{ error: aiRiskExplanationError }"
-              aria-live="polite"
-            >
-              <div v-if="aiRiskExplanationLoading" class="script-risk-thinking">
-                <span /><span /><span />AI 正在分析风险...
-              </div>
-              <p v-if="aiRiskExplanationError">{{ aiRiskExplanationError }}</p>
-              <AiMarkdownMessage v-else-if="aiRiskExplanation" :content="aiRiskExplanation" />
-              <p v-else class="script-risk-ai-placeholder">正在等待模型首段回复...</p>
-            </div>
-          </div>
-          <div class="script-risk-preview" role="region" aria-label="命令风险预览">
-            <div class="script-risk-preview-head">
-              <div>
-                <strong>命令预览</strong>
-                <span>{{ pendingAiCommandRisks.length ? '风险行已标记，执行前请逐行核对。' : '请核对命令内容与当前执行目标。' }}</span>
-              </div>
-              <span class="script-risk-preview-count">{{ pendingAiCommandRiskLines.length }} 行</span>
-            </div>
-            <div class="script-risk-lines">
-              <div
-                v-for="line in pendingAiCommandRiskLines"
-                :key="line.number"
-                class="script-risk-line"
-                :class="[line.riskClass, { flagged: line.risks.length }]"
-              >
-                <span class="script-risk-line-no">{{ line.number }}</span>
-                <code>{{ line.text || ' ' }}</code>
-                <span v-if="line.risks.length" class="script-risk-line-label">{{ riskLabelsForLine(line.risks) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="modal-actions script-risk-actions">
-          <span class="script-risk-action-hint" :title="executionTargetTitle">{{ agentRiskReviewOpen ? agentPendingApproval?.proposal.sshRequest ? '确认后在上述登录目标启动独立 SSH 任务' : '确认后继续 Agent 任务，并在任务绑定的终端执行' : `确认后发送到：${executionTargetLabel}` }}</span>
-          <button class="text-button" type="button" @click="closeAiCommandRiskConfirm">取消</button>
-          <template v-if="agentRiskReviewOpen">
-            <button class="text-button" type="button" @click="skipAgentRiskReview">跳过命令</button>
-            <button class="text-button danger" type="button" @click="stopAgentRiskReview">停止任务</button>
-          </template>
-          <button class="text-button danger" type="button" @click="confirmPendingAiCommandExecution">确认执行</button>
-        </div>
-      </section>
-    </div>
+    <CommandPolicyReview
+      v-if="aiCommandRiskConfirmOpen"
+      :class="{ 'agent-risk-review': agentRiskReviewOpen }"
+      :items="commandReviewItems"
+      :note="commandReviewNote"
+      :agent="agentRiskReviewOpen"
+      :explain="explainPendingAiCommandRisk"
+      :explain-unavailable="hasUsableConfig ? '' : '暂无可用 AI 配置'"
+      :confirm-hint="commandReviewHint"
+      @resolve="resolveCommandReview"
+      @skip="skipAgentRiskReview"
+      @stop="stopAgentRiskReview"
+    >
+      <template v-if="agentRiskReviewOpen && agentPendingApproval?.proposal.sshRequest && agentPendingApproval.proposal.sshTarget" #context>
+        <SshTaskContext :request="agentPendingApproval.proposal.sshRequest" :target="agentPendingApproval.proposal.sshTarget" />
+      </template>
+      <template #explanation="{ text }"><AiMarkdownMessage :content="text" /></template>
+    </CommandPolicyReview>
     </Transition>
     <div class="chat-context" :class="{ expanded: contextOpen }">
       <div class="chat-context-main">

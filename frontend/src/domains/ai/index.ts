@@ -3,3 +3,4 @@ export { COMMAND_HISTORY_CACHE_LIMIT, COMMAND_HISTORY_SESSION_ID, DEFAULT_AI_SES
 export { useAiConfigs } from './application/useAiConfigs'
 export { useAiMessages } from './application/useAiMessages'
 export { useWorkspaceSessions } from './application/useWorkspaceSessions'
+export { explainCommandRisk } from './application/explainCommandRisk'

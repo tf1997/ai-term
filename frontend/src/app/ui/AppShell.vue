@@ -3,6 +3,10 @@ import { createAgentFileToolService } from '../../domains/transfer'
 import { captureSurfaceWidth } from '../../shared/ui/surfaceMotion'
 import { useCommandPolicyReview, commandReviewerKey, createApplicationCommandExecutor, createSshTaskService } from '../../domains/terminal/index'
 import { CommandPolicyReview } from '../../domains/terminal/views'
+import type { CommandRiskExplainer } from '../../domains/terminal/index'
+import { explainCommandRisk } from '../../domains/ai/index'
+import { AiMarkdownMessage } from '../../domains/ai/views'
+import { commandPolicyRisks } from '../../shared/security/commandPolicyPresentation'
 import AboutDialog from './AboutDialog.vue'
 import { useChromeSelection } from '../layout/useChromeSelection'
 import { useTerminalInputRouter } from '../../domains/terminal/index'
@@ -120,6 +124,11 @@ const { commandHistoryForConnection, loadCommandHistoryForConnection, recordComm
 const { contextMenu, openContextMenu, closeContextMenu } = useContextMenu()
 const { toasts, showToast, dismissToast } = useToasts()
 const policyReview = useCommandPolicyReview()
+const aiRiskExplainUnavailable = computed(() => aiConfig.value.baseUrl.trim() && aiConfig.value.model.trim() && (aiConfig.value.apiKey?.trim() || activeAiRuntimeApiKey.value.trim()) ? '' : '暂无可用 AI 配置')
+const explainReviewedCommandRisk: CommandRiskExplainer = (item, onText) => explainCommandRisk({
+  config: aiConfig.value, apiKey: activeAiRuntimeApiKey.value, requestId: `command-review-risk-${Date.now()}`,
+  command: item.intent.source, risks: commandPolicyRisks(item.intent)
+}, onText)
 provide(commandReviewerKey, policyReview.review)
 const { execute: applicationCommandExecutor, agentPolicy: agentCommandPolicy } = createApplicationCommandExecutor({
   panes: terminalRefs, tabs: () => terminalTabs.value, targets: () => [...targetTerminalIds.value],
@@ -912,7 +921,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <CommandPolicyReview v-if="policyReview.pending.value" :items="policyReview.pending.value.items" :note="policyReview.pending.value.note" @resolve="policyReview.resolve" />
+  <CommandPolicyReview v-if="policyReview.pending.value" :items="policyReview.pending.value.items" :note="policyReview.pending.value.note" :explain="explainReviewedCommandRisk" :explain-unavailable="aiRiskExplainUnavailable" @resolve="policyReview.resolve">
+    <template #explanation="{ text }"><AiMarkdownMessage :content="text" /></template>
+  </CommandPolicyReview>
   <div class="app-shell" :class="{ 'left-collapsed': leftCollapsed, 'right-collapsed': rightCollapsed, 'sftp-workbench-active': sftpWorkbenchActive, 'workspace-is-resizing': workspaceResizing, 'theme-light': appTheme === 'light', 'theme-dark': appTheme === 'dark' }" :style="workspaceLayoutStyle">
     <header class="titlebar">
       <div class="brand">

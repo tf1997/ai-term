@@ -136,6 +136,8 @@ const contextMenuState = read('src/shared/ui/useContextMenu.ts')
 const main = read('src/main.ts')
 const terminalPane = read('src/domains/terminal/presentation/components/TerminalPane.vue')
 const aiPanel = read('src/domains/ai/presentation/components/AiPanel.vue')
+const aiRiskExplain = read('src/domains/ai/application/explainCommandRisk.ts')
+const commandPolicyReview = read('src/domains/terminal/presentation/components/CommandPolicyReview.vue')
 const aiPanelStyles = read('src/domains/ai/presentation/styles/ai-final.css')
 const aiMessageItem = read('src/domains/ai/presentation/components/messages/AiMessageItem.vue')
 const aiCodeBlock = read('src/domains/ai/presentation/components/messages/AiCodeBlock.vue')
@@ -2274,7 +2276,7 @@ assert(
 )
 
 assert(
-  aiPanel.includes('chatWithAiProvider') &&
+  aiRiskExplain.includes('chatWithAiProvider') &&
     aiPanel.includes('terminalSnapshot,') &&
     aiPanelTypes.includes('terminalSelection?: TerminalSelectionEvent') &&
     aiPanel.includes('selectedTerminalContext') &&
@@ -2293,7 +2295,7 @@ assert(
     aiPanelTypes.includes('messages: AiMessage[]') &&
     aiPanel.includes('const requestConnectionId = props.connectionId') &&
     aiPanel.includes('const requestWorkspaceSessionId = props.workspaceSessionId') &&
-    aiPanel.includes('conversationMessages') &&
+    aiChatState.includes('conversationMessages') &&
     aiConversationRules.includes('MAX_AI_CONVERSATION_MESSAGES') &&
     aiPanel.includes('pendingAiCommandCrossConnection') &&
     aiPanel.includes('executionTargetConnectionIds') &&
@@ -2331,11 +2333,11 @@ assert(
     aiChat.includes('build_system_prompt') &&
     aiChat.includes('conversation_messages_for_payload') &&
     aiChat.includes('accepts_plain_text_model_answer') &&
-    aiPanel.includes('chatWithAiProviderStream') &&
+    aiRiskExplain.includes('chatWithAiProviderStream') &&
     agentSession.includes('cancelTask') &&
     aiPanel.includes('stopCurrentAnswer') &&
-    aiPanel.includes('onAiChatStream') &&
-    aiPanel.includes("event.kind === 'chunk'") &&
+    aiRiskExplain.includes('onAiChatStream') &&
+    aiRiskExplain.includes("event.kind === 'chunk'") &&
     aiPanel.includes('streaming: true') &&
     aiPanel.includes('handleComposerKeydown') &&
     aiPanel.includes('event.ctrlKey || event.metaKey') &&
@@ -2393,7 +2395,7 @@ assert(
     aiMarkdownMessage.includes('codeBlockLabel(part.language, part.content)') &&
     aiPanel.includes('confirmPendingAiCommandExecution') &&
     aiMarkdownMessage.includes('class="chat-code-risk"') &&
-    aiPanel.includes('script-risk-modal') &&
+    aiPanel.includes('<CommandPolicyReview') && !aiPanel.includes('script-risk-modal') &&
     !aiPanel.includes('isDangerousCommand') &&
     !aiPanel.includes('window.confirm') &&
     styles.includes('.message.collapsed') &&
@@ -2493,9 +2495,9 @@ assert(
     scriptPanel.includes('writeScriptToTerminal') &&
     scriptPanel.includes('script-risk-modal') &&
     scriptPanel.includes('script-risk-preview') &&
-    aiPanel.includes('script-risk-preview-head') &&
-    aiPanel.includes('pendingAiCommandRiskLines.length') &&
-    aiPanel.includes('script-risk-action-hint') &&
+    commandPolicyReview.includes('policy-source-line') &&
+    commandPolicyReview.includes('item.lines.length') &&
+    commandPolicyReview.includes('policy-confirm-hint') &&
     scriptPanel.includes('script-risk-preview-head') &&
     scriptPanel.includes('pendingScriptRiskLines.length') &&
     scriptPanel.includes('script-risk-action-hint') &&
@@ -2969,7 +2971,7 @@ assert(
 function aiPanelUsesBackendModelCall() {
   const aiPanel = read('src/domains/ai/presentation/components/AiPanel.vue')
   return (
-    aiPanel.includes('chatWithAiProvider') &&
+    aiRiskExplain.includes('chatWithAiProvider') &&
     aiApi.includes("invoke<AiChatResponse>('chat_with_ai_provider'") &&
     aiChat.includes('chat/completions') &&
     aiChat.includes('Authorization') &&
@@ -3011,14 +3013,14 @@ assert(
 
 assert(
   aiPanel.includes('explainPendingAiCommandRisk') &&
-    aiPanel.includes('buildAiRiskExplanationPrompt') &&
-    aiPanel.includes('aiRiskExplanationLoading') &&
-    aiPanel.includes('onAiChatStream(requestId') &&
-    aiPanel.includes('streamedAnswer += event.delta') &&
-    aiPanel.includes('借助 AI 分析风险') &&
-    aiPanel.includes('AI 正在分析风险') &&
-    aiPanel.includes('aria-live="polite"') &&
-    aiPanel.includes('<AiMarkdownMessage v-else-if="aiRiskExplanation"') &&
+    aiRiskExplain.includes('buildAiRiskExplanationPrompt') &&
+    commandPolicyReview.includes('explanations[item.intent.reference.id]?.loading') &&
+    aiRiskExplain.includes('onAiChatStream(options.requestId') &&
+    aiRiskExplain.includes('streamedAnswer += event.delta') &&
+    commandPolicyReview.includes('借助 AI 分析风险') &&
+    commandPolicyReview.includes('AI 正在分析风险') &&
+    commandPolicyReview.includes('aria-live="polite"') &&
+    aiPanel.includes('<template #explanation="{ text }"><AiMarkdownMessage :content="text" /></template>') &&
     aiMarkdownMessage.includes('v-html="renderMarkdown(part.content)"') &&
     !aiPanel.includes('@click.self="closeAiCommandRiskConfirm"') &&
     scriptPanel.includes('explainPendingScriptRisk') &&

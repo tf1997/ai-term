@@ -2,7 +2,16 @@ import { onBeforeUnmount, shallowRef } from 'vue'
 import type { InjectionKey } from 'vue'
 import type { CommandIntent } from '../../../shared/security/commandPolicy'
 
-export interface CommandReviewItem { intent: CommandIntent; label: string }
+export interface CommandReviewItem {
+  intent: CommandIntent
+  label: string
+  /** The command touches credentials or private paths. */
+  sensitive?: boolean
+  /** The target is described by the caller (independent SSH task). */
+  hideTarget?: boolean
+}
+/** Streams an AI explanation of the reviewed risks; resolves with the final text. */
+export type CommandRiskExplainer = (item: CommandReviewItem, onText: (text: string) => void) => Promise<string>
 export type CommandReviewer = (items: CommandReviewItem[], note?: string) => Promise<boolean>
 export const commandReviewerKey: InjectionKey<CommandReviewer> = Symbol('command-policy-review')
 
