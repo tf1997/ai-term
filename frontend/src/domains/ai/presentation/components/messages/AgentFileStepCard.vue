@@ -65,7 +65,7 @@ const detailInput = computed(() => [path.value, resolvedPath.value && resolvedPa
 
 <style scoped>
 .file-tool-step { min-width: 0; width: 100%; color: var(--chat-text); border: 1px solid var(--chat-line); border-radius: var(--ai-card-radius); background: var(--chat-surface); overflow: hidden; }
-.file-tool-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 13px; align-items: start; gap: 8px; width: 100%; min-height: 36px; height: auto; padding: 10px var(--ai-card-inset); border: 0; background: transparent; text-align: left; color: inherit; white-space: normal; }
+.file-tool-heading { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 13px; align-items: center; gap: 8px; width: 100%; min-height: 36px; height: auto; padding: 10px var(--ai-card-inset); border: 0; background: transparent; text-align: left; color: inherit; white-space: normal; }
 .file-tool-heading span { min-width: 0; overflow-wrap: anywhere; }
 .file-tool-heading small, .file-tool-target { color: var(--chat-muted); font-size: var(--ai-font-ui); }
 .file-tool-body { padding: 0 var(--ai-card-inset) 10px; min-width: 0; font-size: var(--ai-font-ui); line-height: var(--ai-leading-ui); }
