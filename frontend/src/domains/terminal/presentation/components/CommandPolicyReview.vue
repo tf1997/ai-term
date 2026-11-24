@@ -292,7 +292,7 @@ summary::-webkit-details-marker { display: none; }
 .policy-cancel { min-width: 76px; border: 1px solid var(--policy-line); background: var(--policy-surface); color: var(--policy-text); }
 .policy-cancel:hover { border-color: var(--policy-muted); background: var(--policy-subtle); }
 .primary-button { min-width: 144px; border: 1px solid transparent; background: var(--workbench-accent); color: var(--policy-action-text); }
-.primary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--workbench-accent) 86%, #000); }
+.primary-button:hover:not(:disabled) { background: var(--workbench-accent-strong); color: var(--policy-action-text); }
 .primary-button:disabled { opacity: 1; border-color: var(--policy-line); background: var(--policy-subtle); color: var(--policy-muted); }
 .policy-review-dialog :is(button, input, summary, a):focus-visible { outline: 2px solid var(--workbench-accent); outline-offset: 3px; }
 .policy-source:focus-visible { outline: 2px solid var(--workbench-accent); outline-offset: -2px; }

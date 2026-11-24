@@ -4,7 +4,10 @@ export function createSentinelDisplayFilter({ now = Date.now }: { now?: () => nu
   let pending = ''
   let prelude = ''
   let ordinary = false
-  const plain = (value: string) => value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '')
+  // Readline may pad a wrapped echo's last terminal cell as ` \r` before
+  // continuing on the next row. Remove that single padding space for matching;
+  // preserve any preceding real space from the original command.
+  const plain = (value: string) => value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/ \r(?=[\s\S])/g, '\r').replace(/\r/g, '')
 
   function flush() {
     const value = prelude + pending
@@ -54,7 +57,9 @@ export function createSentinelDisplayFilter({ now = Date.now }: { now?: () => nu
         } else {
           const candidate = plain(prelude + pending).trimStart()
           const expected = plain(operation.input).trim()
-          const possibleEcho = expected.startsWith(candidate) || (candidate.startsWith(expected) && !candidate.slice(expected.length).trim())
+          const possibleEcho = expected.startsWith(candidate)
+            || (candidate.endsWith(' ') && expected.startsWith(candidate.slice(0, -1)))
+            || (candidate.startsWith(expected) && !candidate.slice(expected.length).trim())
           if ((!possibleEcho && !operation.begin.startsWith(pending.replace(/\r$/, ''))) || pending.length > 262_144) {
             visible += prelude + pending; prelude = ''; pending = ''; ordinary = true
           }

@@ -37,6 +37,17 @@ async function until(expression) {
 }
 const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
 const screenshots = []
+function contrastRatio(foreground, background) {
+  const luminance = color => {
+    const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+      const channel = value / 255
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4
+    })
+    return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722
+  }
+  const first = luminance(foreground), second = luminance(background)
+  return (Math.max(first, second) + .05) / (Math.min(first, second) + .05)
+}
 try {
   await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }))
   await send('Runtime.enable'); await send('Page.enable')
@@ -127,6 +138,11 @@ try {
   for (const theme of ['light', 'dark']) {
     await evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; document.documentElement.classList.toggle('theme-light', ${theme === 'light'})`)
     await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+    const buttonRect = await evaluate('(() => { const rect = document.querySelector(".primary-button").getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()')
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...buttonRect })
+    const hover = await evaluate('(() => { const button = document.querySelector(".primary-button"), style = getComputedStyle(button); return { hovered: button.matches(":hover"), color: style.color, background: style.backgroundColor } })()')
+    assert.equal(hover.hovered, true, `${theme} primary button receives mouse hover`)
+    assert.ok(contrastRatio(hover.color, hover.background) >= 4.5, `${theme} hovered button contrast: ${JSON.stringify(hover)}`)
     const clip = await evaluate('(() => { const rect = document.querySelector("[role=dialog]").getBoundingClientRect(); return { x: rect.x - 24, y: rect.y - 24, width: rect.width + 48, height: rect.height + 48, scale: 1 } })()')
     const screenshot = join(artifactDirectory, `command-policy-ready-${theme}.png`)
     await writeFile(screenshot, Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'))
