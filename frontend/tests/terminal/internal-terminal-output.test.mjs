@@ -57,6 +57,33 @@ test('timeout cleanup still hides a delayed wrapped echo at every chunk boundary
   }
 })
 
+test('a cancelled capture probe hides its exact late echo and frame after the short operation timeout', () => {
+  let time = 0
+  const nonce = 'late_capture_probe'
+  const command = wrapInternalTerminalCommand(
+    frameInternalProbe(wrapCommandWithSentinel("(printf 'AI_TERM_CAPTURE_OK\\n'; exit 7)", nonce), nonce),
+    nonce,
+  )
+  const echo = command.replaceAll('\n', '\r\n')
+  const output = `\r\nAI_TERM_PROBE_BEGIN_${nonce}\r\n\r\n__AI_TERM_${nonce}B__\r\nAI_TERM_CAPTURE_OK\r\n\r\n__AI_TERM_${nonce}E__:7\r\n\r\nAI_TERM_PROBE_END_${nonce}\r\n${prompt}`
+  const filter = createInternalTerminalOutputFilter({ now: () => time })
+  filter.begin(command, { debug: false, echo: command, timeoutMs: 8_000 })
+
+  time = 8_001
+  filter.finish(command) // The capture's eight-second cancellation releases the active operation.
+  time += 2_001 // The old two-second late-output grace has elapsed before the SSH output arrives.
+
+  assert.equal(feedCharacters(filter, `${echo}\r\n${output}`), CLEAR_PROMPT + '\r\n' + prompt)
+
+  const expired = createInternalTerminalOutputFilter({ now: () => time })
+  time = 0
+  expired.begin(command, { debug: false, echo: command, timeoutMs: 8_000 })
+  time = 8_001
+  expired.finish(command)
+  time = 68_002
+  assert.equal(expired.push(`${echo}\r\n${output}`), `${echo}\r\n${output}`, 'probe suppression remains bounded')
+})
+
 test('similar commands and user-resumed input are not swallowed by delayed echo matching', () => {
   const probe = identity('similar_echo'), wrapped = wrapInternalTerminalCommand(probe.command, 'similar_echo')
   const filter = createInternalTerminalOutputFilter()

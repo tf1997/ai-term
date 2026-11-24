@@ -30,6 +30,9 @@ type RetiredOperation = Markers & { echo: string; deadline: number; hideBody: bo
 
 const RESTORE_PROMPT = '\r\x1b[2K'
 const LATE_OUTPUT_GRACE_MS = 2_000
+// A timed-out capability probe may still be queued/running on a remote shell.
+// Keep its unique echo/frame recognizable longer than ordinary completed captures.
+const PROBE_LATE_OUTPUT_GRACE_MS = 60_000
 const MAX_TIMEOUT_MS = 65_000
 const MAX_RETIRED_OPERATIONS = 8
 const MAX_MARKER_LINE_CHARS = 512
@@ -123,7 +126,8 @@ export function createInternalTerminalOutputFilter(
       restoreAfterEnd = complete
     }
     // A replay of a late frame never extends the original grace period.
-    const deadline = current.late ? current.deadline : Math.min(at, current.deadline) + LATE_OUTPUT_GRACE_MS
+    const lateOutputGrace = current.kind === 'PROBE' ? PROBE_LATE_OUTPUT_GRACE_MS : LATE_OUTPUT_GRACE_MS
+    const deadline = current.late ? current.deadline : Math.min(at, current.deadline) + lateOutputGrace
     retired = retired.filter(item => item.token !== current.token && item.deadline > at)
     if (deadline > at) {
       retired.push({ token: current.token, end: current.end, kind: current.kind, echo: current.echo, deadline, hideBody: true,
